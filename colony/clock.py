@@ -73,9 +73,9 @@ def review_decision(project, start, last):
     risky = [f for f in files for area in memory.risky(project) if f.startswith(area)]
     if risky:
         return True, f"touches risky areas: {', '.join(sorted(set(risky)))}"
-    if lines >= cfg["review_min_lines"]:
+    if cfg["review_min_lines"] is not None and lines >= cfg["review_min_lines"]:
         return True, f"{lines} lines changed"
-    if len(files) >= cfg["review_min_files"]:
+    if cfg["review_min_files"] is not None and len(files) >= cfg["review_min_files"]:
         return True, f"{len(files)} files changed"
     return False, f"small change ({lines} lines, {len(files)} files): trusted"
 
