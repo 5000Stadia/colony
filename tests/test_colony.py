@@ -361,6 +361,16 @@ class AdaptTest(Base):
         clock.run(self.project, max_rows=1)
         self.assertEqual(self.moves(), [(30, 25)])
 
+    def test_a_trusted_row_that_breaks_a_check_lowers_the_threshold(self):
+        self.spine_rows(2, impact=2)
+        self.project.spine.write_text(self.project.spine.read_text().replace("test -f work.txt", "test ! -f broken.txt"))
+        self.configure(review="auto", review_if_risk_at_least=30)
+        os.environ["FAKE_ASSESS"] = "confidence 9/10 — simple"       # risk 2: trusted without review
+        os.environ["FAKE_BREAK_ROW"] = "2"
+        with self.assertRaises(clock.Stop):
+            clock.run(self.project, max_rows=2)
+        self.assertEqual(self.moves(), [(30, 25)], "a miss review skipped counts at once, like a finding")
+
     def test_reviews_that_find_nothing_raise_it_and_the_bounds_hold(self):
         self.spine_rows(4, impact=9)
         self.configure(review="auto", review_if_risk_at_least=10, review_ceiling=12, waves_per_row=1)

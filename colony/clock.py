@@ -109,9 +109,9 @@ def review_threshold(project):
 
 
 def adapt_threshold(project, row):
-    """Gentle guidance from outcomes: a review that found real problems lowers the threshold a step, so
-    reviews come a little more often; three in a row that found nothing raise it a step. Bounded, and
-    recorded, so it can be read and undone."""
+    """Gentle guidance from outcomes, leaning to quality: a review that found real problems, or a row review
+    trusted that then broke a check, lowers the threshold a step at once; only three empty reviews in a
+    row raise it a step. Bounded, and recorded, so it can be read and undone."""
     cfg = project.config()
     current = review_threshold(project)
     if current is None or not cfg.get("review_adapt"):
@@ -123,7 +123,11 @@ def adapt_threshold(project, row):
     last_move_row = since[-1]["row"] if since else 0
     recent = [e["review_fixes"] for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed and e["row"] > last_move_row]
     step, new, why = cfg["review_adapt_step"], None, None
-    if row in reviewed and outcomes and outcomes[-1] > 0:
+    missed = row not in reviewed and any(e["kind"] == "evidence" and e["type"] == "regression" and e["row"] == row
+                                         for e in ledger)
+    if missed:
+        new, why = current - step, f"row {row} was trusted without review and broke a check that had passed"
+    elif row in reviewed and outcomes and outcomes[-1] > 0:
         new, why = current - step, f"row {row}'s review found {outcomes[-1]} real problem(s)"
     elif len(recent) >= 3 and not any(recent[-3:]):
         new, why = current + step, "three reviews in a row found nothing"
@@ -196,6 +200,7 @@ def run_row(project, row, cap):
     failing = [s for s in field.signals(project, row=number, wave=99) if s["kind"] == "check"]
     if failing:
         health.review_health(project, number, before, after)   # a row that cannot close is evidence too
+        adapt_threshold(project, number)
         raise Stop(f"row {number} cannot close: " + "; ".join(field.render(s) for s in failing))
     close(project, row, start, cap, before, after)
 
@@ -224,8 +229,8 @@ def close(project, row, start, cap, before=None, after=None):
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
                   review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()},
                   files=changed_files(project, start, "HEAD"))
-    adapt_threshold(project, number)
     health.review_health(project, number, before, after)
+    adapt_threshold(project, number)
     note_path = project.state / "closing-note.md"
     note = note_path.read_text().strip() if note_path.exists() else ""
     note_path.unlink(missing_ok=True)

@@ -6,6 +6,6 @@ many agents found it independently.
 Fix what is real. For each signal, answer it with one line:
 `python3 -m colony field resolve ID --fixed --text "what you changed"` or
 `python3 -m colony field resolve ID --declined --text "why it stands"`.
-Declining is right when a signal is wrong or not worth what it costs; say which.
+Declining is right when a signal is wrong, or when the fix would make the work worse; say which.
 
 End your final message with a line `STATUS: done`.

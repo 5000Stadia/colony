@@ -184,12 +184,17 @@ def overview(project):
     stops = [e for e in ledger if e["kind"] == "run-stopped"]
     if stops:
         lines.append(f"- **Runs stopped:** {len(stops)} — last: {stops[-1].get('reason', '')[:160]}")
-    patterns = []
-    if reviewed_rows and not fixes and review_cost > 0:
-        patterns.append(f"review cost ${review_cost:.2f} and found nothing: narrow the risky areas or raise the threshold")
-    if len(costs) >= 4 and costs[-1] > 2 * costs[0]:
-        patterns.append("rows are getting more expensive as the project grows")
+    # Quality first: what went wrong comes before what cost money, and review of the person's risky areas
+    # is never offered up for saving — a quiet review there is the insurance working.
+    look = [f"row {e['row']} broke a check that had passed" for e in ev if e["type"] == "regression"]
+    look += [f"row {e['row']} re-made something the project already had" for e in ev if e["type"] == "duplicate"]
     if len(ev) >= 2 and not esc:
-        patterns.append("lost context keeps showing without a remedy switched on")
-    lines.append("- **Costing without returning:** " + ("; ".join(patterns) if patterns else "nothing stands out"))
+        look.append("lost context keeps showing without a remedy switched on")
+    unforced = [e["row"] for e in reviews if e["review"] and not e["why"].startswith("touches risky areas")]
+    unforced_fixes = sum(e.get("review_fixes", 0) for e in closed if e["row"] in unforced)
+    if len(unforced) >= 3 and not unforced_fixes:
+        look.append(f"{len(unforced)} reviews outside the risky areas found nothing; the threshold is already easing")
+    if len(costs) >= 4 and costs[-1] > 2 * costs[0]:
+        look.append("rows are getting more expensive as the project grows")
+    lines.append("- **Worth a look:** " + ("; ".join(look) if look else "nothing stands out"))
     return "\n".join(lines), (closed[-1]["row"] if closed else start)
