@@ -56,7 +56,9 @@ def brief(project, row, extra=""):
     open_ = [field.render(s) for s in field.signals(project, row=number)]
     return "\n\n".join([
         "# The goal (the person's words — never change them)\n\n" + project.spine.read_text(),
-        "# Where the project is now\n\n" + now_text(project),
+        "# Where the project is now\n\n" + now_text(project)
+        + ("\n\n`design/history.md` records what every earlier row did and why, including decisions that were "
+           "later changed; read the entries that bear on this row." if (project.design / "history.md").exists() else ""),
         f"# This row\n\nRow {number}: {target}\nDone looks like: {done}",
         "# What already exists that bears on it (from the map; read these lines, not everything)\n\n"
         + mapper.render(bearing),
