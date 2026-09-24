@@ -43,7 +43,7 @@ class Base(unittest.TestCase):
         self.project = Project(self.dir)
         os.environ["COLONY_CLAUDE"] = str(ROOT / "tests" / "fake_claude.py")
         os.environ["PYTHONPATH"] = str(ROOT)
-        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
+        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "FAKE_DUP", "FAKE_BREAK_ROW", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
             os.environ.pop(k, None)
         # Most tests exercise the full machinery: review on, reconciliation on, two named lineages.
         for f in self.project.specialists.glob("*.md"):
@@ -417,6 +417,66 @@ class PageTest(Base):
             self.assertEqual(len(memory.notes(self.project)), 1)
         finally:
             httpd.shutdown()
+
+
+class HealthTest(Base):
+    def escalations(self):
+        return [e for e in self.project.read("ledger.jsonl") if e["kind"] == "escalation"]
+
+    def test_a_healthy_small_project_switches_nothing_on(self):
+        self.spine()
+        self.configure(review="never")
+        clock.run(self.project, max_rows=2)
+        self.assertEqual(self.escalations(), [])
+        self.assertFalse(any(e["kind"] == "structure-proposal" for e in self.project.read("ledger.jsonl")))
+
+    def test_re_making_what_exists_switches_the_map_on(self):
+        self.spine()
+        self.configure(review="never")
+        (self.dir / "first.py").write_text('def compute_invoice_total(lines):\n    """Sum the lines."""\n')
+        clock.commit(self.project, "an existing function")
+        os.environ["FAKE_DUP"] = "1"
+        clock.run(self.project, max_rows=1)
+        [esc] = self.escalations()
+        self.assertEqual(esc["switched_on"], {"map_in_brief": True})
+        self.assertIn("computeinvoicetotal", esc["evidence"][0])
+        self.assertTrue(self.project.config()["map_in_brief"])
+
+    def test_breaking_what_an_earlier_row_built_switches_reconciliation_on(self):
+        self.spine(check="test ! -f broken.txt")
+        self.configure(review="never")
+        os.environ["FAKE_BREAK_ROW"] = "2"
+        with self.assertRaises(clock.Stop):
+            clock.run(self.project, max_rows=2)
+        [esc] = self.escalations()
+        self.assertEqual(esc["switched_on"], {"reconcile": True})
+        self.assertIn("passed at the last close", esc["evidence"][0])
+
+    def test_a_remedy_already_on_is_not_switched_again(self):
+        self.spine()
+        self.configure(review="never", map_in_brief=True)
+        (self.dir / "first.py").write_text('def compute_invoice_total(lines):\n    """Sum the lines."""\n')
+        clock.commit(self.project, "an existing function")
+        os.environ["FAKE_DUP"] = "1"
+        clock.run(self.project, max_rows=1)
+        self.assertEqual(self.escalations(), [])
+
+    def test_rising_reading_and_strain_are_measured(self):
+        from colony import health
+        for r, (read, cost) in enumerate([(100, 1), (110, 1), (90, 1), (400, 4), (420, 4), (450, 1)], start=1):
+            self.project.append("usage.jsonl", {"row": r, "wave": 0, "agent": "builder", "cache_read": read, "input": 0, "cost_usd": cost})
+        self.assertIn("three rows running", health.rising_reading(self.project))
+        for r in range(1, 5):
+            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "files": ["core/engine.py", f"row{r}.py"]})
+        signs = health.strain(self.project)
+        self.assertEqual(len(signs), 2)
+        self.assertTrue(any("core/engine.py" in s for s in signs))
+        health.review_health(self.project, 6)
+        [p] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "structure-proposal"]
+        self.assertIn("lane", p["proposal"])
+        health.review_health(self.project, 7)
+        self.assertEqual(sum(1 for e in self.project.read("ledger.jsonl") if e["kind"] == "structure-proposal"), 1,
+                         "a proposal is not repeated while it waits on the person")
 
 
 class LimitTest(Base):

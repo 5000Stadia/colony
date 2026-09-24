@@ -36,9 +36,9 @@ You are starting a long project for a person with colony. Follow these steps in 
    point them to `colony page`, where a note left on any row reaches that row's builder.
 7. **Leave the defaults alone unless the project gives a reason.** They are what won the tests below.
    Raise `effort` only for work that proves hard; set `"review_if_risk_at_least": 30` in
-   `.colony/config.json` if they want review wherever doubt times stakes runs high; turn on
-   `"reconcile": true` only once the project is too large for a fresh agent to re-read cheaply.
-   Add nothing else without evidence.
+   `.colony/config.json` if they want review wherever doubt times stakes runs high. Memory and
+   structure take care of themselves: colony switches memory on when it sees evidence of lost context
+   and proposes reorganisation when one builder is straining. Add nothing else without evidence.
 
 ## What the defaults are, and why
 
@@ -52,8 +52,11 @@ focused tests; `design/claims.md` holds each part's evidence.
   Review runs where the spine declares risk, or where a row's impact (set before the work) times the
   builder's doubt (reported after) crosses the project's rule — which then drifts gently with what
   reviews actually find. Reviewers are read-only and see the stakes and the builder's doubt first.
-- **Memory layers off until earned.** NOW, reconciliation and narrative history cost more and grew
-  faster at fourteen rows without improving results; they are insurance for larger projects.
+- **Memory switches on when the project shows it needs it.** NOW, reconciliation, narrative history and
+  the map in every brief cost more and grew faster at fourteen rows without improving results, so they
+  stay off — until the project re-makes something it already had, breaks something it built, or its
+  re-reading cost keeps climbing. Then the fitting remedy switches on by itself, with its evidence on
+  the page. Strain on one builder produces a reorganisation proposal for the person.
 - **Names carry scope.** Agents named for role, scope and lifetime kept to their own work at a border
   in 16 of 16 runs; neutral names crossed every time.
 - **Nothing irreversible without the person.** Publishing, spending and sending stop as forks.

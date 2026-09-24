@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import claude, field, mapper, memory, specialists
+from . import claude, field, health, mapper, memory, specialists
 
 PROMPTS = Path(__file__).parent / "prompts"
 
@@ -30,6 +30,7 @@ def run_checks(project, row, wave):
     for command in memory.checks(project):
         place = f"check:{command}"
         done = subprocess.run(command, shell=True, cwd=project.root, capture_output=True, text=True, timeout=1800)
+        health.record_check(project, row, wave, command, done.returncode == 0)
         prior = [s for s in field.signals(project, row=row, wave=wave) if s["at"] == place]
         if done.returncode == 0:
             for s in prior:
@@ -141,6 +142,7 @@ def run_row(project, row, cap):
     cfg = project.config()
     session = str(uuid.uuid4())
     start = commit(project, f"row {number}: start")
+    before = mapper.build(project)[0]          # what existed, to tell whether this row re-makes any of it
     brief = memory.brief(project, row)
 
     def budget(want):
@@ -152,6 +154,7 @@ def run_row(project, row, cap):
     built = claude.call(project, (PROMPTS / "builder-row.md").read_text().format(brief=brief, row=number),
                         agent="builder", row=number, wave=0, budget=budget(cfg["builder_budget_usd"]), session=session)
     last = commit(project, f"row {number}: build")
+    after = mapper.build(project)[0]
     lineages = specialists.load(project)
     assessment = parse_assessment(built["said"])
     row_impact = memory.impact(project, number)
@@ -192,11 +195,12 @@ def run_row(project, row, cap):
     run_checks(project, number, cfg["waves_per_row"] + 1)
     failing = [s for s in field.signals(project, row=number, wave=99) if s["kind"] == "check"]
     if failing:
+        health.review_health(project, number, before, after)   # a row that cannot close is evidence too
         raise Stop(f"row {number} cannot close: " + "; ".join(field.render(s) for s in failing))
-    close(project, row, start, cap)
+    close(project, row, start, cap, before, after)
 
 
-def close(project, row, start, cap):
+def close(project, row, start, cap, before=None, after=None):
     number, target, _ = row
     events = project.read("field.jsonl")
     answers = "\n".join(f"- #{e['of']} {'fixed' if e.get('fixed') else 'declined'}: {e['text']}"
@@ -218,8 +222,10 @@ def close(project, row, start, cap):
                 and e.get("by") == "builder")
     # The outcome the builder's assessment is scored against: real problems review found and fixed.
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
-                  review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()})
+                  review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()},
+                  files=changed_files(project, start, "HEAD"))
     adapt_threshold(project, number)
+    health.review_health(project, number, before, after)
     note_path = project.state / "closing-note.md"
     note = note_path.read_text().strip() if note_path.exists() else ""
     note_path.unlink(missing_ok=True)

@@ -74,7 +74,8 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
         project.append("waits.jsonl", {"row": row, "wave": wave, "agent": agent, "wait_s": wait, "at": time.time()})
         sleep(wait)
     record = {"row": row, "wave": wave, "agent": agent, "effort": effort, "seconds": round(time.time() - started),
-              "ok": not result.get("is_error", True), "said": (result.get("result") or "")[-400:]}
+              "ok": not result.get("is_error", True), "subtype": result.get("subtype", ""),
+              "said": (result.get("result") or "")[-400:]}
     record.update(meter(result))
     project.append("usage.jsonl", record)
     return record

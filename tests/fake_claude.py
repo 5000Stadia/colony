@@ -47,6 +47,10 @@ if prompt.startswith("You are `builder") and "Do this row now" in prompt:
     row = re.search(r"^Row (\d+): (.*)$", prompt, re.M)
     with open(root / "work.txt", "a") as fh:
         fh.write(f"row {row.group(1)}: {row.group(2)}\n")
+    if os.environ.get("FAKE_DUP"):
+        (root / "second.py").write_text('def compute_invoice_total(lines):\n    """Sums the lines again."""\n')
+    if os.environ.get("FAKE_BREAK_ROW") == row.group(1):
+        (root / "broken.txt").write_text("forgot what row 1 needed\n")
     assess = os.environ.get("FAKE_ASSESS", "confidence 9/10 — routine")
     finish(f"built\nASSESSMENT: {assess}\nSTATUS: done", cost=0.5)
 elif prompt.startswith("Wave "):
