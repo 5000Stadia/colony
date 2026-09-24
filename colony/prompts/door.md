@@ -17,16 +17,19 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    ## Where it goes            (local-only unless they said otherwise)
    ## Checks                   (commands that settle quality in seconds for this kind of work, each as
                                "- `command`" — tests, a build, a word count, a link check; or none)
+   ## Risky areas              (paths or files, each as "- `path`", where a mistake is expensive —
+                               money, data, security, anything published — and every change there is
+                               reviewed; leave it empty unless the person would want that)
    ## The spec list            (a table: | # | What to build now | What done looks like |, rows 1..n,
                                the smallest thing that works end to end first)
    **Next ID:** <n+1>
    **Approved:** no
 
-2. For each specialist this particular work needs beyond the two that every colony has (reuse, and
-   fresh eyes), write `.colony/specialists/<name>.md` as "# <name>", "## Mission" (who would attack
-   this work and how, in two or three sentences), "## Memory" (empty). Choose the few that would
-   find what matters most for this goal — a continuity reader for a novel, a numbers skeptic for a
-   business, an adversarial tester for software — not a roster.
+2. Only if this work has risky areas: for the one or two reviewers those areas need beyond the general
+   critic every colony has, write `.colony/specialists/<name>.md` as "# <name>", "## Mission" (who
+   would attack this work and how, in two or three sentences), "## Memory" (empty) — a numbers skeptic
+   for money, a continuity reader for a novel's canon. Most goals need none: a single strong agent is
+   the default, and review costs more than it returns except where a mistake is expensive.
 
 3. Write `design/questions.md`: the questions whose answers would most change the spine, each with
    your best guess at the answer, so the person can correct a draft instead of answering from scratch.
