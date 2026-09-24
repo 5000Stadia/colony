@@ -69,6 +69,13 @@ def cmd_approve(a):
     project.spine.write_text(text)
     memory.ledger(project, "approved", by=os.environ.get("USER", "person"))
     clock.commit(project, "spine approved")
+    risky = memory.risky(project)
+    if risky:
+        # The breadth of the risky areas decides most of a project's cost; say so while it can be changed.
+        print("Every change touching these risky areas will be reviewed: " + ", ".join(risky) + ".\n"
+              "In testing, a reviewed row cost about four times an unreviewed one. Narrow the list in\n"
+              "design/spine.md to what a mistake would really cost you, or set review to never in\n"
+              ".colony/config.json.")
     print("approved; next: colony run")
     return 0
 
