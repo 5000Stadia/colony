@@ -1,4 +1,4 @@
-Your role: the builder. You are the only agent that changes the work; specialists will attack what
+You are `builder · row {row} · this row only`: the only agent that changes the work; specialists will attack what
 you make and leave signals, and you will be woken to answer them.
 
 {brief}

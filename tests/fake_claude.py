@@ -36,7 +36,7 @@ if os.environ.get("FAKE_LIMIT_ONCE") and not seen.get("limited"):
     state.write_text(json.dumps(seen))
     finish("You've hit your session limit · resets 3:30am (America/Los_Angeles)", error=True, status=429)
 
-if "Your role: the builder." in prompt and "Do this row now" in prompt:
+if prompt.startswith("You are `builder") and "Do this row now" in prompt:
     row = re.search(r"^Row (\d+): (.*)$", prompt, re.M)
     with open(root / "work.txt", "a") as fh:
         fh.write(f"row {row.group(1)}: {row.group(2)}\n")
@@ -45,14 +45,14 @@ elif prompt.startswith("Wave "):
     for sid in re.findall(r"^#(\d+) ", prompt, re.M):
         colony("field", "resolve", sid, "--fixed", "--text", "fixed it")
     finish("fixed\nSTATUS: done", cost=0.3)
-elif "Your role: the specialist" in prompt:
+elif " · reads, never edits`" in prompt:
     name = agent.split("@")[0]
     if os.environ.get("FAKE_FORK") and name == "reuse":
         colony("field", "signal", "--kind", "fork", "--severity", "critical", "--at", "design/spine.md", "--text", "needs a decision")
     elif wave == 1:
         colony("field", "signal", "--kind", "hole", "--severity", "major", "--at", "work.txt:1", "--text", f"{name} found a hole")
     finish("probed", cost=0.05)
-elif "Your role: the reconciler." in prompt:
+elif prompt.startswith("You are `reconciler"):
     (root / "design" / "now.md").write_text("Status: row closed.\nNext: the next row.\n")
     with open(root / "design" / "history.md", "a") as fh:
         fh.write("## Row closed\nBuilt the row; decided nothing new.\n\n")

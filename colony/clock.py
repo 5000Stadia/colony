@@ -74,7 +74,7 @@ def run_row(project, row, cap):
             raise Stop(f"the cap of ${cap:.2f} is reached")
         return min(want, left)
 
-    claude.call(project, (PROMPTS / "builder-row.md").read_text().format(brief=brief),
+    claude.call(project, (PROMPTS / "builder-row.md").read_text().format(brief=brief, row=number),
                 agent="builder", row=number, wave=0, budget=budget(cfg["builder_budget_usd"]), session=session)
     last = commit(project, f"row {number}: build")
     lineages = specialists.load(project)
@@ -87,7 +87,7 @@ def run_row(project, row, cap):
         def attack(name):
             lineage = lineages[name]
             prompt = (PROMPTS / "specialist.md").read_text().format(
-                name=name, row=number, mission=lineage["mission"], limit=cfg["signals_per_specialist"],
+                name=name, row=number, wave=wave, mission=lineage["mission"], limit=cfg["signals_per_specialist"],
                 memory="\n".join(f"- {m}" for m in lineage["memory"]) or "- none yet",
                 brief=brief_now, change=change, verify=verification(project, number, name))
             return claude.call(project, prompt, agent=f"{name}@w{wave}", row=number, wave=wave,
