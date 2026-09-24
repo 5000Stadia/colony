@@ -12,4 +12,11 @@ How its signals were answered:
 Previous `design/now.md`:
 {now}
 
+Then append one entry to the end of `design/history.md` — the project's narrative, which is only
+ever appended to, never edited, so that someone years from now can learn what happened and why:
+
+## Row {row} — {target} ({date})
+What was built, in two or three sentences. Every decision made that the goal did not dictate, and
+why. Anything this row changed or superseded from before, named as superseded. What is left open.
+
 Change no other file. Do not run git.

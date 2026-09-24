@@ -54,6 +54,8 @@ elif "Your role: the specialist" in prompt:
     finish("probed", cost=0.05)
 elif "Your role: the reconciler." in prompt:
     (root / "design" / "now.md").write_text("Status: row closed.\nNext: the next row.\n")
+    with open(root / "design" / "history.md", "a") as fh:
+        fh.write("## Row closed\nBuilt the row; decided nothing new.\n\n")
     finish("reconciled", cost=0.02)
 elif "Your role: the front door." in prompt:
     (root / "design" / "spine.md").write_text("# Draft — spine\n\n## The spec list\n| # | What | Done |\n|---|---|---|\n| 1 | a | b |\n\n**Approved:** no\n")

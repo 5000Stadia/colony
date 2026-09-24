@@ -121,6 +121,8 @@ class ClockTest(Base):
         clock.run(self.project, max_rows=1)
         self.assertEqual([r[0] for r in memory.rows(self.project)], [2])
         self.assertTrue((self.dir / "design" / "now.md").read_text().startswith("Status: row closed."))
+        history = (self.dir / "design" / "history.md").read_text()
+        self.assertTrue(history.startswith("# History") and "## Row closed" in history, "history is appended, with its header")
         usage = self.project.read("usage.jsonl")
         agents = {u["agent"].split("@")[0] for u in usage}
         self.assertEqual(agents, {"builder", "reuse", "fresh-eyes", "reconciler"})

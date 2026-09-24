@@ -1,6 +1,7 @@
 """The clock: drives each row through build, checks, specialist waves and close."""
 import concurrent.futures as cf
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -101,8 +102,12 @@ def close(project, row, start, cap):
     answers = "\n".join(f"- #{e['of']} {'fixed' if e.get('fixed') else 'declined'}: {e['text']}"
                         for e in events if e["type"] == "resolve" and e.get("row") == number) or "- none"
     change = _git(project, "diff", "--stat", start, "HEAD").strip()
+    history = project.design / "history.md"
+    if not history.exists():
+        history.write_text("# History\n\nAppended at every row close; never edited. The newest entry is last.\n\n")
     claude.call(project, (PROMPTS / "reconcile.md").read_text().format(
-        row=number, target=target, change=change, answers=answers, now=memory.now_text(project)),
+        row=number, target=target, change=change, answers=answers, now=memory.now_text(project),
+        date=time.strftime("%Y-%m-%d")),
         agent="reconciler", row=number, wave=0, budget=project.config()["reconcile_budget_usd"])
     memory.close_row(project, number)
     gained = specialists.harvest(project, number)
