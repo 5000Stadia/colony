@@ -38,7 +38,10 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
     """Run one agent to completion in the project root and record what it cost."""
     cfg = project.config()
     binary = os.environ.get("COLONY_CLAUDE", "claude")
-    cmd = [binary, "-p", prompt, "--model", cfg["model"], "--effort", cfg["effort"],
+    role = agent.split("@")[0]
+    role = role if role in ("builder", "reconciler", "door") else "specialist"
+    effort = cfg.get(f"effort_{role}") or cfg["effort"]
+    cmd = [binary, "-p", prompt, "--model", cfg["model"], "--effort", effort,
            "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "bypassPermissions",
            "--output-format", "stream-json", "--verbose", "--max-budget-usd", f"{budget:.2f}"]
     if session:
@@ -68,7 +71,7 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
             break
         project.append("waits.jsonl", {"row": row, "wave": wave, "agent": agent, "wait_s": wait, "at": time.time()})
         sleep(wait)
-    record = {"row": row, "wave": wave, "agent": agent, "seconds": round(time.time() - started),
+    record = {"row": row, "wave": wave, "agent": agent, "effort": effort, "seconds": round(time.time() - started),
               "ok": not result.get("is_error", True), "said": (result.get("result") or "")[-400:]}
     record.update(meter(result))
     project.append("usage.jsonl", record)

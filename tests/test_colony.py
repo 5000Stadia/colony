@@ -165,6 +165,17 @@ class ClockTest(Base):
         self.assertIn("cap", str(stop.exception))
 
 
+class EffortTest(Base):
+    def test_each_role_can_run_at_its_own_effort(self):
+        import json as _json
+        self.spine()
+        (self.project.state / "config.json").write_text(_json.dumps({"effort": "medium", "effort_builder": "low",
+                                                                      "effort_specialist": "high"}))
+        clock.run(self.project, max_rows=1)
+        by_role = {u["agent"].split("@")[0]: u["effort"] for u in self.project.read("usage.jsonl")}
+        self.assertEqual(by_role, {"builder": "low", "reuse": "high", "fresh-eyes": "high", "reconciler": "medium"})
+
+
 class LimitTest(Base):
     def test_a_refused_call_waits_and_is_repeated_not_counted(self):
         self.spine()
