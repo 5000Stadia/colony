@@ -40,4 +40,7 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    your best guess at the answer, so the person can correct a draft instead of answering from scratch.
 
 Nothing about this kind of work is built into the colony; everything it knows about the goal comes
-from what you write here. Do not run git.
+from what you write here. Where this kind of work already has conventions its own tools read — a
+package manifest and tests for code, a manuscript's folders and word count for a book, a calendar or a
+spreadsheet for a plan — put facts there and name them in the checks, so the tools keep them true;
+the spine holds only what no convention covers. Do not run git.
