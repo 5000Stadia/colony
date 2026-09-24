@@ -8,6 +8,7 @@ located signals and a project memory.
     colony status                   the rows, NOW and the open signals
     colony cost                     dollars and tokens, per row and per agent
     colony calibration              the builder's own forecast beside what review then found
+    colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
     colony field view|signal|resolve   the channel agents use (their name, row and wave are set for them)
 
@@ -88,6 +89,7 @@ def cmd_run(a):
         print(f"{n} row(s) closed; ${clock.spent(project):.2f} spent in all")
         return 0
     except clock.Stop as stop:
+        memory.ledger(project, "run-stopped", reason=str(stop))
         print(f"stopped: {stop}")
         return 3
 
@@ -135,6 +137,12 @@ def cmd_calibration(a):
     return 0
 
 
+def cmd_page(a):
+    from . import page
+    page.serve(Project.here(), a.port)
+    return 0
+
+
 def cmd_map(a):
     project = Project.here()
     _, changed = mapper.build(project)
@@ -179,6 +187,7 @@ def main(argv=None):
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("cost").set_defaults(fn=cmd_cost)
     sub.add_parser("calibration").set_defaults(fn=cmd_calibration)
+    p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)
     fs.add_parser("view")

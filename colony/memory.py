@@ -1,10 +1,39 @@
 """The spine, NOW and the ledger, and the brief assembled from them for each step."""
 import re
+import secrets
 import time
 
 from . import field, mapper
 
 ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|(?:\s*(\d+)\s*(?:[—–-]+\s*([^|]*?))?\s*\|)?\s*$")
+
+
+NOTES = "notes.jsonl"
+
+
+def notes(project):
+    """Notes the person left on rows from the page, oldest first, with whether each was folded in."""
+    merged = {}
+    for e in project.read(NOTES):
+        merged.setdefault(e["id"], {}).update(e)
+    return sorted(merged.values(), key=lambda n: n.get("at", ""))
+
+
+def add_note(project, row, author, text):
+    entry = {"id": secrets.token_hex(5), "row": row, "author": author or "person", "text": text.strip(),
+             "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "folded": False}
+    project.append(NOTES, entry)
+    return entry
+
+
+def waiting_notes(project, row):
+    return [n for n in notes(project) if n.get("row") == row and not n.get("folded")]
+
+
+def fold_notes(project, row):
+    """A row's notes were in its builder's brief; once the row closes they are marked as folded in."""
+    for n in waiting_notes(project, row):
+        project.append(NOTES, {"id": n["id"], "folded": True, "folded_row": row})
 
 
 def rows(project):
@@ -109,7 +138,8 @@ def brief(project, row, extra=""):
         "# Where the project is now\n\n" + now_text(project)
         + ("\n\n`git log` holds what every earlier row did and why, including decisions that were later "
            "changed; read the entries that bear on this row." if project.config().get("reconcile") else ""),
-        f"# This row\n\nRow {number}: {target}\nDone looks like: {done}",
+        f"# This row\n\nRow {number}: {target}\nDone looks like: {done}"
+        + ("".join(f"\n\nA note from the person on this row ({n['at'][:10]}): {n['text']}" for n in waiting_notes(project, number))),
         bearing,
         "# Open signals on this row\n\n" + ("\n".join(open_) if open_ else "none"),
     ])

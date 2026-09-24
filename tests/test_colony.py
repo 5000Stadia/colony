@@ -374,6 +374,51 @@ class AdaptTest(Base):
         self.assertIn("review at 12", last["why"])
 
 
+class PageTest(Base):
+    def test_the_page_shows_now_roadmap_history_and_cost(self):
+        from colony import page
+        self.spine()
+        clock.run(self.project, max_rows=1)
+        html_ = page.render(self.project)
+        for part in ("Roadmap", "Write the second line", "History", "row 1 closed", "Built the row; decided nothing new.",
+                     "Cost", "reviewed"):
+            self.assertIn(part, html_)
+
+    def test_a_note_reaches_its_rows_builder_and_is_folded_in_after(self):
+        self.spine()
+        memory.add_note(self.project, 1, "person", "use the grid from the sketch")
+        self.assertIn("use the grid from the sketch", memory.brief(self.project, memory.rows(self.project)[0]))
+        clock.run(self.project, max_rows=1)
+        argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["builder"][0]
+        self.assertIn("use the grid from the sketch", argv[argv.index("-p") + 1])
+        [n] = memory.notes(self.project)
+        self.assertTrue(n["folded"])
+
+    def test_the_page_answers_only_itself(self):
+        import threading, urllib.request, urllib.error
+        from http.server import ThreadingHTTPServer
+        from colony import page
+        self.spine()
+        page.Handler.project = self.project
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), page.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        try:
+            ok = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read().decode()
+            self.assertIn("Roadmap", ok)
+            data = b"row=2&text=from+the+page"
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/note", data=data, headers={"Origin": f"http://127.0.0.1:{port}"})
+            urllib.request.urlopen(req)
+            self.assertEqual([n["text"] for n in memory.notes(self.project)], ["from the page"])
+            bad = urllib.request.Request(f"http://127.0.0.1:{port}/note", data=b"row=2&text=evil", headers={"Origin": "https://evil.example"})
+            with self.assertRaises(urllib.error.HTTPError) as err:
+                urllib.request.urlopen(bad)
+            self.assertEqual(err.exception.code, 403)
+            self.assertEqual(len(memory.notes(self.project)), 1)
+        finally:
+            httpd.shutdown()
+
+
 class LimitTest(Base):
     def test_a_refused_call_waits_and_is_repeated_not_counted(self):
         self.spine()

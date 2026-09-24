@@ -12,6 +12,7 @@ what matters for its next step. It reports what every step cost.
     colony approve
     colony run --rows 1 --cap 20
     colony cost
+    colony page                               # the project at a glance, with a note box on every row
 
 For a front door as a conversation inside Claude Code, copy `claude/skills/colony` into
 `~/.claude/skills/`.

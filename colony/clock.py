@@ -210,6 +210,7 @@ def close(project, row, start, cap):
             agent="reconciler", row=number, wave=0, budget=cfg["reconcile_budget_usd"])
         enforce_now_budget(project, number)
     memory.close_row(project, number)
+    memory.fold_notes(project, number)
     gained = specialists.harvest(project, number)
     mapper.build(project)
     cost = sum(r["cost_usd"] for r in project.read("usage.jsonl") if r["row"] == number)
