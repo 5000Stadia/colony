@@ -70,6 +70,7 @@ focused tests; `design/claims.md` holds each part's evidence.
     colony status                rows, where the project stands, open signals
     colony cost                  dollars and tokens by row and by agent
     colony calibration           the builder's confidence beside what review found
+    colony checkpoint            effectiveness since the last checkpoint, from the records (no tokens)
     colony page                  the project at a glance, with a note box on every row
     colony map QUERY             what already exists that bears on something
 

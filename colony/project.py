@@ -19,6 +19,7 @@ DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 2,
             "review_adapt_step": 5,      # finds real problems, up a step after three that find nothing,
             "review_floor": 5,           # never outside these bounds; every move is in the ledger
             "review_ceiling": 80,
+            "checkpoint_every": 5,       # the page says a checkpoint is due after this many rows; never stops a run
             "reconcile": False,          # NOW and history, rewritten at every row close
             "now_max_lines": 25,
             "map_in_brief": False}

@@ -114,11 +114,16 @@ def review_health(project, row, before=None, after=None):
         dup = duplicates(before, after)
         if dup:
             lost.append(("duplicate", dup))
-            escalate(project, row, dup, {"map_in_brief": True},
-                     "the project re-made something it already had: builders now see the map of what exists")
+            # A shared name is a heuristic, so one coincidence is only recorded; the second time is evidence.
+            project.append("ledger.jsonl", {"kind": "evidence", "row": row, "type": "duplicate", "detail": dup})
+            seen = [e for e in project.read("ledger.jsonl") if e["kind"] == "evidence" and e["type"] == "duplicate"]
+            if len(seen) >= 2:
+                escalate(project, row, [d for e in seen for d in e["detail"]], {"map_in_brief": True},
+                         "the project re-made things it already had, twice: builders now see the map of what exists")
     reg = regressions(project, row)
     if reg:
         lost.append(("regression", reg))
+        project.append("ledger.jsonl", {"kind": "evidence", "row": row, "type": "regression", "detail": reg})
         escalate(project, row, [f"{c} passed at the last close and failed in row {row}" for c in reg],
                  {"reconcile": True},
                  "the project broke something it had built: NOW and the reasons behind each row now travel forward")
@@ -132,3 +137,59 @@ def review_health(project, row, before=None, after=None):
                                         "proposal": "one builder is carrying more than it should: consider splitting the "
                                                     "most-reworked area into its own lane"})
     return lost, signs
+
+
+def since_checkpoint(project):
+    """Every ledger and usage record since the last checkpoint, and the row it was taken at."""
+    ledger = project.read("ledger.jsonl")
+    marks = [i for i, e in enumerate(ledger) if e["kind"] == "checkpoint"]
+    start_row = ledger[marks[-1]]["row"] if marks else 0
+    return [e for e in ledger[(marks[-1] + 1 if marks else 0):]], start_row
+
+
+def overview(project):
+    """A broad, free look at effectiveness since the last checkpoint: progress, cost, what review returned,
+    lost context, strain — and the patterns that cost without returning anything."""
+    ledger, start = since_checkpoint(project)
+    closed = [e for e in ledger if e["kind"] == "row-closed"]
+    usage = [u for u in project.read("usage.jsonl") if u["row"] > start]
+    reviews = [e for e in ledger if e["kind"] == "review"]
+    reviewed_rows = {e["row"] for e in reviews if e["review"]}
+    review_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"].split("@")[0] not in ("builder", "reconciler", "door"))
+    build_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "builder")
+    fixes = sum(e.get("review_fixes", 0) for e in closed)
+    costs = [e["cost_usd"] for e in closed]
+    if not closed:
+        return f"# Checkpoint — no rows closed since row {start}", start
+    lines = [f"# Checkpoint — rows {start + 1}–{closed[-1]['row']}", ""]
+    lines.append(f"- **Progress:** {len(closed)} row(s) closed for ${sum(costs):.2f}" + (
+        f"; per row ${costs[0]:.2f} at the start of the stretch, ${costs[-1]:.2f} at the end" if len(costs) >= 2 else ""))
+    lines.append(f"- **Review:** {len(reviewed_rows)} of {len(reviews)} row(s) reviewed, ${review_cost:.2f} "
+                 f"(building ${build_cost:.2f}); review fixed {fixes} real problem(s)"
+                 + (f" — ${review_cost / fixes:.2f} per fix" if fixes else ""))
+    moves = [e for e in ledger if e["kind"] == "threshold"]
+    if moves:
+        lines.append("- **Review threshold:** " + "; ".join(f"{m['from']}→{m['to']} ({m['why']})" for m in moves))
+    ev = [e for e in ledger if e["kind"] == "evidence"]
+    if ev:
+        lines.append("- **Evidence of lost context:** " + "; ".join(f"row {e['row']} {e['type']}: {', '.join(e['detail'])[:160]}" for e in ev))
+    esc = [e for e in ledger if e["kind"] == "escalation"]
+    if esc:
+        lines.append("- **Switched on:** " + "; ".join(f"after row {e['row']}: {', '.join(e['switched_on'])}" for e in esc))
+    signs = strain(project)
+    if signs:
+        lines.append("- **Strain on one builder:** " + "; ".join(signs))
+    for p in (e for e in ledger if e["kind"] == "structure-proposal"):
+        lines.append(f"- **Proposed after row {p['row']}:** {p.get('proposal', '')}")
+    stops = [e for e in ledger if e["kind"] == "run-stopped"]
+    if stops:
+        lines.append(f"- **Runs stopped:** {len(stops)} — last: {stops[-1].get('reason', '')[:160]}")
+    patterns = []
+    if reviewed_rows and not fixes and review_cost > 0:
+        patterns.append(f"review cost ${review_cost:.2f} and found nothing: narrow the risky areas or raise the threshold")
+    if len(costs) >= 4 and costs[-1] > 2 * costs[0]:
+        patterns.append("rows are getting more expensive as the project grows")
+    if len(ev) >= 2 and not esc:
+        patterns.append("lost context keeps showing without a remedy switched on")
+    lines.append("- **Costing without returning:** " + ("; ".join(patterns) if patterns else "nothing stands out"))
+    return "\n".join(lines), (closed[-1]["row"] if closed else start)

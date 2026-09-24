@@ -430,13 +430,22 @@ class HealthTest(Base):
         self.assertEqual(self.escalations(), [])
         self.assertFalse(any(e["kind"] == "structure-proposal" for e in self.project.read("ledger.jsonl")))
 
-    def test_re_making_what_exists_switches_the_map_on(self):
+    def test_re_making_what_exists_twice_switches_the_map_on(self):
         self.spine()
         self.configure(review="never")
         (self.dir / "first.py").write_text('def compute_invoice_total(lines):\n    """Sum the lines."""\n')
         clock.commit(self.project, "an existing function")
         os.environ["FAKE_DUP"] = "1"
         clock.run(self.project, max_rows=1)
+        self.assertEqual(self.escalations(), [], "one shared name is only recorded")
+        (self.dir / "second.py").unlink()
+        (self.dir / "third.py").write_text('def compute_invoice_total(lines):\n    """Once more."""\n')
+        clock.commit(self.project, "something else re-made")
+        os.environ.pop("FAKE_DUP")
+        from colony import health
+        health.review_health(self.project, 2, mapper.build(self.project)[0], None)
+        health.review_health(self.project, 2, {k: v for k, v in mapper.build(self.project)[0].items() if k != "third.py"},
+                             mapper.build(self.project)[0])
         [esc] = self.escalations()
         self.assertEqual(esc["switched_on"], {"map_in_brief": True})
         self.assertIn("computeinvoicetotal", esc["evidence"][0])
@@ -451,6 +460,19 @@ class HealthTest(Base):
         [esc] = self.escalations()
         self.assertEqual(esc["switched_on"], {"reconcile": True})
         self.assertIn("passed at the last close", esc["evidence"][0])
+
+    def test_the_checkpoint_overview_is_free_and_resets_its_window(self):
+        self.spine()
+        self.configure(review="always")
+        clock.run(self.project, max_rows=1)
+        env = dict(os.environ, COLONY_ROOT=str(self.dir))
+        out = subprocess.run([sys.executable, "-m", "colony", "checkpoint"], env=env, capture_output=True, text=True).stdout
+        self.assertIn("# Checkpoint — rows 1–1", out)
+        self.assertIn("review fixed", out)
+        self.assertNotIn("reconciler", [u["agent"] for u in self.project.read("usage.jsonl")][-1:], "no tokens spent")
+        clock.run(self.project, max_rows=1)
+        text, _ = __import__("colony.health", fromlist=["x"]).overview(self.project)
+        self.assertIn("rows 2–2", text)
 
     def test_a_remedy_already_on_is_not_switched_again(self):
         self.spine()

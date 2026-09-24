@@ -174,6 +174,12 @@ def render(project):
     esc = [x for x in project.read("ledger.jsonl") if x["kind"] in ("escalation", "structure-proposal")]
     from .health import strain
     signs = strain(project)
+    from .health import since_checkpoint
+    _, cp_row = since_checkpoint(project)
+    closed_since = [x for x in project.read("ledger.jsonl") if x["kind"] == "row-closed" and x["row"] > cp_row]
+    if len(closed_since) >= project.config()["checkpoint_every"]:
+        out.append(f"<div class='card fork'><b>A checkpoint is due</b> — {len(closed_since)} rows since the last. "
+                   "Run <code>colony checkpoint</code> for a broad look; it reads the records and spends no tokens.</div>")
     out.append("<h2>Health</h2>")
     if not esc and not signs:
         out.append("<div class='card muted'>No sign that the project has outgrown its shape. Nothing extra is switched on.</div>")
