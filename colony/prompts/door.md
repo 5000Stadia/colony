@@ -20,8 +20,11 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    ## Risky areas              (paths or files, each as "- `path`", where a mistake is expensive —
                                money, data, security, anything published — and every change there is
                                reviewed; leave it empty unless the person would want that)
-   ## The spec list            (a table: | # | What to build now | What done looks like |, rows 1..n,
-                               the smallest thing that works end to end first)
+   ## The spec list            (a table: | # | What to build now | What done looks like | Impact |,
+                               rows 1..n, the smallest thing that works end to end first. Impact is
+                               how much a mistake in that row would hurt, 1 to 10: 1 a cosmetic slip,
+                               10 money, data, or anything published or irreversible. You set it now,
+                               before the work, so the one who builds the row never rates its stakes.)
    **Next ID:** <n+1>
    **Approved:** no
 

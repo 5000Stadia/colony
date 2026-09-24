@@ -251,38 +251,56 @@ class AssessmentTest(Base):
         [d] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"]
         return d
 
-    def test_uncertain_high_impact_work_crosses_the_rule(self):
+    def spine_with_impact(self, impact):
         self.spine()
+        text = self.project.spine.read_text().replace(
+            "| 1 | Write the first line | work.txt exists |", f"| 1 | Write the first line | work.txt exists | {impact} |")
+        self.project.spine.write_text(text)
+
+    def test_the_assigners_impact_times_the_builders_doubt_triggers_review(self):
+        self.spine_with_impact(8)
         self.configure(review="auto", review_if_risk_at_least=25)
-        os.environ["FAKE_ASSESS"] = "confidence 5/10, impact 8/10 — the tax path is uncertain and moves money"
+        os.environ["FAKE_ASSESS"] = "confidence 5/10 — the tax path is uncertain"
         clock.run(self.project, max_rows=1)
         d = self.decision()
         self.assertTrue(d["review"])
-        self.assertEqual(d["assessment"]["risk"], 40)
-        self.assertIn("risk at 40", d["why"])
+        self.assertEqual((d["assessment"]["impact"], d["assessment"]["risk"]), (8, 40))
+        self.assertIn("set when it was assigned", d["why"])
 
-    def test_uncertain_but_harmless_work_is_trusted(self):
-        self.spine()
+    def test_doubt_on_harmless_work_is_trusted(self):
+        self.spine_with_impact(2)
         self.configure(review="auto", review_if_risk_at_least=25)
-        os.environ["FAKE_ASSESS"] = "confidence 4/10, impact 2/10 — unsure about wording in help text"
+        os.environ["FAKE_ASSESS"] = "confidence 4/10 — unsure about wording in help text"
         clock.run(self.project, max_rows=1)
         d = self.decision()
         self.assertFalse(d["review"])
         self.assertEqual(d["assessment"]["risk"], 12)
 
-    def test_the_builder_is_never_told_the_rule(self):
+    def test_a_row_without_impact_is_not_ruled_on(self):
         self.spine()
+        self.configure(review="auto", review_if_risk_at_least=1)
+        os.environ["FAKE_ASSESS"] = "confidence 1/10 — no idea"
+        clock.run(self.project, max_rows=1)
+        d = self.decision()
+        self.assertFalse(d["review"])
+        self.assertNotIn("risk", d["assessment"])
+
+    def test_the_builder_sees_the_stakes_but_never_the_rule(self):
+        # Knowing a row's impact makes a builder careful; knowing the threshold would let it shade its
+        # confidence to stay under it.
+        self.spine_with_impact(8)
         self.configure(review="auto", review_if_risk_at_least=25)
         clock.run(self.project, max_rows=1)
         argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["builder"][0]
         prompt = argv[argv.index("-p") + 1]
-        self.assertIn("ASSESSMENT:", prompt)
-        self.assertNotIn("25", prompt)
+        self.assertIn("ASSESSMENT: confidence", prompt)
+        self.assertIn("| 8 |", prompt)
         self.assertNotIn("review_if", prompt)
+        self.assertNotIn("25", prompt)
 
     def test_calibration_sets_the_forecast_beside_what_review_found(self):
-        self.spine()
-        os.environ["FAKE_ASSESS"] = "confidence 5/10, impact 6/10 — unsure"
+        self.spine_with_impact(6)
+        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"
         clock.run(self.project, max_rows=1)
         env = dict(os.environ, COLONY_ROOT=str(self.dir))
         out = json.loads(subprocess.run([sys.executable, "-m", "colony", "calibration"], env=env,

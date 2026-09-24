@@ -4,7 +4,7 @@ import time
 
 from . import field, mapper
 
-ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|\s*$")
+ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|(?:\s*(\d+)\s*\|)?\s*$")
 
 
 def rows(project):
@@ -15,6 +15,16 @@ def rows(project):
         return []
     return [(int(r.group(1)), r.group(2).strip(), r.group(3).strip())
             for r in (ROW.match(line.strip()) for line in m.group(1).splitlines()) if r]
+
+
+def impact(project, number):
+    """The impact the row's assigner gave it — how much a mistake here would hurt, 1 to 10 — or None."""
+    text = project.spine.read_text()
+    for line in text.splitlines():
+        r = ROW.match(line.strip())
+        if r and int(r.group(1)) == number and r.group(4):
+            return min(max(int(r.group(4)), 1), 10)
+    return None
 
 
 def approved(project):

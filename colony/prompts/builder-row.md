@@ -14,8 +14,7 @@ needs a decision the goal does not answer, leave a fork —
 and stop. Do not edit `design/spine.md` or `design/map.md`, and do not run git.
 
 End your final message with two lines. First an honest forecast, which will be checked against what
-review and later checks find — confidence is the chance this row meets its done and breaks nothing
-(not how good it is — others judge that); impact is how much it would hurt if it were wrong (1 a
-cosmetic slip, 10 money, data, or anything published or irreversible):
-`ASSESSMENT: confidence N/10, impact N/10 — <one sentence: what is least certain, and what it would hurt>`
+review and later checks find — your confidence that this row meets its done and breaks nothing (not
+how good it is — others judge that):
+`ASSESSMENT: confidence N/10 — <one sentence: what is least certain>`
 Then `STATUS: done`.

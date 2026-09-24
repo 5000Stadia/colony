@@ -13,8 +13,8 @@ DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 2,
             "review_min_lines": None,    # Size alone is not a reason: on a 1000-line one-row build, review
             "review_min_files": None,    # cost 1.3-2.4x and bought nothing measurable (pilots 5, 6). Set
                                          # these to also review large or wide changes.
-            "review_if_risk_at_least": None,  # a standing rule: risk = (10 - confidence) x impact, from the
-                                              # builder's own forecast, e.g. 25; the builder is never told it
+            "review_if_risk_at_least": None,  # a standing rule: risk = (10 - builder's confidence) x the row's
+                                              # impact, set by whoever assigned it; e.g. 25. Never shown to builders.
             "reconcile": False,          # NOW and history, rewritten at every row close
             "now_max_lines": 25,
             "map_in_brief": False}

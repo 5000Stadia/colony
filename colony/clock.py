@@ -62,7 +62,7 @@ def changed_files(project, a, b):
     return [f for f in _git(project, "diff", "--name-only", a, b).split() if f]
 
 
-ASSESSMENT = re.compile(r"ASSESSMENT:\s*confidence\s*(\d+)\s*/\s*10\s*,\s*impact\s*(\d+)\s*/\s*10\s*[—–-]*\s*(.*)", re.I)
+ASSESSMENT = re.compile(r"ASSESSMENT:\s*confidence\s*(\d+)\s*/\s*10\s*[,—–-]*\s*(.*)", re.I)
 
 
 def parse_assessment(said):
@@ -70,9 +70,7 @@ def parse_assessment(said):
     m = ASSESSMENT.search(said or "")
     if not m:
         return None
-    confidence, impact = min(int(m.group(1)), 10), min(int(m.group(2)), 10)
-    return {"confidence": confidence, "impact": impact, "risk": (10 - confidence) * impact,
-            "note": m.group(3).strip()[:300]}
+    return {"confidence": min(int(m.group(1)), 10), "note": m.group(2).strip()[:300]}
 
 
 def review_decision(project, start, last, assessment=None):
@@ -83,9 +81,10 @@ def review_decision(project, start, last, assessment=None):
     cfg = project.config()
     if cfg["review"] in ("never", "always"):
         return cfg["review"] == "always", f"review is set to {cfg['review']}"
-    if assessment and cfg.get("review_if_risk_at_least") is not None and assessment["risk"] >= cfg["review_if_risk_at_least"]:
-        return True, (f"the builder's forecast puts risk at {assessment['risk']} (confidence {assessment['confidence']}/10, "
-                      f"impact {assessment['impact']}/10; rule: review at {cfg['review_if_risk_at_least']})")
+    if assessment and assessment.get("risk") is not None and cfg.get("review_if_risk_at_least") is not None \
+            and assessment["risk"] >= cfg["review_if_risk_at_least"]:
+        return True, (f"risk {assessment['risk']}: the row's impact {assessment['impact']}/10, set when it was assigned, "
+                      f"and the builder's confidence {assessment['confidence']}/10 (rule: review at {cfg['review_if_risk_at_least']})")
     lines = sum(int(a) + int(d) for a, d, *_ in (row.split("\t") for row in
                 _git(project, "diff", "--numstat", start, last).splitlines()) if a.isdigit() and d.isdigit())
     files = changed_files(project, start, last)
@@ -121,6 +120,10 @@ def run_row(project, row, cap):
     last = commit(project, f"row {number}: build")
     lineages = specialists.load(project)
     assessment = parse_assessment(built["said"])
+    row_impact = memory.impact(project, number)
+    if assessment and row_impact is not None:
+        # Impact from whoever assigned the row, before the work; confidence from whoever did it, after.
+        assessment.update(impact=row_impact, risk=(10 - assessment["confidence"]) * row_impact)
     review, why = review_decision(project, start, last, assessment)
     memory.ledger(project, "review", row=number, review=review, why=why, assessment=assessment)
     for wave in range(1, (cfg["waves_per_row"] if review and lineages else 0) + 1):
