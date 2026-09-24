@@ -3,6 +3,9 @@
 A signal at the same place as an open one reinforces it: its strength is the number of different
 agents that found it. A minor signal nobody else confirms fades after the next wave.
 """
+import fcntl
+import json
+
 RANK = {"critical": 3, "major": 2, "minor": 1}
 KINDS = ("hole", "gap", "friction", "duplicate", "fork", "check")
 
@@ -47,22 +50,31 @@ def wakes_builder(s, wave):
     return s["strength"] >= 2 and s["severity"] != "minor"
 
 
+def _append_numbered(project, record):
+    """Number and append one event under a lock: specialists post in parallel, and two of them must
+    never be given the same id, or one signal's confirmation and lesson would be lost."""
+    project.state.mkdir(parents=True, exist_ok=True)
+    with open(project.state / "field.jsonl", "a+") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        fh.seek(0)
+        n = sum(1 for line in fh if line.strip()) + 1
+        fh.write(json.dumps(dict(record, id=n), ensure_ascii=False) + "\n")
+        fh.flush()
+    return n
+
+
 def post(project, *, by, row, wave, kind, severity, at, text):
     if kind not in KINDS or severity not in RANK:
         raise ValueError(f"kind must be one of {KINDS}; severity one of {tuple(RANK)}")
-    n = len(project.read("field.jsonl")) + 1
-    project.append("field.jsonl", {"type": "signal", "id": n, "by": by, "row": row, "wave": wave, "kind": kind,
-                                   "severity": severity, "at": at, "text": text})
-    return n
+    return _append_numbered(project, {"type": "signal", "by": by, "row": row, "wave": wave, "kind": kind,
+                                      "severity": severity, "at": at, "text": text})
 
 
 def resolve(project, *, by, row, wave, of, text, fixed):
     if of not in {s["id"] for s in signals(project, row=row, wave=wave)}:
         raise ValueError(f"#{of} is not an open signal on row {row}")
-    n = len(project.read("field.jsonl")) + 1
-    project.append("field.jsonl", {"type": "resolve", "id": n, "by": by, "row": row, "wave": wave, "of": of,
-                                   "fixed": fixed, "text": text})
-    return n
+    return _append_numbered(project, {"type": "resolve", "by": by, "row": row, "wave": wave, "of": of,
+                                      "fixed": fixed, "text": text})
 
 
 def render(sig):

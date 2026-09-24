@@ -73,6 +73,14 @@ class FieldTest(Base):
         field.resolve(self.project, by="builder", row=1, wave=1, of=n, text="done", fixed=True)
         self.assertEqual([s for s in field.signals(self.project, row=1, wave=1) if s["id"] == n], [])
 
+    def test_parallel_posts_never_share_an_id(self):
+        import concurrent.futures as cf
+        def post(i):
+            return field.post(self.project, by=f"s{i}", row=1, wave=1, kind="hole", severity="major", at=f"f{i}", text="t")
+        with cf.ThreadPoolExecutor(16) as pool:
+            ids = list(pool.map(post, range(64)))
+        self.assertEqual(sorted(ids), list(range(1, 65)))
+
     def test_only_the_builder_answers(self):
         env = dict(os.environ, COLONY_ROOT=str(self.dir), COLONY_AGENT="reuse@w1", COLONY_ROW="1", COLONY_WAVE="1")
         subprocess.run([sys.executable, "-m", "colony", "field", "signal", "--kind", "hole", "--severity", "major",
