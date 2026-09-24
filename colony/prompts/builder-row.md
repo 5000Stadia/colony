@@ -11,7 +11,7 @@ names before you finish.
 Never take an act listed under "What it must never do". If the row cannot be done without one, or it
 needs a decision the goal does not answer, leave a fork —
 `python3 -m colony field signal --kind fork --severity critical --at design/spine.md --text "..."` —
-and stop. Do not edit `design/spine.md` or `design/map.md`, and do not run git.
+and stop. Do not edit `design/spine.md`, and do not run git.
 
 End your final message with two lines. First an honest forecast, which will be checked against what
 review and later checks find — your confidence that this row meets its done and breaks nothing (not

@@ -31,10 +31,12 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    **Approved:** no
 
 2. Only if this work has risky areas: for the one or two reviewers those areas need beyond the general
-   critic every colony has, write `.colony/specialists/<name>.md` as "# <name>", "## Mission" (who
-   would attack this work and how, in two or three sentences), "## Memory" (empty) — a numbers skeptic
-   for money, a continuity reader for a novel's canon. Most goals need none: a single strong agent is
-   the default, and review costs more than it returns except where a mistake is expensive.
+   critic every colony has, write `.claude/agents/<name>.md` — a Claude Code subagent file:
+   a front matter block (`---`, `name: <name>`, `description: "<one sentence>"`, `tools: Read, Grep,
+   Glob, Bash`, `colony: reviewer`, `---`), then the mission — who would attack this work and how, in
+   two or three sentences — then an empty `## Memory` section. A numbers skeptic for money, a
+   continuity reader for a novel's canon. Most goals need none: a single strong agent is the default,
+   and review costs more than it returns except where a mistake is expensive.
 
 3. Write `design/questions.md`: the questions whose answers would most change the spine, each with
    your best guess at the answer, so the person can correct a draft instead of answering from scratch.
