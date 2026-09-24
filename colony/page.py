@@ -121,6 +121,15 @@ def render(project):
            f"<div class='counts'><span><b>{len(m['rows'])}</b> rows to go</span><span><b>{len(m['history'])}</b> closed</span>"
            f"<span><b>${m['total']:.2f}</b> spent</span><span><b>{len(m['forks'])}</b> waiting on you</span></div></div></header><main>"]
     # now
+    questions = memory.open_questions(project)
+    if questions:
+        out.append("<h2>Questions for you</h2>")
+    for q in questions:
+        out.append(f"<div class='card fork'><b><code>{e(q['kind'])}</code></b> {e(q['ask'])}"
+                   f"<form class='add' method='post'><input type='hidden' name='kind' value='{e(q['kind'])}'>"
+                   "<textarea name='text' placeholder='Your answer reaches the next row&#39;s builder'></textarea>"
+                   "<label class='who'><input type='checkbox' name='always' value='1'> handle it this way from now on</label>"
+                   "<button>Answer</button></form></div>")
     out.append("<h2>Now</h2>")
     for f in m["forks"]:
         out.append(f"<div class='card fork'><b>Waiting on you</b> — row {e(f['row'])}: {e(' | '.join(f['notes']))}</div>")
@@ -238,7 +247,10 @@ class Handler(BaseHTTPRequestHandler):
             row = int(form.get("row", ["0"])[0])
         except ValueError:
             row = 0
-        if text:
+        kind = form.get("kind", [""])[0].strip()
+        if text and kind:
+            memory.answer(self.project, kind, text, form.get("always", [""])[0] == "1")
+        elif text:
             add_note(self.project, row, "person", text)
         self.send_response(303)
         self.send_header("Location", "/")

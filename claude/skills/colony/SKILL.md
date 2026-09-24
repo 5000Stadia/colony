@@ -30,6 +30,9 @@ review only where the person has said a mistake would be expensive.
   history, the cost — with a note box on every row that reaches that row's builder.
 - `colony status` shows the rows, where the project stands and any open signals; `colony cost` shows
   dollars and tokens by row and by agent. Report cost beside every result.
+- `colony checkpoint`, every few rows, looks back at the workflow, progress and tokens for free and
+  ends with questions only the person can settle. Ask them; record each answer with
+  `colony answer KIND "text"` (`--always` makes it a rule in the spine). Never answer for them.
 - Settings live in `.colony/config.json`: `effort` (default medium), `review` (`auto` reviews only the
   spine's risky areas; `always`, `never`), `reconcile` (keep NOW, and write each row's narrative into its
   closing commit so `git log` is the history — worth it once a project is too large to re-read cheaply).

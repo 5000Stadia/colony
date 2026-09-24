@@ -70,6 +70,48 @@ def checks(project):
     return re.findall(r"^\s*-\s*`([^`]+)`", m.group(1), re.M) if m else []
 
 
+def rules(project):
+    """The person's standing answers, under the spine's '## Rules': `- `kind` — what to do`."""
+    text = project.spine.read_text() if project.spine.exists() else ""
+    m = re.search(r"^##\s+Rules\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
+    return dict(re.findall(r"^\s*-\s*`([\w-]+)`\s*[—–-]+\s*(.+?)\s*$", m.group(1), re.M)) if m else {}
+
+
+def add_rule(project, kind, text):
+    """Keep an answer as a rule in the spine, where the person reads and edits it."""
+    body = project.spine.read_text().rstrip("\n")
+    line = f"- `{kind}` — {text.strip()}"
+    if re.search(r"^##\s+Rules\s*$", body, re.M):
+        body = re.sub(r"(^##\s+Rules\s*$)", lambda m: m.group(1) + "\n" + line, body, count=1, flags=re.M)
+    else:
+        body += "\n\n## Rules\n" + line
+    project.spine.write_text(body + "\n")
+
+
+def answer(project, kind, text, always=False):
+    """The person's answer to a checkpoint question reaches the next row's builder as their note; kept
+    as a rule, it settles the same question at later checkpoints."""
+    add_note(project, next_row(project), "person", f"On `{kind}`: {text}")
+    ledger(project, "answer", question=kind, text=text, always=always)
+    if always:
+        add_rule(project, kind, text)
+
+
+def open_questions(project):
+    """The last checkpoint's questions the person has not answered yet."""
+    entries = project.read("ledger.jsonl")
+    marks = [i for i, e in enumerate(entries) if e["kind"] == "checkpoint"]
+    if not marks:
+        return []
+    answered = {e["question"] for e in entries[marks[-1]:] if e["kind"] == "answer"}
+    return [q for q in entries[marks[-1]].get("questions", []) if q["kind"] not in answered]
+
+
+def next_row(project):
+    open_rows = rows(project) if project.spine.exists() else []
+    return open_rows[0][0] if open_rows else 0
+
+
 def irreversible(project):
     text = project.spine.read_text()
     m = re.search(r"^##\s+What it must never do\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)

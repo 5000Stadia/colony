@@ -147,54 +147,87 @@ def since_checkpoint(project):
     return [e for e in ledger[(marks[-1] + 1 if marks else 0):]], start_row
 
 
+# The tradeoffs a checkpoint asks the person about, because no count settles them. A rule in the
+# spine's `## Rules` (``- `kind` — what to do``) answers one in advance.
+QUESTIONS = {
+    "row-stuck": "Row {row} has stopped {n} times (last: {reason}). Keep going, rescope it, or split it?",
+    "lane": "One builder is carrying a lot: {signs}. Give that area its own lane, or keep one builder?",
+    "rows-costlier": "Rows went from ${first:.2f} to ${last:.2f} each. Accept it as the project grows, or make rows smaller?",
+    "review-spend": "Review cost ${review:.2f} against ${build:.2f} for building, and fixed {fixes}. Keep it as it is, "
+                    "or narrow the risky areas?",
+}
+
+
 def overview(project):
-    """A broad, free look at effectiveness since the last checkpoint: progress, cost, what review returned,
-    lost context, strain — and the patterns that cost without returning anything."""
+    """A broad look since the last checkpoint, computed from the records: is the work moving, is the
+    workflow effective, are tokens well spent — and the tradeoffs only the person can settle."""
+    from . import memory
     ledger, start = since_checkpoint(project)
     closed = [e for e in ledger if e["kind"] == "row-closed"]
     usage = [u for u in project.read("usage.jsonl") if u["row"] > start]
+    events = [e for e in project.read("field.jsonl") if e.get("row", 0) > start]
     reviews = [e for e in ledger if e["kind"] == "review"]
-    reviewed_rows = {e["row"] for e in reviews if e["review"]}
+    ev = [e for e in ledger if e["kind"] == "evidence"]
+    esc = [e for e in ledger if e["kind"] == "escalation"]
+    stops = [e for e in ledger if e["kind"] == "run-stopped"]
+    costs = [e["cost_usd"] for e in closed]
+    last = closed[-1]["row"] if closed else start
+    lines = [f"# Checkpoint — since row {start}", "", "## Workflow and progress"]
+    lines.append(f"- {len(closed)} row(s) closed" + (f" (rows {closed[0]['row']}–{last})" if closed else "")
+                 + (f"; {len(stops)} run(s) stopped" if stops else ""))
+    stuck = {}
+    for s in stops:
+        stuck.setdefault(s.get("row"), []).append(s)
+    for row, ss in stuck.items():
+        lines.append(f"- row {row} stopped {len(ss)} time(s); last: {ss[-1].get('reason', '')[:160]}")
+    rounds = {u["row"] for u in usage if u["agent"] == "builder" and u["wave"] >= 1}
+    fixed = sum(1 for e in events if e["type"] == "resolve" and e.get("fixed"))
+    declined = sum(1 for e in events if e["type"] == "resolve" and not e.get("fixed"))
+    unfixed = sum(1 for e in events if e["type"] == "signal" and e["kind"] == "unfixed")
+    lines.append(f"- review sent {len(rounds)} row(s) back for fixes: {fixed} fixed, {declined} declined"
+                 + (f", {unfixed} fix(es) that did not hold" if unfixed else ""))
+    for e in ev:
+        what = "broke a check that had passed" if e["type"] == "regression" else "re-made something the project already had"
+        lines.append(f"- row {e['row']} {what}: {', '.join(e['detail'])[:160]}")
+    for e in esc:
+        lines.append(f"- switched on after row {e['row']}: {', '.join(e['switched_on'])}")
+    signs = strain(project)
+    for s in signs:
+        lines.append(f"- strain: {s}")
     review_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"].split("@")[0] not in ("builder", "reconciler", "door"))
     build_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "builder")
-    fixes = sum(e.get("review_fixes", 0) for e in closed)
-    costs = [e["cost_usd"] for e in closed]
-    if not closed:
-        return f"# Checkpoint — no rows closed since row {start}", start
-    lines = [f"# Checkpoint — rows {start + 1}–{closed[-1]['row']}", ""]
-    lines.append(f"- **Progress:** {len(closed)} row(s) closed for ${sum(costs):.2f}" + (
-        f"; per row ${costs[0]:.2f} at the start of the stretch, ${costs[-1]:.2f} at the end" if len(costs) >= 2 else ""))
-    lines.append(f"- **Review:** {len(reviewed_rows)} of {len(reviews)} row(s) reviewed, ${review_cost:.2f} "
-                 f"(building ${build_cost:.2f}); review fixed {fixes} real problem(s)"
-                 + (f" — ${review_cost / fixes:.2f} per fix" if fixes else ""))
-    moves = [e for e in ledger if e["kind"] == "threshold"]
-    if moves:
-        lines.append("- **Review threshold:** " + "; ".join(f"{m['from']}→{m['to']} ({m['why']})" for m in moves))
-    ev = [e for e in ledger if e["kind"] == "evidence"]
-    if ev:
-        lines.append("- **Evidence of lost context:** " + "; ".join(f"row {e['row']} {e['type']}: {', '.join(e['detail'])[:160]}" for e in ev))
-    esc = [e for e in ledger if e["kind"] == "escalation"]
-    if esc:
-        lines.append("- **Switched on:** " + "; ".join(f"after row {e['row']}: {', '.join(e['switched_on'])}" for e in esc))
-    signs = strain(project)
-    if signs:
-        lines.append("- **Strain on one builder:** " + "; ".join(signs))
-    for p in (e for e in ledger if e["kind"] == "structure-proposal"):
-        lines.append(f"- **Proposed after row {p['row']}:** {p.get('proposal', '')}")
-    stops = [e for e in ledger if e["kind"] == "run-stopped"]
-    if stops:
-        lines.append(f"- **Runs stopped:** {len(stops)} — last: {stops[-1].get('reason', '')[:160]}")
-    # Quality first: what went wrong comes before what cost money, and review of the person's risky areas
-    # is never offered up for saving — a quiet review there is the insurance working.
-    look = [f"row {e['row']} broke a check that had passed" for e in ev if e["type"] == "regression"]
-    look += [f"row {e['row']} re-made something the project already had" for e in ev if e["type"] == "duplicate"]
-    if len(ev) >= 2 and not esc:
-        look.append("lost context keeps showing without a remedy switched on")
-    unforced = [e["row"] for e in reviews if e["review"] and not e["why"].startswith("touches risky areas")]
-    unforced_fixes = sum(e.get("review_fixes", 0) for e in closed if e["row"] in unforced)
-    if len(unforced) >= 3 and not unforced_fixes:
-        look.append(f"{len(unforced)} reviews outside the risky areas found nothing; the threshold is already easing")
+    keep_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "reconciler")
+    review_fixes = sum(e.get("review_fixes", 0) for e in closed)
+    lines += ["", "## Tokens"]
+    lines.append(f"- ${build_cost + review_cost + keep_cost:.2f} in all: building ${build_cost:.2f}, review ${review_cost:.2f}, "
+                 f"keeping memory ${keep_cost:.2f}")
+    if len(costs) >= 2:
+        lines.append(f"- per row: ${costs[0]:.2f} at the start of the stretch, ${costs[-1]:.2f} at the end, "
+                     f"median ${statistics.median(costs):.2f}")
+    reviewed = [e for e in reviews if e["review"]]
+    if reviewed:
+        lines.append(f"- {len(reviewed)} of {len(reviews)} row(s) reviewed; review fixed {review_fixes} real problem(s)"
+                     + (f", ${review_cost / review_fixes:.2f} per fix" if review_fixes else ""))
+    reading = rising_reading(project)
+    if reading:
+        lines.append(f"- {reading}")
+    for m in (e for e in ledger if e["kind"] == "threshold"):
+        lines.append(f"- review threshold {m['from']}→{m['to']}: {m['why']}")
+    asks = []
+    for row, ss in stuck.items():
+        if len(ss) >= 2:
+            asks.append(("row-stuck", dict(row=row, n=len(ss), reason=ss[-1].get("reason", "")[:120])))
+    if len(signs) >= 2:
+        asks.append(("lane", dict(signs="; ".join(signs))))
     if len(costs) >= 4 and costs[-1] > 2 * costs[0]:
-        look.append("rows are getting more expensive as the project grows")
-    lines.append("- **Worth a look:** " + ("; ".join(look) if look else "nothing stands out"))
-    return "\n".join(lines), (closed[-1]["row"] if closed else start)
+        asks.append(("rows-costlier", dict(first=costs[0], last=costs[-1])))
+    if review_cost > build_cost > 0:
+        asks.append(("review-spend", dict(review=review_cost, build=build_cost, fixes=review_fixes)))
+    rules = memory.rules(project)
+    questions = [{"kind": k, "ask": QUESTIONS[k].format(**f)} for k, f in asks if k not in rules]
+    handled = [f"`{k}` — {rules[k]}" for k, _ in asks if k in rules]
+    if handled:
+        lines += ["", "## Settled by your rules"] + [f"- {h}" for h in handled]
+    lines += ["", "## Questions for you"]
+    lines += [f"- `{q['kind']}` — {q['ask']}" for q in questions] or ["- none: nothing here is a tradeoff the records cannot settle"]
+    return "\n".join(lines), last, questions

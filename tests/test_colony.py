@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from colony import claude, clock, field, mapper, memory, specialists  # noqa: E402
+from colony import claude, clock, field, health, mapper, memory, specialists  # noqa: E402
 from colony.project import Project  # noqa: E402
 
 SPINE = """# Test — spine
@@ -471,18 +471,40 @@ class HealthTest(Base):
         self.assertEqual(esc["switched_on"], {"reconcile": True})
         self.assertIn("passed at the last close", esc["evidence"][0])
 
-    def test_the_checkpoint_overview_is_free_and_resets_its_window(self):
+    def test_the_checkpoint_is_free_puts_workflow_first_and_resets_its_window(self):
         self.spine()
         self.configure(review="always")
         clock.run(self.project, max_rows=1)
+        spent = len(self.project.read("usage.jsonl"))
         env = dict(os.environ, COLONY_ROOT=str(self.dir))
         out = subprocess.run([sys.executable, "-m", "colony", "checkpoint"], env=env, capture_output=True, text=True).stdout
-        self.assertIn("# Checkpoint — rows 1–1", out)
-        self.assertIn("review fixed", out)
-        self.assertNotIn("reconciler", [u["agent"] for u in self.project.read("usage.jsonl")][-1:], "no tokens spent")
+        self.assertEqual(len(self.project.read("usage.jsonl")), spent, "no tokens spent")
+        self.assertLess(out.index("## Workflow and progress"), out.index("## Tokens"))
+        self.assertLess(out.index("## Tokens"), out.index("## Questions for you"))
+        self.assertIn("1 row(s) closed (rows 1–1)", out)
         clock.run(self.project, max_rows=1)
-        text, _ = __import__("colony.health", fromlist=["x"]).overview(self.project)
+        text, _, _ = health.overview(self.project)
+        self.assertIn("since row 1", text)
         self.assertIn("rows 2–2", text)
+
+    def test_a_row_that_keeps_stopping_is_a_question_until_a_rule_settles_it(self):
+        self.spine(check="test ! -f broken.txt")
+        self.configure(review="never")
+        (self.dir / "broken.txt").write_text("x")
+        env = dict(os.environ, COLONY_ROOT=str(self.dir))
+        colony = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], env=env, capture_output=True, text=True).stdout
+        colony("run"); colony("run")
+        out = colony("checkpoint")
+        self.assertIn("`row-stuck` — Row 1 has stopped 2 times", out)
+        self.assertEqual([q["kind"] for q in memory.open_questions(self.project)], ["row-stuck"])
+        colony("answer", "row-stuck", "split it and carry on", "--always")
+        self.assertEqual(memory.open_questions(self.project), [])
+        self.assertIn("On `row-stuck`: split it and carry on", " ".join(n["text"] for n in memory.waiting_notes(self.project, 1)))
+        self.assertEqual(memory.rules(self.project), {"row-stuck": "split it and carry on"})
+        colony("run"); colony("run")
+        out = colony("checkpoint")
+        self.assertIn("## Settled by your rules\n- `row-stuck` — split it and carry on", out)
+        self.assertNotIn("`row-stuck` — Row", out)
 
     def test_a_remedy_already_on_is_not_switched_again(self):
         self.spine()

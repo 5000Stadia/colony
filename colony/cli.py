@@ -8,7 +8,8 @@ located signals and a project memory.
     colony status                   the rows, NOW and the open signals
     colony cost                     dollars and tokens, per row and per agent
     colony calibration              the builder's own forecast beside what review then found
-    colony checkpoint               effectiveness since the last checkpoint, from the records (no tokens)
+    colony checkpoint               workflow, progress and tokens since the last checkpoint; questions for you
+    colony answer KIND TEXT [--always]  answer a checkpoint question; --always keeps it as a rule
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
     colony field view|signal|resolve   the channel agents use (their name, row and wave are set for them)
@@ -90,7 +91,7 @@ def cmd_run(a):
         print(f"{n} row(s) closed; ${clock.spent(project):.2f} spent in all")
         return 0
     except clock.Stop as stop:
-        memory.ledger(project, "run-stopped", reason=str(stop))
+        memory.ledger(project, "run-stopped", row=memory.next_row(project), reason=str(stop))
         print(f"stopped: {stop}")
         return 3
 
@@ -142,9 +143,18 @@ def cmd_checkpoint(a):
     """A broad look at effectiveness since the last checkpoint, computed from the records: no tokens."""
     from . import health
     project = Project.here()
-    text, row = health.overview(project)
+    text, row, questions = health.overview(project)
     print(text)
-    memory.ledger(project, "checkpoint", row=row, overview=text)
+    memory.ledger(project, "checkpoint", row=row, overview=text, questions=questions)
+    return 0
+
+
+def cmd_answer(a):
+    """The person's answer to a checkpoint question: it reaches the next row's builder, and with --always
+    it becomes a rule in the spine, so the question is not asked again."""
+    project = Project.here()
+    memory.answer(project, a.kind, a.text, a.always)
+    print(f"answered {a.kind}" + (" — kept as a rule in the spine" if a.always else ""))
     return 0
 
 
@@ -199,6 +209,8 @@ def main(argv=None):
     sub.add_parser("cost").set_defaults(fn=cmd_cost)
     sub.add_parser("calibration").set_defaults(fn=cmd_calibration)
     sub.add_parser("checkpoint").set_defaults(fn=cmd_checkpoint)
+    p = sub.add_parser("answer"); p.add_argument("kind"); p.add_argument("text"); p.add_argument("--always", action="store_true")
+    p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)
