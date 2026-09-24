@@ -204,9 +204,6 @@ def close(project, row, start, cap):
     change = _git(project, "diff", "--stat", start, "HEAD").strip()
     cfg = project.config()
     if cfg["reconcile"]:
-        history = project.design / "history.md"
-        if not history.exists():
-            history.write_text("# History\n\nAppended at every row close; never edited. The newest entry is last.\n\n")
         claude.call(project, (PROMPTS / "reconcile.md").read_text().format(
             row=number, target=target, change=change, answers=answers, now=memory.now_text(project),
             date=time.strftime("%Y-%m-%d")),
@@ -222,7 +219,11 @@ def close(project, row, start, cap):
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
                   review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()})
     adapt_threshold(project, number)
-    commit(project, f"row {number} closed: {target} (${cost:.2f})")
+    note_path = project.state / "closing-note.md"
+    note = note_path.read_text().strip() if note_path.exists() else ""
+    note_path.unlink(missing_ok=True)
+    # The narrative lives in the closing commit: git is the history every agent already knows to read.
+    commit(project, f"row {number} closed: {target} (${cost:.2f})" + (f"\n\n{note}" if note else ""))
 
 
 def enforce_now_budget(project, row):
@@ -234,7 +235,7 @@ def enforce_now_budget(project, row):
         return
     claude.call(project, f"You are `reconciler · row {row} · trimming NOW`. `design/now.md` has {len(lines)} lines; its "
                 f"budget is {limit}, because every agent reads it first. Rewrite it within {limit} lines, keeping what a "
-                "fresh agent most needs to continue; what belongs to the past is already in `design/history.md`. Change no "
+                "fresh agent most needs to continue; what belongs to the past is already in the git history. Change no "
                 "other file. Do not run git.", agent="reconciler", row=row, wave=0, budget=0.5)
     after = len([l for l in memory.now_text(project).splitlines() if l.strip()])
     if after > limit:

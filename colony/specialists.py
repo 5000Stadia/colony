@@ -14,20 +14,27 @@ ALWAYS = {
 
 
 def load(project):
+    """The colony's reviewers: Claude Code subagent files marked `colony: reviewer`."""
     out = {}
     for path in sorted(project.specialists.glob("*.md")):
         text = path.read_text()
-        mission = re.search(r"^##\s+Mission\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
-        memory = re.search(r"^##\s+Memory\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
-        out[path.stem] = {"mission": mission.group(1).strip() if mission else "",
-                          "memory": [l[2:] for l in (memory.group(1) if memory else "").splitlines() if l.startswith("- ")]}
+        m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+        if not m or not re.search(r"^colony:\s*reviewer\s*$", m.group(1), re.M):
+            continue                      # someone's own subagent, not a colony reviewer
+        body = m.group(2)
+        mission, _, memory = body.partition("## Memory")
+        out[path.stem] = {"mission": mission.strip(),
+                          "memory": [l[2:] for l in memory.splitlines() if l.startswith("- ")]}
     return out
 
 
 def write(project, name, mission, memory=()):
     project.specialists.mkdir(parents=True, exist_ok=True)
-    body = f"# {name}\n\n## Mission\n\n{mission.strip()}\n\n## Memory\n\n" + "".join(f"- {m}\n" for m in memory)
-    (project.specialists / f"{name}.md").write_text(body)
+    first = re.split(r"(?<=[.!?])\s", mission.strip())[0].replace('"', "'")
+    front = (f"---\nname: {name}\ndescription: \"{first} A colony reviewer: reads, never edits.\"\n"
+             "tools: Read, Grep, Glob, Bash\ncolony: reviewer\n---\n")
+    body = f"{mission.strip()}\n\n## Memory\n\n" + "".join(f"- {m}\n" for m in memory)
+    (project.specialists / f"{name}.md").write_text(front + body)
 
 
 def ensure_defaults(project):

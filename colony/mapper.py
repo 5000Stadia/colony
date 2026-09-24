@@ -21,7 +21,7 @@ def _files(project):
     for args in (["ls-files"], ["ls-files", "--others", "--exclude-standard"]):
         done = subprocess.run(["git", "-C", str(project.root), *args], capture_output=True, text=True)
         out += done.stdout.splitlines()
-    return sorted({f for f in out if not f.startswith(SKIP_DIRS) and f != "design/map.md"})
+    return sorted({f for f in out if not f.startswith(SKIP_DIRS)})
 
 
 def _first_sentence(lines, start):
@@ -72,7 +72,8 @@ def _entries(path, text):
 
 
 def build(project):
-    """Refresh the cache for changed files, write design/map.md, and return the entries."""
+    """Refresh the cache for changed files, write .colony/map.md, and return the entries. The map is a
+    projection of the work, regenerated on demand, so it is never committed."""
     cache_path = project.state / "map.json"
     cache = json.loads(cache_path.read_text()) if cache_path.exists() else {}
     fresh, changed = {}, []
@@ -102,8 +103,7 @@ def build(project):
                 continue
             lines.append(f"- `{e['name']}` ({e['kind']}, line {e['line']})" + (f" — {e['summary']}" if e["summary"] else ""))
         lines.append("")
-    project.design.mkdir(parents=True, exist_ok=True)
-    (project.design / "map.md").write_text("\n".join(lines))
+    (project.state / "map.md").write_text("\n".join(lines))
     return fresh, changed
 
 

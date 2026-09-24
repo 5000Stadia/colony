@@ -28,8 +28,10 @@ review only where the person has said a mistake would be expensive.
 - `colony status` shows the rows, where the project stands and any open signals; `colony cost` shows
   dollars and tokens by row and by agent. Report cost beside every result.
 - Settings live in `.colony/config.json`: `effort` (default medium), `review` (`auto` reviews only the
-  spine's risky areas; `always`, `never`), `reconcile` (keep NOW and a narrative history — worth it once
-  a project is too large to re-read cheaply).
+  spine's risky areas; `always`, `never`), `reconcile` (keep NOW, and write each row's narrative into its
+  closing commit so `git log` is the history — worth it once a project is too large to re-read cheaply).
+- The project's reviewers live in `.claude/agents/` (marked `colony: reviewer`), so they can also be
+  called as subagents in any session.
 
 ## What never happens without the person
 

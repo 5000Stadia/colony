@@ -115,6 +115,22 @@ class FieldTest(Base):
         self.assertIn("only the builder", done.stderr)
 
 
+class HomesTest(Base):
+    def test_reviewers_are_claude_code_subagents_and_the_map_is_not_committed(self):
+        path = self.dir / ".claude" / "agents" / "reuse.md"
+        text = path.read_text()
+        self.assertTrue(text.startswith("---\nname: reuse\n"))
+        self.assertIn("colony: reviewer", text)
+        self.assertIn("tools: Read, Grep, Glob, Bash", text)
+        (self.dir / ".claude" / "agents" / "mine.md").write_text("---\nname: mine\ndescription: the person's own\n---\nhello\n")
+        self.assertNotIn("mine", specialists.load(self.project), "the person's own subagents are left alone")
+        mapper.build(self.project)
+        self.assertTrue((self.dir / ".colony" / "map.md").exists())
+        self.assertFalse((self.dir / "design" / "map.md").exists())
+        ignored = subprocess.run(["git", "-C", str(self.dir), "check-ignore", ".colony/map.md"], capture_output=True, text=True)
+        self.assertEqual(ignored.returncode, 0, "the map is a projection and never committed")
+
+
 class MapTest(Base):
     def test_map_finds_code_and_prose_and_rereads_only_changes(self):
         (self.dir / "tax.py").write_text('def compute_invoice_total(lines):\n    """Sum the invoice lines, tax included."""\n')
@@ -153,8 +169,11 @@ class ClockTest(Base):
         clock.run(self.project, max_rows=1)
         self.assertEqual([r[0] for r in memory.rows(self.project)], [2])
         self.assertTrue((self.dir / "design" / "now.md").read_text().startswith("Status: row closed."))
-        history = (self.dir / "design" / "history.md").read_text()
-        self.assertTrue(history.startswith("# History") and "## Row closed" in history, "history is appended, with its header")
+        body = subprocess.run(["git", "-C", str(self.dir), "log", "-1", "--format=%B", "--grep", "row 1 closed"],
+                              capture_output=True, text=True).stdout
+        self.assertIn("Built the row; decided nothing new.", body, "the narrative is the closing commit's message")
+        self.assertFalse((self.dir / ".colony" / "closing-note.md").exists())
+        self.assertFalse((self.dir / "design" / "history.md").exists())
         usage = self.project.read("usage.jsonl")
         agents = {u["agent"].split("@")[0] for u in usage}
         self.assertEqual(agents, {"builder", "reuse", "fresh-eyes", "reconciler"})

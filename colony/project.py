@@ -44,7 +44,9 @@ class Project:
 
     @property
     def specialists(self):
-        return self.state / "specialists"
+        # Claude Code's own subagent folder: the project's reviewers are also subagents the person can
+        # call in any interactive session.
+        return self.root / ".claude" / "agents"
 
     def config(self):
         path = self.state / "config.json"

@@ -107,8 +107,8 @@ def brief(project, row, extra=""):
     return "\n\n".join([
         "# The goal (the person's words — never change them)\n\n" + project.spine.read_text(),
         "# Where the project is now\n\n" + now_text(project)
-        + ("\n\n`design/history.md` records what every earlier row did and why, including decisions that were "
-           "later changed; read the entries that bear on this row." if (project.design / "history.md").exists() else ""),
+        + ("\n\n`git log` holds what every earlier row did and why, including decisions that were later "
+           "changed; read the entries that bear on this row." if project.config().get("reconcile") else ""),
         f"# This row\n\nRow {number}: {target}\nDone looks like: {done}",
         bearing,
         "# Open signals on this row\n\n" + ("\n".join(open_) if open_ else "none"),

@@ -37,7 +37,7 @@ def cmd_init(a):
     subprocess.run(["git", "-C", str(project.root), "init", "-q", "-b", "main"], check=False)
     project.design.mkdir(exist_ok=True)
     project.state.mkdir()
-    (project.root / ".gitignore").write_text(".colony/transcripts/\nscratch/\n__pycache__/\n")
+    (project.root / ".gitignore").write_text(".colony/transcripts/\n.colony/map.md\n.colony/map.json\nscratch/\n__pycache__/\n")
     specialists.ensure_defaults(project)
     for name in ("AGENTS.md", "CLAUDE.md"):
         (project.root / name).write_text("Read design/spine.md, then design/now.md. Ask the map "
@@ -54,7 +54,7 @@ def cmd_door(a):
                   agent="door", row=0, wave=0, budget=a.budget)
     memory.ledger(project, "door", goal=a.goal, cost_usd=record["cost_usd"])
     clock.commit(project, "door: draft spine")
-    print(f"drafted design/spine.md, design/questions.md and {len(specialists.load(project))} specialists "
+    print(f"drafted design/spine.md, design/questions.md and {len(specialists.load(project))} reviewer(s) in .claude/agents "
           f"(${record['cost_usd']:.2f}). Read and correct them, then: colony approve")
     return 0
 
@@ -141,7 +141,7 @@ def cmd_map(a):
     if a.query:
         print(mapper.render(mapper.query(project, " ".join(a.query))))
     else:
-        print(f"design/map.md refreshed ({len(changed)} file(s) re-read)")
+        print(f".colony/map.md refreshed ({len(changed)} file(s) re-read)")
     return 0
 
 

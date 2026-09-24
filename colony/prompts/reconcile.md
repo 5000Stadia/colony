@@ -12,12 +12,10 @@ How its signals were answered:
 Previous `design/now.md`:
 {now}
 
-Then append one entry to the end of `design/history.md` — the project's narrative, which is only
-ever appended to, never edited, so that someone years from now can learn what happened and why:
-
-## Row {row} — {target} ({date})
-What was built, in two or three sentences. Every decision made that the goal did not dictate, and
-why. Anything this row changed or superseded from before, named as superseded. What is left open.
+Then write `.colony/closing-note.md`: the message of this row's closing commit, which is how the project
+keeps its history — in git, where anyone can read it years from now with `git log`. In it: what was
+built, in two or three sentences; every decision made that the goal did not dictate, and why; anything
+this row changed or superseded from before, named as superseded; what is left open.
 
 If this row showed structural strain — the brief for an area no longer fitting one agent, repeated
 friction at the border between two areas, or work that recurs and belongs to no role — add one line
@@ -28,4 +26,4 @@ namespace such as `billing/tax` — rather than a promoted agent; a department g
 friction inside it recurs; and every name carries its role, scope and lifetime. Propose; never change
 the structure yourself.
 
-Change no other file. Do not run git.
+Change no other file than these two. Do not run git.
