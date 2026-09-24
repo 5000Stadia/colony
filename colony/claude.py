@@ -44,6 +44,8 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
     cmd = [binary, "-p", prompt, "--model", cfg["model"], "--effort", effort,
            "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "bypassPermissions",
            "--output-format", "stream-json", "--verbose", "--max-budget-usd", f"{budget:.2f}"]
+    if role == "specialist":
+        cmd += ["--disallowedTools", "Edit", "Write", "NotebookEdit"]   # reads, never edits — enforced, not asked
     if session:
         cmd += ["--resume", session] if resume else ["--session-id", session]
     else:

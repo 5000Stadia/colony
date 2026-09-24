@@ -7,11 +7,9 @@ import re
 
 MEMORY_LINES = 12
 ALWAYS = {
-    "reuse": "Compare this change against the map of what already exists. Signal (kind `duplicate`) "
-             "anything it re-makes that the work already has — a function, a section, a character "
-             "thread, an offer — and anything it should have built on and did not.",
-    "fresh-eyes": "Meet the work the way its real audience would, from its front door, with no account of "
-                  "how it was made. Signal where that person would stumble, be misled or give up.",
+    "critic": "You did not build this and know nothing of how its builder read the goal. Find where it "
+              "fails the goal — every failure a user would hit, every silent failure nobody would notice, "
+              "and what the goal implies that is missing. Try it the wrong way. Demonstrate each problem.",
 }
 
 

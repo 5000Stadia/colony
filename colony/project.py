@@ -3,9 +3,18 @@ import json
 import os
 from pathlib import Path
 
-DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 3,
+# Lean by default: in pilots 1-7 a single agent at medium effort was the best value up to a
+# fourteen-row project, so every other mechanism starts off and is turned on where it earns its place.
+DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 2,
             "builder_budget_usd": 8.0, "fix_budget_usd": 4.0, "specialist_budget_usd": 1.5,
-            "reconcile_budget_usd": 0.75, "signals_per_specialist": 5}
+            "reconcile_budget_usd": 0.75, "signals_per_specialist": 5,
+            "review": "auto",            # never | auto | always
+            "review_min_lines": 250,     # auto: review a change this large ...
+            "review_min_files": 6,       # ... or touching this many files ...
+                                         # ... or touching anything under "## Risky areas" in the spine
+            "reconcile": False,          # NOW and history, rewritten at every row close
+            "now_max_lines": 25,
+            "map_in_brief": False}
 
 
 class Project:

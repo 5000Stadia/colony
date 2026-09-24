@@ -43,8 +43,17 @@ class Base(unittest.TestCase):
         self.project = Project(self.dir)
         os.environ["COLONY_CLAUDE"] = str(ROOT / "tests" / "fake_claude.py")
         os.environ["PYTHONPATH"] = str(ROOT)
-        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
+        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
             os.environ.pop(k, None)
+        # Most tests exercise the full machinery: review on, reconciliation on, two named lineages.
+        for f in self.project.specialists.glob("*.md"):
+            f.unlink()
+        specialists.write(self.project, "reuse", "Find what this change re-makes.")
+        specialists.write(self.project, "fresh-eyes", "Meet the work as its audience would.")
+        self.configure(review="always", reconcile=True, waves_per_row=3)
+
+    def configure(self, **cfg):
+        (self.project.state / "config.json").write_text(json.dumps(cfg))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -194,11 +203,47 @@ class EffortTest(Base):
     def test_each_role_can_run_at_its_own_effort(self):
         import json as _json
         self.spine()
-        (self.project.state / "config.json").write_text(_json.dumps({"effort": "medium", "effort_builder": "low",
-                                                                      "effort_specialist": "high"}))
+        self.configure(effort="medium", effort_builder="low", effort_specialist="high", review="always", reconcile=True)
         clock.run(self.project, max_rows=1)
         by_role = {u["agent"].split("@")[0]: u["effort"] for u in self.project.read("usage.jsonl")}
         self.assertEqual(by_role, {"builder": "low", "reuse": "high", "fresh-eyes": "high", "reconciler": "medium"})
+
+
+class LeanTest(Base):
+    def test_the_defaults_are_lean_and_trust_a_small_change(self):
+        self.spine()
+        (self.project.state / "config.json").unlink()
+        clock.run(self.project, max_rows=1)
+        agents = {u["agent"].split("@")[0] for u in self.project.read("usage.jsonl")}
+        self.assertEqual(agents, {"builder"}, "no reviewer and no reconciler for a small change by default")
+        [decision] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"]
+        self.assertFalse(decision["review"])
+        self.assertIn("trusted", decision["why"])
+        self.assertEqual([r[0] for r in memory.rows(self.project)], [2], "the row still closes")
+
+    def test_a_risky_area_is_reviewed_under_auto(self):
+        self.spine()
+        self.project.spine.write_text(self.project.spine.read_text().replace(
+            "## The spec list", "## Risky areas\n- `work.txt`\n\n## The spec list"))
+        self.configure(review="auto")
+        clock.run(self.project, max_rows=1)
+        [decision] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"]
+        self.assertTrue(decision["review"])
+        self.assertIn("risky", decision["why"])
+
+    def test_specialists_cannot_edit(self):
+        self.spine()
+        clock.run(self.project, max_rows=1)
+        argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]
+        self.assertIn("--disallowedTools", argv["reuse"][0])
+        self.assertNotIn("--disallowedTools", argv["builder"][0])
+
+    def test_now_is_trimmed_when_it_overruns(self):
+        self.spine()
+        os.environ["FAKE_LONG_NOW"] = "1"
+        clock.run(self.project, max_rows=1)
+        self.assertEqual(self.project.now.read_text(), "Status: trimmed.\n")
+        self.assertEqual(sum(1 for u in self.project.read("usage.jsonl") if u["agent"] == "reconciler"), 2)
 
 
 class LimitTest(Base):

@@ -13,6 +13,7 @@ agent, wave = os.environ["COLONY_AGENT"], int(os.environ["COLONY_WAVE"])
 state = root / ".colony" / "fake-state.json"
 seen = json.loads(state.read_text()) if state.exists() else {"calls": 0}
 seen["calls"] += 1
+seen.setdefault("argv", {}).setdefault(agent.split("@")[0], []).append(sys.argv[1:])
 state.write_text(json.dumps(seen))
 
 
@@ -52,7 +53,15 @@ elif " · reads, never edits`" in prompt:
     elif wave == 1:
         colony("field", "signal", "--kind", "hole", "--severity", "major", "--at", "work.txt:1", "--text", f"{name} found a hole")
     finish("probed", cost=0.05)
+elif "trimming NOW" in prompt:
+    (root / "design" / "now.md").write_text("Status: trimmed.\n")
+    finish("trimmed", cost=0.01)
 elif prompt.startswith("You are `reconciler"):
+    if os.environ.get("FAKE_LONG_NOW"):
+        (root / "design" / "now.md").write_text("".join(f"line {i}\n" for i in range(40)))
+        with open(root / "design" / "history.md", "a") as fh:
+            fh.write("## Row closed\n\n")
+        finish("reconciled long", cost=0.02)
     (root / "design" / "now.md").write_text("Status: row closed.\nNext: the next row.\n")
     with open(root / "design" / "history.md", "a") as fh:
         fh.write("## Row closed\nBuilt the row; decided nothing new.\n\n")

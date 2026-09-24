@@ -57,6 +57,29 @@ def verification(project, row, name):
             "builder. If a decline was wrong, say why the same way.\n\n" + "\n".join(lines))
 
 
+def changed_files(project, a, b):
+    return [f for f in _git(project, "diff", "--name-only", a, b).split() if f]
+
+
+def review_decision(project, start, last):
+    """Trust simple work; review what is large, wide or risky. Measured by the harness, never by the
+    builder's opinion of its own work."""
+    cfg = project.config()
+    if cfg["review"] in ("never", "always"):
+        return cfg["review"] == "always", f"review is set to {cfg['review']}"
+    lines = sum(int(a) + int(d) for a, d, *_ in (row.split("\t") for row in
+                _git(project, "diff", "--numstat", start, last).splitlines()) if a.isdigit() and d.isdigit())
+    files = changed_files(project, start, last)
+    risky = [f for f in files for area in memory.risky(project) if f.startswith(area)]
+    if risky:
+        return True, f"touches risky areas: {', '.join(sorted(set(risky)))}"
+    if lines >= cfg["review_min_lines"]:
+        return True, f"{lines} lines changed"
+    if len(files) >= cfg["review_min_files"]:
+        return True, f"{len(files)} files changed"
+    return False, f"small change ({lines} lines, {len(files)} files): trusted"
+
+
 class Stop(Exception):
     """The run stops for the person: a fork, a check that will not pass, or the cap."""
 
@@ -78,11 +101,13 @@ def run_row(project, row, cap):
                 agent="builder", row=number, wave=0, budget=budget(cfg["builder_budget_usd"]), session=session)
     last = commit(project, f"row {number}: build")
     lineages = specialists.load(project)
-    for wave in range(1, cfg["waves_per_row"] + 1):
+    review, why = review_decision(project, start, last)
+    memory.ledger(project, "review", row=number, review=review, why=why)
+    for wave in range(1, (cfg["waves_per_row"] if review and lineages else 0) + 1):
         run_checks(project, number, wave)
         mapper.build(project)
         change = _git(project, "diff", "--stat", start, last).strip() or "nothing changed"
-        brief_now = memory.brief(project, row, extra=change)
+        brief_now = memory.specialist_brief(project, row, changed_files(project, start, last))
 
         def attack(name):
             lineage = lineages[name]
@@ -120,13 +145,16 @@ def close(project, row, start, cap):
     answers = "\n".join(f"- #{e['of']} {'fixed' if e.get('fixed') else 'declined'}: {e['text']}"
                         for e in events if e["type"] == "resolve" and e.get("row") == number) or "- none"
     change = _git(project, "diff", "--stat", start, "HEAD").strip()
-    history = project.design / "history.md"
-    if not history.exists():
-        history.write_text("# History\n\nAppended at every row close; never edited. The newest entry is last.\n\n")
-    claude.call(project, (PROMPTS / "reconcile.md").read_text().format(
-        row=number, target=target, change=change, answers=answers, now=memory.now_text(project),
-        date=time.strftime("%Y-%m-%d")),
-        agent="reconciler", row=number, wave=0, budget=project.config()["reconcile_budget_usd"])
+    cfg = project.config()
+    if cfg["reconcile"]:
+        history = project.design / "history.md"
+        if not history.exists():
+            history.write_text("# History\n\nAppended at every row close; never edited. The newest entry is last.\n\n")
+        claude.call(project, (PROMPTS / "reconcile.md").read_text().format(
+            row=number, target=target, change=change, answers=answers, now=memory.now_text(project),
+            date=time.strftime("%Y-%m-%d")),
+            agent="reconciler", row=number, wave=0, budget=cfg["reconcile_budget_usd"])
+        enforce_now_budget(project, number)
     memory.close_row(project, number)
     gained = specialists.harvest(project, number)
     mapper.build(project)
@@ -134,6 +162,22 @@ def close(project, row, start, cap):
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
                   lessons={k: len(v) for k, v in gained.items()})
     commit(project, f"row {number} closed: {target} (${cost:.2f})")
+
+
+def enforce_now_budget(project, row):
+    """NOW is the one page every agent reads, so its length is enforced, not requested: one call to cut
+    it back when it overruns, and a ledger entry if even that fails."""
+    limit = project.config()["now_max_lines"]
+    lines = [l for l in memory.now_text(project).splitlines() if l.strip()]
+    if len(lines) <= limit:
+        return
+    claude.call(project, f"You are `reconciler · row {row} · trimming NOW`. `design/now.md` has {len(lines)} lines; its "
+                f"budget is {limit}, because every agent reads it first. Rewrite it within {limit} lines, keeping what a "
+                "fresh agent most needs to continue; what belongs to the past is already in `design/history.md`. Change no "
+                "other file. Do not run git.", agent="reconciler", row=row, wave=0, budget=0.5)
+    after = len([l for l in memory.now_text(project).splitlines() if l.strip()])
+    if after > limit:
+        memory.ledger(project, "now-over-budget", row=row, lines=after, limit=limit)
 
 
 def run(project, max_rows=None, cap=None):
