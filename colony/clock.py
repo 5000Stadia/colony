@@ -62,7 +62,7 @@ def changed_files(project, a, b):
     return [f for f in _git(project, "diff", "--name-only", a, b).split() if f]
 
 
-ASSESSMENT = re.compile(r"ASSESSMENT:\s*complexity\s*(\d+)\s*/\s*10\s*,\s*confidence\s*(\d+)\s*/\s*10\s*[—–-]*\s*(.*)", re.I)
+ASSESSMENT = re.compile(r"ASSESSMENT:\s*confidence\s*(\d+)\s*/\s*10\s*,\s*impact\s*(\d+)\s*/\s*10\s*[—–-]*\s*(.*)", re.I)
 
 
 def parse_assessment(said):
@@ -70,22 +70,22 @@ def parse_assessment(said):
     m = ASSESSMENT.search(said or "")
     if not m:
         return None
-    return {"complexity": int(m.group(1)), "confidence": int(m.group(2)), "note": m.group(3).strip()[:300]}
+    confidence, impact = min(int(m.group(1)), 10), min(int(m.group(2)), 10)
+    return {"confidence": confidence, "impact": impact, "risk": (10 - confidence) * impact,
+            "note": m.group(3).strip()[:300]}
 
 
 def review_decision(project, start, last, assessment=None):
-    """Trust simple work; review what is risky, or what the project's standing rule on the builder's
-    own assessment says to. The assessment is recorded either way, so the rule can be checked against
-    what review actually finds."""
+    """Trust simple work; review where the person declared risk, or where the builder's own forecast puts
+    the expected damage — chance of being wrong times how much it would hurt — over the project's
+    standing rule. The forecast is recorded either way, so the rule can be checked against what review
+    actually finds."""
     cfg = project.config()
     if cfg["review"] in ("never", "always"):
         return cfg["review"] == "always", f"review is set to {cfg['review']}"
-    if assessment:
-        at_least, below = cfg.get("review_if_complexity_at_least"), cfg.get("review_if_confidence_below")
-        if at_least is not None and assessment["complexity"] >= at_least:
-            return True, f"the builder rated complexity {assessment['complexity']}/10 (rule: review at {at_least})"
-        if below is not None and assessment["confidence"] < below:
-            return True, f"the builder rated confidence {assessment['confidence']}/10 (rule: review below {below})"
+    if assessment and cfg.get("review_if_risk_at_least") is not None and assessment["risk"] >= cfg["review_if_risk_at_least"]:
+        return True, (f"the builder's forecast puts risk at {assessment['risk']} (confidence {assessment['confidence']}/10, "
+                      f"impact {assessment['impact']}/10; rule: review at {cfg['review_if_risk_at_least']})")
     lines = sum(int(a) + int(d) for a, d, *_ in (row.split("\t") for row in
                 _git(project, "diff", "--numstat", start, last).splitlines()) if a.isdigit() and d.isdigit())
     files = changed_files(project, start, last)

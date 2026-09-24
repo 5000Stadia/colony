@@ -251,43 +251,44 @@ class AssessmentTest(Base):
         [d] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"]
         return d
 
-    def test_a_standing_rule_on_low_confidence_triggers_review(self):
+    def test_uncertain_high_impact_work_crosses_the_rule(self):
         self.spine()
-        self.configure(review="auto", review_if_confidence_below=6)
-        os.environ["FAKE_ASSESS"] = "complexity 8/10, confidence 4/10 — the tax path is uncertain"
+        self.configure(review="auto", review_if_risk_at_least=25)
+        os.environ["FAKE_ASSESS"] = "confidence 5/10, impact 8/10 — the tax path is uncertain and moves money"
         clock.run(self.project, max_rows=1)
         d = self.decision()
         self.assertTrue(d["review"])
-        self.assertIn("confidence 4/10", d["why"])
-        self.assertEqual(d["assessment"]["note"], "the tax path is uncertain")
+        self.assertEqual(d["assessment"]["risk"], 40)
+        self.assertIn("risk at 40", d["why"])
 
-    def test_confident_simple_work_is_trusted_and_still_recorded(self):
+    def test_uncertain_but_harmless_work_is_trusted(self):
         self.spine()
-        self.configure(review="auto", review_if_confidence_below=6, review_if_complexity_at_least=7)
+        self.configure(review="auto", review_if_risk_at_least=25)
+        os.environ["FAKE_ASSESS"] = "confidence 4/10, impact 2/10 — unsure about wording in help text"
         clock.run(self.project, max_rows=1)
         d = self.decision()
         self.assertFalse(d["review"])
-        self.assertEqual((d["assessment"]["complexity"], d["assessment"]["confidence"]), (3, 9))
+        self.assertEqual(d["assessment"]["risk"], 12)
 
     def test_the_builder_is_never_told_the_rule(self):
         self.spine()
-        self.configure(review="auto", review_if_confidence_below=6)
+        self.configure(review="auto", review_if_risk_at_least=25)
         clock.run(self.project, max_rows=1)
         argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["builder"][0]
         prompt = argv[argv.index("-p") + 1]
         self.assertIn("ASSESSMENT:", prompt)
-        self.assertNotIn("below 6", prompt)
+        self.assertNotIn("25", prompt)
         self.assertNotIn("review_if", prompt)
 
-    def test_calibration_sets_the_assessment_beside_what_review_found(self):
+    def test_calibration_sets_the_forecast_beside_what_review_found(self):
         self.spine()
-        os.environ["FAKE_ASSESS"] = "complexity 6/10, confidence 5/10 — unsure"
+        os.environ["FAKE_ASSESS"] = "confidence 5/10, impact 6/10 — unsure"
         clock.run(self.project, max_rows=1)
         env = dict(os.environ, COLONY_ROOT=str(self.dir))
         out = json.loads(subprocess.run([sys.executable, "-m", "colony", "calibration"], env=env,
                                         capture_output=True, text=True).stdout)
         [row] = out["rows"]
-        self.assertEqual((row["confidence"], row["reviewed"]), (5, True))
+        self.assertEqual((row["confidence"], row["impact"], row["risk"], row["reviewed"]), (5, 6, 30, True))
         self.assertGreaterEqual(row["review_fixes"], 1)
 
 

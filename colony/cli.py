@@ -7,7 +7,7 @@ located signals and a project memory.
     colony run [--rows N] [--cap USD]
     colony status                   the rows, NOW and the open signals
     colony cost                     dollars and tokens, per row and per agent
-    colony calibration              the builder's own confidence beside what review then found
+    colony calibration              the builder's own forecast beside what review then found
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
     colony field view|signal|resolve   the channel agents use (their name, row and wave are set for them)
 
@@ -127,7 +127,7 @@ def cmd_calibration(a):
     rows = []
     for n in sorted(reviews):
         a_ = reviews[n].get("assessment") or {}
-        rows.append({"row": n, "complexity": a_.get("complexity"), "confidence": a_.get("confidence"),
+        rows.append({"row": n, "confidence": a_.get("confidence"), "impact": a_.get("impact"), "risk": a_.get("risk"),
                      "reviewed": reviews[n]["review"], "review_fixes": closed.get(n, {}).get("review_fixes"),
                      "note": a_.get("note")})
     print(json.dumps({"rows": rows}, indent=2))
