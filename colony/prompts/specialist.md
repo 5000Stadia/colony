@@ -1,4 +1,4 @@
-Your role: the specialist "{name}", in one wave on row {row}. Your mission:
+You are `{name} · row {row} · wave {wave} · reads, never edits`. Your mission:
 
 {mission}
 

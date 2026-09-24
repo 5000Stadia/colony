@@ -206,7 +206,7 @@ class LimitTest(Base):
         self.spine()
         os.environ["FAKE_LIMIT_ONCE"] = "1"
         slept = []
-        rec = claude.call(self.project, "Your role: the reconciler.", agent="reconciler", row=1, wave=0,
+        rec = claude.call(self.project, "You are `reconciler · row 1 · at its close`.", agent="reconciler", row=1, wave=0,
                           budget=1, sleep=slept.append)
         self.assertEqual(len(slept), 1)
         self.assertGreater(slept[0], 0)
