@@ -4,7 +4,7 @@ import time
 
 from . import field, mapper
 
-ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|(?:\s*(\d+)\s*\|)?\s*$")
+ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|(?:\s*(\d+)\s*(?:[—–-]+\s*([^|]*?))?\s*\|)?\s*$")
 
 
 def rows(project):
@@ -17,14 +17,17 @@ def rows(project):
             for r in (ROW.match(line.strip()) for line in m.group(1).splitlines()) if r]
 
 
-def impact(project, number):
-    """The impact the row's assigner gave it — how much a mistake here would hurt, 1 to 10 — or None."""
-    text = project.spine.read_text()
-    for line in text.splitlines():
+def stakes(project, number):
+    """What the row's assigner said is at stake — (impact 1 to 10, one sentence) — or (None, "")."""
+    for line in project.spine.read_text().splitlines():
         r = ROW.match(line.strip())
         if r and int(r.group(1)) == number and r.group(4):
-            return min(max(int(r.group(4)), 1), 10)
-    return None
+            return min(max(int(r.group(4)), 1), 10), (r.group(5) or "").strip()
+    return None, ""
+
+
+def impact(project, number):
+    return stakes(project, number)[0]
 
 
 def approved(project):
@@ -72,12 +75,20 @@ def goal(project):
     return m.group(1).strip() if m else ""
 
 
-def specialist_brief(project, row, changed):
-    """A specialist's brief: the goal, what must never happen, the row, and the map entries for the
-    files that changed — not the whole spine or NOW, which it does not need to attack a change."""
+def specialist_brief(project, row, changed, assessment=None):
+    """A specialist's brief: where to look first (what the assigner said is at stake, what the builder is
+    least sure of), the goal, what must never happen, the row, and the map entries for the files that
+    changed — not the whole spine or NOW, which it does not need to attack a change."""
     number, target, done = row
     bearing = mapper.query(project, " ".join(changed) + f" {target}")
-    return "\n\n".join([
+    impact_n, stake = stakes(project, number)
+    look = []
+    if impact_n is not None:
+        look.append(f"- What is at stake (set when the row was assigned): impact {impact_n}/10" + (f" — {stake}" if stake else ""))
+    if assessment and assessment.get("confidence") is not None:
+        look.append(f"- Where the builder is least sure: confidence {assessment['confidence']}/10"
+                    + (f" — {assessment['note']}" if assessment.get("note") else ""))
+    return "\n\n".join((["# Look here first\n\n" + "\n".join(look)] if look else []) + [
         "# The goal\n\n" + goal(project),
         "# What must never happen\n\n" + (irreversible(project) or "nothing listed"),
         f"# This row\n\nRow {number}: {target}\nDone looks like: {done}",

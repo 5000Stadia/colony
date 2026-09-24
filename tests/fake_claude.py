@@ -11,10 +11,13 @@ prompt = sys.argv[sys.argv.index("-p") + 1]
 root = Path(os.environ["COLONY_ROOT"])
 agent, wave = os.environ["COLONY_AGENT"], int(os.environ["COLONY_WAVE"])
 state = root / ".colony" / "fake-state.json"
-seen = json.loads(state.read_text()) if state.exists() else {"calls": 0}
-seen["calls"] += 1
-seen.setdefault("argv", {}).setdefault(agent.split("@")[0], []).append(sys.argv[1:])
-state.write_text(json.dumps(seen))
+import fcntl
+with open(root / ".colony" / "fake-state.lock", "w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX)          # reviewers run in parallel; their records must not collide
+    seen = json.loads(state.read_text()) if state.exists() else {"calls": 0}
+    seen["calls"] += 1
+    seen.setdefault("argv", {}).setdefault(agent.split("@")[0], []).append(sys.argv[1:])
+    state.write_text(json.dumps(seen))
 
 
 def colony(*args):
@@ -33,8 +36,11 @@ def finish(text, cost=0.1, error=False, status=None):
 
 
 if os.environ.get("FAKE_LIMIT_ONCE") and not seen.get("limited"):
-    seen["limited"] = True
-    state.write_text(json.dumps(seen))
+    with open(root / ".colony" / "fake-state.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        seen = json.loads(state.read_text())
+        seen["limited"] = True
+        state.write_text(json.dumps(seen))
     finish("You've hit your session limit · resets 3:30am (America/Los_Angeles)", error=True, status=429)
 
 if prompt.startswith("You are `builder") and "Do this row now" in prompt:
@@ -51,6 +57,8 @@ elif " · reads, never edits`" in prompt:
     name = agent.split("@")[0]
     if os.environ.get("FAKE_FORK") and name == "reuse":
         colony("field", "signal", "--kind", "fork", "--severity", "critical", "--at", "design/spine.md", "--text", "needs a decision")
+    elif name == "quiet":
+        pass
     elif wave == 1:
         colony("field", "signal", "--kind", "hole", "--severity", "major", "--at", "work.txt:1", "--text", f"{name} found a hole")
     finish("probed", cost=0.05)

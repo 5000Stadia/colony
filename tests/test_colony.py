@@ -310,6 +310,51 @@ class AssessmentTest(Base):
         self.assertGreaterEqual(row["review_fixes"], 1)
 
 
+class LookHereTest(Base):
+    def test_the_reviewer_is_told_the_stakes_and_the_builders_doubt_first(self):
+        self.spine()
+        self.project.spine.write_text(self.project.spine.read_text().replace(
+            "| 1 | Write the first line | work.txt exists |",
+            "| 1 | Write the first line | work.txt exists | 8 — a wrong total reaches a tax filing |"))
+        self.assertEqual(memory.stakes(self.project, 1), (8, "a wrong total reaches a tax filing"))
+        os.environ["FAKE_ASSESS"] = "confidence 5/10 — the refund path"
+        clock.run(self.project, max_rows=1)
+        argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["reuse"][0]
+        prompt = argv[argv.index("-p") + 1]
+        head = prompt.split("# Look here first", 1)[1].split("# The goal")[0]
+        self.assertIn("impact 8/10 — a wrong total reaches a tax filing", head)
+        self.assertIn("confidence 5/10 — the refund path", head)
+
+
+class AdaptTest(Base):
+    def spine_rows(self, n, impact):
+        rows = "".join(f"| {i} | Write line {i} | work.txt grows | {impact} |\n" for i in range(1, n + 1))
+        self.project.spine.write_text(SPINE.format(check="test -f work.txt", approved="yes").replace(
+            "| 1 | Write the first line | work.txt exists |\n| 2 | Write the second line | work.txt has two lines |\n", rows))
+
+    def moves(self):
+        return [(e["from"], e["to"]) for e in self.project.read("ledger.jsonl") if e["kind"] == "threshold"]
+
+    def test_a_review_that_finds_problems_lowers_the_threshold(self):
+        self.spine_rows(1, impact=8)
+        self.configure(review="auto", review_if_risk_at_least=30)
+        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"      # risk 40: reviewed; the fake reviewers find holes
+        clock.run(self.project, max_rows=1)
+        self.assertEqual(self.moves(), [(30, 25)])
+
+    def test_reviews_that_find_nothing_raise_it_and_the_bounds_hold(self):
+        self.spine_rows(4, impact=9)
+        self.configure(review="auto", review_if_risk_at_least=10, review_ceiling=12, waves_per_row=1)
+        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"
+        for f in self.project.specialists.glob("*.md"):
+            f.unlink()
+        specialists.write(self.project, "quiet", "Look, but this fake finds nothing.")
+        clock.run(self.project, max_rows=4)
+        self.assertEqual(self.moves(), [(10, 12)], "three empty reviews move it one step, capped at the ceiling")
+        [last] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"][-1:]
+        self.assertIn("review at 12", last["why"])
+
+
 class LimitTest(Base):
     def test_a_refused_call_waits_and_is_repeated_not_counted(self):
         self.spine()

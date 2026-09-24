@@ -130,7 +130,8 @@ def cmd_calibration(a):
         rows.append({"row": n, "confidence": a_.get("confidence"), "impact": a_.get("impact"), "risk": a_.get("risk"),
                      "reviewed": reviews[n]["review"], "review_fixes": closed.get(n, {}).get("review_fixes"),
                      "note": a_.get("note")})
-    print(json.dumps({"rows": rows}, indent=2))
+    moves = [e for e in ledger if e["kind"] == "threshold"]
+    print(json.dumps({"rows": rows, "threshold_moves": moves}, indent=2))
     return 0
 
 

@@ -24,7 +24,9 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
                                rows 1..n, the smallest thing that works end to end first. Impact is
                                how much a mistake in that row would hurt, 1 to 10: 1 a cosmetic slip,
                                10 money, data, or anything published or irreversible. You set it now,
-                               before the work, so the one who builds the row never rates its stakes.)
+                               before the work, so the one who builds the row never rates its stakes.
+                               Write it as the number and one sentence on what a mistake would hurt:
+                               "8 — a wrong total reaches a tax filing".)
    **Next ID:** <n+1>
    **Approved:** no
 

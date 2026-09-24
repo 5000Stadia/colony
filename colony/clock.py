@@ -81,10 +81,10 @@ def review_decision(project, start, last, assessment=None):
     cfg = project.config()
     if cfg["review"] in ("never", "always"):
         return cfg["review"] == "always", f"review is set to {cfg['review']}"
-    if assessment and assessment.get("risk") is not None and cfg.get("review_if_risk_at_least") is not None \
-            and assessment["risk"] >= cfg["review_if_risk_at_least"]:
+    threshold = review_threshold(project)
+    if assessment and assessment.get("risk") is not None and threshold is not None and assessment["risk"] >= threshold:
         return True, (f"risk {assessment['risk']}: the row's impact {assessment['impact']}/10, set when it was assigned, "
-                      f"and the builder's confidence {assessment['confidence']}/10 (rule: review at {cfg['review_if_risk_at_least']})")
+                      f"and the builder's confidence {assessment['confidence']}/10 (rule: review at {threshold})")
     lines = sum(int(a) + int(d) for a, d, *_ in (row.split("\t") for row in
                 _git(project, "diff", "--numstat", start, last).splitlines()) if a.isdigit() and d.isdigit())
     files = changed_files(project, start, last)
@@ -96,6 +96,40 @@ def review_decision(project, start, last, assessment=None):
     if cfg["review_min_files"] is not None and len(files) >= cfg["review_min_files"]:
         return True, f"{len(files)} files changed"
     return False, f"small change ({lines} lines, {len(files)} files): trusted"
+
+
+def review_threshold(project):
+    """The project's standing review threshold as experience has moved it, or None if it has none."""
+    cfg = project.config()
+    if cfg.get("review_if_risk_at_least") is None:
+        return None
+    moves = [e for e in project.read("ledger.jsonl") if e["kind"] == "threshold"]
+    return moves[-1]["to"] if moves else cfg["review_if_risk_at_least"]
+
+
+def adapt_threshold(project, row):
+    """Gentle guidance from outcomes: a review that found real problems lowers the threshold a step, so
+    reviews come a little more often; three in a row that found nothing raise it a step. Bounded, and
+    recorded, so it can be read and undone."""
+    cfg = project.config()
+    current = review_threshold(project)
+    if current is None or not cfg.get("review_adapt"):
+        return
+    ledger = project.read("ledger.jsonl")
+    reviewed = {e["row"] for e in ledger if e["kind"] == "review" and e["review"]}
+    outcomes = [e["review_fixes"] for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed]
+    since = [e for e in ledger if e["kind"] == "threshold"]
+    last_move_row = since[-1]["row"] if since else 0
+    recent = [e["review_fixes"] for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed and e["row"] > last_move_row]
+    step, new, why = cfg["review_adapt_step"], None, None
+    if row in reviewed and outcomes and outcomes[-1] > 0:
+        new, why = current - step, f"row {row}'s review found {outcomes[-1]} real problem(s)"
+    elif len(recent) >= 3 and not any(recent[-3:]):
+        new, why = current + step, "three reviews in a row found nothing"
+    if new is not None:
+        new = min(max(new, cfg["review_floor"]), cfg["review_ceiling"])
+        if new != current:
+            memory.ledger(project, "threshold", row=row, **{"from": current, "to": new, "why": why})
 
 
 class Stop(Exception):
@@ -130,7 +164,7 @@ def run_row(project, row, cap):
         run_checks(project, number, wave)
         mapper.build(project)
         change = _git(project, "diff", "--stat", start, last).strip() or "nothing changed"
-        brief_now = memory.specialist_brief(project, row, changed_files(project, start, last))
+        brief_now = memory.specialist_brief(project, row, changed_files(project, start, last), assessment)
 
         def attack(name):
             lineage = lineages[name]
@@ -187,6 +221,7 @@ def close(project, row, start, cap):
     # The outcome the builder's assessment is scored against: real problems review found and fixed.
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
                   review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()})
+    adapt_threshold(project, number)
     commit(project, f"row {number} closed: {target} (${cost:.2f})")
 
 

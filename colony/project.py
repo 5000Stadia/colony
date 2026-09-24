@@ -15,6 +15,10 @@ DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 2,
                                          # these to also review large or wide changes.
             "review_if_risk_at_least": None,  # a standing rule: risk = (10 - builder's confidence) x the row's
                                               # impact, set by whoever assigned it; e.g. 25. Never shown to builders.
+            "review_adapt": True,        # the threshold drifts with experience: down a step when a review
+            "review_adapt_step": 5,      # finds real problems, up a step after three that find nothing,
+            "review_floor": 5,           # never outside these bounds; every move is in the ledger
+            "review_ceiling": 80,
             "reconcile": False,          # NOW and history, rewritten at every row close
             "now_max_lines": 25,
             "map_in_brief": False}
