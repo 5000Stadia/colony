@@ -7,6 +7,7 @@ located signals and a project memory.
     colony run [--rows N] [--cap USD]
     colony status                   the rows, NOW and the open signals
     colony cost                     dollars and tokens, per row and per agent
+    colony calibration              the builder's own confidence beside what review then found
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
     colony field view|signal|resolve   the channel agents use (their name, row and wave are set for them)
 
@@ -117,6 +118,22 @@ def cmd_cost(a):
     return 0
 
 
+def cmd_calibration(a):
+    """How the builder's own assessments compared with what review then found, row by row."""
+    project = Project.here()
+    ledger = project.read("ledger.jsonl")
+    reviews = {e["row"]: e for e in ledger if e["kind"] == "review"}
+    closed = {e["row"]: e for e in ledger if e["kind"] == "row-closed"}
+    rows = []
+    for n in sorted(reviews):
+        a_ = reviews[n].get("assessment") or {}
+        rows.append({"row": n, "complexity": a_.get("complexity"), "confidence": a_.get("confidence"),
+                     "reviewed": reviews[n]["review"], "review_fixes": closed.get(n, {}).get("review_fixes"),
+                     "note": a_.get("note")})
+    print(json.dumps({"rows": rows}, indent=2))
+    return 0
+
+
 def cmd_map(a):
     project = Project.here()
     _, changed = mapper.build(project)
@@ -160,6 +177,7 @@ def main(argv=None):
     p = sub.add_parser("run"); p.add_argument("--rows", type=int); p.add_argument("--cap", type=float); p.set_defaults(fn=cmd_run)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("cost").set_defaults(fn=cmd_cost)
+    sub.add_parser("calibration").set_defaults(fn=cmd_calibration)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)
     fs.add_parser("view")

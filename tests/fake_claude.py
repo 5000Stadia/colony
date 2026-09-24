@@ -41,7 +41,8 @@ if prompt.startswith("You are `builder") and "Do this row now" in prompt:
     row = re.search(r"^Row (\d+): (.*)$", prompt, re.M)
     with open(root / "work.txt", "a") as fh:
         fh.write(f"row {row.group(1)}: {row.group(2)}\n")
-    finish("built\nSTATUS: done", cost=0.5)
+    assess = os.environ.get("FAKE_ASSESS", "complexity 3/10, confidence 9/10 — routine")
+    finish(f"built\nASSESSMENT: {assess}\nSTATUS: done", cost=0.5)
 elif prompt.startswith("Wave "):
     for sid in re.findall(r"^#(\d+) ", prompt, re.M):
         colony("field", "resolve", sid, "--fixed", "--text", "fixed it")

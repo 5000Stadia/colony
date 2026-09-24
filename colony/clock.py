@@ -1,5 +1,6 @@
 """The clock: drives each row through build, checks, specialist waves and close."""
 import concurrent.futures as cf
+import re
 import subprocess
 import time
 import uuid
@@ -61,12 +62,30 @@ def changed_files(project, a, b):
     return [f for f in _git(project, "diff", "--name-only", a, b).split() if f]
 
 
-def review_decision(project, start, last):
-    """Trust simple work; review what is large, wide or risky. Measured by the harness, never by the
-    builder's opinion of its own work."""
+ASSESSMENT = re.compile(r"ASSESSMENT:\s*complexity\s*(\d+)\s*/\s*10\s*,\s*confidence\s*(\d+)\s*/\s*10\s*[—–-]*\s*(.*)", re.I)
+
+
+def parse_assessment(said):
+    """The builder's one-line forecast about its own row, if it gave one."""
+    m = ASSESSMENT.search(said or "")
+    if not m:
+        return None
+    return {"complexity": int(m.group(1)), "confidence": int(m.group(2)), "note": m.group(3).strip()[:300]}
+
+
+def review_decision(project, start, last, assessment=None):
+    """Trust simple work; review what is risky, or what the project's standing rule on the builder's
+    own assessment says to. The assessment is recorded either way, so the rule can be checked against
+    what review actually finds."""
     cfg = project.config()
     if cfg["review"] in ("never", "always"):
         return cfg["review"] == "always", f"review is set to {cfg['review']}"
+    if assessment:
+        at_least, below = cfg.get("review_if_complexity_at_least"), cfg.get("review_if_confidence_below")
+        if at_least is not None and assessment["complexity"] >= at_least:
+            return True, f"the builder rated complexity {assessment['complexity']}/10 (rule: review at {at_least})"
+        if below is not None and assessment["confidence"] < below:
+            return True, f"the builder rated confidence {assessment['confidence']}/10 (rule: review below {below})"
     lines = sum(int(a) + int(d) for a, d, *_ in (row.split("\t") for row in
                 _git(project, "diff", "--numstat", start, last).splitlines()) if a.isdigit() and d.isdigit())
     files = changed_files(project, start, last)
@@ -97,12 +116,13 @@ def run_row(project, row, cap):
             raise Stop(f"the cap of ${cap:.2f} is reached")
         return min(want, left)
 
-    claude.call(project, (PROMPTS / "builder-row.md").read_text().format(brief=brief, row=number),
-                agent="builder", row=number, wave=0, budget=budget(cfg["builder_budget_usd"]), session=session)
+    built = claude.call(project, (PROMPTS / "builder-row.md").read_text().format(brief=brief, row=number),
+                        agent="builder", row=number, wave=0, budget=budget(cfg["builder_budget_usd"]), session=session)
     last = commit(project, f"row {number}: build")
     lineages = specialists.load(project)
-    review, why = review_decision(project, start, last)
-    memory.ledger(project, "review", row=number, review=review, why=why)
+    assessment = parse_assessment(built["said"])
+    review, why = review_decision(project, start, last, assessment)
+    memory.ledger(project, "review", row=number, review=review, why=why, assessment=assessment)
     for wave in range(1, (cfg["waves_per_row"] if review and lineages else 0) + 1):
         run_checks(project, number, wave)
         mapper.build(project)
@@ -159,8 +179,11 @@ def close(project, row, start, cap):
     gained = specialists.harvest(project, number)
     mapper.build(project)
     cost = sum(r["cost_usd"] for r in project.read("usage.jsonl") if r["row"] == number)
+    fixed = sum(1 for e in events if e["type"] == "resolve" and e.get("row") == number and e.get("fixed")
+                and e.get("by") == "builder")
+    # The outcome the builder's assessment is scored against: real problems review found and fixed.
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
-                  lessons={k: len(v) for k, v in gained.items()})
+                  review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()})
     commit(project, f"row {number} closed: {target} (${cost:.2f})")
 
 

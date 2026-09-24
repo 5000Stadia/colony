@@ -13,4 +13,8 @@ needs a decision the goal does not answer, leave a fork —
 `python3 -m colony field signal --kind fork --severity critical --at design/spine.md --text "..."` —
 and stop. Do not edit `design/spine.md` or `design/map.md`, and do not run git.
 
-End your final message with a line `STATUS: done`.
+End your final message with two lines. First an honest forecast, which will be checked against what
+review and later checks find — complexity is how hard this row's work is; confidence is the chance
+it meets its done and breaks nothing (not how good it is — others judge that):
+`ASSESSMENT: complexity N/10, confidence N/10 — <one sentence: what is hardest, or least certain>`
+Then `STATUS: done`.

@@ -43,7 +43,7 @@ class Base(unittest.TestCase):
         self.project = Project(self.dir)
         os.environ["COLONY_CLAUDE"] = str(ROOT / "tests" / "fake_claude.py")
         os.environ["PYTHONPATH"] = str(ROOT)
-        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
+        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
             os.environ.pop(k, None)
         # Most tests exercise the full machinery: review on, reconciliation on, two named lineages.
         for f in self.project.specialists.glob("*.md"):
@@ -244,6 +244,51 @@ class LeanTest(Base):
         clock.run(self.project, max_rows=1)
         self.assertEqual(self.project.now.read_text(), "Status: trimmed.\n")
         self.assertEqual(sum(1 for u in self.project.read("usage.jsonl") if u["agent"] == "reconciler"), 2)
+
+
+class AssessmentTest(Base):
+    def decision(self):
+        [d] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"]
+        return d
+
+    def test_a_standing_rule_on_low_confidence_triggers_review(self):
+        self.spine()
+        self.configure(review="auto", review_if_confidence_below=6)
+        os.environ["FAKE_ASSESS"] = "complexity 8/10, confidence 4/10 — the tax path is uncertain"
+        clock.run(self.project, max_rows=1)
+        d = self.decision()
+        self.assertTrue(d["review"])
+        self.assertIn("confidence 4/10", d["why"])
+        self.assertEqual(d["assessment"]["note"], "the tax path is uncertain")
+
+    def test_confident_simple_work_is_trusted_and_still_recorded(self):
+        self.spine()
+        self.configure(review="auto", review_if_confidence_below=6, review_if_complexity_at_least=7)
+        clock.run(self.project, max_rows=1)
+        d = self.decision()
+        self.assertFalse(d["review"])
+        self.assertEqual((d["assessment"]["complexity"], d["assessment"]["confidence"]), (3, 9))
+
+    def test_the_builder_is_never_told_the_rule(self):
+        self.spine()
+        self.configure(review="auto", review_if_confidence_below=6)
+        clock.run(self.project, max_rows=1)
+        argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["builder"][0]
+        prompt = argv[argv.index("-p") + 1]
+        self.assertIn("ASSESSMENT:", prompt)
+        self.assertNotIn("below 6", prompt)
+        self.assertNotIn("review_if", prompt)
+
+    def test_calibration_sets_the_assessment_beside_what_review_found(self):
+        self.spine()
+        os.environ["FAKE_ASSESS"] = "complexity 6/10, confidence 5/10 — unsure"
+        clock.run(self.project, max_rows=1)
+        env = dict(os.environ, COLONY_ROOT=str(self.dir))
+        out = json.loads(subprocess.run([sys.executable, "-m", "colony", "calibration"], env=env,
+                                        capture_output=True, text=True).stdout)
+        [row] = out["rows"]
+        self.assertEqual((row["confidence"], row["reviewed"]), (5, True))
+        self.assertGreaterEqual(row["review_fixes"], 1)
 
 
 class LimitTest(Base):
