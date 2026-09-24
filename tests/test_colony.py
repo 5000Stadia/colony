@@ -81,6 +81,21 @@ class FieldTest(Base):
             ids = list(pool.map(post, range(64)))
         self.assertEqual(sorted(ids), list(range(1, 65)))
 
+    def test_an_unfixed_signal_always_wakes_the_builder(self):
+        field.post(self.project, by="a@w2", row=1, wave=2, kind="unfixed", severity="minor", at="x", text="still broken")
+        [s] = field.signals(self.project, row=1, wave=2)
+        self.assertTrue(field.wakes_builder(s, 2))
+
+    def test_a_specialist_is_shown_its_own_answered_signals(self):
+        n = field.post(self.project, by="reuse@w1", row=1, wave=1, kind="hole", severity="major", at="a.py:f", text="breaks")
+        field.post(self.project, by="fresh-eyes@w1", row=1, wave=1, kind="hole", severity="major", at="b.py", text="other")
+        field.resolve(self.project, by="builder", row=1, wave=1, of=n, text="patched f", fixed=True)
+        text = clock.verification(self.project, 1, "reuse")
+        self.assertIn("a.py:f", text)
+        self.assertIn("patched f", text)
+        self.assertNotIn("b.py", text)
+        self.assertEqual(clock.verification(self.project, 1, "fresh-eyes"), "")
+
     def test_only_the_builder_answers(self):
         env = dict(os.environ, COLONY_ROOT=str(self.dir), COLONY_AGENT="reuse@w1", COLONY_ROW="1", COLONY_WAVE="1")
         subprocess.run([sys.executable, "-m", "colony", "field", "signal", "--kind", "hole", "--severity", "major",

@@ -11,6 +11,8 @@ What earlier waves of your lineage found that was real and got fixed (start from
 
 {change}
 
+{verify}
+
 Work fast and narrow. Pursue your mission against this change, demonstrate each problem you find,
 and leave at most {limit} signals, each at the file and the place where it lives:
 `python3 -m colony field signal --kind hole|gap|friction|duplicate --severity critical|major|minor --at PATH[:PLACE] --text "what you did and what happened"`.

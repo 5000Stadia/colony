@@ -7,7 +7,7 @@ import fcntl
 import json
 
 RANK = {"critical": 3, "major": 2, "minor": 1}
-KINDS = ("hole", "gap", "friction", "duplicate", "fork", "check")
+KINDS = ("hole", "gap", "friction", "duplicate", "fork", "check", "unfixed")
 
 
 def signals(project, row=None, wave=0):
@@ -42,8 +42,9 @@ def signals(project, row=None, wave=0):
 
 
 def wakes_builder(s, wave):
-    """Critical, a failing check, or a fork always; major only in the first wave; later, confirmation."""
-    if s["severity"] == "critical" or s["kind"] in ("check", "fork"):
+    """Critical, a failing check, a fork or a fix that did not hold always; major only in the first
+    wave; later, confirmation."""
+    if s["severity"] == "critical" or s["kind"] in ("check", "fork", "unfixed"):
         return True
     if wave <= 1 and s["severity"] == "major":
         return True

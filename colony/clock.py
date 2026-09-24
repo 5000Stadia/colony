@@ -39,6 +39,24 @@ def run_checks(project, row, wave):
                        text=f"exit {done.returncode}: {tail}")
 
 
+def verification(project, row, name):
+    """A specialist's own earlier signals on this row and how they were answered, to re-check first.
+
+    A fix nobody re-checks can be partial, overclaimed in the docs, or open a new hole; measured in
+    the garden pilots, it is where a critic's gains were lost."""
+    events = project.read("field.jsonl")
+    mine = {e["id"]: e for e in events if e["type"] == "signal" and e.get("row") == row and e["by"].split("@")[0] == name}
+    answers = [(mine[e["of"]], e) for e in events if e["type"] == "resolve" and e.get("of") in mine]
+    if not answers:
+        return ""
+    lines = [f"- {s['at']}: you found \"{s['text'][:160]}\" — the builder {'fixed it' if a.get('fixed') else 'declined it'}: {a['text'][:160]}"
+             for s, a in answers]
+    return ("# Verify first\n\nBefore anything new, re-run the demonstration behind each of your earlier signals below "
+            "against the work as it is now. If a fix did not hold, or it broke something near it, or the documentation now "
+            "claims more than the fix does, signal it with `--kind unfixed` at the same `--at`; that always reaches the "
+            "builder. If a decline was wrong, say why the same way.\n\n" + "\n".join(lines))
+
+
 class Stop(Exception):
     """The run stops for the person: a fork, a check that will not pass, or the cap."""
 
@@ -71,7 +89,7 @@ def run_row(project, row, cap):
             prompt = (PROMPTS / "specialist.md").read_text().format(
                 name=name, row=number, mission=lineage["mission"], limit=cfg["signals_per_specialist"],
                 memory="\n".join(f"- {m}" for m in lineage["memory"]) or "- none yet",
-                brief=brief_now, change=change)
+                brief=brief_now, change=change, verify=verification(project, number, name))
             return claude.call(project, prompt, agent=f"{name}@w{wave}", row=number, wave=wave,
                                budget=budget(cfg["specialist_budget_usd"]))
 
