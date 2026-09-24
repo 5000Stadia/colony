@@ -3,7 +3,7 @@ import json
 import os
 from pathlib import Path
 
-DEFAULTS = {"model": "claude-opus-5-5", "effort": "high", "waves_per_row": 3,
+DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 3,
             "builder_budget_usd": 8.0, "fix_budget_usd": 4.0, "specialist_budget_usd": 1.5,
             "reconcile_budget_usd": 0.75, "signals_per_specialist": 5}
 
