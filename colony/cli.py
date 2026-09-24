@@ -77,9 +77,8 @@ def cmd_approve(a):
     if risky:
         # The breadth of the risky areas decides most of a project's cost; say so while it can be changed.
         print("Every change touching these risky areas will be reviewed: " + ", ".join(risky) + ".\n"
-              "In testing, a reviewed row cost about four times an unreviewed one. Narrow the list in\n"
-              "design/spine.md to what a mistake would really cost you, or set review to never in\n"
-              ".colony/config.json.")
+              "In testing a reviewed row cost 1.3 to 2.4 times an unreviewed one. Keep the list to where\n"
+              "a mistake would really cost you.")
     print("approved; next: colony run")
     return 0
 

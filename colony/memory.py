@@ -5,7 +5,7 @@ import time
 
 from . import field, mapper
 
-ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|(?:\s*(\d+)\s*(?:[—–-]+\s*([^|]*?))?\s*\|)?\s*$")
+ROW = re.compile(r"^\|\s*(\d+)\s*\|(.*?)\|(.*?)\|(?:\s*(\d+)\s*(?:/\s*10\s*)?(?:[—–-]+\s*([^|]*?))?\s*\|)?\s*$")
 
 
 NOTES = "notes.jsonl"
@@ -120,8 +120,13 @@ def irreversible(project):
 
 def close_row(project, number):
     """Remove the row from the spine; git remembers it."""
-    lines = project.spine.read_text().split("\n")
-    kept = [l for l in lines if not ((m := ROW.match(l.strip())) and int(m.group(1)) == number)]
+    lines, section, kept = project.spine.read_text().split("\n"), None, []
+    for l in lines:
+        if l.startswith("## "):
+            section = l[3:].strip().lower()
+        if section == "the spec list" and (m := ROW.match(l.strip())) and int(m.group(1)) == number:
+            continue
+        kept.append(l)
     project.spine.write_text("\n".join(kept))
 
 

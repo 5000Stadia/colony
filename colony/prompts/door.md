@@ -36,7 +36,7 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    Glob, Bash`, `colony: reviewer`, `---`), then the mission — who would attack this work and how, in
    two or three sentences — then an empty `## Memory` section. A numbers skeptic for money, a
    continuity reader for a novel's canon. Most goals need none: a single strong agent is the default,
-   and review costs more than it returns except where a mistake is expensive.
+   and review is for the places where a mistake would be expensive.
 
 3. Write `design/questions.md`: the questions whose answers would most change the spine, each with
    your best guess at the answer, so the person can correct a draft instead of answering from scratch.

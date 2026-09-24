@@ -37,12 +37,13 @@ def _symbols(entries):
 
 
 def duplicates(before, after):
-    """Things this row made that already existed elsewhere under the same name."""
+    """Things this row made that still exist elsewhere under the same name. A thing moved is not re-made:
+    only a copy that stays beside the original counts."""
     old, new = _symbols(before), _symbols(after)
     found = []
     for name, paths in new.items():
         added = paths - old.get(name, set())
-        elsewhere = old.get(name, set()) - added
+        elsewhere = (old.get(name, set()) & paths) - added
         if added and elsewhere:
             found.append(f"{name}: new in {', '.join(sorted(added))}, already in {', '.join(sorted(elsewhere))}")
     return found
@@ -98,7 +99,9 @@ def escalate(project, row, evidence, remedy, why):
     import json
     path = project.state / "config.json"
     cfg = json.loads(path.read_text()) if path.exists() else {}
-    changed = {k: v for k, v in remedy.items() if cfg.get(k) != v}
+    ledger = project.read("ledger.jsonl")
+    turned_off = {k for e in ledger if e["kind"] == "escalation" for k in e["switched_on"] if cfg.get(k) is False}
+    changed = {k: v for k, v in remedy.items() if cfg.get(k) != v and k not in turned_off}   # the person's "off" stands
     if not changed:
         return False
     cfg.update(changed)
@@ -124,9 +127,12 @@ def review_health(project, row, before=None, after=None):
     if reg:
         lost.append(("regression", reg))
         project.append("ledger.jsonl", {"kind": "evidence", "row": row, "type": "regression", "detail": reg})
-        escalate(project, row, [f"{c} passed at the last close and failed in row {row}" for c in reg],
-                 {"reconcile": True},
-                 "the project broke something it had built: NOW and the reasons behind each row now travel forward")
+        # One break can be a flaky check; a second, in another row, is the project forgetting.
+        rows_broken = {e["row"] for e in project.read("ledger.jsonl") if e["kind"] == "evidence" and e["type"] == "regression"}
+        if len(rows_broken) >= 2:
+            escalate(project, row, [f"{c} passed at the last close and failed in row {row}" for c in reg],
+                     {"reconcile": True},
+                     "the project broke what it had built, in two rows: NOW and each row's reasons now travel forward")
     reading = rising_reading(project)
     if reading:
         escalate(project, row, [reading], {"map_in_brief": True},

@@ -45,8 +45,10 @@ You are starting a long project for a person with colony. Follow these steps in 
 
 ## What the defaults are, and why
 
-Every default was measured against a single fresh agent, across seven pre-registered pilots and five
-focused tests; `design/claims.md` holds each part's evidence.
+The core — one builder per row at medium effort, checks, the meter, review only where declared — was
+measured against a single fresh agent across seven pre-registered pilots and five focused tests. The
+mechanisms that switch on later are tested for behaviour, not yet for value. `design/claims.md` holds
+each part's evidence and its status.
 
 - **One builder per row, at medium effort.** The best value on every task tested, up to a fourteen-row
   project that lost its context at every row. Low → medium effort was the largest single gain found
@@ -60,9 +62,11 @@ focused tests; `design/claims.md` holds each part's evidence.
   stay off — until the project re-makes something it already had, breaks something it built, or its
   re-reading cost keeps climbing. Then the fitting remedy switches on by itself, with its evidence on
   the page. Strain on one builder produces a reorganisation proposal for the person.
-- **Names carry scope.** Agents named for role, scope and lifetime kept to their own work at a border
-  in 16 of 16 runs; neutral names crossed every time.
-- **Nothing irreversible without the person.** Publishing, spending and sending stop as forks.
+- **Names carry scope.** Free, so kept: in one border scenario (16 runs, mostly low effort) scoped names
+  kept agents to their side and neutral names crossed, with no measurable harm either way.
+- **Nothing irreversible without the person.** Publishing and remote commands are refused to every
+  agent; anything else the spine names stops as a fork. A floor, not a sandbox: for isolation, run
+  colony in a container.
 
 ## Commands
 

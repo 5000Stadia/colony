@@ -21,6 +21,13 @@ def commit(project, message):
     return _git(project, "rev-parse", "HEAD").strip()
 
 
+def discard_edits(project):
+    """Reviewers read, never edit: whatever one changed in the work through its shell is put back.
+    Their signals (.colony/) and their scratch/ stay."""
+    _git(project, "checkout", "--", ".", ":!.colony", ":!scratch")
+    _git(project, "clean", "-fdq", "--", ".", ":!.colony", ":!scratch")
+
+
 def spent(project):
     return sum(r.get("cost_usd", 0) for r in project.read("usage.jsonl"))
 
@@ -108,7 +115,7 @@ def review_threshold(project):
     return moves[-1]["to"] if moves else cfg["review_if_risk_at_least"]
 
 
-def adapt_threshold(project, row):
+def adapt_threshold(project, row, closed=True):
     """Gentle guidance from outcomes, leaning to quality: a review that found real problems, or a row review
     trusted that then broke a check, lowers the threshold a step at once; only three empty reviews in a
     row raise it a step. Bounded, and recorded, so it can be read and undone."""
@@ -127,9 +134,9 @@ def adapt_threshold(project, row):
                                          for e in ledger)
     if missed:
         new, why = current - step, f"row {row} was trusted without review and broke a check that had passed"
-    elif row in reviewed and outcomes and outcomes[-1] > 0:
+    elif closed and row in reviewed and outcomes and outcomes[-1] > 0:
         new, why = current - step, f"row {row}'s review found {outcomes[-1]} real problem(s)"
-    elif len(recent) >= 3 and not any(recent[-3:]):
+    elif closed and len(recent) >= 3 and not any(recent[-3:]):
         new, why = current + step, "three reviews in a row found nothing"
     if new is not None:
         new = min(max(new, cfg["review_floor"]), cfg["review_ceiling"])
@@ -141,7 +148,7 @@ class Stop(Exception):
     """The run stops for the person: a fork, a check that will not pass, or the cap."""
 
 
-def run_row(project, row, cap):
+def run_row(project, row, cap, baseline=0.0):
     number, target, _ = row
     cfg = project.config()
     session = str(uuid.uuid4())
@@ -150,7 +157,7 @@ def run_row(project, row, cap):
     brief = memory.brief(project, row)
 
     def budget(want):
-        left = cap - spent(project) if cap else want
+        left = cap - (spent(project) - baseline) if cap else want      # the cap is this run's, not the project's
         if left < 0.5:
             raise Stop(f"the cap of ${cap:.2f} is reached")
         return min(want, left)
@@ -158,6 +165,12 @@ def run_row(project, row, cap):
     built = claude.call(project, (PROMPTS / "builder-row.md").read_text().format(brief=brief, row=number),
                         agent="builder", row=number, wave=0, budget=budget(cfg["builder_budget_usd"]), session=session)
     last = commit(project, f"row {number}: build")
+    if not built["ok"] or "STATUS: done" not in built["said"]:
+        raise Stop(f"row {number}'s builder did not finish ({built['subtype'] or 'no result'}): "
+                   f"{built['said'][-200:]}; the row stays open")
+    forks = [s for s in field.signals(project, row=number, wave=0) if s["kind"] == "fork"]
+    if forks:
+        raise Stop("a fork needs the person: " + "; ".join(field.render(s) for s in forks))
     after = mapper.build(project)[0]
     lineages = specialists.load(project)
     assessment = parse_assessment(built["said"])
@@ -184,6 +197,7 @@ def run_row(project, row, cap):
 
         with cf.ThreadPoolExecutor(max(1, len(lineages))) as pool:
             list(pool.map(attack, lineages))
+        discard_edits(project)
         live = field.signals(project, row=number, wave=wave)
         if any(s["kind"] == "fork" for s in live):
             commit(project, f"row {number}: fork")
@@ -199,24 +213,34 @@ def run_row(project, row, cap):
     run_checks(project, number, cfg["waves_per_row"] + 1)
     failing = [s for s in field.signals(project, row=number, wave=99) if s["kind"] == "check"]
     if failing:
+        # One try, as any builder would, before the person is needed.
+        claude.call(project, (PROMPTS / "builder-fix.md").read_text().format(
+            wave=cfg["waves_per_row"] + 1, row=number, signals="\n".join(field.render(s) for s in failing)),
+            agent="builder", row=number, wave=cfg["waves_per_row"] + 1, budget=budget(cfg["fix_budget_usd"]),
+            session=session, resume=True)
+        commit(project, f"row {number}: check fixes")
+        run_checks(project, number, cfg["waves_per_row"] + 2)
+        failing = [s for s in field.signals(project, row=number, wave=99) if s["kind"] == "check"]
+    if failing:
         health.review_health(project, number, before, after)   # a row that cannot close is evidence too
-        adapt_threshold(project, number)
+        adapt_threshold(project, number, closed=False)
         raise Stop(f"row {number} cannot close: " + "; ".join(field.render(s) for s in failing))
-    close(project, row, start, cap, before, after)
+    close(project, row, start, cap, before, after, baseline)
 
 
-def close(project, row, start, cap, before=None, after=None):
+def close(project, row, start, cap, before=None, after=None, baseline=0.0):
     number, target, _ = row
     events = project.read("field.jsonl")
     answers = "\n".join(f"- #{e['of']} {'fixed' if e.get('fixed') else 'declined'}: {e['text']}"
                         for e in events if e["type"] == "resolve" and e.get("row") == number) or "- none"
     change = _git(project, "diff", "--stat", start, "HEAD").strip()
     cfg = project.config()
-    if cfg["reconcile"]:
+    keep = min(cfg["reconcile_budget_usd"], cap - (spent(project) - baseline)) if cap else cfg["reconcile_budget_usd"]
+    if cfg["reconcile"] and keep >= 0.1:
         claude.call(project, (PROMPTS / "reconcile.md").read_text().format(
             row=number, target=target, change=change, answers=answers, now=memory.now_text(project),
             date=time.strftime("%Y-%m-%d")),
-            agent="reconciler", row=number, wave=0, budget=cfg["reconcile_budget_usd"])
+            agent="reconciler", row=number, wave=0, budget=keep)
         enforce_now_budget(project, number)
     memory.close_row(project, number)
     memory.fold_notes(project, number)
@@ -258,10 +282,10 @@ def run(project, max_rows=None, cap=None):
     if not memory.approved(project):
         raise Stop("the spine is not approved: read design/spine.md, correct it, then run `colony approve`")
     mapper.build(project)
-    done = 0
+    done, baseline = 0, spent(project)
     for row in memory.rows(project):
         if max_rows is not None and done >= max_rows:
             break
-        run_row(project, row, cap)
+        run_row(project, row, cap, baseline)
         done += 1
     return done

@@ -43,7 +43,7 @@ class Base(unittest.TestCase):
         self.project = Project(self.dir)
         os.environ["COLONY_CLAUDE"] = str(ROOT / "tests" / "fake_claude.py")
         os.environ["PYTHONPATH"] = str(ROOT)
-        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "FAKE_DUP", "FAKE_BREAK_ROW", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
+        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "FAKE_DUP", "FAKE_BREAK_ROW", "FAKE_BUILD_ERROR", "FAKE_BUILDER_FORK", "FAKE_TAMPER", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
             os.environ.pop(k, None)
         # Most tests exercise the full machinery: review on, reconciliation on, two named lineages.
         for f in self.project.specialists.glob("*.md"):
@@ -74,10 +74,11 @@ class FieldTest(Base):
         self.assertEqual((s["strength"], s["severity"]), (2, "major"))
         self.assertTrue(field.wakes_builder(s, 2))
 
-    def test_unconfirmed_minor_fades_and_resolved_leaves(self):
-        field.post(self.project, by="a", row=1, wave=1, kind="friction", severity="minor", at="r.md", text="t")
-        self.assertEqual(len(field.signals(self.project, row=1, wave=2)), 1)
-        self.assertEqual(field.signals(self.project, row=1, wave=3), [])
+    def test_a_lineage_does_not_confirm_itself_and_resolved_leaves(self):
+        field.post(self.project, by="critic@w1", row=1, wave=1, kind="hole", severity="major", at="r.md", text="t")
+        field.post(self.project, by="critic@w2", row=1, wave=2, kind="hole", severity="major", at="r.md", text="again")
+        [s] = field.signals(self.project, row=1, wave=2)
+        self.assertEqual(s["strength"], 1, "the same lineage in a later wave is not independent")
         n = field.post(self.project, by="a", row=1, wave=1, kind="hole", severity="critical", at="y", text="t")
         field.resolve(self.project, by="builder", row=1, wave=1, of=n, text="done", fixed=True)
         self.assertEqual([s for s in field.signals(self.project, row=1, wave=1) if s["id"] == n], [])
@@ -200,6 +201,51 @@ class ClockTest(Base):
         self.assertIn("fork", str(stop.exception))
         self.assertEqual([r[0] for r in memory.rows(self.project)], [1, 2], "a forked row does not close")
 
+    def test_a_reviewers_edits_are_put_back_and_no_agent_may_publish(self):
+        self.spine()
+        os.environ["FAKE_TAMPER"] = "1"
+        clock.run(self.project, max_rows=1)
+        self.assertNotIn("rewrote", (self.dir / "work.txt").read_text())
+        self.assertFalse((self.dir / "junk.txt").exists())
+        self.assertTrue(self.project.read("field.jsonl"), "the reviewers' signals stay")
+        seen = json.loads((self.project.state / "fake-state.json").read_text())["argv"]
+        for role in ("builder", "critic"):
+            for argv in seen.get(role, []):
+                self.assertIn("Bash(git push:*)", argv)
+
+    def test_a_builders_fork_stops_the_run_without_review(self):
+        self.spine()
+        self.configure(review="never")
+        os.environ["FAKE_BUILDER_FORK"] = "1"
+        with self.assertRaises(clock.Stop) as stop:
+            clock.run(self.project, max_rows=1)
+        self.assertIn("which one?", str(stop.exception))
+        self.assertEqual([r[0] for r in memory.rows(self.project)], [1, 2])
+
+    def test_a_builder_that_did_not_finish_leaves_its_row_open(self):
+        self.spine()
+        os.environ["FAKE_BUILD_ERROR"] = "1"
+        with self.assertRaises(clock.Stop) as stop:
+            clock.run(self.project, max_rows=1)
+        self.assertIn("did not finish", str(stop.exception))
+        self.assertEqual([r[0] for r in memory.rows(self.project)], [1, 2])
+
+    def test_the_cap_belongs_to_the_run_not_the_project(self):
+        self.spine()
+        self.configure(review="never")
+        clock.run(self.project, max_rows=1, cap=5)
+        clock.run(self.project, max_rows=1, cap=0.9)        # $0.50 already spent in an earlier run
+        self.assertEqual(memory.rows(self.project), [])
+
+    def test_a_failing_check_gets_one_fix_before_it_blocks_the_close(self):
+        self.spine(check="false")
+        self.configure(review="never")
+        with self.assertRaises(clock.Stop) as stop:
+            clock.run(self.project, max_rows=1)
+        self.assertIn("cannot close", str(stop.exception))
+        waves = [u["wave"] for u in self.project.read("usage.jsonl") if u["agent"] == "builder"]
+        self.assertEqual(len(waves), 2, "the build and one try at the failing check")
+
     def test_a_failing_check_blocks_the_close(self):
         self.spine(check="false")
         with self.assertRaises(clock.Stop) as stop:
@@ -254,8 +300,8 @@ class LeanTest(Base):
         self.spine()
         clock.run(self.project, max_rows=1)
         argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]
-        self.assertIn("--disallowedTools", argv["reuse"][0])
-        self.assertNotIn("--disallowedTools", argv["builder"][0])
+        self.assertIn("Edit", argv["reuse"][0][argv["reuse"][0].index("--disallowedTools"):])
+        self.assertNotIn("Edit", argv["builder"][0][argv["builder"][0].index("--disallowedTools"):])
 
     def test_now_is_trimmed_when_it_overruns(self):
         self.spine()
@@ -461,15 +507,31 @@ class HealthTest(Base):
         self.assertIn("computeinvoicetotal", esc["evidence"][0])
         self.assertTrue(self.project.config()["map_in_brief"])
 
-    def test_breaking_what_an_earlier_row_built_switches_reconciliation_on(self):
+    def test_breaking_what_was_built_twice_switches_reconciliation_on(self):
         self.spine(check="test ! -f broken.txt")
+        self.project.spine.write_text(self.project.spine.read_text().replace(
+            "| 2 | Write the second line | work.txt has two lines |\n",
+            "| 2 | Write the second line | work.txt has two lines |\n| 3 | Write the third line | three lines |\n"))
         self.configure(review="never")
         os.environ["FAKE_BREAK_ROW"] = "2"
+        with self.assertRaises(clock.Stop):
+            clock.run(self.project, max_rows=2)
+        self.assertEqual(self.escalations(), [], "one break can be a flaky check")
+        (self.dir / "broken.txt").unlink()
+        os.environ["FAKE_BREAK_ROW"] = "3"
         with self.assertRaises(clock.Stop):
             clock.run(self.project, max_rows=2)
         [esc] = self.escalations()
         self.assertEqual(esc["switched_on"], {"reconcile": True})
         self.assertIn("passed at the last close", esc["evidence"][0])
+
+    def test_a_remedy_the_person_turned_off_stays_off(self):
+        from colony import health
+        self.configure(reconcile=False)
+        self.assertTrue(health.escalate(self.project, 1, ["x"], {"reconcile": True}, "why"))
+        self.configure(reconcile=False)
+        self.assertFalse(health.escalate(self.project, 4, ["y"], {"reconcile": True}, "why"))
+        self.assertFalse(self.project.config()["reconcile"])
 
     def test_the_checkpoint_is_free_puts_workflow_first_and_resets_its_window(self):
         self.spine()

@@ -1,7 +1,7 @@
 """The field: short, located signals that specialists leave and the builder answers.
 
 A signal at the same place as an open one reinforces it: its strength is the number of different
-agents that found it. A minor signal nobody else confirms fades after the next wave.
+lineages that found it.
 """
 import fcntl
 import json
@@ -20,24 +20,21 @@ def signals(project, row=None, wave=0):
             place = e["at"].strip()
             if place in by_place and by_place[place] in open_:
                 s = open_[by_place[place]]
-                s["by"].add(e["by"])
+                s["by"].add(e["by"].split("@")[0])
                 s["last_wave"] = max(s["last_wave"], e["wave"])
                 if RANK[e["severity"]] > RANK[s["severity"]]:
                     s["severity"] = e["severity"]
                 s["notes"].append(e["text"])
             else:
                 open_[e["id"]] = {"id": e["id"], "row": e.get("row"), "kind": e["kind"], "severity": e["severity"],
-                                  "at": place, "by": {e["by"]}, "wave": e["wave"], "last_wave": e["wave"],
+                                  "at": place, "by": {e["by"].split("@")[0]}, "wave": e["wave"], "last_wave": e["wave"],
                                   "notes": [e["text"]]}
                 by_place[place] = e["id"]
         elif e["type"] == "resolve":
             open_.pop(e["of"], None)
-    live = []
-    for s in open_.values():
+    live = list(open_.values())
+    for s in live:
         s["strength"] = len(s["by"])
-        faded = s["severity"] == "minor" and s["strength"] == 1 and wave - s["last_wave"] >= 2
-        if not faded:
-            live.append(s)
     return sorted(live, key=lambda s: (-s["strength"], -RANK[s["severity"]], s["id"]))
 
 

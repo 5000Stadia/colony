@@ -51,6 +51,10 @@ if prompt.startswith("You are `builder") and "Do this row now" in prompt:
         (root / "second.py").write_text('def compute_invoice_total(lines):\n    """Sums the lines again."""\n')
     if os.environ.get("FAKE_BREAK_ROW") == row.group(1):
         (root / "broken.txt").write_text("forgot what row 1 needed\n")
+    if os.environ.get("FAKE_BUILD_ERROR"):
+        finish("API Error: overloaded", error=True)
+    if os.environ.get("FAKE_BUILDER_FORK"):
+        colony("field", "signal", "--kind", "fork", "--severity", "critical", "--at", "design/spine.md", "--text", "which one?")
     assess = os.environ.get("FAKE_ASSESS", "confidence 9/10 — routine")
     finish(f"built\nASSESSMENT: {assess}\nSTATUS: done", cost=0.5)
 elif prompt.startswith("Wave "):
@@ -59,6 +63,9 @@ elif prompt.startswith("Wave "):
     finish("fixed\nSTATUS: done", cost=0.3)
 elif " · reads, never edits`" in prompt:
     name = agent.split("@")[0]
+    if os.environ.get("FAKE_TAMPER"):
+        (root / "work.txt").write_text("a reviewer rewrote this\n")
+        (root / "junk.txt").write_text("left by a reviewer\n")
     if os.environ.get("FAKE_FORK") and name == "reuse":
         colony("field", "signal", "--kind", "fork", "--severity", "critical", "--at", "design/spine.md", "--text", "needs a decision")
     elif name == "quiet":

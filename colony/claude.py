@@ -11,7 +11,8 @@ from zoneinfo import ZoneInfo
 def limit_wait(result):
     """Seconds to wait if the call was refused by a usage limit, else None."""
     said = result.get("result") or ""
-    refused = result.get("is_error") and (result.get("api_error_status") == 429 or "limit" in said.lower())
+    refused = result.get("is_error") and (result.get("api_error_status") == 429
+                                          or re.search(r"usage limit|rate limit|session limit|limit reached", said, re.I))
     if not refused:
         return None
     m = re.search(r"resets (\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)", said, re.I)
@@ -34,6 +35,12 @@ def meter(result):
             "cache_write": total("cacheCreationInputTokens"), "cache_read": total("cacheReadInputTokens")}
 
 
+# A floor, not a sandbox: the commands that publish or reach other machines are refused to every agent
+# (deny rules hold even with permissions bypassed). Other routes out exist; for isolation, use a container.
+OUTWARD = ["Bash(git push:*)", "Bash(gh:*)", "Bash(npm publish:*)", "Bash(twine:*)", "Bash(cargo publish:*)",
+           "Bash(docker push:*)", "Bash(ssh:*)", "Bash(scp:*)"]
+
+
 def call(project, prompt, *, agent, row, wave, budget, session=None, resume=False, sleep=time.sleep):
     """Run one agent to completion in the project root and record what it cost."""
     cfg = project.config()
@@ -44,8 +51,7 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
     cmd = [binary, "-p", prompt, "--model", cfg["model"], "--effort", effort,
            "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "bypassPermissions",
            "--output-format", "stream-json", "--verbose", "--max-budget-usd", f"{budget:.2f}"]
-    if role == "specialist":
-        cmd += ["--disallowedTools", "Edit", "Write", "NotebookEdit"]   # reads, never edits — enforced, not asked
+    cmd += ["--disallowedTools", *OUTWARD, *(["Edit", "Write", "NotebookEdit"] if role == "specialist" else [])]
     if session:
         cmd += ["--resume", session] if resume else ["--session-id", session]
     else:
