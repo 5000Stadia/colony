@@ -8,11 +8,8 @@ so the page never holds a second copy of anything. It answers only itself: a not
 site is refused.
 """
 import html
-import json
 import re
-import secrets
 import subprocess
-import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 

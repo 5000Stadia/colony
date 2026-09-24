@@ -18,13 +18,16 @@ review only where the person has said a mistake would be expensive.
 3. Write `design/spine.md` with them — sections *What we're making* (their words, quoted), *What "good"
    means here*, *What it must never do*, *Where it goes*, *Checks* (commands, each "- `command`"),
    *Risky areas* (paths where every change is reviewed; usually empty), and *The spec list* as a table
-   `| # | What to build now | What done looks like |`, smallest end-to-end thing first. For a quick
+   `| # | What to build now | What done looks like | Impact |`, smallest end-to-end thing first, impact
+   written as `1–10 — one sentence on what a mistake would hurt`. For a quick
    draft instead, `colony door --goal "..."` writes one for them to correct.
 4. When they recognise themselves in it, they run `colony approve` — not you.
 
 ## Running and reporting
 
 - `colony run --rows N --cap USD` builds the next N rows; it stops for a fork, a failing check, or the cap.
+- `colony page` serves the project at a glance for the person — what waits on them, the roadmap, the
+  history, the cost — with a note box on every row that reaches that row's builder.
 - `colony status` shows the rows, where the project stands and any open signals; `colony cost` shows
   dollars and tokens by row and by agent. Report cost beside every result.
 - Settings live in `.colony/config.json`: `effort` (default medium), `review` (`auto` reviews only the
