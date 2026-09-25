@@ -16,11 +16,13 @@ located signals and a project memory.
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
     colony noted ID "TEXT"          mark a note as acted on, with what was done
     colony restart                  reload the board with its code as it is now (consoles keep running)
+    colony stop                     end the board, the monitor and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
     colony projects                 every project on the board, its console state and latest line
     colony peek NAME [-n 30]        a project console's last lines
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
+    colony settings [KEY VALUE]     the global options: remote, monitor, model, effort, new-folder
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
@@ -324,6 +326,15 @@ def cmd_board(a):
     return 0
 
 
+def cmd_stop(a):
+    """End the board, the monitor and every project console this board started, and nothing else."""
+    from . import board, console, monitor
+    names = [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
+    ended = [n for n in names if subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True).returncode == 0]
+    print(f"stopped {len(ended)} session(s): {', '.join(ended) or 'none were running'}")
+    return 0
+
+
 def cmd_restart(a):
     """Reload the board with its code as it is now. Project consoles and the monitor keep running."""
     from . import board
@@ -459,6 +470,22 @@ def cmd_new(a):
     return 0
 
 
+def cmd_settings(a):
+    from . import board
+    if a.key:
+        try:
+            board.set_setting(a.key, a.value or "")
+        except KeyError:
+            raise SystemExit(f"no setting {a.key}; the settings are: remote, monitor, model, effort, new-folder")
+    reg = board.registry()
+    for k, v in reg["settings"].items():
+        shown = ("on" if v else "off") if isinstance(v, bool) else (v or "(Claude Code's default)")
+        print(f"{k:10} {shown:28} {board.SETTING_HELP[k]}")
+    print(f"{'new-folder':10} {reg['new_root']:28} where new projects are created")
+    print(f"{'folders':10} {', '.join(reg['roots']) or '(none)'}")
+    return 0
+
+
 def cmd_helm(a):
     from . import monitor
     if a.state:
@@ -490,6 +517,7 @@ def main(argv=None):
     p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
     p.set_defaults(fn=cmd_board)
     sub.add_parser("restart").set_defaults(fn=cmd_restart)
+    sub.add_parser("stop").set_defaults(fn=cmd_stop)
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
@@ -502,6 +530,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
     p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within"); p.set_defaults(fn=cmd_new)
+    p = sub.add_parser("settings"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
+    p.set_defaults(fn=cmd_settings)
     p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_helm)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)

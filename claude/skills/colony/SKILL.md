@@ -1,50 +1,17 @@
 ---
 name: colony
-description: Start or continue a long project with colony — use when the person wants to begin a project that will span many steps (software, a book, a business), continue one that has a design/spine.md, see where it stands, or see what it has cost.
+description: Run and manage projects with colony's board — use when the person wants to start the board, add or create a project, follow what their projects are doing, or have the monitor act for them; also for colony's experimental unattended runs.
 ---
 
-# Colony
+`~/colony/start` starts everything and prints the address (`--lan` for other devices at home). The board
+is one page for all the person's projects: each project's live Claude Code console (Remote Control on
+by default, so it is in the Claude app too), its roadmap, what waits on the person, and their notes.
+The monitor is the front page: one session that acts for the person across projects.
 
-Colony keeps one strong agent at its best across a long project. It runs the work row by row, a fresh
-agent for each row, with the goal in the person's own words, the project's checks, a cost meter, and
-review only where the person has said a mistake would be expensive.
-
-## Starting a project — the front door is a conversation
-
-1. Ask for the project's name and where it should live; create it with `colony init DIR`.
-2. Have the conversation, in the person's words: what it is and who it is for, what would make them
-   proud of it (not merely satisfied), the best real example of this kind of work, what would ruin it,
-   what must never happen, and where it goes. Reflect drafts rather than asking open questions.
-3. Write `design/spine.md` with them — sections *What we're making* (their words, quoted), *What "good"
-   means here*, *What it must never do*, *Where it goes*, *Checks* (commands, each "- `command`"),
-   *Risky areas* (paths where every change is reviewed; usually empty), and *The spec list* as a table
-   `| # | What to do now | What done looks like | Impact |`, smallest end-to-end thing first, impact
-   written as `1–10 — one sentence on what a mistake would hurt`. For a quick
-   draft instead, `colony door --goal "..."` writes one for them to correct.
-4. When they recognise themselves in it, they run `colony approve` — not you.
-
-## Running and reporting
-
-- `colony run --rows N --cap USD` builds the next N rows in the background, safe from the session
-  closing; it stops for a fork, a failing check, or the cap. `colony wait` blocks until it stops and
-  says how it went.
-- `colony page` serves the project at a glance for the person — what waits on them, the roadmap, the
-  history, the cost — with a note box on every row that reaches that row's builder.
-- `colony status` shows the rows, where the project stands and any open signals; `colony cost` shows
-  dollars and tokens by row and by agent. Report cost beside every result.
-- `colony checkpoint`, every few rows, looks back at the workflow, progress and tokens for free and
-  ends with questions only the person can settle. Ask them; record each answer with
-  `colony answer KIND "text"` (`--always` makes it a rule in the spine). Never answer for them.
-- Before the first build, settle the model with the person (Quickstart step 3): Opus 5.5 at medium
-  is what was measured; for another model, find its published effort guidance, answer the three
-  questions in the README's *What we measured*, and let the person choose.
-- Settings live in `.colony/config.json`: `model` and `effort` (default Opus 5.5, medium), `review`
-  (`auto` reviews only changes touching the spine's risky areas; `always`, `never`), and
-  `review_at_impact` (also review rows at that impact or above).
-- The project's reviewers live in `.claude/agents/` (marked `colony: reviewer`), so they can also be
-  called as subagents in any session.
-
-## What never happens without the person
-
-Publishing, deploying, spending, or contacting anyone. The spine lists these; a row that needs one
-stops with a fork for the person to answer.
+- Projects: every folder in `~/colony/projects` (and in any folder added in Settings) is a project;
+  `colony new NAME` creates one; `colony track PATH` adds any folder.
+- Across projects: `colony projects`, `colony peek NAME`, `colony tell NAME "..."`.
+- Options: `colony settings` (remote, monitor, model, effort, new-folder); `colony helm on|off`.
+- Health: `colony doctor`, `colony restart`, `colony stop`.
+- How to work well on a long project: `GUIDE.md` in the repository.
+- The older unattended runner (`colony init/door/approve/run`) is experimental; see the README.

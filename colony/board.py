@@ -75,6 +75,33 @@ def registry():
     reg.setdefault("seen", {})
     reg.setdefault("roots", [str(PACKAGE_PROJECTS)])  # folders whose every subfolder is a project
     reg.setdefault("new_root", reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS))
+    reg["settings"] = dict(DEFAULT_SETTINGS, **reg.get("settings", {}))
+    return reg
+
+
+# The person's global options, with what each means; the board's Settings page and `colony settings` show them.
+DEFAULT_SETTINGS = {"remote": True, "monitor": True, "model": "", "effort": ""}
+SETTING_HELP = {
+    "remote": "new consoles start with Remote Control, reachable from the Claude app",
+    "monitor": "the monitor session runs with the board",
+    "model": "model for new project sessions (blank: Claude Code's default)",
+    "effort": "effort for new project sessions (blank: Claude Code's default)",
+}
+
+
+def set_setting(key, value):
+    reg = registry()
+    if key == "new-folder":
+        reg["new_root"] = str(Path(value).expanduser())
+        if reg["new_root"] not in reg["roots"]:
+            reg["roots"].append(reg["new_root"])
+    elif key in ("remote", "monitor"):
+        reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
+    elif key in ("model", "effort"):
+        reg["settings"][key] = str(value).strip()
+    else:
+        raise KeyError(key)
+    save_registry(reg)
     return reg
 
 
@@ -588,7 +615,17 @@ def settings_page(reg):
                     + f"<form class='inline' method='post' action='/roots'><input type='hidden' name='remove' value='{e(r)}'><button class='quiet'>Remove</button></form></li>")
     single = "".join(f"<li><code>{e(p)}</code><form class='inline' method='post' action='/roots'><input type='hidden' name='untrack' value='{e(p)}'>"
                      f"<button class='quiet'>Remove from board</button></form></li>" for p in reg["projects"])
-    body = (f"<header><h1>Settings</h1></header><h2>Project folders</h2><div class='card'>"
+    s = reg["settings"]
+    check = lambda k: " checked" if s[k] else ""
+    options = (f"<form method='post' action='/options' class='options'>"
+               f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
+               f"<span class='muted'>(reach them from the Claude app)</span></label>"
+               f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
+               f"<label>Model for new project sessions <input name='model' value='{e(s['model'])}' placeholder='Claude Code default'></label>"
+               f"<label>Effort for new project sessions <input name='effort' value='{e(s['effort'])}' placeholder='Claude Code default'></label>"
+               f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
+               f"<button>Save</button><p class='muted'>Remote, model and effort apply to consoles started from now on.</p></form>")
+    body = (f"<header><h1>Settings</h1></header><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='dirs'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
             f"<h2>Projects added one by one</h2><div class='card'><ul class='dirs'>{single or '<li class=muted>none</li>'}</ul>"
@@ -643,6 +680,12 @@ class Handler(BaseHTTPRequestHandler):
         reg = registry()
         plist = projects(reg)
         pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
+        if url.path == "/" and "p" not in q and reg["settings"]["monitor"]:
+            self.send_response(303)                    # the monitor is the front page; projects are a click away
+            self.send_header("Location", "/monitor")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if url.path == "/":
             return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/add":
@@ -685,6 +728,18 @@ class Handler(BaseHTTPRequestHandler):
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path == "/options":
+            set_setting("remote", form.get("remote", "off"))
+            set_setting("monitor", form.get("monitor", "off"))
+            set_setting("model", form.get("model", ""))
+            set_setting("effort", form.get("effort", ""))
+            if form.get("new_root", "").strip():
+                set_setting("new-folder", form["new_root"].strip())
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in ("/add", "/new", "/roots"):
             target = "/settings" if path == "/roots" else "/"
             if path == "/add" and form.get("path"):
@@ -752,7 +807,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port, lan=False, monitor=True):
-    if monitor:
+    if monitor and registry()["settings"]["monitor"]:
         from . import monitor as mon
         mon.start()
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
@@ -803,6 +858,9 @@ nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0
 .navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
 form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
+form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:10px; align-items:center }
+form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:260px } form.options button { align-self:flex-start }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
 .sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }

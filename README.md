@@ -1,16 +1,109 @@
 # colony
 
-**Start with [GUIDE.md](GUIDE.md):** what the tests showed about running long projects with one strong
-agent in Claude Code — effort, one agent over many, the project as its own memory, lessons, naming
-when agents share work, where a reviewer might earn its place, and how to test a change before
-adopting it.
+One page to run all your projects with Claude Code: each project's live console, its roadmap, what is
+waiting on you, and your notes to its agent, on your computer or your phone, with a monitor agent
+that can act for you across them. And [GUIDE.md](GUIDE.md): what the tests showed about running long
+projects with one strong agent.
 
-The runtime below was built alongside those tests. At fourteen steps, one plain Claude Code session
-matched it on quality at lower cost (`garden/results/SESSION.md`); a test at the scale it was built
-for — many dozens of steps, repeated compaction — decides whether it stays. Until then it is
-experimental.
+## Quickstart
 
-## Quickstart — for the agent you hand this to
+    gh repo clone 5000Stadia/colony ~/colony && ~/colony/start
+
+It installs what it needs, starts the board and prints its address; `~/colony/start --lan` also prints
+the address for your phone and other devices at home. The monitor is the front page. Put project
+folders in `~/colony/projects`, or use **+ Add project** to pick any folder or start a new one. Global
+options are under **Settings**. `colony stop` ends it all. It needs tmux, Claude Code and Python 3.10+.
+
+## The board: one place to follow and steer every project
+
+    colony track            in a project: put it on the board (once)
+    colony board            open the board: every tracked project in one page, each with its live console
+    colony board --lan      the same, reachable from other machines on your network
+    colony restart          reload the board after a change (consoles and the monitor keep running)
+    colony doctor           is everything up and wired? what to do if not
+
+Projects live in folders you choose. Colony ships an empty `projects/` folder: every folder you put in
+it is a project on the board, and new projects are created there. In Settings you can add other
+folders that work the same way and pick which one new projects go into. "+ Add project" browses the
+machine to add any single folder as a project, or to create a new one wherever you are looking; that
+folder is the root its agent works in.
+
+For each project the board shows what changed since you were last there, what the agent has put in
+your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
+page with its history, gates and a thread where you direct it. Notes on past work reach the agent on
+its next turn. Notes on a roadmap item reach it when it starts that item. Nothing waits unseen: a note
+whose item leaves the roadmap is delivered at once, and one delivered but not acted on is repeated at
+the next session's start.
+
+Each project's Console tab is its own Claude Code session, running in tmux: switch projects in the
+sidebar and each session keeps going; close the browser and it keeps going; `tmux attach -t board-…`
+reaches the same session from a terminal. The sidebar shows each session's state (working, needs you,
+idle) and its latest line; the Overview opens with a peek at the last few lines. The state is read
+off the screen ("esc to interrupt" while working, a numbered choice when asking), so a change in Claude
+Code's wording could mislabel it; the lines shown are always the real ones.
+
+Every console starts with Remote Control (`claude --remote-control <project>`), so each project, and
+the monitor, shows up in the Claude app on your phone. An idle session costs nothing.
+
+**The monitor** is one more session, at the top of the sidebar and in the app, that acts for you across
+projects: it tells you when one needs you or has finished, turns what you say into a clean request
+typed into that project (`colony tell`), starts new projects (`colony new`), and, when you say "take
+the helm", settles routine questions itself. It always comes back to you for planning, scope,
+milestones, and anything costly to undo or leaving your hands. It never watches: a watcher in the
+board reads each screen every few seconds, costing no tokens, and wakes the monitor only when a project
+needs you, finishes a turn, or opens a gate. Talking through the monitor roughly doubles the tokens
+of that exchange; talk to a project's own session when that matters.
+
+The board runs in its own tmux session, so it needs no open terminal. The monitor also looks after the
+board itself: it runs `colony doctor` when something seems off, fixes bugs in this repository (tests,
+`colony restart`, a local commit; it asks before pushing), and proposes improvements for you to decide
+on, always after the projects' needs.
+
+The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
+from the board's console or the app.
+
+The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
+what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude
+Code hooks that `colony track` installs, so it doesn't rely on the agent remembering.
+
+## The guide
+
+[GUIDE.md](GUIDE.md) is what the tests showed about running a long project with one strong agent:
+horizon first, effort, one agent over many, the project as its own memory, when review pays, naming
+subagents, and how to test a change before adopting it. The evidence is in `design/claims.md` and the
+lab's results.
+
+## What we measured, and on what
+
+Every number in this README was measured on **Claude Opus 5.5** in Claude Code, in September 2026, on
+software tasks with pre-registered tests, replicates and a blind judge (`design/claims.md`). A
+different model changes the numbers, not the questions. These are the three to answer for it:
+
+1. **Where is the value knee for building to a clear spec?** For Opus 5.5 it is medium. Low → medium
+   was the largest gain found (+11 judged points for $0.75, three runs each, one task). Above medium,
+   published evaluations found flat or negative returns on common work. CodeRabbit's lower-effort
+   configuration caught 51 known bugs against 50, with better precision. Medium matched or beat the
+   previous generation's high effort on about half the tokens.
+2. **Does effort pay for looking past the obvious** (review, subtle faults)? A little, not reliably.
+   Our low-effort reviewers barely looked and our medium ones found real problems. In CodeRabbit's
+   13 hard cases, higher effort caught 10 against 8, but not consistently, and the two missed
+   different faults.
+3. **Do more agents pay?** On well-specified work, no: a reviewer cost 1.2–1.7× for no measurable
+   gain. A fresh agent per row at medium was the best value up to fourteen rows. We did not test xhigh
+   or max; the published evaluations found diminishing returns there.
+
+Sources: `design/claims.md` and the lab's results; [CodeRabbit's Opus 5.5
+review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
+[Anthropic's Opus 5.5 page](https://www.anthropic.com/claude-opus-5-5).
+
+## Unattended runs (experimental)
+
+Colony also has a runtime that drives a project's plan row by row with a fresh agent per row, checks
+between rows, review where the person declared risk, and a cost ledger. At fourteen steps one plain
+Claude Code session matched it on quality at lower cost (`garden/results/SESSION.md`); a test at the
+scale it was built for decides whether it stays.
+
+### Starting an unattended project — for the agent you hand this to
 
 > Tell your agent: *"Read the Quickstart in github.com/5000Stadia/colony and follow it. I want to start
 > a project."*
@@ -70,59 +163,7 @@ be in the way. Otherwise, follow these steps in order.
    needs one, the person can lift it with `"allow_outward": ["Bash(gh:*)"]`. Add nothing without
    evidence.
 
-## The board: one place to follow and steer every project
-
-    colony track            in a project: put it on the board (once)
-    colony board            open the board: every tracked project in one page, each with its live console
-    colony board --lan      the same, reachable from other machines on your network
-    colony restart          reload the board after a change (consoles and the monitor keep running)
-    colony doctor           is everything up and wired? what to do if not
-
-Projects live in folders you choose. Colony ships an empty `projects/` folder: every folder you put in
-it is a project on the board, and new projects are created there. In Settings you can add other
-folders that work the same way and pick which one new projects go into. "+ Add project" browses the
-machine to add any single folder as a project, or to create a new one wherever you are looking; that
-folder is the root its agent works in.
-
-For each project the board shows what changed since you were last there, what the agent has put in
-your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
-page with its history, gates and a thread where you direct it. Notes on past work reach the agent on
-its next turn. Notes on a roadmap item reach it when it starts that item. Nothing waits unseen: a note
-whose item leaves the roadmap is delivered at once, and one delivered but not acted on is repeated at
-the next session's start.
-
-Each project's Console tab is its own Claude Code session, running in tmux: switch projects in the
-sidebar and each session keeps going; close the browser and it keeps going; `tmux attach -t board-…`
-reaches the same session from a terminal. The sidebar shows each session's state (working, needs you,
-idle) and its latest line; the Overview opens with a peek at the last few lines. The state is read
-off the screen ("esc to interrupt" while working, a numbered choice when asking), so a change in Claude
-Code's wording could mislabel it; the lines shown are always the real ones.
-
-Every console starts with Remote Control (`claude --remote-control <project>`), so each project, and
-the monitor, shows up in the Claude app on your phone. An idle session costs nothing.
-
-**The monitor** is one more session, at the top of the sidebar and in the app, that acts for you across
-projects: it tells you when one needs you or has finished, turns what you say into a clean request
-typed into that project (`colony tell`), starts new projects (`colony new`), and, when you say "take
-the helm", settles routine questions itself. It always comes back to you for planning, scope,
-milestones, and anything costly to undo or leaving your hands. It never watches: a watcher in the
-board reads each screen every few seconds, costing no tokens, and wakes the monitor only when a project
-needs you, finishes a turn, or opens a gate. Talking through the monitor roughly doubles the tokens
-of that exchange; talk to a project's own session when that matters.
-
-The board runs in its own tmux session, so it needs no open terminal. The monitor also looks after the
-board itself: it runs `colony doctor` when something seems off, fixes bugs in this repository (tests,
-`colony restart`, a local commit; it asks before pushing), and proposes improvements for you to decide
-on, always after the projects' needs.
-
-The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
-from the board's console or the app.
-
-The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
-what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude
-Code hooks that `colony track` installs, so it doesn't rely on the agent remembering.
-
-## What the defaults are, and why
+### What its defaults are, and why
 
 The core — one builder per row at medium effort, checks, the meter, review only where declared — was
 measured against a single fresh agent across seven pre-registered pilots and five focused tests. The
@@ -147,30 +188,7 @@ each part's evidence and its status.
   agent; anything else the spine names stops as a fork. A floor, not a sandbox: for isolation, run
   colony in a container.
 
-## What we measured, and on what
-
-Every number above was measured on **Claude Opus 5.5** in Claude Code, in September 2026, on
-software tasks with pre-registered tests, replicates and a blind judge (`design/claims.md`). A
-different model changes the numbers, not the questions. These are the three to answer for it:
-
-1. **Where is the value knee for building to a clear spec?** For Opus 5.5 it is medium. Low → medium
-   was the largest gain found (+11 judged points for $0.75, three runs each, one task). Above medium,
-   published evaluations found flat or negative returns on common work. CodeRabbit's lower-effort
-   configuration caught 51 known bugs against 50, with better precision. Medium matched or beat the
-   previous generation's high effort on about half the tokens.
-2. **Does effort pay for looking past the obvious** (review, subtle faults)? A little, not reliably.
-   Our low-effort reviewers barely looked and our medium ones found real problems. In CodeRabbit's
-   13 hard cases, higher effort caught 10 against 8, but not consistently, and the two missed
-   different faults.
-3. **Do more agents pay?** On well-specified work, no: a reviewer cost 1.2–1.7× for no measurable
-   gain. A fresh agent per row at medium was the best value up to fourteen rows. We did not test xhigh
-   or max; the published evaluations found diminishing returns there.
-
-Sources: `design/claims.md` and the lab's results; [CodeRabbit's Opus 5.5
-review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
-[Anthropic's Opus 5.5 page](https://www.anthropic.com/claude-opus-5-5).
-
-## Commands
+### Its commands
 
     colony init DIR              make DIR a colony project
     colony door --goal "..."     draft the spine from a goal, to correct with the person

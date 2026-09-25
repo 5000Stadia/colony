@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+# One command: install colony if needed, check what it needs, start the board and say where it is.
+#   ~/colony/start          the board on this machine
+#   ~/colony/start --lan    the board for every device on your home network
+set -e
+here=$(cd "$(dirname "$0")" && pwd)
+command -v tmux >/dev/null || { echo "colony needs tmux: install it (e.g. sudo apt install tmux, brew install tmux)"; exit 1; }
+command -v claude >/dev/null || { echo "colony needs Claude Code: https://claude.com/claude-code"; exit 1; }
+if ! command -v colony >/dev/null; then
+  python3 -m pip install --user -q -e "$here" 2>/dev/null || python3 -m pip install --user -q -e "$here" --break-system-packages
+  export PATH="$HOME/.local/bin:$PATH"
+fi
+colony board "$@"
+port=8790
+case " $* " in *" --port "*) port=$(echo "$*" | sed -n 's/.*--port \([0-9]*\).*/\1/p') ;; esac
+echo
+echo "Open the board:  http://127.0.0.1:$port/"
+case " $* " in *" --lan "*)
+  for ip in $(hostname -I 2>/dev/null); do case $ip in *:*) ;; *) echo "From other devices:  http://$ip:$port/" ;; esac; done ;;
+esac
+echo "The monitor is the front page; your projects are in the sidebar. Stop everything with: colony stop"

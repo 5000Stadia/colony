@@ -332,6 +332,47 @@ class FoldersTest(BoardBase):
             httpd.server_close()
 
 
+class SettingsTest(BoardBase):
+    def test_settings_shape_new_consoles_and_the_monitor_can_read_and_change_them(self):
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertEqual(console.command("plants"), "claude --remote-control plants", "remote is on by default")
+            run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                            text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+            self.assertIn("remote     on", run("settings").stdout)
+            run("settings", "remote", "off")
+            run("settings", "model", "claude-opus-5-5")
+            run("settings", "effort", "medium")
+            self.assertEqual(console.command("plants"), "claude --model claude-opus-5-5 --effort medium")
+            elsewhere = Path(self.tmp.name) / "work"
+            run("settings", "new-folder", str(elsewhere))
+            reg = board.registry()
+            self.assertEqual(reg["new_root"], str(elsewhere))
+            self.assertIn(str(elsewhere), reg["roots"])
+            self.assertIn("no setting", run("settings", "colour", "blue").stderr)
+            self.assertIn("colony settings", monitor.ROLE, "the monitor knows the settings")
+        finally:
+            console.COMMAND = saved
+
+    def test_the_front_page_is_the_monitor_and_settings_save_from_the_page(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        opener = urllib.request.build_opener(type("NoRedirect", (urllib.request.HTTPRedirectHandler,),
+                                                  {"redirect_request": lambda *a: None}))
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as r:
+                opener.open(f"http://127.0.0.1:{port}/")
+            self.assertEqual(r.exception.headers["Location"], "/monitor")
+            data = urllib.parse.urlencode({"monitor": "on", "model": "", "effort": "high", "new_root": ""}).encode()
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/options", data=data))
+            s = board.registry()["settings"]
+            self.assertEqual((s["remote"], s["effort"]), (False, "high"), "an unticked box turns remote off")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
 class ServerTest(BoardBase):
     def run_cli(self, *a):
         return subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True,
@@ -361,6 +402,9 @@ class ServerTest(BoardBase):
         broken = self.run_cli("doctor")
         self.assertEqual(broken.returncode, 1)
         self.assertIn("board wiring is missing", broken.stdout)
+        stopped = self.run_cli("stop").stdout
+        self.assertIn(board.scoped("board-server"), stopped)
+        self.assertNotEqual(subprocess.run(["tmux", "has-session", "-t", board.scoped("board-server")]).returncode, 0)
 
 
 if __name__ == "__main__":

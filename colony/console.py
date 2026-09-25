@@ -23,7 +23,24 @@ from pathlib import Path
 TOKEN = secrets.token_urlsafe(24)          # made fresh each time the board starts
 # Every session starts with Remote Control, named for its project, so the person can reach it from the
 # Claude app anywhere; an idle session costs nothing.
-COMMAND = os.environ.get("COLONY_CONSOLE_CMD", "claude --remote-control {name}")
+COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace claude (tests, demos)
+
+
+def command(label):
+    """The person's own `claude`, as their settings say: Remote Control on unless turned off, and their
+    chosen model and effort if any."""
+    if COMMAND:
+        return COMMAND.format(name=shlex.quote(label))
+    from . import board
+    s = board.registry()["settings"]
+    parts = ["claude"]
+    if s["remote"]:
+        parts += ["--remote-control", shlex.quote(label)]
+    if s["model"]:
+        parts += ["--model", shlex.quote(s["model"])]
+    if s["effort"]:
+        parts += ["--effort", shlex.quote(s["effort"])]
+    return " ".join(parts)
 
 
 def session_name(root):
@@ -40,8 +57,8 @@ def ensure(root, name=None, label=None):
     """Start the session if it is not running: the person's own `claude`, in the project, remote-enabled."""
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
-        command = COMMAND.format(name=shlex.quote(label or Path(root).name))
-        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50", command],
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50",
+                        command(label or Path(root).name)],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
     return name

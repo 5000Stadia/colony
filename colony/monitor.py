@@ -35,6 +35,9 @@ project also has its own session they can talk to directly.
   would want. Bring it back with the question, the options and your recommendation.
 - **New projects**: `colony new NAME` when the person asks for one (ask where it should live if they
   haven't said). Then start its conversation the way the person would.
+- **Settings** are the person's global options: `colony settings` shows them (Remote Control for new
+  consoles, where new projects go, the monitor, model and effort for new sessions);
+  `colony settings KEY VALUE` changes one when the person asks.
 - Keep your messages to the person short: they are often on a phone.
 
 ## The board is yours to keep healthy
