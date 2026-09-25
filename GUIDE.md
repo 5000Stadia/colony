@@ -64,6 +64,26 @@ strong its evidence is. Read it once at the start of a project; it is not a rule
 15. **Do not reorganise on a guess.** No agent over-structured in the gap test, and the need to split
     one agent's work into lanes has not been seen at the scales tested.
 
+## When the plain setup strains
+
+None of this is needed at the scales tested, and none of it is tested at the scale where it would be.
+It is here for the day a workflow outgrows the plain setup. Each remedy is one the agent will not
+reach for on its own from inside its session; what it does unprompted (running its tests, searching
+the code, asking when stuck, suggesting next steps) is left out. Before adopting one, test it against
+the plain setup on a seeded version of the problem.
+
+| What you see | What it likely means | What to reach for | Why the agent will not do it itself |
+|---|---|---|---|
+| After many compactions the agent re-derives settled things, or tries an approach the project already rejected | the history outgrew the context, and the decision is not in the code | record each step's decisions in its commit message, and push the few past decisions that bear on the next step into its brief (a retrieval with no model call; colony's `memory-runner` branch) | it cannot search for what it does not know it forgot |
+| After a bad step the agent keeps defending a failed approach | the context is anchored on it | start the next step in a fresh session with only the plan and the repo | it cannot reset its own context |
+| The work must run unattended — overnight, or with the terminal closed | a session ends when its terminal does | a driver that feeds steps, detaches, stops on a failing check or a cost cap, and reports when done (colony's runtime) | it cannot outlive its session |
+| Something is about to leave the person's hands — a document to a client, a release — and no test can judge it | one reader cannot see its own blind spots | a separate read-only reviewer who meets it as the recipient will, shown the stakes and the author's doubt first | it cannot give itself independent eyes, and rarely asks for them |
+| The same kind of mistake keeps returning despite fixes and conventions | the lesson is not reaching whoever repeats it | a reviewer that keeps the lessons of its serious findings and looks for them first | a new session starts without them |
+| Several agents work in one place at once | their borders are unclear | name each for its role, scope and lifetime; one owner per area | only arises with parallel agents |
+| One area's work no longer fits one context, or moves at its own pace | the work has outgrown one agent | a lane: its own agent and plan for that area — only once the strain recurs, never on a guess | splitting itself is not a call it can make |
+| Cost is spread across many sessions and nobody can say where it goes | no per-step accounting | a per-step ledger metered from `modelUsage`, differencing resumed sessions | each session sees only its own total |
+| The person is not in the conversation but wants to follow and steer | nothing shows the work at a glance | a page of plan, history and cost, with a note box per step that reaches that step's agent | it speaks only when spoken to |
+
 ## Measuring a change before adopting it
 
 16. **Test it against the plain agent first.** Pre-register a forecast; run at least three replicates
