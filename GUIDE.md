@@ -16,7 +16,7 @@
 - Make small calls yourself and say which you made. Ask when a decision is costly to undo or an action leaves the person's hands.
 - Judge stakes by consequence and reversibility, never by subject.
 - If the work shows the plan or a milestone is wrong, say so with the reason. How to do a step is your call; scope, order and milestones are the person's.
-- Safeguards and extra layers are code every later change must work around. Add them where a failure would matter.
+- Guard against damaged data, hostile input and anything that would fail silently; skip guards nobody would miss. Every extra layer is code later changes must work around.
 
 ## Other agents
 - Handing isolated work to subagents is good. Any other added agent often costs 1.2–5× the tokens and must justify it; agents added only to check, remember or co-build one agent's well-specified work didn't.
@@ -25,10 +25,12 @@
 - Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
 
 ## Review
-- Your own tests share your understanding: if you misread the spec, they pass anyway. Where an uncaught bug is plausible and costly, have a separate agent write tests from the spec alone, without seeing the implementation; where its reading differs from yours, a test fails. Plausible: correctness the tests can't see, a change too large to hold at once, new territory, a doubt you can name, a mistake that has escaped before. Costly: a miss that would be silent, hard to undo, or built on.
+- On a complex build, the defects that slip through are rarely misreadings of the spec. They are damaged data, hostile input, docs that fail a newcomer, and tests with holes. Have a separate agent try to break it (hand-edit its files, feed it odd input) and use it cold from its docs.
+- Your own tests share your understanding: if you misread the spec, they pass anyway. Where the spec itself is long, subtle or ambiguous, also have a separate agent write tests from the spec alone, without seeing the implementation.
+- Review when an uncaught bug is plausible and costly: a change too large to hold at once, new territory, a doubt you can name, a mistake that has escaped before; a miss that would be silent, hard to undo, or built on.
 - For what tests can't express (prose, design, a document leaving the person's hands), use a reader who meets it as its recipient will. The reviewer reads, never edits, and sees the stakes and your doubts first.
 - One reviewer always finds something "major". Act on critical findings and on ones two reviewers found independently.
-- Where the tests already pin the work down, reviewers found real issues but fixing them didn't measurably improve the result. Review more where bugs escape; less where reviews keep finding nothing serious.
+- Review more where bugs escape; less where reviews keep finding nothing serious.
 
 ## As the project grows
 Reach for these only when the symptom appears; the agent won't set them up on its own.
