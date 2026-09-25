@@ -1,8 +1,14 @@
 # colony
 
-Keeps one strong Claude Code agent at its best across a long project — software, a book, a business,
-a plan — with the goal in the person's own words, the project's checks, a cost meter, review only
-where a mistake would be expensive, and a page the person can read at a glance.
+**Start with [GUIDE.md](GUIDE.md):** what the tests showed about running long projects with one strong
+agent in Claude Code — effort, one agent over many, the project as its own memory, lessons, naming
+when agents share work, where a reviewer might earn its place, and how to test a change before
+adopting it.
+
+The runtime below was built alongside those tests. At fourteen steps, one plain Claude Code session
+matched it on quality at lower cost (`garden/results/SESSION.md`); a test at the scale it was built
+for — many dozens of steps, repeated compaction — decides whether it stays. Until then it is
+experimental.
 
 ## Quickstart — for the agent you hand this to
 
