@@ -96,7 +96,7 @@ def review_plan(project):
     if cfg["review"] in ("never", "always"):
         return f"Review is set to {cfg['review']}: {'every' if cfg['review'] == 'always' else 'no'} row will be reviewed."
     at = cfg.get("review_at_impact")
-    lines = ["Review plan (a reviewed row cost 1.3 to 2.4 times an unreviewed one in testing):"]
+    lines = ["Review plan (a reviewed row cost 1.2 to 1.7 times an unreviewed one in testing):"]
     lines.append("- any change touching " + ", ".join(risky) if risky else "- no risky areas: no change is reviewed for where it lands")
     if at is not None:
         lines.append(f"- rows at impact {at} or above, whatever they touch: "

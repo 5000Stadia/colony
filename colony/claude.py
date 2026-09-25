@@ -83,7 +83,13 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
         sleep(wait)
     record = {"row": row, "wave": wave, "agent": agent, "effort": effort, "seconds": round(time.time() - started),
               "ok": not result.get("is_error", True), "subtype": result.get("subtype", ""),
-              "said": (result.get("result") or "")[-400:]}
+              "said": (result.get("result") or "")[-400:], "session": session}
     record.update(meter(result))
+    if resume:
+        # A resumed session reports what the whole session has cost so far, not this call: subtract what
+        # its earlier calls already recorded, or every fix would count the build again.
+        earlier = [u for u in project.read("usage.jsonl") if u.get("session") == session]
+        for key in ("cost_usd", "input", "output", "thinking", "cache_write", "cache_read"):
+            record[key] = max(0, record[key] - sum(u.get(key, 0) for u in earlier))
     project.append("usage.jsonl", record)
     return record

@@ -222,6 +222,9 @@ class ClockTest(Base):
         clock.run(self.project, max_rows=1)
         builder_calls = [u for u in self.project.read("usage.jsonl") if u["agent"] == "builder"]
         self.assertEqual(len(builder_calls), 2, "one build, one wave of fixes")
+        self.assertEqual([round(u["cost_usd"], 2) for u in builder_calls], [0.5, 0.3],
+                         "a resumed call is metered for itself, not for the session so far")
+        self.assertEqual([u["output"] for u in builder_calls], [100, 100])
 
     def test_a_fork_stops_the_run(self):
         self.spine()

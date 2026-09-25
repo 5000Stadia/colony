@@ -25,9 +25,21 @@ def colony(*args):
 
 
 def finish(text, cost=0.1, error=False, status=None):
+    # Like the real CLI, a resumed session reports what the whole session has cost so far.
+    calls = 1
+    if "--resume" in sys.argv or "--session-id" in sys.argv:
+        sid = sys.argv[sys.argv.index("--resume" if "--resume" in sys.argv else "--session-id") + 1]
+        with open(root / ".colony" / "fake-state.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            st = json.loads(state.read_text())
+            spent_, n = st.setdefault("sessions", {}).get(sid, [0.0, 0])
+            spent_, calls = spent_ + (0 if error else cost), n + 1
+            st["sessions"][sid] = [spent_, calls]
+            state.write_text(json.dumps(st))
+        cost = spent_
     result = {"type": "result", "is_error": error, "result": text, "total_cost_usd": 0 if error else cost,
-              "modelUsage": {} if error else {"claude-opus-5-5": {"inputTokens": 10, "outputTokens": 100,
-              "thinkingTokens": 20, "cacheCreationInputTokens": 1000, "cacheReadInputTokens": 5000}}}
+              "modelUsage": {} if error else {"claude-opus-5-5": {"inputTokens": 10 * calls, "outputTokens": 100 * calls,
+              "thinkingTokens": 20 * calls, "cacheCreationInputTokens": 1000 * calls, "cacheReadInputTokens": 5000 * calls}}}
     if status:
         result["api_error_status"] = status
     print(json.dumps({"type": "system", "subtype": "init"}))

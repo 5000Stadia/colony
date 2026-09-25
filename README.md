@@ -75,7 +75,7 @@ each part's evidence and its status.
 - **One builder per row, at medium effort.** The best value on every task tested, up to a fourteen-row
   project that lost its context at every row. Low → medium effort was the largest single gain found
   (+11 points of judged quality for 75¢).
-- **Review only where it pays.** Critics on well-specified work cost 1.3–2.4× for no measurable gain.
+- **Review only where it pays.** Critics on well-specified work cost 1.2–1.7× for no measurable gain.
   Review runs where the spine declares risk: a change touching a risky area, or, if the project sets
   `review_at_impact`, a row whose impact (set before the work) reaches it. One round: reviewers are
   read-only, see the stakes and the builder's one-sentence doubt first, and the builder answers what
@@ -104,7 +104,7 @@ different model changes the numbers, not the questions. These are the three to a
    Our low-effort reviewers barely looked and our medium ones found real problems. In CodeRabbit's
    13 hard cases, higher effort caught 10 against 8, but not consistently, and the two missed
    different faults.
-3. **Do more agents pay?** On well-specified work, no: a reviewer cost 1.3–2.4× for no measurable
+3. **Do more agents pay?** On well-specified work, no: a reviewer cost 1.2–1.7× for no measurable
    gain. A fresh agent per row at medium was the best value up to fourteen rows. We did not test xhigh
    or max; the published evaluations found diminishing returns there.
 
