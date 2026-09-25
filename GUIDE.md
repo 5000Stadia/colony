@@ -25,10 +25,10 @@
 - Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
 
 ## Review
-- Work built to a full spec gains little from review.
-- Consider it where no test can judge the work and it leaves the person's hands: a document for a client, a release.
-- The reviewer reads, never edits, and sees the stakes and the builder's doubts first.
+- Your own tests share your understanding: if you misread the spec, they pass anyway. Where an uncaught bug is plausible and costly, have a separate agent write tests from the spec alone, without seeing the implementation; where its reading differs from yours, a test fails. Plausible: correctness the tests can't see, a change too large to hold at once, new territory, a doubt you can name, a mistake that has escaped before. Costly: a miss that would be silent, hard to undo, or built on.
+- For what tests can't express (prose, design, a document leaving the person's hands), use a reader who meets it as its recipient will. The reviewer reads, never edits, and sees the stakes and your doubts first.
 - One reviewer always finds something "major". Act on critical findings and on ones two reviewers found independently.
+- Where the tests already pin the work down, reviewers found real issues but fixing them didn't measurably improve the result. Review more where bugs escape; less where reviews keep finding nothing serious.
 
 ## As the project grows
 Reach for these only when the symptom appears; the agent won't set them up on its own.
