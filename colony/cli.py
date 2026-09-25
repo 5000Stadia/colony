@@ -15,6 +15,11 @@ located signals and a project memory.
     colony gate "QUESTION" [--item R4] [--why ...]   put a decision in the person's hands
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
     colony noted ID "TEXT"          mark a note as acted on, with what was done
+    colony projects                 every project on the board, its console state and latest line
+    colony peek NAME [-n 30]        a project console's last lines
+    colony tell NAME "TEXT"         send a message into a project's console, as the person would
+    colony new NAME [--in DIR]      create a project, put it on the board, start its console
+    colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
     colony field view|signal|resolve   the channel agents use (their name, row and wave are set for them)
@@ -285,7 +290,7 @@ def cmd_track(a):
 
 def cmd_board(a):
     from . import board
-    board.serve(a.port, lan=a.lan)
+    board.serve(a.port, lan=a.lan, monitor=not a.no_monitor)
     return 0
 
 
@@ -327,6 +332,61 @@ def cmd_noted(a):
     return 0
 
 
+def _project(name):
+    from . import board
+    for p in map(Path, board.registry()["projects"]):
+        if p.name == name:
+            return p
+    raise SystemExit(f"no project named {name} on the board; `colony projects` lists them")
+
+
+def cmd_projects(a):
+    from . import board, console
+    for p in map(Path, board.registry()["projects"]):
+        snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
+        waiting = sum(1 for g in board.gates(p) if not g["answer"]) if p.exists() else 0
+        last = snap["lines"][-1] if snap["lines"] else ""
+        print(f"{p.name:24} {snap['state']:10} {str(waiting) + ' gate(s) open' if waiting else '':16} {last[:80]}")
+    return 0
+
+
+def cmd_peek(a):
+    from . import console
+    snap = console.snapshot(_project(a.name), lines=a.lines)
+    print(f"[{snap['state']}]")
+    print("\n".join(snap["lines"]))
+    return 0
+
+
+def cmd_tell(a):
+    from . import console
+    root = _project(a.name)
+    name = console.ensure(root)
+    console.type_into(name, a.text)
+    print(f"sent to {a.name}")
+    return 0
+
+
+def cmd_new(a):
+    from . import board, console
+    root = (Path(a.within).expanduser() if a.within else Path.home() / "Projects") / a.name
+    if root.exists() and any(root.iterdir()):
+        raise SystemExit(f"{root} already exists and is not empty")
+    root.mkdir(parents=True, exist_ok=True)
+    board.track(root)
+    console.ensure(root)
+    print(f"{a.name} created at {root}, on the board, with its console running")
+    return 0
+
+
+def cmd_helm(a):
+    from . import monitor
+    if a.state:
+        monitor.helm(a.state == "on")
+    print("the monitor holds the helm" if monitor.helm() else "the helm is with the person")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="colony", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -345,12 +405,20 @@ def main(argv=None):
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("track"); p.add_argument("path", nargs="?", default="."); p.set_defaults(fn=cmd_track)
     p = sub.add_parser("board"); p.add_argument("--port", type=int, default=8790)
-    p.add_argument("--lan", action="store_true", help="also answer other machines on the network"); p.set_defaults(fn=cmd_board)
+    p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
+    p.add_argument("--no-monitor", action="store_true", help="don't start the monitor session and its watcher")
+    p.set_defaults(fn=cmd_board)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.set_defaults(fn=cmd_gate)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
+    sub.add_parser("projects").set_defaults(fn=cmd_projects)
+    p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
+    p.set_defaults(fn=cmd_peek)
+    p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
+    p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within"); p.set_defaults(fn=cmd_new)
+    p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_helm)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)
     fs.add_parser("view")

@@ -14,13 +14,16 @@ import pty
 import re
 import secrets
 import select
+import shlex
 import struct
 import subprocess
 import termios
 from pathlib import Path
 
 TOKEN = secrets.token_urlsafe(24)          # made fresh each time the board starts
-COMMAND = os.environ.get("COLONY_CONSOLE_CMD", "claude")
+# Every session starts with Remote Control, named for its project, so the person can reach it from the
+# Claude app anywhere; an idle session costs nothing.
+COMMAND = os.environ.get("COLONY_CONSOLE_CMD", "claude --remote-control {name}")
 
 
 def session_name(root):
@@ -33,14 +36,21 @@ def live(root):
     return subprocess.run(["tmux", "has-session", "-t", session_name(root)], capture_output=True).returncode == 0
 
 
-def ensure(root):
-    """Start the project's session if it is not running: the person's own `claude`, in the project."""
-    name = session_name(root)
-    if not live(root):
-        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50", COMMAND],
+def ensure(root, name=None, label=None):
+    """Start the session if it is not running: the person's own `claude`, in the project, remote-enabled."""
+    name = name or session_name(root)
+    if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
+        command = COMMAND.format(name=shlex.quote(label or Path(root).name))
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50", command],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
     return name
+
+
+def type_into(name, text):
+    """Type a message into a session and send it, as if the person had."""
+    subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
+    subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
 
 
 def stop(root):
@@ -63,11 +73,11 @@ def classify(screen):
     return "idle"
 
 
-def snapshot(root, lines=6):
-    if not live(root):
+def snapshot(root, lines=6, name=None):
+    name = name or session_name(root)
+    if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
         return {"state": "off", "lines": []}
-    screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", session_name(root)], capture_output=True,
-                            text=True).stdout
+    screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
     shown = [BORDER.sub("", l) for l in screen.splitlines()]
     shown = [l for l in shown if l.strip()]
     return {"state": classify(screen), "lines": shown[-lines:]}
@@ -108,10 +118,10 @@ def recv_frame(sock):
     return opcode, data
 
 
-def bridge(sock, root):
-    """Attach a terminal to the project's session and pass bytes both ways until either side leaves.
-    Leaving detaches; the session keeps running."""
-    name = ensure(root)
+def bridge(sock, root, name=None, label=None):
+    """Attach a terminal to the session and pass bytes both ways until either side leaves. Leaving
+    detaches; the session keeps running."""
+    name = ensure(root, name, label)
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"

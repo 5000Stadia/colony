@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from colony import board, console  # noqa: E402
+from colony import board, console, monitor  # noqa: E402
 import base64, socket, time  # noqa: E402
 
 ROADMAP = """# Roadmap
@@ -213,7 +213,7 @@ class GlanceTest(BoardBase):
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
             port = httpd.server_address[1]
-            [s] = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/status").read())
+            [s] = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/status").read())["projects"]
             self.assertEqual(s["state"], "working")
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
             self.assertIn("id='peek-0'", page)
@@ -223,6 +223,66 @@ class GlanceTest(BoardBase):
             httpd.server_close()
         console.stop(self.root)
         self.assertEqual(console.snapshot(self.root)["state"], "off")
+
+
+class MonitorTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.saved = (console.snapshot, console.type_into, monitor.snapshot)
+
+    def tearDown(self):
+        console.snapshot, console.type_into, monitor.snapshot = self.saved
+        console.stop(self.root)
+        super().tearDown()
+
+    def test_the_monitor_wakes_only_when_a_project_needs_the_person_or_finishes(self):
+        screens = iter(["working", "working", "needs you", "needs you", "working", "idle"])
+        console.snapshot = lambda root, lines=6, name=None: {"state": next(screens), "lines": ["last line"]}
+        sent = []
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        w = monitor.Watcher(quiet=0)
+        for _ in range(6):
+            w.tick()
+        self.assertEqual(len(sent), 2, "busy work wakes nothing; needs-you and finished each wake it once")
+        self.assertIn("plants needs you", sent[0])
+        self.assertIn("plants finished a turn", sent[1])
+        self.assertIn("helm is off", sent[0])
+
+    def test_events_wait_until_the_monitor_is_free_and_a_new_gate_wakes_it(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
+        sent, busy = [], {"state": "working", "lines": []}
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: busy
+        w = monitor.Watcher(quiet=0)
+        w.tick()
+        board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(), "question": "Ship it?"})
+        w.tick()
+        self.assertEqual(sent, [], "the monitor is busy: the event waits")
+        busy["state"] = "idle"
+        monitor.helm(True)
+        w.tick()
+        self.assertEqual(len(sent), 1)
+        self.assertIn("opened a gate: Ship it?", sent[0])
+        self.assertIn("You hold the helm", sent[0])
+
+    def test_tell_new_and_helm_from_the_command_line(self):
+        env = {"COLONY_CONSOLE_CMD": "cat"}
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), **env))
+        self.assertIn("sent to plants", run("tell", "plants", "please add reminders").stdout)
+        time.sleep(0.5)
+        self.assertIn("please add reminders", "\n".join(console.snapshot(self.root)["lines"]))
+        out = run("new", "fresh", "--in", str(self.root.parent))
+        self.assertIn("fresh created", out.stdout, out.stderr)
+        fresh = self.root.parent / "fresh"
+        self.assertTrue((fresh / "ROADMAP.md").exists())
+        self.assertTrue(console.live(fresh))
+        console.stop(fresh)
+        self.assertIn("helm is with the person", run("helm").stdout)
+        self.assertIn("holds the helm", run("helm", "on").stdout)
+        self.assertTrue(monitor.helm())
 
 
 if __name__ == "__main__":

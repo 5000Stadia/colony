@@ -90,6 +90,21 @@ idle) and its latest line; the Overview opens with a peek at the last few lines.
 off the screen ("esc to interrupt" while working, a numbered choice when asking), so a change in Claude
 Code's wording could mislabel it; the lines shown are always the real ones.
 
+Every console starts with Remote Control (`claude --remote-control <project>`), so each project, and
+the monitor, shows up in the Claude app on your phone. An idle session costs nothing.
+
+**The monitor** is one more session, at the top of the sidebar and in the app, that acts for you across
+projects: it tells you when one needs you or has finished, turns what you say into a clean request
+typed into that project (`colony tell`), starts new projects (`colony new`), and, when you say "take
+the helm", settles routine questions itself. It always comes back to you for planning, scope,
+milestones, and anything costly to undo or leaving your hands. It never watches: a watcher in the
+board reads each screen every few seconds, costing no tokens, and wakes the monitor only when a project
+needs you, finishes a turn, or opens a gate. Talking through the monitor roughly doubles the tokens
+of that exchange; talk to a project's own session when that matters.
+
+The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
+from the board's console or the app.
+
 The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
 what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude
 Code hooks that `colony track` installs, so it doesn't rely on the agent remembering.

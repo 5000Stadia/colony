@@ -302,8 +302,13 @@ def thread(ns, road_items=None):
 
 
 def sidebar(reg, pid):
+    from . import monitor
     projects = [Path(p) for p in reg["projects"]]
-    side = []
+    ms = monitor.snapshot()
+    helm = "at the helm" if monitor.helm() else "helm with you"
+    side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/monitor'><span class='pname'>"
+            f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>monitor</span>"
+            f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
     for i, p in enumerate(projects):
         waiting = sum(1 for g in gates(p) if not g["answer"]) if p.exists() else 0
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
@@ -328,8 +333,9 @@ def shell(reg, pid, body, wide=False):
 POLL = """
 async function poll() {
   try {
-    const r = await fetch('/status', {cache: 'no-store'}); const all = await r.json();
-    all.forEach((s, i) => {
+    const r = await fetch('/status', {cache: 'no-store'}); const st = await r.json();
+    const md = document.getElementById('dot-m'); if (md) md.className = 'sdot ' + st.monitor.state.replace(' ', '-');
+    st.projects.forEach((s, i) => {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
       if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
@@ -525,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return origin is None or origin == f"http://{host}"
 
-    def _console(self, root, token):
+    def _console(self, root, token, name=None, label=None):
         """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a
         WebSocket; it must be this page's, and the token must be the one this board made."""
         origin_ok = self._from_this_page() and self.headers.get("Origin") is not None
@@ -539,7 +545,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.flush()
         self.close_connection = True
-        console.bridge(self.connection, root)
+        console.bridge(self.connection, root, name, label)
 
     def _send(self, code, body):
         self.send_response(code)
@@ -558,15 +564,29 @@ class Handler(BaseHTTPRequestHandler):
         pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(reg["projects"]) - 1, 0))
         if url.path == "/":
             return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
+        if url.path == "/monitor":
+            from . import monitor
+            monitor.ensure()
+            on = monitor.helm()
+            body = (f"<header class='slim'><h1>monitor</h1><form method='post' action='/helm'>"
+                    f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
+                    f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
+                    f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
+                    f"</span></header>" + console.PAGE.format(path=e(monitor.home()), name=monitor.NAME, pid=-1, token=console.TOKEN))
+            return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
-            body = json.dumps([console.snapshot(Path(p)) if Path(p).exists() else {"state": "off", "lines": []}
-                               for p in reg["projects"]]).encode()
+            from . import monitor
+            body = json.dumps({"projects": [console.snapshot(Path(p)) if Path(p).exists() else {"state": "off", "lines": []}
+                                            for p in reg["projects"]], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return self.wfile.write(body)
+        if url.path == "/console/ws" and (q.get("p") or [""])[0] == "-1":
+            from . import monitor
+            return self._console(monitor.home(), (q.get("t") or [""])[0], name=monitor.NAME, label="monitor")
         if url.path == "/console/ws" and reg["projects"]:
             return self._console(Path(reg["projects"][pid]), (q.get("t") or [""])[0])
         if url.path == "/item" and reg["projects"]:
@@ -579,7 +599,24 @@ class Handler(BaseHTTPRequestHandler):
         length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
         reg = registry()
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/helm":
+            from . import monitor
+            monitor.helm(form.get("state") == "on")
+            self.send_response(303)
+            self.send_header("Location", "/monitor")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         pid = int(form.get("p", "0"))
+        if pid == -1 and path == "/console/stop":
+            from . import monitor
+            subprocess.run(["tmux", "kill-session", "-t", monitor.NAME], capture_output=True)
+            self.send_response(303)
+            self.send_header("Location", "/monitor")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         root = Path(reg["projects"][pid])
         text = form.get("text", "").strip()
         path = urllib.parse.urlparse(self.path).path
@@ -600,7 +637,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def serve(port, lan=False):
+def serve(port, lan=False, monitor=True):
+    if monitor:
+        from . import monitor as mon
+        mon.start()
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.lan = lan
     where = "every address on this machine (your home network can open it)" if lan else "http://127.0.0.1"
@@ -644,6 +684,7 @@ main.wide { max-width:none } header.slim { display:flex; align-items:center; gap
 .tabs a.on { background:var(--sunk); color:var(--ink); font-weight:600 }
 nav .proj { flex-direction:column; align-items:stretch; gap:1px } .pname { display:flex; align-items:center; gap:6px }
 .sline { font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:14px }
+nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0 0; margin-bottom:8px; padding-bottom:9px }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
 .sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }
