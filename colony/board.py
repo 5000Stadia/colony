@@ -65,9 +65,33 @@ def scoped(base):
     return base if home() == default else f"{base}-{hashlib.sha1(str(home()).encode()).hexdigest()[:6]}"
 
 
+PACKAGE_PROJECTS = Path(__file__).resolve().parent.parent / "projects"
+
+
 def registry():
     path = home() / "board.json"
-    return json.loads(path.read_text()) if path.exists() else {"projects": [], "seen": {}}
+    reg = json.loads(path.read_text()) if path.exists() else {}
+    reg.setdefault("projects", [])                     # added one by one, anywhere
+    reg.setdefault("seen", {})
+    reg.setdefault("roots", [str(PACKAGE_PROJECTS)])  # folders whose every subfolder is a project
+    reg.setdefault("new_root", reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS))
+    return reg
+
+
+def projects(reg=None):
+    """Every project on the board: those added by hand, then each subfolder of each project folder.
+    A subfolder seen for the first time is put on the board as it is found."""
+    reg = reg or registry()
+    out = [Path(p) for p in reg["projects"]]
+    for root in map(Path, reg["roots"]):
+        if not root.is_dir():
+            continue
+        for sub in sorted(d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")):
+            if sub not in out:
+                if not (sub / ".board").exists():
+                    track(sub, register=False)
+                out.append(sub)
+    return out
 
 
 def save_registry(reg):
@@ -206,7 +230,7 @@ def render_notes(ns, heading):
     return "\n".join(lines)
 
 
-def track(path):
+def track(path, register=True):
     """Put a project on the board: its roadmap, its .board folder, the agent's three habits in CLAUDE.md,
     and the delivery hooks in .claude/settings.json — added to whatever the project already has."""
     root = root_of(path)
@@ -228,7 +252,8 @@ def track(path):
             entries.append({"hooks": [{"type": "command", "command": command}]})
     settings.write_text(json.dumps(cfg, indent=2) + "\n")
     reg = registry()
-    if str(root) not in reg["projects"]:
+    inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
+    if register and not inside_a_root and str(root) not in reg["projects"]:
         reg["projects"].append(str(root))
         save_registry(reg)
     return root
@@ -311,13 +336,13 @@ def thread(ns, road_items=None):
 
 def sidebar(reg, pid):
     from . import monitor
-    projects = [Path(p) for p in reg["projects"]]
+    plist = projects(reg)
     ms = monitor.snapshot()
     helm = "at the helm" if monitor.helm() else "helm with you"
     side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/monitor'><span class='pname'>"
             f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>monitor</span>"
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
-    for i, p in enumerate(projects):
+    for i, p in enumerate(plist):
         waiting = sum(1 for g in gates(p) if not g["answer"]) if p.exists() else 0
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
         badge = (f"<span class='badge gate'>{waiting}</span>" if waiting else "") + \
@@ -328,7 +353,8 @@ def sidebar(reg, pid):
                     f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                     f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                     f"{' · ' + e(last) if last else ''}</span></a>")
-    return "".join(side) or "<p class=muted>No projects yet: run <code>colony track</code> in one.</p>"
+    side.append("<div class='navfoot'><a href='/add'>+ Add project</a><a href='/settings'>Settings</a></div>")
+    return "".join(side)
 
 
 def shell(reg, pid, body, wide=False):
@@ -364,16 +390,16 @@ def tabs(pid, view):
 
 
 def render(reg, pid, view="overview"):
-    projects = [Path(p) for p in reg["projects"]]
+    plist = projects(reg)
     out = []
-    if not projects:
+    if not plist:
         return shell(reg, pid, "")
     if view == "console":
-        root = projects[pid]
+        root = plist[pid]
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>"
                      + console.PAGE.format(path=e(root), name=e(console.session_name(root)), pid=pid, token=console.TOKEN),
                      wide=True)
-    root = projects[pid]
+    root = plist[pid]
     road, gs = roadmap(root), gates(root)
     all_notes = notes(root)
     by = lambda key, val: [n for n in all_notes if (n["anchor"] or {}).get(key) == val and not (n["anchor"] or {}).get("gate")]
@@ -492,7 +518,7 @@ def roadmap_map(road, pid, all_notes, gs):
 def render_item(reg, pid, iid):
     """One roadmap item in depth: what it is, where it sits, the work done on it, its gates, and the
     thread where the person directs it."""
-    root = Path(reg["projects"][pid])
+    root = projects(reg)[pid]
     road = roadmap(root)
     its = items(road)
     it = its.get(iid)
@@ -523,6 +549,52 @@ def render_item(reg, pid, iid):
                 + note_box(pid, "item", iid, "What should the agent cover or keep in mind for this item?", back=f"/item?p={pid}&id={iid}")
                 + "</div>")
     return shell(reg, pid, "".join(body))
+
+
+def folder_browser(reg, current, purpose):
+    """Browse the machine running the board, to add a folder as a project, make a new one, or add a
+    folder whose subfolders are all projects."""
+    here = Path(current).expanduser() if current else Path.home()
+    if not here.is_dir():
+        here = Path.home()
+    try:
+        subs = sorted((d for d in here.iterdir() if d.is_dir() and not d.name.startswith(".")), key=lambda d: d.name.lower())
+    except PermissionError:
+        subs = []
+    q = lambda d: urllib.parse.quote(str(d))
+    head = "Add a project folder" if purpose == "project" else "Add a folder of projects"
+    out = [f"<header><h1>{head}</h1><p class='muted'>Browsing the machine the board runs on.</p></header><div class='card'>"
+           f"<p><code>{e(here)}</code></p><p>"
+           + (f"<a href='/add?dir={q(here.parent)}&for={purpose}'>↑ up</a>" if here != here.parent else "") + "</p><ul class='dirs'>"]
+    out += [f"<li><a href='/add?dir={q(d)}&for={purpose}'>{e(d.name)}/</a></li>" for d in subs] or ["<li class='muted'>no subfolders</li>"]
+    out.append("</ul>")
+    if purpose == "project":
+        out.append(f"<form method='post' action='/add'><input type='hidden' name='path' value='{e(here)}'>"
+                   f"<button>Add this folder as a project</button></form>"
+                   f"<form class='add' method='post' action='/new'><input type='hidden' name='within' value='{e(here)}'>"
+                   f"<input name='name' placeholder='name of a new, empty project here'><button>Create new project here</button></form>")
+    else:
+        out.append(f"<form method='post' action='/roots'><input type='hidden' name='add' value='{e(here)}'>"
+                   f"<button>Use this folder: every subfolder becomes a project</button></form>")
+    return shell(reg, -2, "".join(out) + "</div>")
+
+
+def settings_page(reg):
+    rows = []
+    for r in reg["roots"]:
+        default = r == reg["new_root"]
+        rows.append(f"<li><code>{e(r)}</code>{' <b>new projects go here</b>' if default else ''}"
+                    + ("" if default else f"<form class='inline' method='post' action='/roots'><input type='hidden' name='default' value='{e(r)}'><button class='quiet'>Make default</button></form>")
+                    + f"<form class='inline' method='post' action='/roots'><input type='hidden' name='remove' value='{e(r)}'><button class='quiet'>Remove</button></form></li>")
+    single = "".join(f"<li><code>{e(p)}</code><form class='inline' method='post' action='/roots'><input type='hidden' name='untrack' value='{e(p)}'>"
+                     f"<button class='quiet'>Remove from board</button></form></li>" for p in reg["projects"])
+    body = (f"<header><h1>Settings</h1></header><h2>Project folders</h2><div class='card'>"
+            f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='dirs'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
+            f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
+            f"<h2>Projects added one by one</h2><div class='card'><ul class='dirs'>{single or '<li class=muted>none</li>'}</ul>"
+            f"<p><a href='/add'>+ Add a project folder</a></p></div>"
+            f"<p class='muted'>Removing leaves every file where it is; the project just leaves the board.</p>")
+    return shell(reg, -2, body)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -569,9 +641,14 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
         reg = registry()
-        pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(reg["projects"]) - 1, 0))
+        plist = projects(reg)
+        pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
         if url.path == "/":
             return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
+        if url.path == "/add":
+            return self._send(200, folder_browser(reg, (q.get("dir") or [""])[0], (q.get("for") or ["project"])[0]).encode())
+        if url.path == "/settings":
+            return self._send(200, settings_page(reg).encode())
         if url.path == "/monitor":
             from . import monitor
             monitor.ensure()
@@ -584,8 +661,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor
-            body = json.dumps({"projects": [console.snapshot(Path(p)) if Path(p).exists() else {"state": "off", "lines": []}
-                                            for p in reg["projects"]], "monitor": monitor.snapshot()}).encode()
+            body = json.dumps({"projects": [console.snapshot(p) if p.exists() else {"state": "off", "lines": []}
+                                            for p in plist], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -595,9 +672,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/console/ws" and (q.get("p") or [""])[0] == "-1":
             from . import monitor
             return self._console(monitor.home(), (q.get("t") or [""])[0], name=monitor.name(), label="monitor")
-        if url.path == "/console/ws" and reg["projects"]:
-            return self._console(Path(reg["projects"][pid]), (q.get("t") or [""])[0])
-        if url.path == "/item" and reg["projects"]:
+        if url.path == "/console/ws" and plist:
+            return self._console(plist[pid], (q.get("t") or [""])[0])
+        if url.path == "/item" and plist:
             return self._send(200, render_item(reg, pid, (q.get("id") or [""])[0]).encode())
         self._send(404, b"not here")
 
@@ -608,6 +685,35 @@ class Handler(BaseHTTPRequestHandler):
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path in ("/add", "/new", "/roots"):
+            target = "/settings" if path == "/roots" else "/"
+            if path == "/add" and form.get("path"):
+                track(Path(form["path"]))
+                target = f"/?p={projects().index(root_of(form['path']))}"
+            elif path == "/new" and form.get("name", "").strip():
+                new = Path(form["within"]) / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
+                new.mkdir(parents=True, exist_ok=True)
+                track(new)
+                console.ensure(new)
+                target = f"/?p={projects().index(new)}"
+            elif path == "/roots":
+                reg = registry()
+                if form.get("add") and form["add"] not in reg["roots"]:
+                    reg["roots"].append(form["add"])
+                if form.get("remove") in reg["roots"]:
+                    reg["roots"].remove(form["remove"])
+                    if reg["new_root"] == form["remove"]:
+                        reg["new_root"] = reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS)
+                if form.get("default") in reg["roots"]:
+                    reg["new_root"] = form["default"]
+                if form.get("untrack") in reg["projects"]:
+                    reg["projects"].remove(form["untrack"])
+                save_registry(reg)
+            self.send_response(303)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/helm":
             from . import monitor
             monitor.helm(form.get("state") == "on")
@@ -625,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        root = Path(reg["projects"][pid])
+        root = projects(reg)[pid]
         text = form.get("text", "").strip()
         path = urllib.parse.urlparse(self.path).path
         if path == "/note" and text:
@@ -693,6 +799,10 @@ main.wide { max-width:none } header.slim { display:flex; align-items:center; gap
 nav .proj { flex-direction:column; align-items:stretch; gap:1px } .pname { display:flex; align-items:center; gap:6px }
 .sline { font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:14px }
 nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0 0; margin-bottom:8px; padding-bottom:9px }
+.navfoot { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px; font-size:13px }
+.navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
+form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
 .sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }

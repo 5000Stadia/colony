@@ -94,7 +94,7 @@ class Watcher:
 
     def events(self):
         out = []
-        for p in map(Path, board.registry()["projects"]):
+        for p in board.projects():
             if not p.exists():
                 continue
             snap = console.snapshot(p, lines=4)

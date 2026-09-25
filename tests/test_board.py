@@ -33,6 +33,7 @@ class BoardBase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
+        board.save_registry({"roots": []})       # a test board sees no one's real project folders
         self.root = base / "plants"
         self.root.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -283,6 +284,52 @@ class MonitorTest(BoardBase):
         self.assertIn("helm is with the person", run("helm").stdout)
         self.assertIn("holds the helm", run("helm", "on").stdout)
         self.assertTrue(monitor.helm())
+
+
+class FoldersTest(BoardBase):
+    def post(self, port, url, **form):
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{url}", data=urllib.parse.urlencode(form).encode())
+        return urllib.request.urlopen(req)
+
+    def test_every_subfolder_of_a_project_folder_is_a_project(self):
+        shelf = Path(self.tmp.name) / "shelf"
+        (shelf / "novel").mkdir(parents=True)
+        (shelf / "shop").mkdir()
+        (shelf / ".hidden").mkdir()
+        reg = board.registry()
+        reg["roots"] = [str(shelf)]
+        board.save_registry(reg)
+        names = [p.name for p in board.projects()]
+        self.assertEqual(names, ["novel", "shop"])
+        self.assertTrue((shelf / "novel" / "ROADMAP.md").exists(), "found and put on the board")
+        self.assertEqual(board.registry()["projects"], [], "found in a folder, not listed one by one")
+
+    def test_the_browser_adds_a_folder_creates_a_project_and_settings_manage_folders(self):
+        shelf = Path(self.tmp.name) / "shelf"
+        shelf.mkdir()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        console.COMMAND = "cat"
+        try:
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/add?dir={urllib.parse.quote(self.tmp.name)}").read().decode()
+            self.assertIn("plants/", page)
+            self.post(port, "/add", path=str(self.root))
+            self.assertIn(str(self.root), board.registry()["projects"])
+            self.post(port, "/new", within=str(shelf), name="fresh idea")
+            self.assertTrue((shelf / "fresh idea" / "ROADMAP.md").exists())
+            self.assertTrue(console.live(shelf / "fresh idea"))
+            console.stop(shelf / "fresh idea")
+            self.post(port, "/roots", add=str(shelf))
+            self.post(port, "/roots", default=str(shelf))
+            self.assertEqual(board.registry()["new_root"], str(shelf))
+            self.assertIn("fresh idea", [p.name for p in board.projects()])
+            self.post(port, "/roots", untrack=str(self.root))
+            self.assertNotIn(self.root, board.projects())
+            self.assertTrue(self.root.exists(), "removing from the board leaves the files")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 class ServerTest(BoardBase):

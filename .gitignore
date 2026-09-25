@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 colony.egg-info/
+
+# your projects live here; they are not part of colony
+projects/*
+!projects/.gitkeep

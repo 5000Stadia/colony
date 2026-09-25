@@ -352,7 +352,7 @@ def cmd_doctor(a):
     if "--no-monitor" not in args:
         (print("ok    monitor session running") if monitor.snapshot()["state"] != "off"
          else problems.append("the monitor session is not running: colony restart starts it"))
-    for p in map(Path, board.registry()["projects"]):
+    for p in board.projects():
         if not p.exists():
             problems.append(f"{p}: the folder is gone; remove it from {board.home() / 'board.json'}")
             continue
@@ -414,7 +414,7 @@ def cmd_noted(a):
 
 def _project(name):
     from . import board
-    for p in map(Path, board.registry()["projects"]):
+    for p in board.projects():
         if p.name == name:
             return p
     raise SystemExit(f"no project named {name} on the board; `colony projects` lists them")
@@ -422,7 +422,7 @@ def _project(name):
 
 def cmd_projects(a):
     from . import board, console
-    for p in map(Path, board.registry()["projects"]):
+    for p in board.projects():
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
         waiting = sum(1 for g in board.gates(p) if not g["answer"]) if p.exists() else 0
         last = snap["lines"][-1] if snap["lines"] else ""
@@ -449,7 +449,7 @@ def cmd_tell(a):
 
 def cmd_new(a):
     from . import board, console
-    root = (Path(a.within).expanduser() if a.within else Path.home() / "Projects") / a.name
+    root = Path(a.within or board.registry()["new_root"]).expanduser() / a.name
     if root.exists() and any(root.iterdir()):
         raise SystemExit(f"{root} already exists and is not empty")
     root.mkdir(parents=True, exist_ok=True)

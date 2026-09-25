@@ -78,6 +78,12 @@ be in the way. Otherwise, follow these steps in order.
     colony restart          reload the board after a change (consoles and the monitor keep running)
     colony doctor           is everything up and wired? what to do if not
 
+Projects live in folders you choose. Colony ships an empty `projects/` folder: every folder you put in
+it is a project on the board, and new projects are created there. In Settings you can add other
+folders that work the same way and pick which one new projects go into. "+ Add project" browses the
+machine to add any single folder as a project, or to create a new one wherever you are looking; that
+folder is the root its agent works in.
+
 For each project the board shows what changed since you were last there, what the agent has put in
 your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
 page with its history, gates and a thread where you direct it. Notes on past work reach the agent on
