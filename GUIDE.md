@@ -18,7 +18,7 @@
 - **Settle any wording that can be read two ways.** State your reading or ask. This is the most common cause of misses.
 - **Make small calls yourself and say which ones you made.** Ask when a decision is costly to undo or when an action leaves the person's hands.
 - **Judge stakes by consequence and reversibility,** never by subject.
-- When the work teaches you something, propose a change to the plan. The person decides.
+- **If the work shows the plan or the horizon is wrong, say so with the reason.** How to do a step is your call. Changes to scope, order or milestones are the person's. Raise a milestone that looks wrong as soon as you see it, because that's where rebuilds come from.
 - Build what's asked, cleanly. Heavily guarded code costs about twice as much to change later.
 - Don't reorganise on a guess.
 - Report the cost with every result. Ask before going over what the person set.
