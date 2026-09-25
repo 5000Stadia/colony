@@ -56,7 +56,7 @@ Reach for these only when the symptom appears; the agent won't do them itself.
 
 ## Testing a change
 - Test against the plain agent first, before building.
-- Pre-register a forecast; ≥3 replicates (identical runs spread up to 11 points); blind judge with labels swapped; hidden acceptance tests; no hindsight hints.
+- Pre-register a forecast; ≥3 replicates (identical runs can differ widely in quality); blind judge with labels swapped; hidden acceptance tests; no hindsight hints.
 - Check the measure itself: tied pass rates hid a real difference only a blind judge found.
 - Confirm the task has no published answer.
 - Wait out usage limits; never count a refused call. Change settings only between experiment sets.
