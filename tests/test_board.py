@@ -13,7 +13,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from colony import board  # noqa: E402
+from colony import board, console  # noqa: E402
+import base64, socket, time  # noqa: E402
 
 ROADMAP = """# Roadmap
 
@@ -27,7 +28,7 @@ A tool for my plants.
 """
 
 
-class BoardTest(unittest.TestCase):
+class BoardBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
@@ -56,6 +57,8 @@ class BoardTest(unittest.TestCase):
         return subprocess.run([sys.executable, "-m", "colony", *args], cwd=self.root, capture_output=True, text=True,
                               env=dict(os.environ, PYTHONPATH=str(ROOT)))
 
+
+class BoardTest(BoardBase):
     def test_track_adds_to_what_the_project_has(self):
         board.track(self.root)
         self.assertTrue((self.root / "CLAUDE.md").read_text().startswith("Our own rules."))
@@ -133,6 +136,59 @@ class BoardTest(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class ConsoleTest(BoardBase):
+    def serve(self):
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        return self.httpd.server_address[1]
+
+    def tearDown(self):
+        console.stop(self.root)
+        if hasattr(self, "httpd"):
+            self.httpd.shutdown()
+            self.httpd.server_close()
+        super().tearDown()
+
+    def handshake(self, port, origin, token):
+        s = socket.create_connection(("127.0.0.1", port))
+        key = base64.b64encode(os.urandom(16)).decode()
+        s.sendall((f"GET /console/ws?p=0&t={token} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+                   f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                   f"Origin: {origin}\r\n\r\n").encode())
+        return s, s.recv(4096).decode(errors="replace")
+
+    def test_the_console_answers_only_this_page_with_its_token(self):
+        board.track(self.root)
+        port = self.serve()
+        _, head = self.handshake(port, "http://evil.example", console.TOKEN)
+        self.assertIn("403", head.splitlines()[0])
+        _, head = self.handshake(port, f"http://127.0.0.1:{port}", "wrong")
+        self.assertIn("403", head.splitlines()[0])
+        self.assertFalse(console.live(self.root), "a refused connection starts nothing")
+
+    def test_the_console_bridges_to_the_projects_own_session_and_outlives_the_browser(self):
+        board.track(self.root)
+        console.COMMAND = "cat"
+        port = self.serve()
+        s, head = self.handshake(port, f"http://127.0.0.1:{port}", console.TOKEN)
+        self.assertIn("101", head.splitlines()[0])
+        msg = json.dumps({"i": "hello board\r"}).encode()
+        mask = os.urandom(4)
+        s.sendall(bytes([0x81, 0x80 | len(msg)]) + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(msg)))
+        seen, deadline = b"", time.time() + 10
+        while b"hello board" not in seen and time.time() < deadline:
+            s.settimeout(1)
+            try:
+                seen += s.recv(65536)
+            except socket.timeout:
+                pass
+        self.assertIn(b"hello board", seen)
+        s.close()
+        time.sleep(0.5)
+        self.assertTrue(console.live(self.root), "closing the browser detaches; the session keeps running")
+        self.assertIn("class='live'", board.sidebar(board.registry(), 0))
 
 
 if __name__ == "__main__":

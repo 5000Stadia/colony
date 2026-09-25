@@ -11,7 +11,7 @@ located signals and a project memory.
     colony checkpoint               workflow, progress and tokens since the last checkpoint; questions for you
     colony answer KIND TEXT [--always]  answer a checkpoint question; --always keeps it as a rule
     colony track [PATH]             put a project on the board (roadmap, notes, gates, delivery hooks)
-    colony board [--port 8790]      one page for all tracked projects: what changed, what waits on you, notes
+    colony board [--port 8790] [--lan]  one page for all tracked projects, with each project's live console
     colony gate "QUESTION" [--item R4] [--why ...]   put a decision in the person's hands
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
     colony noted ID "TEXT"          mark a note as acted on, with what was done
@@ -285,7 +285,7 @@ def cmd_track(a):
 
 def cmd_board(a):
     from . import board
-    board.serve(a.port)
+    board.serve(a.port, lan=a.lan)
     return 0
 
 
@@ -344,7 +344,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("track"); p.add_argument("path", nargs="?", default="."); p.set_defaults(fn=cmd_track)
-    p = sub.add_parser("board"); p.add_argument("--port", type=int, default=8790); p.set_defaults(fn=cmd_board)
+    p = sub.add_parser("board"); p.add_argument("--port", type=int, default=8790)
+    p.add_argument("--lan", action="store_true", help="also answer other machines on the network"); p.set_defaults(fn=cmd_board)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.set_defaults(fn=cmd_gate)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")

@@ -73,7 +73,8 @@ be in the way. Otherwise, follow these steps in order.
 ## The board: one place to follow and steer every project
 
     colony track            in a project: put it on the board (once)
-    colony board            open the board: every tracked project in one page
+    colony board            open the board: every tracked project in one page, each with its live console
+    colony board --lan      the same, reachable from other machines on your network
 
 For each project the board shows what changed since you were last there, what the agent has put in
 your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
@@ -81,6 +82,10 @@ page with its history, gates and a thread where you direct it. Notes on past wor
 its next turn. Notes on a roadmap item reach it when it starts that item. Nothing waits unseen: a note
 whose item leaves the roadmap is delivered at once, and one delivered but not acted on is repeated at
 the next session's start.
+
+Each project's Console tab is its own Claude Code session, running in tmux: switch projects in the
+sidebar and each session keeps going; close the browser and it keeps going; `tmux attach -t board-…`
+reaches the same session from a terminal.
 
 The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
 what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude

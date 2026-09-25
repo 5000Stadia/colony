@@ -19,6 +19,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from . import console
+
 MILESTONE = re.compile(r"^##\s+(M\d+)\s*[—–-]+\s*(.+?)\s*$")
 ITEM = re.compile(r"^\s*-\s*\[( |x|X|~)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
 STATE = {" ": "todo", "~": "doing", "x": "done", "X": "done"}
@@ -307,28 +309,39 @@ def sidebar(reg, pid):
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
         badge = (f"<span class='badge gate'>{waiting}</span>" if waiting else "") + \
                 (f"<span class='badge new'>{new} new</span>" if new else "")
-        side.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'>{e(p.name)}{badge}</a>")
+        dot = "<span class='live' title='console session running'></span>" if p.exists() and console.live(p) else ""
+        side.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'>{dot}{e(p.name)}{badge}</a>")
     return "".join(side) or "<p class=muted>No projects yet: run <code>colony track</code> in one.</p>"
 
 
-def shell(reg, pid, body):
+def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main>{body}</main></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main></body></html>")
 
 
-def render(reg, pid):
+def tabs(pid, view):
+    return (f"<div class='tabs'><a class='{'on' if view != 'console' else ''}' href='/?p={pid}'>Overview</a>"
+            f"<a class='{'on' if view == 'console' else ''}' href='/?p={pid}&view=console'>Console</a></div>")
+
+
+def render(reg, pid, view="overview"):
     projects = [Path(p) for p in reg["projects"]]
     out = []
     if not projects:
         return shell(reg, pid, "")
+    if view == "console":
+        root = projects[pid]
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>"
+                     + console.PAGE.format(path=e(root), name=e(console.session_name(root)), pid=pid, token=console.TOKEN),
+                     wide=True)
     root = projects[pid]
     road, gs = roadmap(root), gates(root)
     all_notes = notes(root)
     by = lambda key, val: [n for n in all_notes if (n["anchor"] or {}).get(key) == val and not (n["anchor"] or {}).get("gate")]
     done = sum(1 for m in road["milestones"] for i in m["items"] if i["state"] == "done")
     total = sum(len(m["items"]) for m in road["milestones"])
-    out.append(f"<header><h1>{e(root.name)}</h1><p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
+    out.append(f"<header><h1>{e(root.name)}</h1>{tabs(pid, view)}<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     # since you were last here
     s = since(root, reg["seen"].get(str(root)))
     out.append("<h2>Since you were last here</h2><div class='card'>")
@@ -475,12 +488,30 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _from_this_page(self):
+        """Same-origin: a request posted from another website carries that site's Origin and is refused.
+        Localhost-only unless the board was started with --lan."""
+        host = self.headers.get("Host", "")
         port = self.server.server_address[1]
-        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
-        if self.headers.get("Host", "") not in hosts:
+        if not getattr(self.server, "lan", False) and host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
             return False
         origin = self.headers.get("Origin")
-        return origin is None or origin in {f"http://{h}" for h in hosts}
+        return origin is None or origin == f"http://{host}"
+
+    def _console(self, root, token):
+        """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a
+        WebSocket; it must be this page's, and the token must be the one this board made."""
+        origin_ok = self._from_this_page() and self.headers.get("Origin") is not None
+        if not origin_ok or not secrets.compare_digest(token, console.TOKEN) or \
+                self.headers.get("Upgrade", "").lower() != "websocket":
+            return self._send(403, b"not from this page")
+        self.send_response(101)
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", console.accept(self.headers["Sec-WebSocket-Key"]))
+        self.end_headers()
+        self.wfile.flush()
+        self.close_connection = True
+        console.bridge(self.connection, root)
 
     def _send(self, code, body):
         self.send_response(code)
@@ -498,7 +529,9 @@ class Handler(BaseHTTPRequestHandler):
         reg = registry()
         pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(reg["projects"]) - 1, 0))
         if url.path == "/":
-            return self._send(200, render(reg, pid).encode())
+            return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
+        if url.path == "/console/ws" and reg["projects"]:
+            return self._console(Path(reg["projects"][pid]), (q.get("t") or [""])[0])
         if url.path == "/item" and reg["projects"]:
             return self._send(200, render_item(reg, pid, (q.get("id") or [""])[0]).encode())
         self._send(404, b"not here")
@@ -518,6 +551,8 @@ class Handler(BaseHTTPRequestHandler):
             add_note(root, {kind: ref} if kind in ("item", "commit") else None, text)
         elif path == "/answer" and text:
             answer_gate(root, form["gate"], text)
+        elif path == "/console/stop":
+            console.stop(root)
         elif path == "/seen":
             reg["seen"][str(root)] = {"at": now(), "head": form.get("head") or git(root, "rev-parse", "HEAD").strip()}
             save_registry(reg)
@@ -528,9 +563,11 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
-def serve(port):
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print(f"board: http://127.0.0.1:{httpd.server_address[1]}/  (ctrl-c to stop)", flush=True)
+def serve(port, lan=False):
+    httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
+    httpd.lan = lan
+    where = "every address on this machine (your home network can open it)" if lan else "http://127.0.0.1"
+    print(f"board: {where}, port {httpd.server_address[1]}  (ctrl-c to stop)", flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -565,6 +602,13 @@ form.add { margin:8px 0 4px 18px; display:flex; gap:8px; flex-wrap:wrap } form.a
   font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 button { font:inherit; padding:5px 13px; border-radius:7px; border:0; background:var(--accent); color:var(--card); cursor:pointer }
 ul { margin:0; padding-left:18px } li { margin:3px 0 }
+main.wide { max-width:none } header.slim { display:flex; align-items:center; gap:18px } header.slim h1 { margin:10px 0 }
+.tabs { display:flex; gap:4px; margin:6px 0 10px } .tabs a { padding:4px 12px; border-radius:7px; color:var(--muted); text-decoration:none }
+.tabs a.on { background:var(--sunk); color:var(--ink); font-weight:600 }
+.live { width:8px; height:8px; border-radius:50%; background:var(--accent); flex:none }
+.console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
+.console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
+#term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
 .ms[open] > summary { margin-bottom:6px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
