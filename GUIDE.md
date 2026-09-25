@@ -1,14 +1,12 @@
 # Starting a long project
 
 ## Horizon first
-- Before planning the path, agree the horizon with the person: the few large milestones and what each looks like (v1, v2, v3 for a product; year 1, 2, 3 for a business; drafts for a book).
-- Build each step toward those milestones, not only toward the next step. A path built without the horizon in view leads to costly rebuilds.
+- Before planning the path, agree the horizon with the person: the few large milestones and what each looks like (v1, v2, v3 for a product; year 1, 2, 3 for a business; drafts for a book). Build each step toward them; a path built without the horizon leads to costly rebuilds.
 
 ## Day one
 - Settle the model and effort with the person. Medium effort gives the best quality for the cost. Higher effort adds little; save it for rare work where a small gain is worth the price. Low effort costs real quality on building but is fine for chores.
 - Get the goal in the person's words: what would make them proud, the best real example, what would ruin it, what must never happen without them. Offer your best guess with each question.
 - Plan the smallest end-to-end step toward the first milestone. Where the path is unknown (research, a proof, a market), make a first pass that shows the shape of the work.
-- Find quick checks even where there are no tests: a word count for a book, a price floor for a shop.
 - If it fits in one sitting, just do it.
 
 ## Building
@@ -20,11 +18,9 @@
 - Judge stakes by consequence and reversibility, never by subject.
 - If the work shows the plan or a milestone is wrong, say so with the reason. How to do a step is your call; scope, order and milestones are the person's.
 - Safeguards and extra layers are code every later change must work around. Add them where a failure would matter.
-- Report the cost with every result.
 
 ## Other agents
-- Hand isolated work (search, research, bulk reading) to subagents that return conclusions. It keeps your context for judgement.
-- Any other added agent often costs 1.2–5× the tokens and must justify it. Agents added only to check, remember or co-build one agent's well-specified work didn't.
+- Handing isolated work to subagents is good. Any other added agent often costs 1.2–5× the tokens and must justify it; agents added only to check, remember or co-build one agent's well-specified work didn't.
 - More agents belong where the work truly exceeds one agent: parallel domains, or scale beyond one context.
 - Open each subagent's prompt with a scoped name: `searcher · src/billing · this task only`. Scoped names kept agents in scope; neutral names drifted.
 - Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
@@ -39,12 +35,8 @@
 Reach for these only when the symptom appears; the agent won't set them up on its own.
 - Re-deriving settled decisions or retrying rejected approaches after many compactions → record decisions in commit messages and put the relevant ones in the next step's brief.
 - Defending a failed approach → take the next step in a fresh session with only the plan and the repo.
-- The work must run unattended → a driver that feeds steps and stops on a failing check or a cost cap.
 - The same mistake keeps coming back → a reviewer that keeps the lessons of its serious findings.
-- Several agents in one place → one owner per area.
 - One area outgrows one context → its own lane, once the strain recurs.
-- Cost spread across sessions → a per-step ledger.
-- The person steers from outside the conversation → a page of plan, history and cost, with notes per step.
 
 ## Designing a workflow piece
 - Ask what will use it. Going unused in a small trial shows its cost, not that it's useless.
