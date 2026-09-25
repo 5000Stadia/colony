@@ -35,6 +35,10 @@ class BoardBase(unittest.TestCase):
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
         # A test board sees no one's real project folders and, unless a test says so, posts no mail.
         board.save_registry({"roots": [], "settings": {"messaging": False}})
+        # Nor does it ever start a real agent: a console that a test starts, here or in a `colony` it runs,
+        # is a stand-in, and teardown ends every session its projects left.
+        self._command, console.COMMAND = console.COMMAND, "sleep 60"
+        os.environ["COLONY_CONSOLE_CMD"] = "sleep 60"
         self.root = base / "plants"
         self.root.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -45,6 +49,10 @@ class BoardBase(unittest.TestCase):
         self.commit("start")
 
     def tearDown(self):
+        for d in Path(self.tmp.name).iterdir():
+            console.stop(d)
+        console.COMMAND = self._command
+        os.environ.pop("COLONY_CONSOLE_CMD", None)
         os.environ.pop("COLONY_BOARD_HOME", None)
         self.tmp.cleanup()
 
@@ -412,7 +420,7 @@ class ProjectSettingsTest(BoardBase):
             wired = lambda self, root: (root / "AGENTS.md").exists()
             classify = lambda self, screen: "idle"
         providers.PROVIDERS["other"] = Other()
-        saved, console.COMMAND = console.COMMAND, None
+        saved = console.COMMAND
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
@@ -424,6 +432,7 @@ class ProjectSettingsTest(BoardBase):
                 data = urllib.parse.urlencode({"within": self.tmp.name, "name": name, "provider": provider, "model": "big"}).encode()
                 urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/new", data=data))
             seeds, soil = Path(self.tmp.name) / "seeds", Path(self.tmp.name) / "soil"
+            console.COMMAND = None                         # only to read the command each would start with
             self.assertIn("This project is part of a colony", (seeds / "CLAUDE.md").read_text())
             self.assertEqual(console.command("seeds", seeds), "claude --remote-control seeds --model big")
             self.assertTrue((soil / "AGENTS.md").exists() and not (soil / "CLAUDE.md").exists(), "wired by its own provider")
