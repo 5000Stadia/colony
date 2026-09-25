@@ -47,8 +47,6 @@ if prompt.startswith("You are `builder") and "Do this row now" in prompt:
     row = re.search(r"^Row (\d+): (.*)$", prompt, re.M)
     with open(root / "work.txt", "a") as fh:
         fh.write(f"row {row.group(1)}: {row.group(2)}\n")
-    if os.environ.get("FAKE_DUP"):
-        (root / "second.py").write_text('def compute_invoice_total(lines):\n    """Sums the lines again."""\n')
     if os.environ.get("FAKE_BREAK_ROW") == row.group(1):
         (root / "broken.txt").write_text("forgot what row 1 needed\n")
     if os.environ.get("FAKE_BUILD_ERROR"):

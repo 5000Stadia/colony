@@ -153,7 +153,6 @@ def run_row(project, row, cap, baseline=0.0):
     cfg = project.config()
     session = str(uuid.uuid4())
     start = commit(project, f"row {number}: start")
-    before = mapper.build(project)[0]          # what existed, to tell whether this row re-makes any of it
     brief = memory.brief(project, row)
 
     def budget(want):
@@ -171,7 +170,7 @@ def run_row(project, row, cap, baseline=0.0):
     forks = [s for s in field.signals(project, row=number, wave=0) if s["kind"] == "fork"]
     if forks:
         raise Stop("a fork needs the person: " + "; ".join(field.render(s) for s in forks))
-    after = mapper.build(project)[0]
+    mapper.build(project)
     lineages = specialists.load(project)
     assessment = parse_assessment(built["said"])
     row_impact = memory.impact(project, number)
@@ -222,13 +221,13 @@ def run_row(project, row, cap, baseline=0.0):
         run_checks(project, number, cfg["waves_per_row"] + 2)
         failing = [s for s in field.signals(project, row=number, wave=99) if s["kind"] == "check"]
     if failing:
-        health.review_health(project, number, before, after)   # a row that cannot close is evidence too
+        health.review_health(project, number)   # a row that cannot close is evidence too
         adapt_threshold(project, number, closed=False)
         raise Stop(f"row {number} cannot close: " + "; ".join(field.render(s) for s in failing))
-    close(project, row, start, cap, before, after, baseline)
+    close(project, row, start, cap, baseline)
 
 
-def close(project, row, start, cap, before=None, after=None, baseline=0.0):
+def close(project, row, start, cap, baseline=0.0):
     number, target, _ = row
     events = project.read("field.jsonl")
     answers = "\n".join(f"- #{e['of']} {'fixed' if e.get('fixed') else 'declined'}: {e['text']}"
@@ -253,7 +252,7 @@ def close(project, row, start, cap, before=None, after=None, baseline=0.0):
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
                   review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()},
                   files=changed_files(project, start, "HEAD"))
-    health.review_health(project, number, before, after)
+    health.review_health(project, number)
     adapt_threshold(project, number)
     note_path = project.state / "closing-note.md"
     note = note_path.read_text().strip() if note_path.exists() else ""

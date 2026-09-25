@@ -4,13 +4,9 @@ Dormant machinery switches itself on at the first real evidence it is needed, an
 pay for it. Memory remedies are cheap and reversible, so they turn on automatically, recorded with their
 evidence. Reorganisation is heavier, so strain produces a proposal for the person, with its numbers.
 """
-import re
 import statistics
 
 # Names too common to mean that something was made twice.
-COMMON = {"main", "run", "init", "setup", "parse", "load", "save", "get", "set", "update", "build", "check",
-          "helper", "format", "render", "validate", "test", "handle", "process", "execute", "call", "apply"}
-CODE_KINDS = {"def", "class", "function", "fn", "func", "struct", "enum", "interface", "type"}
 
 
 def record_check(project, row, wave, command, passed):
@@ -23,30 +19,6 @@ def regressions(project, row):
     ledger = [e for e in project.read("ledger.jsonl") if e["kind"] == "check"]
     passed_before = {e["command"] for e in ledger if e["row"] < row and e["passed"]}
     return sorted({e["command"] for e in ledger if e["row"] == row and not e["passed"] and e["command"] in passed_before})
-
-
-def _symbols(entries):
-    out = {}
-    for path, item in entries.items():
-        for e in item["entries"]:
-            if e["kind"] in CODE_KINDS and not e["name"].startswith("test"):
-                name = re.sub(r"[^a-z0-9]", "", e["name"].split(".")[-1].lower())
-                if len(name) >= 4 and name not in COMMON:
-                    out.setdefault(name, set()).add(path)
-    return out
-
-
-def duplicates(before, after):
-    """Things this row made that still exist elsewhere under the same name. A thing moved is not re-made:
-    only a copy that stays beside the original counts."""
-    old, new = _symbols(before), _symbols(after)
-    found = []
-    for name, paths in new.items():
-        added = paths - old.get(name, set())
-        elsewhere = (old.get(name, set()) & paths) - added
-        if added and elsewhere:
-            found.append(f"{name}: new in {', '.join(sorted(added))}, already in {', '.join(sorted(elsewhere))}")
-    return found
 
 
 def builder_reading(project):
@@ -110,19 +82,11 @@ def escalate(project, row, evidence, remedy, why):
     return True
 
 
-def review_health(project, row, before=None, after=None):
-    """Run every detector for this row and act on what it finds."""
+def review_health(project, row):
+    """Run the detectors for this row and act on what they find. Only a check — the project's own
+    ground truth — can switch memory on; a shared name or a rising read did not, because on real
+    healthy projects both fired on most rows (garden/harness/replay_*.py)."""
     lost = []
-    if before is not None and after is not None:
-        dup = duplicates(before, after)
-        if dup:
-            lost.append(("duplicate", dup))
-            # A shared name is a heuristic, so one coincidence is only recorded; the second time is evidence.
-            project.append("ledger.jsonl", {"kind": "evidence", "row": row, "type": "duplicate", "detail": dup})
-            seen = [e for e in project.read("ledger.jsonl") if e["kind"] == "evidence" and e["type"] == "duplicate"]
-            if len(seen) >= 2:
-                escalate(project, row, [d for e in seen for d in e["detail"]], {"map_in_brief": True},
-                         "the project re-made things it already had, twice: builders now see the map of what exists")
     reg = regressions(project, row)
     if reg:
         lost.append(("regression", reg))
@@ -133,16 +97,34 @@ def review_health(project, row, before=None, after=None):
             escalate(project, row, [f"{c} passed at the last close and failed in row {row}" for c in reg],
                      {"reconcile": True},
                      "the project broke what it had built, in two rows: NOW and each row's reasons now travel forward")
-    reading = rising_reading(project)
-    if reading:
-        escalate(project, row, [reading], {"map_in_brief": True},
-                 "re-reading the project is getting expensive: builders now start from the map")
     signs = strain(project)
     if len(signs) >= 2 and not any(e["kind"] == "structure-proposal" and e["row"] >= row - 3 for e in project.read("ledger.jsonl")):
         project.append("ledger.jsonl", {"kind": "structure-proposal", "row": row, "signs": signs,
                                         "proposal": "one builder is carrying more than it should: consider splitting the "
                                                     "most-reworked area into its own lane"})
     return lost, signs
+
+
+def remedy_reviews(project):
+    """Every remedy still on, three rows or more after it switched on: does it pay? The same counts that
+    switched it on judge it, so a remedy that only costs is noticed and put to the person."""
+    ledger = project.read("ledger.jsonl")
+    cfg = project.config()
+    cost = {e["row"]: e["cost_usd"] for e in ledger if e["kind"] == "row-closed"}
+    asks = []
+    for esc in (e for e in ledger if e["kind"] == "escalation"):
+        on = [k for k in esc["switched_on"] if cfg.get(k)]
+        before = [c for r, c in cost.items() if r <= esc["row"]][-5:]
+        after = [c for r, c in cost.items() if r > esc["row"]]
+        if not on or len(after) < 3 or not before:
+            continue
+        kinds = {e["type"] for e in ledger if e["kind"] == "evidence" and e["row"] <= esc["row"]}
+        again = sum(1 for e in ledger if e["kind"] == "evidence" and e["type"] in kinds and e["row"] > esc["row"])
+        if statistics.median(after) <= 1.25 * statistics.median(before) and not again:
+            continue                                        # cheap and what woke it has not come back: it pays
+        asks.append(("remedy", dict(remedy=", ".join(on), row=esc["row"], why=esc["why"].split(":")[0],
+                                    before=statistics.median(before), after=statistics.median(after), again=again)))
+    return asks
 
 
 def since_checkpoint(project):
@@ -158,7 +140,9 @@ def since_checkpoint(project):
 QUESTIONS = {
     "row-stuck": "Row {row} has stopped {n} times (last: {reason}). Keep going, rescope it, or split it?",
     "lane": "One builder is carrying a lot: {signs}. Give that area its own lane, or keep one builder?",
-    "rows-costlier": "Rows went from ${first:.2f} to ${last:.2f} each. Accept it as the project grows, or make rows smaller?",
+    "rows-costlier": "Rows went from about ${first:.2f} to about ${last:.2f} each. Accept it as the project grows, or make rows smaller?",
+    "remedy": "{remedy} has been on since row {row} ({why}). Since then rows cost about ${after:.2f} against "
+              "${before:.2f} before, and what woke it happened {again} more time(s). Keep it, or turn it off?",
     "review-spend": "Review cost ${review:.2f} against ${build:.2f} for building, and fixed {fixes}. Keep it as it is, "
                     "or narrow the risky areas?",
 }
@@ -193,8 +177,7 @@ def overview(project):
     lines.append(f"- review sent {len(rounds)} row(s) back for fixes: {fixed} fixed, {declined} declined"
                  + (f", {unfixed} fix(es) that did not hold" if unfixed else ""))
     for e in ev:
-        what = "broke a check that had passed" if e["type"] == "regression" else "re-made something the project already had"
-        lines.append(f"- row {e['row']} {what}: {', '.join(e['detail'])[:160]}")
+        lines.append(f"- row {e['row']} broke a check that had passed: {', '.join(e['detail'])[:160]}")
     for e in esc:
         lines.append(f"- switched on after row {e['row']}: {', '.join(e['switched_on'])}")
     signs = strain(project)
@@ -225,10 +208,12 @@ def overview(project):
             asks.append(("row-stuck", dict(row=row, n=len(ss), reason=ss[-1].get("reason", "")[:120])))
     if len(signs) >= 2:
         asks.append(("lane", dict(signs="; ".join(signs))))
-    if len(costs) >= 4 and costs[-1] > 2 * costs[0]:
-        asks.append(("rows-costlier", dict(first=costs[0], last=costs[-1])))
+    # Medians of the first and last three rows: single rows vary 2-3x on healthy projects.
+    if len(costs) >= 6 and statistics.median(costs[-3:]) > 2 * statistics.median(costs[:3]):
+        asks.append(("rows-costlier", dict(first=statistics.median(costs[:3]), last=statistics.median(costs[-3:]))))
     if review_cost > build_cost > 0:
         asks.append(("review-spend", dict(review=review_cost, build=build_cost, fixes=review_fixes)))
+    asks += remedy_reviews(project)
     rules = memory.rules(project)
     questions = [{"kind": k, "ask": QUESTIONS[k].format(**f)} for k, f in asks if k not in rules]
     handled = [f"`{k}` — {rules[k]}" for k, _ in asks if k in rules]

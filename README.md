@@ -59,9 +59,10 @@ each part's evidence and its status.
   reviews actually find. Reviewers are read-only and see the stakes and the builder's doubt first.
 - **Memory switches on when the project shows it needs it.** NOW, reconciliation, narrative history and
   the map in every brief cost more and grew faster at fourteen rows without improving results, so they
-  stay off — until the project re-makes something it already had, breaks something it built, or its
-  re-reading cost keeps climbing. Then the fitting remedy switches on by itself, with its evidence on
-  the page. Strain on one builder produces a reorganisation proposal for the person.
+  stay off — until checks that passed start failing again in a second row. Then NOW and
+  reconciliation switch on by themselves, with their evidence on the page, and every checkpoint asks
+  the person whether a remedy that costs more, or has not stopped the breaks, should stay. Strain on
+  one builder produces a reorganisation proposal for the person.
 - **Names carry scope.** Free, so kept: in one border scenario (16 runs, mostly low effort) scoped names
   kept agents to their side and neutral names crossed, with no measurable harm either way.
 - **Nothing irreversible without the person.** Publishing and remote commands are refused to every

@@ -43,7 +43,7 @@ class Base(unittest.TestCase):
         self.project = Project(self.dir)
         os.environ["COLONY_CLAUDE"] = str(ROOT / "tests" / "fake_claude.py")
         os.environ["PYTHONPATH"] = str(ROOT)
-        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "FAKE_DUP", "FAKE_BREAK_ROW", "FAKE_BUILD_ERROR", "FAKE_BUILDER_FORK", "FAKE_TAMPER", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
+        for k in ("FAKE_FORK", "FAKE_LIMIT_ONCE", "FAKE_LONG_NOW", "FAKE_ASSESS", "FAKE_BREAK_ROW", "FAKE_BUILD_ERROR", "FAKE_BUILDER_FORK", "FAKE_TAMPER", "COLONY_AGENT", "COLONY_ROW", "COLONY_WAVE"):
             os.environ.pop(k, None)
         # Most tests exercise the full machinery: review on, reconciliation on, two named lineages.
         for f in self.project.specialists.glob("*.md"):
@@ -486,27 +486,6 @@ class HealthTest(Base):
         self.assertEqual(self.escalations(), [])
         self.assertFalse(any(e["kind"] == "structure-proposal" for e in self.project.read("ledger.jsonl")))
 
-    def test_re_making_what_exists_twice_switches_the_map_on(self):
-        self.spine()
-        self.configure(review="never")
-        (self.dir / "first.py").write_text('def compute_invoice_total(lines):\n    """Sum the lines."""\n')
-        clock.commit(self.project, "an existing function")
-        os.environ["FAKE_DUP"] = "1"
-        clock.run(self.project, max_rows=1)
-        self.assertEqual(self.escalations(), [], "one shared name is only recorded")
-        (self.dir / "second.py").unlink()
-        (self.dir / "third.py").write_text('def compute_invoice_total(lines):\n    """Once more."""\n')
-        clock.commit(self.project, "something else re-made")
-        os.environ.pop("FAKE_DUP")
-        from colony import health
-        health.review_health(self.project, 2, mapper.build(self.project)[0], None)
-        health.review_health(self.project, 2, {k: v for k, v in mapper.build(self.project)[0].items() if k != "third.py"},
-                             mapper.build(self.project)[0])
-        [esc] = self.escalations()
-        self.assertEqual(esc["switched_on"], {"map_in_brief": True})
-        self.assertIn("computeinvoicetotal", esc["evidence"][0])
-        self.assertTrue(self.project.config()["map_in_brief"])
-
     def test_breaking_what_was_built_twice_switches_reconciliation_on(self):
         self.spine(check="test ! -f broken.txt")
         self.project.spine.write_text(self.project.spine.read_text().replace(
@@ -568,13 +547,32 @@ class HealthTest(Base):
         self.assertIn("## Settled by your rules\n- `row-stuck` — split it and carry on", out)
         self.assertNotIn("`row-stuck` — Row", out)
 
+    def test_a_remedy_that_only_costs_is_put_to_the_person(self):
+        self.configure(reconcile=False)
+        for r, c in enumerate([0.3, 0.3, 0.3], start=1):
+            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": c, "review_fixes": 0})
+        self.project.append("ledger.jsonl", {"kind": "evidence", "row": 3, "type": "regression", "detail": ["t"]})
+        health.escalate(self.project, 3, ["t"], {"reconcile": True}, "the project broke what it had built: more")
+        for r, c in enumerate([0.8, 0.9, 0.8], start=4):
+            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": c, "review_fixes": 0})
+        _, _, qs = health.overview(self.project)
+        [q] = [q for q in qs if q["kind"] == "remedy"]
+        self.assertIn("reconcile has been on since row 3", q["ask"])
+        self.assertIn("$0.80 against $0.30", q["ask"])
+
+    def test_a_remedy_that_pays_is_left_alone(self):
+        self.configure(reconcile=False)
+        for r in range(1, 4):
+            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": 0.3, "review_fixes": 0})
+        health.escalate(self.project, 3, ["t"], {"reconcile": True}, "why")
+        for r in range(4, 7):
+            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": 0.32, "review_fixes": 0})
+        self.assertEqual(health.remedy_reviews(self.project), [])
+
     def test_a_remedy_already_on_is_not_switched_again(self):
         self.spine()
-        self.configure(review="never", map_in_brief=True)
-        (self.dir / "first.py").write_text('def compute_invoice_total(lines):\n    """Sum the lines."""\n')
-        clock.commit(self.project, "an existing function")
-        os.environ["FAKE_DUP"] = "1"
-        clock.run(self.project, max_rows=1)
+        self.configure(review="never", reconcile=True)
+        self.assertFalse(health.escalate(self.project, 1, ["x"], {"reconcile": True}, "why"))
         self.assertEqual(self.escalations(), [])
 
     def test_rising_reading_and_strain_are_measured(self):
