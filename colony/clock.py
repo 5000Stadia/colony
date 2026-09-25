@@ -82,17 +82,17 @@ def parse_assessment(said):
 
 
 def review_decision(project, start, last, assessment=None):
-    """Trust simple work; review where the person declared risk, or where the builder's own forecast puts
-    the expected damage — chance of being wrong times how much it would hurt — over the project's
-    standing rule. The forecast is recorded either way, so the rule can be checked against what review
-    actually finds."""
+    """Trust simple work; review where the person declared risk — a risky area the change touches, or a
+    row whose impact, set when it was assigned, reaches the project's rule. The builder's own
+    confidence is recorded beside what review finds, but decides nothing: it was 8 or 9 on every row
+    measured."""
     cfg = project.config()
     if cfg["review"] in ("never", "always"):
         return cfg["review"] == "always", f"review is set to {cfg['review']}"
     threshold = review_threshold(project)
-    if assessment and assessment.get("risk") is not None and threshold is not None and assessment["risk"] >= threshold:
-        return True, (f"risk {assessment['risk']}: the row's impact {assessment['impact']}/10, set when it was assigned, "
-                      f"and the builder's confidence {assessment['confidence']}/10 (rule: review at {threshold})")
+    impact = (assessment or {}).get("impact")
+    if impact is not None and threshold is not None and impact >= threshold:
+        return True, f"impact {impact}/10, set when the row was assigned (rule: review at {threshold} or above)"
     lines = sum(int(a) + int(d) for a, d, *_ in (row.split("\t") for row in
                 _git(project, "diff", "--numstat", start, last).splitlines()) if a.isdigit() and d.isdigit())
     files = changed_files(project, start, last)
@@ -109,10 +109,10 @@ def review_decision(project, start, last, assessment=None):
 def review_threshold(project):
     """The project's standing review threshold as experience has moved it, or None if it has none."""
     cfg = project.config()
-    if cfg.get("review_if_risk_at_least") is None:
+    if cfg.get("review_at_impact") is None:
         return None
     moves = [e for e in project.read("ledger.jsonl") if e["kind"] == "threshold"]
-    return moves[-1]["to"] if moves else cfg["review_if_risk_at_least"]
+    return moves[-1]["to"] if moves else cfg["review_at_impact"]
 
 
 def adapt_threshold(project, row, closed=True):
@@ -129,7 +129,7 @@ def adapt_threshold(project, row, closed=True):
     since = [e for e in ledger if e["kind"] == "threshold"]
     last_move_row = since[-1]["row"] if since else 0
     recent = [e.get("serious_fixes", 0) for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed and e["row"] > last_move_row]
-    step, new, why = cfg["review_adapt_step"], None, None
+    step, new, why = 1, None, None
     missed = row not in reviewed and any(e["kind"] == "evidence" and e["type"] == "regression" and e["row"] == row
                                          for e in ledger)
     if missed:
@@ -139,7 +139,7 @@ def adapt_threshold(project, row, closed=True):
     elif closed and len(recent) >= 3 and not any(recent[-3:]):
         new, why = current + step, "three reviews in a row found nothing serious"
     if new is not None:
-        new = min(max(new, cfg["review_floor"]), cfg["review_ceiling"])
+        new = min(max(new, 1), 10)
         if new != current:
             memory.ledger(project, "threshold", row=row, **{"from": current, "to": new, "why": why})
 
@@ -172,11 +172,10 @@ def run_row(project, row, cap, baseline=0.0):
         raise Stop("a fork needs the person: " + "; ".join(field.render(s) for s in forks))
     mapper.build(project)
     lineages = specialists.load(project)
-    assessment = parse_assessment(built["said"])
+    assessment = parse_assessment(built["said"]) or {}
     row_impact = memory.impact(project, number)
-    if assessment and row_impact is not None:
-        # Impact from whoever assigned the row, before the work; confidence from whoever did it, after.
-        assessment.update(impact=row_impact, risk=(10 - assessment["confidence"]) * row_impact)
+    if row_impact is not None:
+        assessment["impact"] = row_impact        # from whoever assigned the row, before the work
     review, why = review_decision(project, start, last, assessment)
     memory.ledger(project, "review", row=number, review=review, why=why, assessment=assessment)
     for wave in range(1, (cfg["waves_per_row"] if review and lineages else 0) + 1):

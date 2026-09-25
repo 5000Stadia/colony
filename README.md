@@ -49,8 +49,9 @@ be in the way. Otherwise, follow these steps in order.
    tools already read it (a manifest, a manuscript folder, a calendar), not in new files.
 6. **The person approves.** They run `colony approve`, or tell you to; it shows what the risky areas
    will cost. Never approve on their behalf.
-7. **Run and report.** `colony run --rows 3 --cap 10` builds the next rows and stops cleanly at the
-   cap, a failing check, or a fork that needs them. After each run, give the person `colony cost` and
+7. **Run and report.** `colony run --rows 3 --cap 10` builds the next rows in the background — closing
+   this session cannot kill it — and stops cleanly at the cap, a failing check, or a fork that needs
+   them. `colony wait` blocks until it stops and says how it went. After each run, give the person `colony cost` and
    point them to `colony page`, where a note left on any row reaches that row's builder. Builders may
    propose rows under `## Proposed rows` in the spine when the work teaches them something; the
    person decides which join the plan.
@@ -76,9 +77,11 @@ each part's evidence and its status.
   project that lost its context at every row. Low → medium effort was the largest single gain found
   (+11 points of judged quality for 75¢).
 - **Review only where it pays.** Critics on well-specified work cost 1.3–2.4× for no measurable gain.
-  Review runs where the spine declares risk, or where a row's impact (set before the work) times the
-  builder's doubt (reported after) crosses the project's rule — which then drifts gently with what
-  reviews actually find. Reviewers are read-only and see the stakes and the builder's doubt first.
+  Review runs where the spine declares risk: a change touching a risky area, or, if the project sets
+  `review_at_impact`, a row whose impact (set before the work) reaches it; that rule then drifts gently
+  with what reviews actually find. The builder's own confidence decides nothing: it was 8 or 9 on all
+  36 rows measured. `colony approve` prints exactly what will and will not be reviewed. Reviewers are
+  read-only and see the stakes and the builder's doubt first.
 - **Memory is off, and stays the person's call.** NOW, reconciliation, narrative history and the map
   in every brief cost 1.7–2.8× without improving results — at fourteen rows, and on a seeded project
   whose docs were cut to one line: fresh builders recovered every rule from code and tests. Colony

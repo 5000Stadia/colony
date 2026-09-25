@@ -13,12 +13,12 @@ DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 2,
             "review_min_lines": None,    # Size alone is not a reason: on a 1000-line one-row build, review
             "review_min_files": None,    # cost 1.3-2.4x and bought nothing measurable (pilots 5, 6). Set
                                          # these to also review large or wide changes.
-            "review_if_risk_at_least": None,  # a standing rule: risk = (10 - builder's confidence) x the row's
-                                              # impact, set by whoever assigned it; e.g. 25. Never shown to builders.
-            "review_adapt": True,        # the threshold drifts with experience: down a step when a review
-            "review_adapt_step": 5,      # finds real problems, up a step after three that find nothing,
-            "review_floor": 5,           # never outside these bounds; every move is in the ledger
-            "review_ceiling": 80,
+            "review_at_impact": None,    # also review every row whose impact (set when it was assigned) is at
+                                         # least this, e.g. 9. Builders' own confidence was 8 or 9 on all 36
+                                         # rows measured, so it does not separate rows; the assigner's stakes do.
+            "review_adapt": True,        # the rule drifts with experience, one step on the 1-10 scale: down
+                                         # after a serious fix or a trusted row that broke a check, up after
+                                         # three reviews with nothing serious; every move is in the ledger
             "checkpoint_every": 5,       # the page says a checkpoint is due after this many rows; never stops a run
             "reconcile": False,          # NOW and history, rewritten at every row close
             "now_max_lines": 25,

@@ -25,7 +25,9 @@ review only where the person has said a mistake would be expensive.
 
 ## Running and reporting
 
-- `colony run --rows N --cap USD` builds the next N rows; it stops for a fork, a failing check, or the cap.
+- `colony run --rows N --cap USD` builds the next N rows in the background, safe from the session
+  closing; it stops for a fork, a failing check, or the cap. `colony wait` blocks until it stops and
+  says how it went.
 - `colony page` serves the project at a glance for the person — what waits on them, the roadmap, the
   history, the cost — with a note box on every row that reaches that row's builder.
 - `colony status` shows the rows, where the project stands and any open signals; `colony cost` shows

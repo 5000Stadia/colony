@@ -5,6 +5,7 @@ located signals and a project memory.
     colony door --goal "..."        draft the spine, specialists and questions from a goal
     colony approve                  the person approves design/spine.md; runs may start
     colony run [--rows N] [--cap USD]
+    colony wait [--timeout S]        block until the run stops, then say how it went
     colony status                   the rows, NOW and the open signals
     colony cost                     dollars and tokens, per row and per agent
     colony calibration              the builder's own forecast beside what review then found
@@ -22,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import clock, field, mapper, memory, specialists
@@ -82,26 +84,107 @@ def cmd_approve(a):
     project.spine.write_text(text)
     memory.ledger(project, "approved", by=os.environ.get("USER", "person"))
     clock.commit(project, "spine approved")
-    risky = memory.risky(project)
-    if risky:
-        # The breadth of the risky areas decides most of a project's cost; say so while it can be changed.
-        print("Every change touching these risky areas will be reviewed: " + ", ".join(risky) + ".\n"
-              "In testing a reviewed row cost 1.3 to 2.4 times an unreviewed one. Keep the list to where\n"
-              "a mistake would really cost you.")
+    print(review_plan(project))
     print("approved; next: colony run")
     return 0
 
 
+def review_plan(project):
+    """Exactly what will be reviewed and what will not, while it can still be changed: the breadth of
+    review decides most of a project's cost, and nobody should have to infer it."""
+    cfg, risky = project.config(), memory.risky(project)
+    rows = [(n, memory.impact(project, n)) for n, _, _ in memory.rows(project)]
+    if cfg["review"] in ("never", "always"):
+        return f"Review is set to {cfg['review']}: {'every' if cfg['review'] == 'always' else 'no'} row will be reviewed."
+    at = cfg.get("review_at_impact")
+    lines = ["Review plan (a reviewed row cost 1.3 to 2.4 times an unreviewed one in testing):"]
+    lines.append("- any change touching " + ", ".join(risky) if risky else "- no risky areas: no change is reviewed for where it lands")
+    if at is not None:
+        lines.append(f"- rows at impact {at} or above, whatever they touch: "
+                     + (", ".join(str(n) for n, i in rows if i is not None and i >= at) or "none yet"))
+    high = [n for n, i in rows if i is not None and i >= 9 and (at is None or i < at)]
+    if high:
+        lines.append(f"- rows {', '.join(map(str, high))} have impact 9 or 10 but are reviewed only where they touch a "
+                     "risky area; to review them regardless, set \"review_at_impact\": 9 in .colony/config.json")
+    return "\n".join(lines)
+
+
+def running(project):
+    """The run in progress, or None: a lock whose process is gone is only a run that was killed."""
+    lock = project.state / "run.json"
+    if not lock.exists():
+        return None
+    run = json.loads(lock.read_text())
+    try:
+        os.kill(run["pid"], 0)
+        return run
+    except OSError:
+        return None
+
+
 def cmd_run(a):
+    """A run belongs to the project, not to the session that started it: it detaches, so closing the
+    session cannot kill a row halfway, and `colony wait` follows it from anywhere."""
     project = Project.here()
+    live = running(project)
+    if live and live["pid"] != os.getpid():
+        print(f"a run is already going (since {live['started']}); `colony wait` follows it")
+        return 0
+    if not a.attached:
+        args = [sys.executable, "-m", "colony", "run", "--attached"]
+        args += (["--rows", str(a.rows)] if a.rows else []) + (["--cap", str(a.cap)] if a.cap else [])
+        home = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ, COLONY_ROOT=str(project.root),
+                   PYTHONPATH=os.pathsep.join(filter(None, [home, os.environ.get("PYTHONPATH")])))
+        with open(project.state / "run.log", "a") as log:
+            subprocess.Popen(args, cwd=project.root, env=env, stdout=log, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        print("running in the background, safe from this session closing. `colony wait` blocks until it "
+              "stops and says how it went; `colony page` shows it live.")
+        return 0
+    lock = project.state / "run.json"
+    lock.write_text(json.dumps({"pid": os.getpid(), "started": time.strftime("%Y-%m-%d %H:%M")}))
+    before = clock.spent(project)
     try:
         n = clock.run(project, max_rows=a.rows, cap=a.cap)
-        print(f"{n} row(s) closed; ${clock.spent(project):.2f} spent in all")
-        return 0
+        stopped = None
     except clock.Stop as stop:
-        memory.ledger(project, "run-stopped", row=memory.next_row(project), reason=str(stop))
-        print(f"stopped: {stop}")
+        n, stopped = None, str(stop)
+        memory.ledger(project, "run-stopped", row=memory.next_row(project), reason=stopped)
+    finally:
+        lock.unlink(missing_ok=True)
+    closed = [e for e in project.read("ledger.jsonl") if e["kind"] == "row-closed"]
+    memory.ledger(project, "run-finished", closed=n if n is not None else None, stopped=stopped,
+                  spent_usd=round(clock.spent(project) - before, 2), last_closed=closed[-1]["row"] if closed else None)
+    print(finished_text(project))
+    return 3 if stopped else 0
+
+
+def finished_text(project):
+    runs = [e for e in project.read("ledger.jsonl") if e["kind"] == "run-finished"]
+    if not runs:
+        return "no run has finished yet"
+    r = runs[-1]
+    head = f"stopped: {r['stopped']}" if r["stopped"] else f"{r['closed']} row(s) closed"
+    return f"{head}\n${r['spent_usd']:.2f} this run; `colony cost` for the detail, `colony page` for the whole picture"
+
+
+def cmd_wait(a):
+    """Block until the run stops, then say how it went."""
+    project = Project.here()
+    deadline = time.time() + a.timeout if a.timeout else None
+    while running(project):
+        if deadline and time.time() > deadline:
+            print("still running; `colony wait` again to keep following it")
+            return 124
+        time.sleep(3)
+    if (project.state / "run.json").exists():
+        (project.state / "run.json").unlink()
+        print(f"the last run was killed before it finished; `colony run` starts again at row {memory.next_row(project)}")
         return 3
+    print(finished_text(project))
+    runs = [e for e in project.read("ledger.jsonl") if e["kind"] == "run-finished"]
+    return 3 if runs and runs[-1]["stopped"] else 0
 
 
 def cmd_status(a):
@@ -139,8 +222,9 @@ def cmd_calibration(a):
     rows = []
     for n in sorted(reviews):
         a_ = reviews[n].get("assessment") or {}
-        rows.append({"row": n, "confidence": a_.get("confidence"), "impact": a_.get("impact"), "risk": a_.get("risk"),
+        rows.append({"row": n, "confidence": a_.get("confidence"), "impact": a_.get("impact"),
                      "reviewed": reviews[n]["review"], "review_fixes": closed.get(n, {}).get("review_fixes"),
+                     "serious_fixes": closed.get(n, {}).get("serious_fixes"),
                      "note": a_.get("note")})
     moves = [e for e in ledger if e["kind"] == "threshold"]
     print(json.dumps({"rows": rows, "threshold_moves": moves}, indent=2))
@@ -212,7 +296,9 @@ def main(argv=None):
     p = sub.add_parser("door"); p.add_argument("--goal", required=True); p.add_argument("--budget", type=float, default=3.0)
     p.set_defaults(fn=cmd_door)
     sub.add_parser("approve").set_defaults(fn=cmd_approve)
-    p = sub.add_parser("run"); p.add_argument("--rows", type=int); p.add_argument("--cap", type=float); p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("run"); p.add_argument("--rows", type=int); p.add_argument("--cap", type=float)
+    p.add_argument("--attached", action="store_true", help="stay in the foreground"); p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("wait"); p.add_argument("--timeout", type=float, help="seconds"); p.set_defaults(fn=cmd_wait)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("cost").set_defaults(fn=cmd_cost)
     sub.add_parser("calibration").set_defaults(fn=cmd_calibration)

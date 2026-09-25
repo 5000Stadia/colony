@@ -88,6 +88,28 @@ class BriefTest(Base):
         self.assertIn("Status: row 3 built.", memory.brief(self.project, (1, "x", "y")))
 
 
+class RunTest(Base):
+    def test_a_run_detaches_and_wait_says_how_it_went(self):
+        self.spine()
+        self.configure(review="never")
+        env = dict(os.environ, COLONY_ROOT=str(self.dir))
+        cli = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], env=env, capture_output=True, text=True)
+        started = cli("run", "--rows", "2")
+        self.assertIn("running in the background", started.stdout)
+        done = cli("wait", "--timeout", "120")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("2 row(s) closed", done.stdout)
+        self.assertFalse((self.project.state / "run.json").exists())
+
+    def test_a_killed_run_is_named_and_the_next_one_can_start(self):
+        self.spine()
+        (self.project.state / "run.json").write_text(json.dumps({"pid": 999999, "started": "then"}))
+        env = dict(os.environ, COLONY_ROOT=str(self.dir))
+        out = subprocess.run([sys.executable, "-m", "colony", "wait"], env=env, capture_output=True, text=True).stdout
+        self.assertIn("killed before it finished", out)
+        self.assertIn("row 1", out)
+
+
 class ProposedTest(Base):
     def test_proposed_rows_wait_for_the_person(self):
         self.spine()
@@ -366,46 +388,43 @@ class AssessmentTest(Base):
             "| 1 | Write the first line | work.txt exists |", f"| 1 | Write the first line | work.txt exists | {impact} |")
         self.project.spine.write_text(text)
 
-    def test_the_assigners_impact_times_the_builders_doubt_triggers_review(self):
+    def test_a_row_at_the_impact_rule_is_reviewed(self):
         self.spine_with_impact(8)
-        self.configure(review="auto", review_if_risk_at_least=25)
-        os.environ["FAKE_ASSESS"] = "confidence 5/10 — the tax path is uncertain"
+        self.configure(review="auto", review_at_impact=8)
+        os.environ["FAKE_ASSESS"] = "confidence 9/10 — the tax path is uncertain"
         clock.run(self.project, max_rows=1)
         d = self.decision()
         self.assertTrue(d["review"])
-        self.assertEqual((d["assessment"]["impact"], d["assessment"]["risk"]), (8, 40))
-        self.assertIn("set when it was assigned", d["why"])
+        self.assertEqual((d["assessment"]["impact"], d["assessment"]["confidence"]), (8, 9))
+        self.assertIn("set when the row was assigned", d["why"])
 
     def test_doubt_on_harmless_work_is_trusted(self):
         self.spine_with_impact(2)
-        self.configure(review="auto", review_if_risk_at_least=25)
+        self.configure(review="auto", review_at_impact=8)
         os.environ["FAKE_ASSESS"] = "confidence 4/10 — unsure about wording in help text"
         clock.run(self.project, max_rows=1)
-        d = self.decision()
-        self.assertFalse(d["review"])
-        self.assertEqual(d["assessment"]["risk"], 12)
+        self.assertFalse(self.decision()["review"], "the builder's doubt is recorded, not a trigger")
 
     def test_a_row_without_impact_is_not_ruled_on(self):
         self.spine()
-        self.configure(review="auto", review_if_risk_at_least=1)
+        self.configure(review="auto", review_at_impact=1)
         os.environ["FAKE_ASSESS"] = "confidence 1/10 — no idea"
         clock.run(self.project, max_rows=1)
         d = self.decision()
         self.assertFalse(d["review"])
-        self.assertNotIn("risk", d["assessment"])
+        self.assertNotIn("impact", d["assessment"])
 
     def test_the_builder_sees_the_stakes_but_never_the_rule(self):
         # Knowing a row's impact makes a builder careful; knowing the threshold would let it shade its
         # confidence to stay under it.
         self.spine_with_impact(8)
-        self.configure(review="auto", review_if_risk_at_least=25)
+        self.configure(review="auto", review_at_impact=9)
         clock.run(self.project, max_rows=1)
         argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["builder"][0]
         prompt = argv[argv.index("-p") + 1]
         self.assertIn("ASSESSMENT: confidence", prompt)
         self.assertIn("| 8 |", prompt)
-        self.assertNotIn("review_if", prompt)
-        self.assertNotIn("25", prompt)
+        self.assertNotIn("review_at", prompt)
 
     def test_calibration_sets_the_forecast_beside_what_review_found(self):
         self.spine_with_impact(6)
@@ -415,7 +434,7 @@ class AssessmentTest(Base):
         out = json.loads(subprocess.run([sys.executable, "-m", "colony", "calibration"], env=env,
                                         capture_output=True, text=True).stdout)
         [row] = out["rows"]
-        self.assertEqual((row["confidence"], row["impact"], row["risk"], row["reviewed"]), (5, 6, 30, True))
+        self.assertEqual((row["confidence"], row["impact"], row["reviewed"]), (5, 6, True))
         self.assertGreaterEqual(row["review_fixes"], 1)
 
 
@@ -446,15 +465,13 @@ class AdaptTest(Base):
 
     def test_a_review_that_finds_problems_lowers_the_threshold(self):
         self.spine_rows(1, impact=8)
-        self.configure(review="auto", review_if_risk_at_least=30)
-        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"      # risk 40: reviewed; the fake reviewers find holes
+        self.configure(review="auto", review_at_impact=8)             # reviewed; the fake reviewers find holes
         clock.run(self.project, max_rows=1)
-        self.assertEqual(self.moves(), [(30, 25)])
+        self.assertEqual(self.moves(), [(8, 7)])
 
     def test_one_reviewers_fixed_major_is_not_enough_to_lower_it(self):
         self.spine_rows(1, impact=8)
-        self.configure(review="auto", review_if_risk_at_least=30)
-        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"
+        self.configure(review="auto", review_at_impact=8)
         for f in self.project.specialists.glob("*.md"):
             f.unlink()
         specialists.write(self.project, "solo", "Look for holes.")
@@ -466,24 +483,22 @@ class AdaptTest(Base):
     def test_a_trusted_row_that_breaks_a_check_lowers_the_threshold(self):
         self.spine_rows(2, impact=2)
         self.project.spine.write_text(self.project.spine.read_text().replace("test -f work.txt", "test ! -f broken.txt"))
-        self.configure(review="auto", review_if_risk_at_least=30)
-        os.environ["FAKE_ASSESS"] = "confidence 9/10 — simple"       # risk 2: trusted without review
+        self.configure(review="auto", review_at_impact=8)             # impact 2: trusted without review
         os.environ["FAKE_BREAK_ROW"] = "2"
         with self.assertRaises(clock.Stop):
             clock.run(self.project, max_rows=2)
-        self.assertEqual(self.moves(), [(30, 25)], "a miss review skipped counts at once, like a finding")
+        self.assertEqual(self.moves(), [(8, 7)], "a miss review skipped counts at once, like a finding")
 
     def test_reviews_that_find_nothing_raise_it_and_the_bounds_hold(self):
-        self.spine_rows(4, impact=9)
-        self.configure(review="auto", review_if_risk_at_least=10, review_ceiling=12, waves_per_row=1)
-        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"
+        self.spine_rows(7, impact=10)
+        self.configure(review="auto", review_at_impact=9, waves_per_row=1)
         for f in self.project.specialists.glob("*.md"):
             f.unlink()
         specialists.write(self.project, "quiet", "Look, but this fake finds nothing.")
-        clock.run(self.project, max_rows=4)
-        self.assertEqual(self.moves(), [(10, 12)], "three empty reviews move it one step, capped at the ceiling")
+        clock.run(self.project, max_rows=7)
+        self.assertEqual(self.moves(), [(9, 10)], "three empty reviews move it one step, and never past 10")
         [last] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "review"][-1:]
-        self.assertIn("review at 12", last["why"])
+        self.assertIn("review at 10", last["why"])
 
 
 class PageTest(Base):
@@ -584,7 +599,7 @@ class HealthTest(Base):
         (self.dir / "broken.txt").write_text("x")
         env = dict(os.environ, COLONY_ROOT=str(self.dir))
         colony = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], env=env, capture_output=True, text=True).stdout
-        colony("run"); colony("run")
+        colony("run", "--attached"); colony("run", "--attached")
         out = colony("checkpoint")
         self.assertIn("`row-stuck` — Row 1 has stopped 2 times", out)
         self.assertEqual([q["kind"] for q in memory.open_questions(self.project)], ["row-stuck"])
@@ -592,7 +607,7 @@ class HealthTest(Base):
         self.assertEqual(memory.open_questions(self.project), [])
         self.assertIn("On `row-stuck`: split it and carry on", " ".join(n["text"] for n in memory.waiting_notes(self.project, 1)))
         self.assertEqual(memory.rules(self.project), {"row-stuck": "split it and carry on"})
-        colony("run"); colony("run")
+        colony("run", "--attached"); colony("run", "--attached")
         out = colony("checkpoint")
         self.assertIn("## Settled by your rules\n- `row-stuck` — split it and carry on", out)
         self.assertNotIn("`row-stuck` — Row", out)

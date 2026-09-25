@@ -131,6 +131,11 @@ def render(project):
                    "<label class='who'><input type='checkbox' name='always' value='1'> handle it this way from now on</label>"
                    "<button>Answer</button></form></div>")
     out.append("<h2>Now</h2>")
+    from .cli import running
+    live = running(project)
+    if live:
+        out.append(f"<div class='card'><b>Running</b> since {e(live['started'])} — row {e(memory.next_row(project))}. "
+                   "Refresh to follow it.</div>")
     for f in m["forks"]:
         out.append(f"<div class='card fork'><b>Waiting on you</b> — row {e(f['row'])}: {e(' | '.join(f['notes']))}</div>")
     for s in m["stops"]:
@@ -171,7 +176,7 @@ def render(project):
         a = rv.get("assessment") or {}
         facts = [f"{h['at']} · <code>{e(h['sha'])}</code>", f"${sum(cost.values()):.2f}"]
         if a.get("confidence") is not None:
-            facts.append(f"confidence {a['confidence']}/10" + (f" · risk {a['risk']}" if a.get("risk") is not None else ""))
+            facts.append(f"confidence {a['confidence']}/10" + (f" · impact {a['impact']}" if a.get("impact") is not None else ""))
         facts.append(("reviewed — " + e(rv.get("why", ""))) if rv.get("review") else "trusted")
         if cl.get("review_fixes"):
             facts.append(f"review fixed {cl['review_fixes']}")
