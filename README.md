@@ -85,7 +85,10 @@ the next session's start.
 
 Each project's Console tab is its own Claude Code session, running in tmux: switch projects in the
 sidebar and each session keeps going; close the browser and it keeps going; `tmux attach -t board-…`
-reaches the same session from a terminal.
+reaches the same session from a terminal. The sidebar shows each session's state (working, needs you,
+idle) and its latest line; the Overview opens with a peek at the last few lines. The state is read
+off the screen ("esc to interrupt" while working, a numbered choice when asking), so a change in Claude
+Code's wording could mislabel it; the lines shown are always the real ones.
 
 The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
 what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude

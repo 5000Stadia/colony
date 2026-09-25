@@ -188,7 +188,41 @@ class ConsoleTest(BoardBase):
         s.close()
         time.sleep(0.5)
         self.assertTrue(console.live(self.root), "closing the browser detaches; the session keeps running")
-        self.assertIn("class='live'", board.sidebar(board.registry(), 0))
+        self.assertIn("sdot idle", board.sidebar(board.registry(), 0))
+
+
+class GlanceTest(BoardBase):
+    def tearDown(self):
+        console.stop(self.root)
+        super().tearDown()
+
+    def test_the_status_is_read_off_the_screen(self):
+        self.assertEqual(console.classify("✻ Reading files… (esc to interrupt)"), "working")
+        self.assertEqual(console.classify("Do you want to make this edit?\n❯ 1. Yes"), "needs you")
+        self.assertEqual(console.classify("│ > │"), "idle")
+
+    def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
+        board.track(self.root)
+        console.COMMAND = "sh -c 'echo first line; echo second line; echo esc to interrupt; sleep 30'"
+        console.ensure(self.root)
+        time.sleep(1)
+        snap = console.snapshot(self.root)
+        self.assertEqual(snap["state"], "working")
+        self.assertIn("second line", snap["lines"])
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+            [s] = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/status").read())
+            self.assertEqual(s["state"], "working")
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
+            self.assertIn("id='peek-0'", page)
+            self.assertIn("second line", page)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        console.stop(self.root)
+        self.assertEqual(console.snapshot(self.root)["state"], "off")
 
 
 if __name__ == "__main__":

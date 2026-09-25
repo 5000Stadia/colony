@@ -47,6 +47,32 @@ def stop(root):
     subprocess.run(["tmux", "kill-session", "-t", session_name(root)], capture_output=True)
 
 
+# ---------------------------------------------------------------- a glance at a session without opening it
+
+BORDER = re.compile(r"^[\s│|╭╮╰╯─━┃┏┓┗┛]+|[\s│|╭╮╰╯─━┃┏┓┗┛]+$")
+
+
+def classify(screen):
+    """What the session is doing, read off its screen. Claude Code shows "esc to interrupt" while it works
+    and a numbered choice when it asks permission; anything else is waiting for the person to type."""
+    low = screen.lower()
+    if "esc to interrupt" in low:
+        return "working"
+    if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
+        return "needs you"
+    return "idle"
+
+
+def snapshot(root, lines=6):
+    if not live(root):
+        return {"state": "off", "lines": []}
+    screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", session_name(root)], capture_output=True,
+                            text=True).stdout
+    shown = [BORDER.sub("", l) for l in screen.splitlines()]
+    shown = [l for l in shown if l.strip()]
+    return {"state": classify(screen), "lines": shown[-lines:]}
+
+
 # ---------------------------------------------------------------- a minimal WebSocket (RFC 6455)
 
 def accept(key):

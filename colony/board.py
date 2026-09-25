@@ -309,15 +309,39 @@ def sidebar(reg, pid):
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
         badge = (f"<span class='badge gate'>{waiting}</span>" if waiting else "") + \
                 (f"<span class='badge new'>{new} new</span>" if new else "")
-        dot = "<span class='live' title='console session running'></span>" if p.exists() and console.live(p) else ""
-        side.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'>{dot}{e(p.name)}{badge}</a>")
+        snap = console.snapshot(p, lines=1) if p.exists() else {"state": "off", "lines": []}
+        last = snap["lines"][-1] if snap["lines"] else ""
+        side.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'><span class='pname'>"
+                    f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
+                    f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
+                    f"{' · ' + e(last) if last else ''}</span></a>")
     return "".join(side) or "<p class=muted>No projects yet: run <code>colony track</code> in one.</p>"
 
 
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}</script></body></html>")
+
+
+# Every few seconds: each project's status in the sidebar, and the peek strip if this page has one.
+POLL = """
+async function poll() {
+  try {
+    const r = await fetch('/status', {cache: 'no-store'}); const all = await r.json();
+    all.forEach((s, i) => {
+      const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
+      if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
+      if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
+      const peek = document.getElementById('peek-' + i);
+      if (peek) { peek.hidden = s.state === 'off';
+        document.getElementById('peek-state-' + i).textContent = s.state;
+        document.getElementById('peek-lines-' + i).textContent = s.lines.join('\\n'); }
+    });
+  } catch (e) {}
+}
+setInterval(poll, 2500);
+"""
 
 
 def tabs(pid, view):
@@ -342,6 +366,10 @@ def render(reg, pid, view="overview"):
     done = sum(1 for m in road["milestones"] for i in m["items"] if i["state"] == "done")
     total = sum(len(m["items"]) for m in road["milestones"])
     out.append(f"<header><h1>{e(root.name)}</h1>{tabs(pid, view)}<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
+    snap = console.snapshot(root)
+    out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
+               f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
+               f"<pre id='peek-lines-{pid}'>{e(chr(10).join(snap['lines']))}</pre></a>")
     # since you were last here
     s = since(root, reg["seen"].get(str(root)))
     out.append("<h2>Since you were last here</h2><div class='card'>")
@@ -530,6 +558,15 @@ class Handler(BaseHTTPRequestHandler):
         pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(reg["projects"]) - 1, 0))
         if url.path == "/":
             return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
+        if url.path == "/status":
+            body = json.dumps([console.snapshot(Path(p)) if Path(p).exists() else {"state": "off", "lines": []}
+                               for p in reg["projects"]]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(body)
         if url.path == "/console/ws" and reg["projects"]:
             return self._console(Path(reg["projects"][pid]), (q.get("t") or [""])[0])
         if url.path == "/item" and reg["projects"]:
@@ -605,7 +642,15 @@ ul { margin:0; padding-left:18px } li { margin:3px 0 }
 main.wide { max-width:none } header.slim { display:flex; align-items:center; gap:18px } header.slim h1 { margin:10px 0 }
 .tabs { display:flex; gap:4px; margin:6px 0 10px } .tabs a { padding:4px 12px; border-radius:7px; color:var(--muted); text-decoration:none }
 .tabs a.on { background:var(--sunk); color:var(--ink); font-weight:600 }
-.live { width:8px; height:8px; border-radius:50%; background:var(--accent); flex:none }
+nav .proj { flex-direction:column; align-items:stretch; gap:1px } .pname { display:flex; align-items:center; gap:6px }
+.sline { font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:14px }
+.sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
+.sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
+.sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }
+@keyframes pulse { 50% { opacity:.35 } }
+.peek { display:block; margin:0 0 16px; padding:10px 14px; border-radius:10px; background:#16171a; color:#d7d4ce; text-decoration:none }
+.peek[hidden] { display:none } .peek-head { font-size:12px; color:#9a9791 } .peek-head b { color:#7fb5a2 }
+.peek pre { margin:6px 0 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; max-height:9em; overflow:hidden }
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
