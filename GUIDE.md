@@ -25,12 +25,11 @@
 - Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
 
 ## Review
-- On a complex build, the defects that slip through are rarely misreadings of the spec. They are damaged data, hostile input, docs that fail a newcomer, and tests with holes. Where damaged data or hostile input would matter, have a separate agent try to break it (hand-edit its files, feed it odd input) and use it cold from its docs. In testing this removed nearly all such defects at about twice the build's cost. On a long project that usually pays: bugs that slip through compound as later work builds on them, and are found later by someone without the context. On a one-off, weigh it.
-- Your own tests share your understanding: if you misread the spec, they pass anyway. Where the spec itself is long, subtle or ambiguous, also have a separate agent write tests from the spec alone, without seeing the implementation.
-- Review when an uncaught bug is plausible and costly: a change too large to hold at once, new territory, a doubt you can name, a mistake that has escaped before; a miss that would be silent, hard to undo, or built on.
+- Ask of each piece of work: if a few bugs or inaccuracies are in this, will they hurt the project going forward? Chapter 2 of a book: no. A load-bearing rebuild of a core system: yes.
+- Where yes, have a separate agent try to break it (hand-edit its files, feed it odd input) and use it cold from its docs. What slips past a strong builder is rarely a misreading of the spec; it is damaged data, hostile input, docs that fail a newcomer, tests with holes. In testing this review removed nearly all such defects at about twice the build's cost, which is cheap next to fixing what later work was built on.
+- Your own tests share your understanding: if you misread the spec, they pass anyway. Where the spec itself is long, subtle or ambiguous, also have a separate agent write tests from the spec alone.
 - For what tests can't express (prose, design, a document leaving the person's hands), use a reader who meets it as its recipient will. The reviewer reads, never edits, and sees the stakes and your doubts first.
 - One reviewer always finds something "major". Act on critical findings and on ones two reviewers found independently.
-- Review more where bugs escape; less where reviews keep finding nothing serious.
 
 ## As the project grows
 Reach for these only when the symptom appears; the agent won't set them up on its own.
