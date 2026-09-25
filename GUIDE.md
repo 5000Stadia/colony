@@ -13,19 +13,18 @@
 
 ## Building
 - **Start with one agent in one continuing session.** It does as well as handing each step to a fresh agent, and costs less.
-- **The project is the memory.** Keep the docs current in the same change and hold rules in tests. Status pages and reconciled histories add cost, not quality.
+- **The project is the memory.** Don't keep a separate status page or history: the code, tests and docs carry it. Extra memory layers added cost, not quality.
 - **When you fix a mistake that could come back,** add a line to the project's conventions as well as the test, so later sessions know.
 - **Settle any wording that can be read two ways.** State your reading or ask. This is the most common cause of misses.
 - **Make small calls yourself and say which ones you made.** Ask when a decision is costly to undo or when an action leaves the person's hands.
 - **Judge stakes by consequence and reversibility,** never by subject.
 - **If the work shows the plan or the horizon is wrong, say so with the reason.** How to do a step is your call. Changes to scope, order or milestones are the person's. Raise a milestone that looks wrong as soon as you see it, because that's where rebuilds come from.
 - **Every safeguard and extra layer is code that later changes must work around.** The most defensive version cost about twice as much to change. Add guards where a failure would matter, not everywhere.
-- Report the cost with every result. Ask before going over what the person set.
+- Report the cost with every result.
 
 ## Adding agents
 - **Hand isolated work to subagents** — search, research, bulk reading — and have them return conclusions. That keeps the main context for judgement, and is good.
-- **Every other added agent costs overhead.** Reviewers, memory keepers, co-builders and parallel workers often cost 1.2–5× the tokens. Each one must justify that cost.
-- **Agents added only to check, remember or co-build one agent's well-specified work don't earn their cost.**
+- **Every other added agent often costs 1.2–5× the tokens and must justify it.** Agents added only to check, remember or co-build one agent's well-specified work didn't.
 - **More agents belong where the work really exceeds one agent:** truly parallel domains, or scale beyond one context.
 
 ## Briefing subagents
@@ -45,7 +44,7 @@ Use these when the symptom appears, not before. Each needs deliberate setup; an 
 - The agent defends an approach that failed → take the next step in a fresh session that has only the plan and the repo.
 - The work must run unattended → use a driver that feeds in steps, detaches, and stops on a failing check or a cost cap.
 - The same mistake keeps coming back → use a reviewer that keeps lessons from its serious findings.
-- Several agents work in one place → give them scoped names and one owner per area.
+- Several agents work in one place → one owner per area.
 - One area outgrows one context → give it its own lane once the strain recurs.
 - Cost is spread across sessions → keep a per-step ledger.
 - The person steers without being in the conversation → keep a page of the plan, history and cost, with notes for each step.
@@ -57,7 +56,6 @@ Use these when the symptom appears, not before. Each needs deliberate setup; an 
 - Test each line: would a strong model do worse without it? If not, cut it.
 - Judgement belongs to the model; plumbing belongs to code. Base triggers on counts over records at boundaries, never on an agent's opinion. Keep the machinery out of the worker's view.
 - Any gauge puts quality before cost: a wrong result should set it off at least as fast as an empty result does.
-- When the person turns something off, it stays off.
 - Churn that isn't about the work itself means the workflow is wrong. Fix the architecture.
 
 ## Safety
