@@ -30,9 +30,10 @@ strong its evidence is. Read it once at the start of a project; it is not a rule
    co-build lost on value every time they were tested: a group of standing agents cost 5× for a
    blind-judged win on one run; a critic on work built to a full spec cost 1.2–1.7× for no measurable
    gain (pilots 5 and 6, three runs each); verifying its fixes stayed inside the noise. Handing a
-   self-contained task — a broad search, research, bulk reading — to a named subagent that returns only
-   its conclusion is a different thing and plainly good: it keeps the main context for the judgement
-   that needs it.
+   self-contained task — a broad search, research, bulk reading — to a subagent that returns only its
+   conclusion is a different thing and plainly good: it keeps the main context for the judgement that
+   needs it. Name each one for its role, scope and lifetime (see *Delegating to subagents*): that is
+   where the naming result applies most.
 5. **A plain continuing session is enough.** Given one step after another, a single session matched
    a harness that started a fresh agent every step — 86.3 against 86 of 87 hidden tests — at 0.74× the
    cost (three runs; 14 steps). Beyond a few dozen steps and repeated compaction, untested.
