@@ -56,6 +56,22 @@ strong its evidence is. Read it once at the start of a project; it is not a rule
 13. **If you review:** the reviewer reads, never edits; it sees first what is at stake and what the
     builder is least sure of; a finding two reviewers made independently is more likely real.
 
+## Delegating to subagents
+
+A main agent at medium effort handing work to subagents:
+
+- **Open every subagent's prompt with a name that carries its role, scope and lifetime** —
+  `searcher · src/billing · this task only`, `reviewer · the export change · reads, never edits`. The
+  naming result above (16 of 16 runs) is exactly this situation: a delegate told who it is and what it
+  owns stayed inside it and reported what lay outside. It costs nothing.
+- **Chores can go cheap; judgement cannot.** Small, clear doing — fetch, rename, run the tests and
+  report, a one-file change — went well at low effort ($0.18–0.47 a task in the naming and gap tests).
+  Looking and deciding did not: low-effort critics barely looked (≈30 s, no fixes, pilot 5). Send a
+  subagent that must find problems or make a call at the main agent's effort. In Claude Code a main
+  agent usually chooses a subagent's model rather than its effort; which cheap route serves chores
+  better — a smaller model or low effort — is untested.
+- **Give it only what its task needs,** and have it return the answer, not the file dumps.
+
 ## Shape
 
 14. **Robustness bought with code has a price later.** The most heavily guarded product cost about
