@@ -72,7 +72,8 @@ ask another project's agent rather than guess at what it exports. Nothing extra 
 when it is added or created and changeable from its Overview; blank keeps the global setting. The
 provider is the CLI that runs the project's agent. Claude Code is the only one wired today; another joins
 by adding an entry to `colony/providers.py`, which says how to start it, how to wire a project for it and
-how to read its screen.
+how to read its screen. The few places elsewhere that still assume Claude Code (the startup check, Remote
+Control, the monitor, the unattended runtime) are marked `PROVIDER:` in the code with what each needs.
 
 If the board's port is taken by another program, colony uses the next free one; `colony urls` shows where.
 

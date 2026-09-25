@@ -1,6 +1,23 @@
 """Who runs a project's agent. Each provider says how to start its CLI, how to wire a project so the agent
 knows the colony and gets its notes and mail, and how to read its screen. Only Claude Code is here; another
 CLI joins by adding an entry to PROVIDERS, and the board, settings and forms offer it from then on.
+
+PROVIDER: for an agent adding another CLI (Codex or any other). Everything outside this file that still
+assumes Claude Code is marked with a `PROVIDER:` comment; `grep -rn "PROVIDER:" .` lists them, each saying
+what it assumes and what a second provider needs there. What a provider supplies here:
+  label, models, efforts   shown in the add/create forms and settings (suggestions; any value can be typed)
+  command(label, s)        the shell command that starts its interactive agent with the settings in `s`:
+                           provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off).
+                           Map each to the CLI's own flags, and ignore any it has no equivalent for.
+  wire(root, protocol)     put the colony protocol where the CLI reads project instructions (AGENTS.md for
+                           Codex) and arrange for `colony notes --deliver` output to reach the agent: at
+                           session start (`--session`) and before each turn the person or the board types.
+                           Without a hook system, the protocol can ask the agent to run it itself, weaker.
+  wired(root)              whether wire() has been done (the doctor asks)
+  classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
+                           monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
+The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
+.board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
 import json
 import shlex
@@ -12,6 +29,7 @@ class ClaudeCode:
     models = ["fable", "opus", "sonnet", "haiku"]          # aliases for the latest of each; full names work too
     efforts = ["low", "medium", "high", "xhigh", "max"]
     # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
+    # SessionStart gives the backlog at start; UserPromptSubmit gives what is new before every turn.
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver"}
 
     def command(self, label, s):

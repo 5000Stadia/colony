@@ -1,5 +1,10 @@
 """The monitor: one Claude Code session that acts for the person across all their projects.
 
+PROVIDER: the monitor is Claude Code whatever the projects use: its role is written to CLAUDE.md, it is
+reached from the Claude app, and its console is labelled so. To let another provider run it, add a
+"monitor provider" setting and have ensure() go through providers (wire the role into that CLI's
+instructions file, start it with that provider's command()).
+
 It never watches anything itself. A watcher in the board process reads each project's screen every few
 seconds (no tokens) and wakes the monitor only when a project changes to something the person would want
 to know: it needs input, it finished a turn, or it opened a gate. While projects work, the monitor
@@ -52,6 +57,9 @@ Its source is `{source}` (a git repository; its `GUIDE.md` is how work is done t
 - Fix bugs yourself: change the code, run `python3 -m unittest tests.test_colony tests.test_board` in
   the source, then `colony restart` (project consoles and you keep running). Commit each fix locally
   with a clear message; ask the person before pushing it anywhere.
+- Keep what you build provider-agnostic: files in .board/, the `colony` command, text typed into a
+  session. Where something can only work with Claude Code, put it behind colony/providers.py or mark it
+  with a `PROVIDER:` comment saying what another provider would need there.
 - Improvements are the person's call: propose them with the reason and what they would cost, and build
   one only once they agree. Try it against the plain setup first; add nothing that doesn't earn its place.
 """

@@ -37,7 +37,7 @@ class Project:
     @property
     def specialists(self):
         # Claude Code's own subagent folder: the project's reviewers are also subagents the person can
-        # call in any interactive session.
+        # call in any interactive session. PROVIDER: Claude Code only; see colony/claude.py.
         return self.root / ".claude" / "agents"
 
     def config(self):

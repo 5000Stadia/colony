@@ -1,4 +1,9 @@
-"""One headless Claude Code call: launched clean, metered, and patient with usage limits."""
+"""One headless Claude Code call: launched clean, metered, and patient with usage limits.
+
+PROVIDER: the unattended runtime (colony run, the clock, reviewers in .claude/agents, the meter reading
+Claude Code's JSON cost report) is Claude Code only and separate from the board's providers. Another
+provider needs its own call() with the same record (cost, tokens, result) before it can run rows.
+"""
 import json
 import os
 import re

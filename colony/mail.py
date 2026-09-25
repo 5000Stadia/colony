@@ -5,6 +5,8 @@ and copied to the sender's, so each project holds its own conversation. It reach
 agent through the board's hooks on its next turn; if that session is idle or not running, the watcher
 wakes it. `--ask` marks a message that expects an answer; `colony reply` answers it. `--urgent` is typed
 in even while the recipient is mid-turn (Claude Code queues it); otherwise mail waits for the turn to end.
+Mail itself is provider-agnostic: files and the `colony` command. PROVIDER: only the mid-turn typing assumes
+Claude Code (see console.type_into).
 """
 import secrets
 import sys

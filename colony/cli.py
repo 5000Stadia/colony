@@ -403,6 +403,7 @@ def cmd_urls(a):
     if not lan:
         print("From your network:    off (colony settings lan on, then colony restart)")
     if board.registry()["settings"]["remote"]:
+        # PROVIDER: Remote Control and the Claude app are Claude Code's; name each provider's own way here.
         print("From anywhere:        the Claude app, where each project's session and the monitor appear")
     return 0
 
@@ -486,6 +487,7 @@ def cmd_notes(a):
     if not (root / ".board").exists():
         return 0                                  # not on the board: the hooks stay silent
     if a.deliver:
+        # Printed for the provider to put in the agent's context: Claude Code's hooks do (providers.py wire()).
         from . import mail
         fresh, still = board.deliver(root, session=a.session)
         new_mail, open_asks = mail.deliver(root, session=a.session)

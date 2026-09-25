@@ -20,7 +20,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import console
+from . import console, providers
 
 MILESTONE = re.compile(r"^##\s+(M\d+)\s*[—–-]+\s*(.+?)\s*$")
 ITEM = re.compile(r"^\s*-\s*\[( |x|X|~)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
@@ -86,9 +86,14 @@ def registry():
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
                     "permissions": "ask"}
+# PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
+# Another provider maps the same keys to its own approval flags in its command(); move this map into
+# ClaudeCode then, and keep only the keys here.
 PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
     "provider": "which CLI runs new projects' agents (colony knows: claude)",
+    # PROVIDER: Remote Control is Claude Code's. Another provider maps "remote" to its own way of reaching a
+    # session from elsewhere in its command(), or ignores it; say which in this help and in the forms.
     "remote": "new consoles start with Remote Control, reachable from the Claude app",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
@@ -501,7 +506,7 @@ def render(reg, pid, view="overview"):
                    f"<textarea name='text' placeholder='{e(root.name)}’s agent writes the message itself, with its own context'></textarea></label>"
                    f"<button>Have {e(root.name)} send it</button></form></details>") if others else ""
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
-                     + console.PAGE.format(path=e(root), name=e(console.session_name(root)), pid=pid, token=console.TOKEN),
+                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.TOKEN),
                      wide=True)
     root = plist[pid]
     road, gs = roadmap(root), gates(root)
@@ -691,6 +696,9 @@ def suggestions(name, values):
 def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
     with the provider's own suggestions."""
+    # PROVIDER: the model and effort suggestions are those of the provider shown first, fixed when the page is
+    # drawn. With two providers, swap the datalists when the select changes (a few lines of script), and let
+    # permissions and Remote Control say when the chosen provider has no equivalent.
     from .providers import PROVIDERS, get
     p = get(cur)
     return (f"<label>Provider <select name='provider'>"
@@ -710,6 +718,7 @@ def project_settings_form(pid, own, action="/project-settings"):
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
             f"<label>Permissions {opt('permissions', [('', 'global'), ('ask', 'ask each time'), ('edits', 'accept edits'), ('all', 'allow everything'), ('plan', 'plan only')], own.get('permissions', ''))}</label>"
+            # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
             f"<label>Remote Control {opt('remote', [('', 'global'), ('on', 'on'), ('off', 'off')], remote)}</label>"
             f"<button>Save</button></form>")
 
@@ -758,6 +767,7 @@ def settings_page(reg):
     s = reg["settings"]
     check = lambda k: " checked" if s[k] else ""
     options = (f"<form method='post' action='/options' class='options'>"
+               # PROVIDER: Remote Control and the Claude app are Claude Code's; see SETTING_HELP["remote"].
                f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
                f"<span class='muted'>(reach them from the Claude app)</span></label>"
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
@@ -851,7 +861,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
                     f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
                     f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
-                    f"</span></header>" + console.PAGE.format(path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.TOKEN))
+                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.TOKEN))
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor

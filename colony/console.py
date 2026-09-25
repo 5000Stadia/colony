@@ -1,4 +1,4 @@
-"""The console: each project's own Claude Code session, live in the board.
+"""The console: each project's own agent session (its provider's CLI, Claude Code today), live in the board.
 
 Each project's session runs in tmux (`board-<name>`), so it keeps running when the browser closes or the
 board restarts, and the person can attach from a terminal too (`tmux attach -t board-<name>`). The board
@@ -21,9 +21,9 @@ import termios
 from pathlib import Path
 
 TOKEN = secrets.token_urlsafe(24)          # made fresh each time the board starts
-# Every session starts with Remote Control, named for its project, so the person can reach it from the
-# Claude app anywhere; an idle session costs nothing.
-COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace claude (tests, demos)
+# How a session starts is its provider's (colony/providers.py): with Claude Code, Remote Control named for the
+# project, so the person can reach it from the Claude app anywhere; an idle session costs nothing.
+COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the provider's CLI (tests, demos)
 
 
 def command(label, root=None):
@@ -46,7 +46,7 @@ def live(root):
 
 
 def ensure(root, name=None, label=None):
-    """Start the session if it is not running: the person's own `claude`, in the project, remote-enabled."""
+    """Start the session if it is not running: the provider's CLI, in the project, as its settings say."""
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50",
@@ -58,6 +58,9 @@ def ensure(root, name=None, label=None):
 
 def type_into(name, text):
     """Type a message into a session and send it, as if the person had."""
+    # PROVIDER: this is how the board and the monitor reach an agent, and it relies on the CLI taking typed
+    # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
+    # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
     subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
     subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
 
@@ -164,7 +167,7 @@ def bridge(sock, root, name=None, label=None):
 
 
 PAGE = """
-<div class='console-bar'><span class='muted'>Claude Code in <code>{path}</code> · session <code>{name}</code>
+<div class='console-bar'><span class='muted'>{label} in <code>{path}</code> · session <code>{name}</code>
  (also reachable with <code>tmux attach -t {name}</code>)</span>
  <form method='post' action='/console/stop' onsubmit="return confirm('End this project\\'s session?')">
  <input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=console'>
