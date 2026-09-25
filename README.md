@@ -68,8 +68,13 @@ Next to a project's console, "Message another project" lists the others: you say
 should be about and that project's agent writes and sends it with its own context. Agents also know to
 ask another project's agent rather than guess at what it exports. Nothing extra to install.
 
-**Each project has its own settings** (permissions, Remote Control, model, effort), chosen when it is
-added or created and changeable from its Overview; blank keeps the global setting.
+**Each project has its own settings** (provider, model, effort, permissions, Remote Control), chosen
+when it is added or created and changeable from its Overview; blank keeps the global setting. The
+provider is the CLI that runs the project's agent. Claude Code is the only one wired today; another joins
+by adding an entry to `colony/providers.py`, which says how to start it, how to wire a project for it and
+how to read its screen.
+
+If the board's port is taken by another program, colony uses the next free one; `colony urls` shows where.
 
 The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
 from the board's console or the app.

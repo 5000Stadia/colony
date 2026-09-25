@@ -374,15 +374,12 @@ def cmd_board(a):
     if subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode == 0:
         print("the board is already running (colony urls shows where; colony restart reloads it)")
         return 0
-    if a.port is None:
-        # The port it had last time, else 8790; if another program holds it, the next free one.
-        old = json.loads(saved.read_text()) if saved.exists() else []
-        a.port = int(old[old.index("--port") + 1]) if "--port" in old else 8790
-        a.port = next(p for p in range(a.port, a.port + 50) if _free(p, _lan(a)))
-    elif not _free(a.port, _lan(a)):
-        print(f"colony: port {a.port} is taken by another program; choose another with --port, "
-              f"or leave it out and colony finds a free one", file=sys.stderr)
-        return 1
+    # The port asked for, else the one it had last time, else 8790; if another program holds it, the next free one.
+    old = json.loads(saved.read_text()) if saved.exists() else []
+    wanted = a.port or (int(old[old.index("--port") + 1]) if "--port" in old else 8790)
+    a.port = next(p for p in range(wanted, wanted + 100) if _free(p, _lan(a)))
+    if a.port != wanted:
+        print(f"port {wanted} is taken by another program; using {a.port}")
     board.home().mkdir(parents=True, exist_ok=True)
     saved.write_text(json.dumps(_server_args(a)))
     if not _launch(_server_args(a)):
@@ -440,7 +437,7 @@ def cmd_restart(a):
 
 def cmd_doctor(a):
     """Is everything up and wired? Prints what is wrong and what to do; exit 1 if anything is."""
-    from . import board, console, monitor
+    from . import board, console, monitor, providers
     import urllib.request
     problems = []
     saved = board.home() / "server.json"
@@ -458,10 +455,7 @@ def cmd_doctor(a):
         if not p.exists():
             problems.append(f"{p}: the folder is gone; remove it from {board.home() / 'board.json'}")
             continue
-        claude_md = (p / "CLAUDE.md").read_text() if (p / "CLAUDE.md").exists() else ""
-        settings = json.loads((p / ".claude" / "settings.json").read_text()) if (p / ".claude" / "settings.json").exists() else {}
-        hooks = json.dumps(settings.get("hooks", {}))
-        if "## This project is part of a colony" not in claude_md or "colony notes --deliver" not in hooks:
+        if not providers.of(p).wired(p):
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
@@ -560,6 +554,11 @@ def cmd_new(a):
     if root.exists() and any(root.iterdir()):
         raise SystemExit(f"{root} already exists and is not empty")
     root.mkdir(parents=True, exist_ok=True)
+    chosen = {k: getattr(a, k) for k in board.PROJECT_KEYS if getattr(a, k, None)}
+    try:
+        board.project_settings(root, chosen)            # before wiring: the chosen provider does the wiring
+    except KeyError as err:
+        raise SystemExit(f"no such choice for {err}: colony settings shows the options")
     board.track(root)
     console.ensure(root)
     print(f"{a.name} created at {root}, on the board, with its console running")
@@ -575,7 +574,7 @@ def cmd_settings(a):
         except KeyError:
             raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
         for k in board.PROJECT_KEYS:
-            print(f"{k:12} {str(merged[k]) or '(Claude Code default)':24} {'set for this project' if k in own else 'global'}")
+            print(f"{k:12} {str(merged[k]) or '(provider default)':24} {'set for this project' if k in own else 'global'}")
         return 0
     if a.key:
         try:
@@ -584,7 +583,7 @@ def cmd_settings(a):
             raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.DEFAULT_SETTINGS)}, new-folder")
     reg = board.registry()
     for k, v in reg["settings"].items():
-        shown = ("on" if v else "off") if isinstance(v, bool) else (v or "(Claude Code's default)")
+        shown = ("on" if v else "off") if isinstance(v, bool) else (v or "(the provider's default)")
         print(f"{k:10} {shown:28} {board.SETTING_HELP[k]}")
     print(f"{'new-folder':10} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':10} {', '.join(reg['roots']) or '(none)'}")
@@ -679,7 +678,10 @@ def main(argv=None):
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
-    p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within"); p.set_defaults(fn=cmd_new)
+    p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within")
+    for k in ("provider", "model", "effort", "permissions"):
+        p.add_argument(f"--{k}", help="for this project (default: the global setting)")
+    p.set_defaults(fn=cmd_new)
     p = sub.add_parser("settings"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     p.add_argument("--project", help="a project's own settings instead of the global ones")
     p.set_defaults(fn=cmd_settings)

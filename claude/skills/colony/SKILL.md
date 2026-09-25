@@ -11,7 +11,7 @@ The monitor is the front page: one session that acts for the person across proje
 - Projects: every folder in `~/colony/projects` (and in any folder added in Settings) is a project;
   `colony new NAME` creates one; `colony track PATH` adds any folder.
 - Across projects: `colony projects`, `colony peek NAME`, `colony tell NAME "..."`.
-- Options: `colony settings` (remote, monitor, model, effort, new-folder); `colony helm on|off`.
+- Options: `colony settings` (provider, model, effort, remote, monitor, new-folder); `colony helm on|off`.
 - Health: `colony doctor`, `colony restart`, `colony stop`.
 - How to work well on a long project: `GUIDE.md` in the repository.
 - The older unattended runner (`colony init/door/approve/run`) is experimental; see the README.

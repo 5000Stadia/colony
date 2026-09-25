@@ -27,22 +27,12 @@ COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace claude
 
 
 def command(label, root=None):
-    """The person's own `claude`, as the project's settings say (falling back to the global ones):
-    permissions, Remote Control, model and effort."""
+    """How the project's provider starts its agent, with the project's settings (falling back to the global ones)."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
-    from . import board
+    from . import board, providers
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
-    parts = ["claude"]
-    if board.PERMISSIONS.get(s.get("permissions") or "ask"):
-        parts += ["--permission-mode", board.PERMISSIONS[s["permissions"]]]
-    if s["remote"]:
-        parts += ["--remote-control", shlex.quote(label)]
-    if s["model"]:
-        parts += ["--model", shlex.quote(s["model"])]
-    if s["effort"]:
-        parts += ["--effort", shlex.quote(s["effort"])]
-    return " ".join(parts)
+    return providers.of(root).command(label, s)
 
 
 def session_name(root):
@@ -81,17 +71,6 @@ def stop(root):
 BORDER = re.compile(r"^[\s│|╭╮╰╯─━┃┏┓┗┛]+|[\s│|╭╮╰╯─━┃┏┓┗┛]+$")
 
 
-def classify(screen):
-    """What the session is doing, read off its screen. Claude Code shows "esc to interrupt" while it works
-    and a numbered choice when it asks permission; anything else is waiting for the person to type."""
-    low = screen.lower()
-    if "esc to interrupt" in low:
-        return "working"
-    if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
-        return "needs you"
-    return "idle"
-
-
 def snapshot(root, lines=6, name=None):
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
@@ -99,7 +78,8 @@ def snapshot(root, lines=6, name=None):
     screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
     shown = [BORDER.sub("", l) for l in screen.splitlines()]
     shown = [l for l in shown if l.strip()]
-    return {"state": classify(screen), "lines": shown[-lines:]}
+    from . import providers
+    return {"state": providers.of(root).classify(screen), "lines": shown[-lines:]}
 
 
 # ---------------------------------------------------------------- a minimal WebSocket (RFC 6455)

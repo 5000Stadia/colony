@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from colony import board, console, mail, monitor  # noqa: E402
+from colony import board, console, mail, monitor, providers  # noqa: E402
 import base64, socket, time  # noqa: E402
 
 ROADMAP = """# Roadmap
@@ -199,9 +199,10 @@ class GlanceTest(BoardBase):
         super().tearDown()
 
     def test_the_status_is_read_off_the_screen(self):
-        self.assertEqual(console.classify("✻ Reading files… (esc to interrupt)"), "working")
-        self.assertEqual(console.classify("Do you want to make this edit?\n❯ 1. Yes"), "needs you")
-        self.assertEqual(console.classify("│ > │"), "idle")
+        claude = providers.get("claude")
+        self.assertEqual(claude.classify("✻ Reading files… (esc to interrupt)"), "working")
+        self.assertEqual(claude.classify("Do you want to make this edit?\n❯ 1. Yes"), "needs you")
+        self.assertEqual(claude.classify("│ > │"), "idle")
 
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)
@@ -391,6 +392,38 @@ class ProjectSettingsTest(BoardBase):
         finally:
             console.COMMAND = saved
 
+    def test_a_new_project_names_its_provider_and_model_and_another_provider_can_join(self):
+        class Other:                       # what another CLI supplies to join: start, wire, read the screen
+            label, models, efforts = "Other CLI", ["big"], ["deep"]
+            command = lambda self, label, s: f"other --model {s.get('model')}"
+            wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
+            wired = lambda self, root: (root / "AGENTS.md").exists()
+            classify = lambda self, screen: "idle"
+        providers.PROVIDERS["other"] = Other()
+        saved, console.COMMAND = console.COMMAND, None
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/add?for=project&dir={self.tmp.name}").read().decode()
+            self.assertIn(">Claude Code</option>", page)
+            self.assertIn("<option value='fable'>", page, "the provider's models are suggested")
+            for name, provider in (("seeds", "claude"), ("soil", "other")):
+                data = urllib.parse.urlencode({"within": self.tmp.name, "name": name, "provider": provider, "model": "big"}).encode()
+                urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/new", data=data))
+            seeds, soil = Path(self.tmp.name) / "seeds", Path(self.tmp.name) / "soil"
+            self.assertIn("This project is part of a colony", (seeds / "CLAUDE.md").read_text())
+            self.assertEqual(console.command("seeds", seeds), "claude --remote-control seeds --model big")
+            self.assertTrue((soil / "AGENTS.md").exists() and not (soil / "CLAUDE.md").exists(), "wired by its own provider")
+            self.assertEqual(console.command("soil", soil), "other --model big")
+            with self.assertRaises(KeyError):
+                board.project_settings(seeds, {"provider": "nobody"})
+        finally:
+            del providers.PROVIDERS["other"]
+            console.COMMAND = saved
+            httpd.shutdown()
+            httpd.server_close()
+
     def test_the_urls_name_this_machine_and_the_network(self):
         board.set_setting("lan", "on")
         us = board.urls(8790)
@@ -545,14 +578,12 @@ class ServerTest(BoardBase):
         threading.Thread(target=other.serve_forever, daemon=True).start()
         port = str(other.server_address[1])
         try:
-            taken = self.run_cli("board", "--port", port, "--no-monitor")
-            self.assertEqual(taken.returncode, 1)
-            self.assertIn("taken by another program", taken.stderr)
             (board.home() / "server.json").write_text(json.dumps(["--port", port, "--local", "--no-monitor"]))
             self.assertIn("does not answer", self.run_cli("doctor").stdout)
-            moved = self.run_cli("board", "--no-monitor")        # no port named: it finds a free one
+            moved = self.run_cli("board", "--port", port, "--no-monitor")     # taken: it moves to a free one
             self.assertEqual(moved.returncode, 0, moved.stderr)
-            self.assertNotIn(f":{port}/", moved.stdout)
+            self.assertIn(f"port {port} is taken", moved.stdout)
+            self.assertNotIn(f":{port}/", moved.stdout.split("using", 1)[1])
             self.assertIn("board answers", self.run_cli("doctor").stdout)
         finally:
             other.shutdown()

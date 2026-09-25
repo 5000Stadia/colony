@@ -46,9 +46,6 @@ person follows and steers them all from one board, and the projects can write to
   quicker. Mail from the colony arrives by itself; answer a question with `colony reply ID "..."`.
 """
 
-# Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
-HOOKS = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver"}
-
 SKELETON = """# Roadmap
 
 What we're making, in the person's words.
@@ -87,17 +84,18 @@ def registry():
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
-DEFAULT_SETTINGS = {"remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
+DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
                     "permissions": "ask"}
 PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
+    "provider": "which CLI runs new projects' agents (colony knows: claude)",
     "remote": "new consoles start with Remote Control, reachable from the Claude app",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
-    "model": "model for new project sessions (blank: Claude Code's default)",
-    "effort": "effort for new project sessions (blank: Claude Code's default)",
+    "model": "model for new project sessions (blank: the provider's default)",
+    "effort": "effort for new project sessions (blank: the provider's default)",
 }
 
 
@@ -115,13 +113,18 @@ def set_setting(key, value):
         if value not in PERMISSIONS:
             raise KeyError(key)
         reg["settings"][key] = value
+    elif key == "provider":
+        from .providers import PROVIDERS
+        if value not in PROVIDERS:
+            raise KeyError(key)
+        reg["settings"][key] = value
     else:
         raise KeyError(key)
     save_registry(reg)
     return reg
 
 
-PROJECT_KEYS = ("permissions", "remote", "model", "effort")
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote")
 
 
 def project_settings(root, changes=None):
@@ -137,6 +140,8 @@ def project_settings(root, changes=None):
             elif k == "remote":
                 own[k] = str(v).lower() in ("on", "true", "yes", "1")
             elif k == "permissions" and v not in PERMISSIONS:
+                raise KeyError(k)
+            elif k == "provider" and v not in __import__("colony.providers").providers.PROVIDERS:
                 raise KeyError(k)
             else:
                 own[k] = v
@@ -330,33 +335,16 @@ def render_notes(ns, heading):
 
 
 def track(path, register=True):
-    """Put a project on the board: its roadmap, its .board folder, the agent's three habits in CLAUDE.md,
-    and the delivery hooks in .claude/settings.json — added to whatever the project already has."""
+    """Put a project on the board: its roadmap, its .board folder, and its provider's wiring (for Claude Code,
+    the colony protocol in CLAUDE.md and the delivery hooks) — added to whatever the project already has."""
     root = Path(path).expanduser().resolve()      # the folder chosen is the root, whatever repository holds it
     if not (root / ".git").exists():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".board").mkdir(exist_ok=True)
     if not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
-    claude_md = root / "CLAUDE.md"
-    have = claude_md.read_text() if claude_md.exists() else ""
-    block = PROTOCOL.lstrip("\n")
-    marker = next((m for m in ("## This project is part of a colony", "## The board") if m in have), None)
-    if marker:                                       # an older block is brought up to date, in place
-        start = have.index(marker)
-        end = have.find("\n## ", start + 5)
-        have = have[:start] + block + (have[end + 1:] if end != -1 else "")
-        claude_md.write_text(have)
-    else:
-        claude_md.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
-    settings = root / ".claude" / "settings.json"
-    settings.parent.mkdir(exist_ok=True)
-    cfg = json.loads(settings.read_text()) if settings.exists() else {}
-    for event, command in HOOKS.items():
-        entries = cfg.setdefault("hooks", {}).setdefault(event, [])
-        if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
-            entries.append({"hooks": [{"type": "command", "command": command}]})
-    settings.write_text(json.dumps(cfg, indent=2) + "\n")
+    from . import providers
+    providers.of(root).wire(root, PROTOCOL)
     reg = registry()
     inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
     if register and not inside_a_root and str(root) not in reg["projects"]:
@@ -681,16 +669,33 @@ def render_item(reg, pid, iid):
     return shell(reg, pid, "".join(body))
 
 
+def suggestions(name, values):
+    return f"<datalist id='{name}'>" + "".join(f"<option value='{e(v)}'>" for v in values) + "</datalist>"
+
+
+def provider_fields(cur, model, effort, blank):
+    """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
+    with the provider's own suggestions."""
+    from .providers import PROVIDERS, get
+    p = get(cur)
+    return (f"<label>Provider <select name='provider'>"
+            + (f"<option value=''>{blank}</option>" if blank == "global" else "")
+            + "".join(f"<option value='{k}'{' selected' if cur == k else ''}>{e(v.label)}</option>" for k, v in PROVIDERS.items())
+            + "</select></label>"
+            f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{blank}'></label>"
+            f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{blank}'></label>"
+            + suggestions("models", p.models) + suggestions("efforts", p.efforts))
+
+
 def project_settings_form(pid, own, action="/project-settings"):
     """The choices a project can make for itself; blank keeps the global one."""
     opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
     remote = "" if "remote" not in own else ("on" if own["remote"] else "off")
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
+            + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
             f"<label>Permissions {opt('permissions', [('', 'global'), ('ask', 'ask each time'), ('edits', 'accept edits'), ('all', 'allow everything'), ('plan', 'plan only')], own.get('permissions', ''))}</label>"
             f"<label>Remote Control {opt('remote', [('', 'global'), ('on', 'on'), ('off', 'off')], remote)}</label>"
-            f"<label>Model <input name='model' value='{e(own.get('model', ''))}' placeholder='global'></label>"
-            f"<label>Effort <input name='effort' value='{e(own.get('effort', ''))}' placeholder='global'></label>"
             f"<button>Save</button></form>")
 
 
@@ -749,10 +754,9 @@ def settings_page(reg):
                + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
                + "</select></label>"
-               f"<label>Model for new project sessions <input name='model' value='{e(s['model'])}' placeholder='Claude Code default'></label>"
-               f"<label>Effort for new project sessions <input name='effort' value='{e(s['effort'])}' placeholder='Claude Code default'></label>"
+               + provider_fields(s["provider"], s["model"], s["effort"], "the provider's default") +
                f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
-               f"<button>Save</button><p class='muted'>Remote, model and effort apply to consoles started from now on.</p></form>")
+               f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
     body = (f"<header><h1>Settings</h1></header><h2>Open this board</h2><div class='card'><ul class='dirs'>{where}</ul>"
@@ -867,6 +871,8 @@ class Handler(BaseHTTPRequestHandler):
             set_setting("messaging", form.get("messaging", "off"))
             if form.get("permissions"):
                 set_setting("permissions", form["permissions"])
+            if form.get("provider"):
+                set_setting("provider", form["provider"])
             set_setting("model", form.get("model", ""))
             set_setting("effort", form.get("effort", ""))
             if form.get("new_root", "").strip():
@@ -898,16 +904,16 @@ class Handler(BaseHTTPRequestHandler):
             target = "/settings" if path == "/roots" else "/"
             chosen = {k: form.get(k, "") for k in PROJECT_KEYS if form.get(k)}
             if path == "/add" and form.get("path"):
-                track(Path(form["path"]))
                 if chosen:
-                    project_settings(root_of(form["path"]), chosen)
+                    project_settings(Path(form["path"]).expanduser().resolve(), chosen)
+                track(Path(form["path"]))
                 target = f"/?p={projects().index(root_of(form['path']))}"
             elif path == "/new" and form.get("name", "").strip():
                 new = Path(form["within"]) / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
                 new.mkdir(parents=True, exist_ok=True)
-                track(new)
                 if chosen:
                     project_settings(new, chosen)
+                track(new)
                 console.ensure(new)
                 target = f"/?p={projects().index(new)}"
             elif path == "/roots":
