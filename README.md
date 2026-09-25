@@ -100,8 +100,8 @@ different model changes the numbers, not the questions. These are the three to a
    13 hard cases, higher effort caught 10 against 8, but not consistently, and the two missed
    different faults.
 3. **Do more agents pay?** On well-specified work, no: a reviewer cost 1.3–2.4× for no measurable
-   gain. A fresh agent per row at medium was the best value up to fourteen rows. xhigh and max were
-   not worth testing further given the above.
+   gain. A fresh agent per row at medium was the best value up to fourteen rows. We did not test xhigh
+   or max; the published evaluations found diminishing returns there.
 
 Sources: `design/claims.md` and the lab's results; [CodeRabbit's Opus 5.5
 review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
