@@ -18,6 +18,8 @@
 - If the work shows the plan or a milestone is wrong, say so with the reason. How to do a step is your call; scope, order and milestones are the person's.
 - Guard against what would fail silently or spoil what later work builds on; skip guards nobody would miss. Every extra layer is something later changes must work around.
 
+- If the person wants to follow and steer the project without being in the conversation, put it on the board (`colony track`): one page for all their projects, with gates for their decisions and notes that reach you when they're relevant.
+
 ## Other agents
 - Handing isolated work to subagents is good. Any other added agent often costs 1.2–5× the tokens and must justify it; agents added only to check, remember or co-build one agent's well-specified work didn't.
 - Add agents when it's clearly the better approach for the project (genuinely parallel domains, scale beyond one context) or when a real difficulty would benefit from a specialist's focus. The gain is a clean context and a narrow brief, not more intelligence; for a problem that is simply hard, raise effort instead.

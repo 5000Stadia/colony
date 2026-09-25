@@ -70,6 +70,22 @@ be in the way. Otherwise, follow these steps in order.
    needs one, the person can lift it with `"allow_outward": ["Bash(gh:*)"]`. Add nothing without
    evidence.
 
+## The board: one place to follow and steer every project
+
+    colony track            in a project: put it on the board (once)
+    colony board            open the board: every tracked project in one page
+
+For each project the board shows what changed since you were last there, what the agent has put in
+your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
+page with its history, gates and a thread where you direct it. Notes on past work reach the agent on
+its next turn. Notes on a roadmap item reach it when it starts that item. Nothing waits unseen: a note
+whose item leaves the roadmap is delivered at once, and one delivered but not acted on is repeated at
+the next session's start.
+
+The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
+what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude
+Code hooks that `colony track` installs, so it doesn't rely on the agent remembering.
+
 ## What the defaults are, and why
 
 The core — one builder per row at medium effort, checks, the meter, review only where declared — was

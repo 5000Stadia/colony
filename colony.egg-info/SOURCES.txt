@@ -2,12 +2,15 @@ README.md
 pyproject.toml
 colony/__init__.py
 colony/__main__.py
+colony/board.py
 colony/claude.py
 colony/cli.py
 colony/clock.py
 colony/field.py
+colony/health.py
 colony/mapper.py
 colony/memory.py
+colony/page.py
 colony/project.py
 colony/specialists.py
 colony.egg-info/PKG-INFO
@@ -18,6 +21,6 @@ colony.egg-info/top_level.txt
 colony/prompts/builder-fix.md
 colony/prompts/builder-row.md
 colony/prompts/door.md
-colony/prompts/reconcile.md
 colony/prompts/specialist.md
+tests/test_board.py
 tests/test_colony.py

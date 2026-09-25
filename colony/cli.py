@@ -10,6 +10,11 @@ located signals and a project memory.
     colony cost                     dollars and tokens, per row and per agent
     colony checkpoint               workflow, progress and tokens since the last checkpoint; questions for you
     colony answer KIND TEXT [--always]  answer a checkpoint question; --always keeps it as a rule
+    colony track [PATH]             put a project on the board (roadmap, notes, gates, delivery hooks)
+    colony board [--port 8790]      one page for all tracked projects: what changed, what waits on you, notes
+    colony gate "QUESTION" [--item R4] [--why ...]   put a decision in the person's hands
+    colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
+    colony noted ID "TEXT"          mark a note as acted on, with what was done
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
     colony field view|signal|resolve   the channel agents use (their name, row and wave are set for them)
@@ -271,6 +276,57 @@ def cmd_field(a):
     return 0
 
 
+def cmd_track(a):
+    from . import board
+    root = board.track(a.path)
+    print(f"{root.name} is on the board. Open it with: colony board")
+    return 0
+
+
+def cmd_board(a):
+    from . import board
+    board.serve(a.port)
+    return 0
+
+
+def cmd_gate(a):
+    from . import board
+    root = board.root_of()
+    gid = "g" + __import__("secrets").token_hex(3)
+    board.append(root, "gates.jsonl", {"type": "gate", "id": gid, "at": board.now(), "question": a.question,
+                                       "item": a.item, "why": a.why})
+    print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note")
+    return 0
+
+
+def cmd_notes(a):
+    from . import board
+    root = board.root_of()
+    if not (root / ".board").exists():
+        return 0                                  # not on the board: the hooks stay silent
+    if a.deliver:
+        fresh, still = board.deliver(root, session=a.session)
+        text = "\n\n".join(filter(None, [
+            board.render_notes(fresh, "The person left notes for you on the board:"),
+            board.render_notes(still, "Still open from earlier (delivered, not yet acted on):")]))
+    else:
+        text = board.render_notes(board.open_notes(root, a.item), "Open notes from the person:") or "No open notes."
+    if text:
+        print(text)
+    return 0
+
+
+def cmd_noted(a):
+    from . import board
+    root = board.root_of()
+    if a.id not in {n["id"] for n in board.notes(root)}:
+        print(f"no note {a.id}", file=sys.stderr)
+        return 2
+    board.append(root, "notes.jsonl", {"type": "addressed", "of": a.id, "at": board.now(), "text": a.text})
+    print(f"{a.id} marked as acted on")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="colony", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -287,6 +343,13 @@ def main(argv=None):
     p = sub.add_parser("answer"); p.add_argument("kind"); p.add_argument("text"); p.add_argument("--always", action="store_true")
     p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
+    p = sub.add_parser("track"); p.add_argument("path", nargs="?", default="."); p.set_defaults(fn=cmd_track)
+    p = sub.add_parser("board"); p.add_argument("--port", type=int, default=8790); p.set_defaults(fn=cmd_board)
+    p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
+    p.set_defaults(fn=cmd_gate)
+    p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
+    p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
+    p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)
     fs.add_parser("view")
