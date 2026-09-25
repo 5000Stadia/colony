@@ -62,6 +62,21 @@ class Base(unittest.TestCase):
         self.project.spine.write_text(SPINE.format(check=check, approved=approved))
 
 
+class InitTest(unittest.TestCase):
+    def test_an_existing_project_keeps_its_own_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp) / "existing"
+            d.mkdir()
+            (d / ".gitignore").write_text(".invoicer/\n")
+            (d / "CLAUDE.md").write_text("Our own rules.\n")
+            env = dict(os.environ, PYTHONPATH=str(ROOT))
+            subprocess.run([sys.executable, "-m", "colony", "init", str(d)], env=env, check=True, capture_output=True)
+            self.assertIn(".invoicer/", (d / ".gitignore").read_text())
+            self.assertIn(".colony/transcripts/", (d / ".gitignore").read_text())
+            self.assertTrue((d / "CLAUDE.md").read_text().startswith("Our own rules."))
+            self.assertIn("design/spine.md", (d / "CLAUDE.md").read_text())
+
+
 class FieldTest(Base):
     def test_same_place_reinforces_and_confirmation_wakes_later_waves(self):
         field.post(self.project, by="a@w2", row=1, wave=2, kind="hole", severity="major", at="x.py:f", text="one")

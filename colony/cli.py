@@ -31,6 +31,13 @@ from .project import Project
 PROMPTS = Path(__file__).parent / "prompts"
 
 
+def add_lines(path, lines):
+    have = path.read_text() if path.exists() else ""
+    missing = [l for l in lines if l not in have.splitlines()]
+    if missing:
+        path.write_text(have + ("" if not have or have.endswith("\n") else "\n") + "\n".join(missing) + "\n")
+
+
 def cmd_init(a):
     project = Project(a.dir)
     project.root.mkdir(parents=True, exist_ok=True)
@@ -40,11 +47,13 @@ def cmd_init(a):
     subprocess.run(["git", "-C", str(project.root), "init", "-q", "-b", "main"], check=False)
     project.design.mkdir(exist_ok=True)
     project.state.mkdir()
-    (project.root / ".gitignore").write_text(".colony/transcripts/\n.colony/map.md\n.colony/map.json\nscratch/\n__pycache__/\n")
+    # An existing project keeps its own files: colony adds its lines and replaces nothing.
+    add_lines(project.root / ".gitignore", [".colony/transcripts/", ".colony/map.md", ".colony/map.json",
+                                            "scratch/", "__pycache__/"])
     specialists.ensure_defaults(project)
     for name in ("AGENTS.md", "CLAUDE.md"):
-        (project.root / name).write_text("Read design/spine.md, then design/now.md. Ask the map "
-                                         "(`python3 -m colony map QUERY`) before making anything new.\n")
+        add_lines(project.root / name, ["The goal and the plan are in design/spine.md. Ask the map "
+                                        "(`python3 -m colony map QUERY`) before making anything new."])
     clock.commit(project, "colony init")
     print(f"initialised {project.root}; next: colony door --goal \"...\"")
     return 0
