@@ -187,6 +187,7 @@ def overview(project):
     build_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "builder")
     keep_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "reconciler")
     review_fixes = sum(e.get("review_fixes", 0) for e in closed)
+    serious = sum(e.get("serious_fixes", 0) for e in closed)
     lines += ["", "## Tokens"]
     lines.append(f"- ${build_cost + review_cost + keep_cost:.2f} in all: building ${build_cost:.2f}, review ${review_cost:.2f}, "
                  f"keeping memory ${keep_cost:.2f}")
@@ -195,8 +196,9 @@ def overview(project):
                      f"median ${statistics.median(costs):.2f}")
     reviewed = [e for e in reviews if e["review"]]
     if reviewed:
-        lines.append(f"- {len(reviewed)} of {len(reviews)} row(s) reviewed; review fixed {review_fixes} real problem(s)"
-                     + (f", ${review_cost / review_fixes:.2f} per fix" if review_fixes else ""))
+        lines.append(f"- {len(reviewed)} of {len(reviews)} row(s) reviewed; the builder fixed {review_fixes} of review's "
+                     f"findings, {serious} of them serious (critical, or found by two reviewers)"
+                     + (f", ${review_cost / serious:.2f} per serious fix" if serious else ""))
     reading = rising_reading(project)
     if reading:
         lines.append(f"- {reading}")

@@ -433,6 +433,18 @@ class AdaptTest(Base):
         clock.run(self.project, max_rows=1)
         self.assertEqual(self.moves(), [(30, 25)])
 
+    def test_one_reviewers_fixed_major_is_not_enough_to_lower_it(self):
+        self.spine_rows(1, impact=8)
+        self.configure(review="auto", review_if_risk_at_least=30)
+        os.environ["FAKE_ASSESS"] = "confidence 5/10 — unsure"
+        for f in self.project.specialists.glob("*.md"):
+            f.unlink()
+        specialists.write(self.project, "solo", "Look for holes.")
+        clock.run(self.project, max_rows=1)
+        [closed] = [e for e in self.project.read("ledger.jsonl") if e["kind"] == "row-closed"]
+        self.assertEqual((closed["review_fixes"], closed["serious_fixes"]), (1, 0))
+        self.assertEqual(self.moves(), [], "a builder fixes whatever it is shown; one lineage's major is not evidence")
+
     def test_a_trusted_row_that_breaks_a_check_lowers_the_threshold(self):
         self.spine_rows(2, impact=2)
         self.project.spine.write_text(self.project.spine.read_text().replace("test -f work.txt", "test ! -f broken.txt"))

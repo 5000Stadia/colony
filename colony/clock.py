@@ -115,29 +115,44 @@ def review_threshold(project):
     return moves[-1]["to"] if moves else cfg["review_if_risk_at_least"]
 
 
+def review_fixes(events, row):
+    """Reviewer signals the builder fixed on this row, and how many were serious: critical, or found by
+    two lineages. A builder will fix almost anything it is shown (pilot 5: fixes every run, no gain in
+    judged quality), so only a serious fix is evidence that review earned its place."""
+    signals = {e["id"]: e for e in events if e["type"] == "signal" and e.get("row") == row
+               and e["kind"] not in ("check", "fork", "unfixed")}
+    finders = {}
+    for e in signals.values():
+        finders.setdefault(e["at"].strip(), set()).add(e["by"].split("@")[0])
+    fixed = [signals[e["of"]] for e in events if e["type"] == "resolve" and e.get("row") == row
+             and e.get("fixed") and e.get("by") == "builder" and e["of"] in signals]
+    serious = [s for s in fixed if s["severity"] == "critical" or len(finders[s["at"].strip()]) >= 2]
+    return len(fixed), len(serious)
+
+
 def adapt_threshold(project, row, closed=True):
-    """Gentle guidance from outcomes, leaning to quality: a review that found real problems, or a row review
-    trusted that then broke a check, lowers the threshold a step at once; only three empty reviews in a
-    row raise it a step. Bounded, and recorded, so it can be read and undone."""
+    """Gentle guidance from outcomes, leaning to quality: a review whose fixes were serious, or a row review
+    trusted that then broke a check, lowers the threshold a step at once; only three reviews in a row
+    with nothing serious raise it a step. Bounded, and recorded, so it can be read and undone."""
     cfg = project.config()
     current = review_threshold(project)
     if current is None or not cfg.get("review_adapt"):
         return
     ledger = project.read("ledger.jsonl")
     reviewed = {e["row"] for e in ledger if e["kind"] == "review" and e["review"]}
-    outcomes = [e["review_fixes"] for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed]
+    outcomes = [e.get("serious_fixes", 0) for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed]
     since = [e for e in ledger if e["kind"] == "threshold"]
     last_move_row = since[-1]["row"] if since else 0
-    recent = [e["review_fixes"] for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed and e["row"] > last_move_row]
+    recent = [e.get("serious_fixes", 0) for e in ledger if e["kind"] == "row-closed" and e["row"] in reviewed and e["row"] > last_move_row]
     step, new, why = cfg["review_adapt_step"], None, None
     missed = row not in reviewed and any(e["kind"] == "evidence" and e["type"] == "regression" and e["row"] == row
                                          for e in ledger)
     if missed:
         new, why = current - step, f"row {row} was trusted without review and broke a check that had passed"
     elif closed and row in reviewed and outcomes and outcomes[-1] > 0:
-        new, why = current - step, f"row {row}'s review found {outcomes[-1]} real problem(s)"
+        new, why = current - step, f"row {row}'s review found {outcomes[-1]} serious problem(s)"
     elif closed and len(recent) >= 3 and not any(recent[-3:]):
-        new, why = current + step, "three reviews in a row found nothing"
+        new, why = current + step, "three reviews in a row found nothing serious"
     if new is not None:
         new = min(max(new, cfg["review_floor"]), cfg["review_ceiling"])
         if new != current:
@@ -246,11 +261,10 @@ def close(project, row, start, cap, baseline=0.0):
     gained = specialists.harvest(project, number)
     mapper.build(project)
     cost = sum(r["cost_usd"] for r in project.read("usage.jsonl") if r["row"] == number)
-    fixed = sum(1 for e in events if e["type"] == "resolve" and e.get("row") == number and e.get("fixed")
-                and e.get("by") == "builder")
-    # The outcome the builder's assessment is scored against: real problems review found and fixed.
+    fixed, serious = review_fixes(events, number)
+    # The outcome the builder's assessment is scored against: problems review found and the builder fixed.
     memory.ledger(project, "row-closed", row=number, target=target, cost_usd=round(cost, 4),
-                  review_fixes=fixed, lessons={k: len(v) for k, v in gained.items()},
+                  review_fixes=fixed, serious_fixes=serious, lessons={k: len(v) for k, v in gained.items()},
                   files=changed_files(project, start, "HEAD"))
     health.review_health(project, number)
     adapt_threshold(project, number)
