@@ -1,7 +1,7 @@
 # Long projects with one strong agent
 
 ## Start
-- Settle model and effort with the person. Opus 5.5: medium (low → medium was +11 judged points; the largest lever found). Another model: check the vendor's guidance and one independent evaluation for where effort stops paying.
+- Settle model and effort with the person. Medium is the best quality for cost; returns diminish sharply above it — save higher effort for the rare work where a slight gain in intelligence is worth the cost. Low loses real quality on building. For an unfamiliar model, check its guidance for where effort stops paying.
 - Get the goal in their words: what would make them proud, the best real example, what would ruin it, what must never happen without them. Reflect a draft; offer a best guess beside each question.
 - Plan: smallest end-to-end step first; unknown-path work (research, proof, market): a first pass that shows the shape. Person approves before building.
 - Find the checks that settle quality in seconds (tests, build, word count, price floor).
