@@ -1,65 +1,62 @@
 # Starting a long project
 
-## The horizon comes first
-- **Before planning the path, agree with the person on the horizon.** That means the few large milestones and what each one looks like. Use the stages that fit the domain: v1, v2 and v3 for a product; year 1, 2 and 3 for a business; drafts or volumes for a book.
-- **Build the near-term path toward those milestones, not only toward the next step.** If the path is built without the horizon in view, correcting course later means a costly rebuild.
+## Horizon first
+- Before planning the path, agree the horizon with the person: the few large milestones and what each looks like (v1, v2, v3 for a product; year 1, 2, 3 for a business; drafts for a book).
+- Build each step toward those milestones, not only toward the next step. A path built without the horizon in view leads to costly rebuilds.
 
 ## Day one
-- **Settle the model and effort with the person.** Medium effort gives the best quality for the cost. Above medium, returns drop off sharply, so keep higher effort for the rare work where a small gain in intelligence is worth paying for. Low effort loses real quality on building but is fine for chores. For a model you don't know, check its guidance on where more effort stops paying.
-- **Get the goal in their words:** what would make them proud, the best real example, what would ruin it, and what must never happen without them. Offer a best guess beside each question, then reflect a draft back.
-- **Plan the smallest end-to-end step toward the first milestone.** Where the path is unknown (research, a proof, a market), make a first pass that shows the shape of the work. The person approves before you build.
-- **Find the quick checks, even where there are no tests:** a word count and placeholder check for a book, a price floor for a shop.
+- Settle the model and effort with the person. Medium effort gives the best quality for the cost. Higher effort adds little; save it for rare work where a small gain is worth the price. Low effort costs real quality on building but is fine for chores.
+- Get the goal in the person's words: what would make them proud, the best real example, what would ruin it, what must never happen without them. Offer your best guess with each question.
+- Plan the smallest end-to-end step toward the first milestone. Where the path is unknown (research, a proof, a market), make a first pass that shows the shape of the work.
+- Find quick checks even where there are no tests: a word count for a book, a price floor for a shop.
 - If it fits in one sitting, just do it.
 
 ## Building
-- **Start with one agent in one continuing session.** It does as well as handing each step to a fresh agent, and costs less.
-- **The project is the memory.** Don't keep a separate status page or history: the code, tests and docs carry it. Extra memory layers added cost, not quality.
-- **When you fix a mistake that could come back,** add a line to the project's conventions as well as the test, so later sessions know.
-- **Settle any wording that can be read two ways.** State your reading or ask. This is the most common cause of misses.
-- **Make small calls yourself and say which ones you made.** Ask when a decision is costly to undo or when an action leaves the person's hands.
-- **Judge stakes by consequence and reversibility,** never by subject.
-- **If the work shows the plan or the horizon is wrong, say so with the reason.** How to do a step is your call. Changes to scope, order or milestones are the person's. Raise a milestone that looks wrong as soon as you see it, because that's where rebuilds come from.
-- **Every safeguard and extra layer is code that later changes must work around.** The most defensive version cost about twice as much to change. Add guards where a failure would matter, not everywhere.
+- One agent in one continuing session does as well as a fresh agent per step, and costs less.
+- The project is the memory: its code, tests and docs. Don't keep separate status pages or histories; they added cost, not quality.
+- When you fix a mistake that could come back, also add a line to the project's conventions.
+- When wording can be read two ways, state your reading or ask. This caused most misses.
+- Make small calls yourself and say which you made. Ask when a decision is costly to undo or an action leaves the person's hands.
+- Judge stakes by consequence and reversibility, never by subject.
+- If the work shows the plan or a milestone is wrong, say so with the reason. How to do a step is your call; scope, order and milestones are the person's.
+- Safeguards and extra layers are code every later change must work around. Add them where a failure would matter.
 - Report the cost with every result.
 
-## Adding agents
-- **Hand isolated work to subagents** — search, research, bulk reading — and have them return conclusions. That keeps the main context for judgement, and is good.
-- **Every other added agent often costs 1.2–5× the tokens and must justify it.** Agents added only to check, remember or co-build one agent's well-specified work didn't.
-- **More agents belong where the work really exceeds one agent:** truly parallel domains, or scale beyond one context.
+## Other agents
+- Hand isolated work (search, research, bulk reading) to subagents that return conclusions. It keeps your context for judgement.
+- Any other added agent often costs 1.2–5× the tokens and must justify it. Agents added only to check, remember or co-build one agent's well-specified work didn't.
+- More agents belong where the work truly exceeds one agent: parallel domains, or scale beyond one context.
+- Open each subagent's prompt with a scoped name: `searcher · src/billing · this task only`. Scoped names kept agents in scope; neutral names drifted.
+- Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
 
-## Briefing subagents
-- Start each prompt with a scoped name, such as `searcher · src/billing · this task only`. Agents with scoped names stayed in scope; agents with neutral names drifted out of it.
-- For chores (fetching, renaming, running tests, a one-file change), low effort or a smaller model is fine.
-- For finding problems or making a call, use the main agent's effort. Low-effort reviewers barely look.
-
-## Review, where it can pay
+## Review
 - Work built to a full spec gains little from review.
-- Consider review where no test can judge the work and the work leaves the person's hands, such as a document for a client or a release. A review can find robustness nobody asked for, at several times the cost. A solo build may find the same thing by chance.
-- The reviewer reads and never edits. Show the reviewer the stakes and the builder's doubts first.
-- A single reviewer always finds something "major". Act on critical findings and on findings that two reviewers made independently.
+- Consider it where no test can judge the work and it leaves the person's hands: a document for a client, a release.
+- The reviewer reads, never edits, and sees the stakes and the builder's doubts first.
+- One reviewer always finds something "major". Act on critical findings and on ones two reviewers found independently.
 
 ## As the project grows
-Use these when the symptom appears, not before. Each needs deliberate setup; an agent won't adopt them on its own.
-- The agent re-derives settled decisions or retries rejected approaches after many compactions → record decisions in commit messages and put the relevant ones in the next step's brief.
-- The agent defends an approach that failed → take the next step in a fresh session that has only the plan and the repo.
-- The work must run unattended → use a driver that feeds in steps, detaches, and stops on a failing check or a cost cap.
-- The same mistake keeps coming back → use a reviewer that keeps lessons from its serious findings.
-- Several agents work in one place → one owner per area.
-- One area outgrows one context → give it its own lane once the strain recurs.
-- Cost is spread across sessions → keep a per-step ledger.
-- The person steers without being in the conversation → keep a page of the plan, history and cost, with notes for each step.
+Reach for these only when the symptom appears; the agent won't set them up on its own.
+- Re-deriving settled decisions or retrying rejected approaches after many compactions → record decisions in commit messages and put the relevant ones in the next step's brief.
+- Defending a failed approach → take the next step in a fresh session with only the plan and the repo.
+- The work must run unattended → a driver that feeds steps and stops on a failing check or a cost cap.
+- The same mistake keeps coming back → a reviewer that keeps the lessons of its serious findings.
+- Several agents in one place → one owner per area.
+- One area outgrows one context → its own lane, once the strain recurs.
+- Cost spread across sessions → a per-step ledger.
+- The person steers from outside the conversation → a page of plan, history and cost, with notes per step.
 
-## Designing any workflow piece
-- First ask what will use it. If it goes unused in a small trial, that shows its cost, not that it is useless. Cut only what stays empty at every scale.
-- Before building it, try it against the plain setup on a small version of the problem.
-- State the intention, not the mechanism. The exception is where a mistake must be physically blocked: publishing, irreversible actions, other people's data.
-- Test each line: would a strong model do worse without it? If not, cut it.
-- Judgement belongs to the model; plumbing belongs to code. Base triggers on counts over records at boundaries, never on an agent's opinion. Keep the machinery out of the worker's view.
-- Any gauge puts quality before cost: a wrong result should set it off at least as fast as an empty result does.
-- Churn that isn't about the work itself means the workflow is wrong. Fix the architecture.
+## Designing a workflow piece
+- Ask what will use it. Going unused in a small trial shows its cost, not that it's useless.
+- Try it against the plain setup on a small version of the problem first.
+- State the intention, not the mechanism, except where a mistake must be physically blocked: publishing, irreversible actions, other people's data.
+- Keep a line only if a strong model would do worse without it.
+- Judgement belongs to the model, plumbing to code. Trigger on counts over records, not an agent's opinion.
+- Put quality before cost in any gauge.
+- Churn that isn't about the work means the workflow is wrong. Fix the architecture.
 
 ## Safety
-- Deny outward commands in the Claude Code settings: `git push`, `gh`, publishing, `ssh`. The denial holds even when permissions are bypassed. It is a minimum safeguard, not a sandbox.
+- Deny outward commands in Claude Code settings: `git push`, `gh`, publishing, `ssh`. The denial holds even with permissions bypassed. It is a floor, not a sandbox.
 
-## This guide is a starting point
-- If the project's own evidence contradicts a line, challenge that line and revise it.
+## This guide
+- Challenge and revise any line the project's own evidence contradicts.
