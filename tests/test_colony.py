@@ -77,6 +77,17 @@ class InitTest(unittest.TestCase):
             self.assertIn("design/spine.md", (d / "CLAUDE.md").read_text())
 
 
+class BriefTest(Base):
+    def test_no_now_means_no_claim_about_the_state(self):
+        self.spine()
+        self.configure(reconcile=False)
+        b = memory.brief(self.project, (1, "Write the first line", "work.txt exists"))
+        self.assertNotIn("Where the project is now", b)
+        self.assertNotIn("Nothing has been built", b)
+        self.project.now.write_text("Status: row 3 built.\n")
+        self.assertIn("Status: row 3 built.", memory.brief(self.project, (1, "x", "y")))
+
+
 class FieldTest(Base):
     def test_same_place_reinforces_and_confirmation_wakes_later_waves(self):
         field.post(self.project, by="a@w2", row=1, wave=2, kind="hole", severity="major", at="x.py:f", text="one")

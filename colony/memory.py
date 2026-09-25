@@ -180,13 +180,17 @@ def brief(project, row, extra=""):
                + mapper.render(mapper.query(project, f"{target} {done} {extra}"))
                if project.config().get("map_in_brief") else
                "# What already exists\n\nAsk the map before making anything new: `python3 -m colony map QUERY`.")
-    return "\n\n".join([
+    # NOW only when it exists: without it the project itself is the state, and saying "nothing has been
+    # built" to a builder joining a project that has would be false.
+    now = ("# Where the project is now\n\n" + project.now.read_text()
+           + ("\n\n`git log` holds what every earlier row did and why, including decisions that were later "
+              "changed; read the entries that bear on this row." if project.config().get("reconcile") else "")
+           if project.now.exists() else "")
+    return "\n\n".join(filter(None, [
         "# The goal (the person's words — never change them)\n\n" + project.spine.read_text(),
-        "# Where the project is now\n\n" + now_text(project)
-        + ("\n\n`git log` holds what every earlier row did and why, including decisions that were later "
-           "changed; read the entries that bear on this row." if project.config().get("reconcile") else ""),
+        now,
         f"# This row\n\nRow {number}: {target}\nDone looks like: {done}"
         + ("".join(f"\n\nA note from the person on this row ({n['at'][:10]}): {n['text']}" for n in waiting_notes(project, number))),
         bearing,
         "# Open signals on this row\n\n" + ("\n".join(open_) if open_ else "none"),
-    ])
+    ]))
