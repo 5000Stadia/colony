@@ -78,3 +78,18 @@ def resolve(project, *, by, row, wave, of, text, fixed):
 def render(sig):
     return (f"#{sig['id']} [{sig['severity']} {sig['kind']}, strength {sig['strength']}] {sig['at']}: "
             + " | ".join(sig["notes"]))
+
+
+def review_fixes(events, row):
+    """Reviewer signals the builder fixed on a row, and the serious ones among them: critical, or found by
+    two lineages. A builder fixes almost anything it is shown (pilot 5: fixes every run, no gain in judged
+    quality), so only a serious fix is evidence that review earned its place."""
+    signals = {e["id"]: e for e in events if e["type"] == "signal" and e.get("row") == row
+               and e["kind"] not in ("check", "fork", "unfixed")}
+    finders = {}
+    for e in signals.values():
+        finders.setdefault(e["at"].strip(), set()).add(e["by"].split("@")[0])
+    fixed = [signals[e["of"]] for e in events if e["type"] == "resolve" and e.get("row") == row
+             and e.get("fixed") and e.get("by") == "builder" and e["of"] in signals]
+    serious = [s for s in fixed if s["severity"] == "critical" or len(finders[s["at"].strip()]) >= 2]
+    return fixed, serious

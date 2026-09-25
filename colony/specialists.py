@@ -1,9 +1,12 @@
 """Specialists are lineages: a mission and a bounded memory of what has actually paid off.
 
-A lineage's memory gains a line only for a signal of its that the builder fixed — never for a guess,
-a decline or a signal nobody acted on — so the next wave starts from what has proven real.
+A lineage's memory gains a line only for a serious signal of its that the builder fixed — critical,
+or found by two lineages — never for a guess, a decline or trivia, so the next wave starts from what
+has proven real.
 """
 import re
+
+from . import field
 
 MEMORY_LINES = 12
 ALWAYS = {
@@ -45,16 +48,14 @@ def ensure_defaults(project):
 
 
 def harvest(project, row):
-    """Give each lineage whose signal was fixed on this row one line of memory."""
+    """Give each lineage whose serious signal was fixed on this row one line of memory: lessons from
+    trivia would teach reviewers to find more trivia."""
     events = project.read("field.jsonl")
     signals = {e["id"]: e for e in events if e["type"] == "signal" and e.get("row") == row}
-    fixed = [e["of"] for e in events if e["type"] == "resolve" and e.get("row") == row and e.get("fixed")]
+    _, serious = field.review_fixes(events, row)
     lineages = load(project)
     gained = {}
-    for sid in fixed:
-        sig = signals.get(sid)
-        if not sig:
-            continue
+    for sig in serious:
         place = sig["at"]
         finders = {e["by"] for e in signals.values() if e["at"].strip() == place.strip()}
         for by in finders:
