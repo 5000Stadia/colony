@@ -75,6 +75,8 @@ be in the way. Otherwise, follow these steps in order.
     colony track            in a project: put it on the board (once)
     colony board            open the board: every tracked project in one page, each with its live console
     colony board --lan      the same, reachable from other machines on your network
+    colony restart          reload the board after a change (consoles and the monitor keep running)
+    colony doctor           is everything up and wired? what to do if not
 
 For each project the board shows what changed since you were last there, what the agent has put in
 your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
@@ -101,6 +103,11 @@ milestones, and anything costly to undo or leaving your hands. It never watches:
 board reads each screen every few seconds, costing no tokens, and wakes the monitor only when a project
 needs you, finishes a turn, or opens a gate. Talking through the monitor roughly doubles the tokens
 of that exchange; talk to a project's own session when that matters.
+
+The board runs in its own tmux session, so it needs no open terminal. The monitor also looks after the
+board itself: it runs `colony doctor` when something seems off, fixes bugs in this repository (tests,
+`colony restart`, a local commit; it asks before pushing), and proposes improvements for you to decide
+on, always after the projects' needs.
 
 The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
 from the board's console or the app.

@@ -285,5 +285,36 @@ class MonitorTest(BoardBase):
         self.assertTrue(monitor.helm())
 
 
+class ServerTest(BoardBase):
+    def run_cli(self, *a):
+        return subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True,
+                              env=dict(os.environ, PYTHONPATH=str(ROOT)))
+
+    def tearDown(self):
+        subprocess.run(["tmux", "kill-session", "-t", board.scoped("board-server")], capture_output=True)
+        super().tearDown()
+
+    def test_the_board_runs_on_its_own_restarts_and_the_doctor_checks_it(self):
+        board.track(self.root)
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = str(s.getsockname()[1])
+        s.close()
+        self.assertNotEqual(board.scoped("board-server"), "board-server", "a test board never touches the real one")
+        self.assertIn("the board is running", self.run_cli("board", "--port", port, "--no-monitor").stdout)
+        time.sleep(1.5)
+        doctor = self.run_cli("doctor")
+        self.assertEqual(doctor.returncode, 0, doctor.stdout)
+        self.assertIn(f"board answers on port {port}", doctor.stdout)
+        self.assertIn("plants: wired", doctor.stdout)
+        self.assertIn("restarted", self.run_cli("restart").stdout)
+        time.sleep(1.5)
+        self.assertEqual(self.run_cli("doctor").returncode, 0)
+        (self.root / "CLAUDE.md").write_text("Our own rules.\n")
+        broken = self.run_cli("doctor")
+        self.assertEqual(broken.returncode, 1)
+        self.assertIn("board wiring is missing", broken.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

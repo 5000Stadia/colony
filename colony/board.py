@@ -8,6 +8,7 @@ items), .board/gates.jsonl (what the agent has put in the person's hands) and .b
 person's comments on past work, gates and roadmap items not yet reached). The board remembers only which
 projects it shows and when the person last caught up on each. It answers only itself.
 """
+import hashlib
 import html
 import json
 import os
@@ -55,6 +56,13 @@ What we're making, in the person's words.
 
 def home():
     return Path(os.environ.get("COLONY_BOARD_HOME", Path.home() / ".config" / "colony"))
+
+
+def scoped(base):
+    """A tmux session name for this board: plain for the person's own board, suffixed for any other home,
+    so a second board (a test, a demo) never touches the first one's sessions."""
+    default = Path.home() / ".config" / "colony"
+    return base if home() == default else f"{base}-{hashlib.sha1(str(home()).encode()).hexdigest()[:6]}"
 
 
 def registry():
@@ -572,7 +580,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
                     f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
                     f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
-                    f"</span></header>" + console.PAGE.format(path=e(monitor.home()), name=monitor.NAME, pid=-1, token=console.TOKEN))
+                    f"</span></header>" + console.PAGE.format(path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.TOKEN))
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor
@@ -586,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if url.path == "/console/ws" and (q.get("p") or [""])[0] == "-1":
             from . import monitor
-            return self._console(monitor.home(), (q.get("t") or [""])[0], name=monitor.NAME, label="monitor")
+            return self._console(monitor.home(), (q.get("t") or [""])[0], name=monitor.name(), label="monitor")
         if url.path == "/console/ws" and reg["projects"]:
             return self._console(Path(reg["projects"][pid]), (q.get("t") or [""])[0])
         if url.path == "/item" and reg["projects"]:
@@ -611,7 +619,7 @@ class Handler(BaseHTTPRequestHandler):
         pid = int(form.get("p", "0"))
         if pid == -1 and path == "/console/stop":
             from . import monitor
-            subprocess.run(["tmux", "kill-session", "-t", monitor.NAME], capture_output=True)
+            subprocess.run(["tmux", "kill-session", "-t", monitor.name()], capture_output=True)
             self.send_response(303)
             self.send_header("Location", "/monitor")
             self.send_header("Content-Length", "0")

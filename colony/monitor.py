@@ -12,7 +12,8 @@ from pathlib import Path
 
 from . import board, console
 
-NAME = "board-monitor"
+def name():
+    return board.scoped("board-monitor")
 
 ROLE = """# You are `monitor · every project on this board · until the person ends you`
 
@@ -35,6 +36,20 @@ project also has its own session they can talk to directly.
 - **New projects**: `colony new NAME` when the person asks for one (ask where it should live if they
   haven't said). Then start its conversation the way the person would.
 - Keep your messages to the person short: they are often on a phone.
+
+## The board is yours to keep healthy
+
+You also look after the system you run on: the board, the consoles, the watcher and this monitor.
+Its source is `{source}` (a git repository; its `GUIDE.md` is how work is done there).
+
+- The person comes first: engine work happens only when no project needs them.
+- When something seems off, or the person reports a problem, run `colony doctor` (add `--tests` to run
+  the suite). It names each problem and what to do.
+- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_colony tests.test_board` in
+  the source, then `colony restart` (project consoles and you keep running). Commit each fix locally
+  with a clear message; ask the person before pushing it anywhere.
+- Improvements are the person's call: propose them with the reason and what they would cost, and build
+  one only once they agree. Try it against the plain setup first; add nothing that doesn't earn its place.
 """
 
 HELM_ON_NOTE = "You hold the helm: settle routine questions yourself, but bring planning, scope and anything costly back."
@@ -55,12 +70,12 @@ def helm(value=None):
 
 def ensure():
     home().mkdir(parents=True, exist_ok=True)
-    (home() / "CLAUDE.md").write_text(ROLE)
-    return console.ensure(home(), NAME, "monitor")
+    (home() / "CLAUDE.md").write_text(ROLE.replace("{source}", str(Path(__file__).resolve().parent.parent)))
+    return console.ensure(home(), name(), "monitor")
 
 
 def snapshot():
-    return console.snapshot(home(), name=NAME)
+    return console.snapshot(home(), name=name())
 
 
 # ---------------------------------------------------------------- the watcher (no tokens)
@@ -100,7 +115,7 @@ class Watcher:
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             note = HELM_ON_NOTE if helm() else HELM_OFF_NOTE
-            console.type_into(NAME, "[board] " + " | ".join(self.pending) + f" ({note})")
+            console.type_into(name(), "[board] " + " | ".join(self.pending) + f" ({note})")
             self.pending = []
 
     def run(self):

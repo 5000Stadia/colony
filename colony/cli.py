@@ -15,6 +15,8 @@ located signals and a project memory.
     colony gate "QUESTION" [--item R4] [--why ...]   put a decision in the person's hands
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
     colony noted ID "TEXT"          mark a note as acted on, with what was done
+    colony restart                  reload the board with its code as it is now (consoles keep running)
+    colony doctor [--tests]         is everything up and wired? what to do if not
     colony projects                 every project on the board, its console state and latest line
     colony peek NAME [-n 30]        a project console's last lines
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
@@ -30,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -288,10 +291,87 @@ def cmd_track(a):
     return 0
 
 
-def cmd_board(a):
+def server():
     from . import board
-    board.serve(a.port, lan=a.lan, monitor=not a.no_monitor)
+    return board.scoped("board-server")
+
+
+def _tmux_env():
+    """tmux gives a new session the tmux server's environment, not ours: pass on what the board needs."""
+    keep = ("COLONY_BOARD_HOME", "COLONY_CONSOLE_CMD", "PYTHONPATH", "PATH")
+    return [x for k in keep if os.environ.get(k) for x in ("-e", f"{k}={os.environ[k]}")]
+
+
+def _server_args(a):
+    return ["--port", str(a.port)] + (["--lan"] if a.lan else []) + (["--no-monitor"] if a.no_monitor else [])
+
+
+def cmd_board(a):
+    """The board runs in its own tmux session, so it outlives the terminal that started it and the
+    monitor can restart it; --foreground runs it here instead."""
+    from . import board
+    if a.foreground:
+        board.serve(a.port, lan=a.lan, monitor=not a.no_monitor)
+        return 0
+    if subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode == 0:
+        print(f"the board is already running: http://127.0.0.1:{a.port}/  (colony restart to reload it)")
+        return 0
+    board.home().mkdir(parents=True, exist_ok=True)
+    (board.home() / "server.json").write_text(json.dumps(_server_args(a)))
+    cmd = " ".join([shlex.quote(sys.executable), "-m", "colony", "board", "--foreground", *_server_args(a)])
+    subprocess.run(["tmux", "new-session", "-d", "-s", server(), *_tmux_env(), cmd], check=True)
+    print(f"the board is running: http://127.0.0.1:{a.port}/  (it keeps running in tmux session {server()})")
     return 0
+
+
+def cmd_restart(a):
+    """Reload the board with its code as it is now. Project consoles and the monitor keep running."""
+    from . import board
+    saved = board.home() / "server.json"
+    args = json.loads(saved.read_text()) if saved.exists() else []
+    subprocess.run(["tmux", "kill-session", "-t", server()], capture_output=True)
+    cmd = " ".join([shlex.quote(sys.executable), "-m", "colony", "board", "--foreground", *args])
+    subprocess.run(["tmux", "new-session", "-d", "-s", server(), *_tmux_env(), cmd], check=True)
+    print("the board restarted; consoles and the monitor were not touched")
+    return 0
+
+
+def cmd_doctor(a):
+    """Is everything up and wired? Prints what is wrong and what to do; exit 1 if anything is."""
+    from . import board, console, monitor
+    import urllib.request
+    problems = []
+    saved = board.home() / "server.json"
+    args = json.loads(saved.read_text()) if saved.exists() else []
+    port = args[args.index("--port") + 1] if "--port" in args else "8790"
+    try:
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/", headers={"Host": f"127.0.0.1:{port}"}), timeout=5)
+        print(f"ok    board answers on port {port}")
+    except Exception as err:
+        problems.append(f"the board does not answer on port {port} ({err}): colony board, or colony restart")
+    if "--no-monitor" not in args:
+        (print("ok    monitor session running") if monitor.snapshot()["state"] != "off"
+         else problems.append("the monitor session is not running: colony restart starts it"))
+    for p in map(Path, board.registry()["projects"]):
+        if not p.exists():
+            problems.append(f"{p}: the folder is gone; remove it from {board.home() / 'board.json'}")
+            continue
+        claude_md = (p / "CLAUDE.md").read_text() if (p / "CLAUDE.md").exists() else ""
+        settings = json.loads((p / ".claude" / "settings.json").read_text()) if (p / ".claude" / "settings.json").exists() else {}
+        hooks = json.dumps(settings.get("hooks", {}))
+        if "## The board" not in claude_md or "colony notes --deliver" not in hooks:
+            problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
+        else:
+            print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
+    if a.tests:
+        home = Path(__file__).resolve().parent.parent
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board"], cwd=home,
+                           capture_output=True, text=True)
+        (print("ok    the test suite passes") if r.returncode == 0
+         else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
+    for pr in problems:
+        print("PROBLEM " + pr)
+    return 1 if problems else 0
 
 
 def cmd_gate(a):
@@ -407,7 +487,11 @@ def main(argv=None):
     p = sub.add_parser("board"); p.add_argument("--port", type=int, default=8790)
     p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
     p.add_argument("--no-monitor", action="store_true", help="don't start the monitor session and its watcher")
+    p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
     p.set_defaults(fn=cmd_board)
+    sub.add_parser("restart").set_defaults(fn=cmd_restart)
+    p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
+    p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.set_defaults(fn=cmd_gate)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
