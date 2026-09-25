@@ -12,10 +12,16 @@ strong its evidence is. Read it once at the start of a project; it is not a rule
    another model, find the vendor's guidance and one independent evaluation, and answer the same
    questions for it: where does effort stop paying for building to a clear spec, does it pay for
    looking past the obvious, do more agents pay.
-2. **Put the goal in the person's own words, and a plan they approve.** The smallest thing that works
-   end to end first; for work whose path is unknown — research, a proof, a market — a first pass that
-   shows the shape of the answer. The plan is a plain document in the repo; an agent writes and
-   follows one natively.
+2. **Put the goal in the person's own words, and a plan they approve.** Find out, in their words, what
+   would make them proud of it (not merely satisfied), the best real example of this kind of work and
+   what makes it the bar, what would ruin it, and what must never happen without them. Reflect a draft
+   back rather than asking open questions, and give your best guess beside each open question so they
+   correct instead of starting from scratch. The smallest thing that works end to end first; for work
+   whose path is unknown — research, a proof, a market — a first pass that shows the shape of the
+   answer. The plan is a plain document in the repo. From one sentence each, this drew a sound plan,
+   checks and stakes for a receipts tool, a thousand-page novel and a pottery business (door test).
+2a. **Find the checks that settle quality in seconds** — tests and a build for code; a word count,
+   placeholder and cliché checks for a novel; a price floor for a shop. Most kinds of work have some.
 3. **Match the structure to the work.** If it fits in one sitting, just do it.
 
 ## Building
@@ -38,7 +44,13 @@ strong its evidence is. Read it once at the start of a project; it is not a rule
    need by building one shared module and telling the others (gap test, three runs each). That
    instinct is the strength to protect; do not add rules that stop it.
 9. **Make the small calls; ask only when a decision is costly to undo** or an act leaves the person's
-   hands. Say which calls you made.
+   hands. Say which calls you made. When the work teaches you what should come next, propose the
+   change to the plan; the person decides.
+9a. **Settle wording that can be read two ways.** It was the most common cause of misses measured:
+   pilot 7's shared miss (5 of 6 runs) traced to "a paid invoice", and the seeded test's one miss to a
+   field that could be a count or a list. When a step can be read two ways, say which reading you took,
+   or ask if the difference matters.
+9b. **Report cost beside every result, and ask before going past what the person set.**
 10. **Judge stakes by consequence and reversibility, never by subject.** Models carry trained caution
     about some subjects; it is not a reason for review or ceremony.
 
@@ -54,7 +66,9 @@ strong its evidence is. Read it once at the start of a project; it is not a rule
     (pilot 1) came from agents raising what a maintainer would fear — the product refused a tampered
     log — at 5× the cost; the same idea later arose by chance in a solo build.
 13. **If you review:** the reviewer reads, never edits; it sees first what is at stake and what the
-    builder is least sure of; a finding two reviewers made independently is more likely real.
+    builder is least sure of. A reviewer always finds something and calls it major — with "any major
+    finding wakes the builder" the loop never went quiet (pilot 3) — so act on critical findings and on
+    those two reviewers made independently.
 
 ## Delegating to subagents
 
@@ -100,11 +114,40 @@ the plain setup on a seeded version of the problem.
 | Cost is spread across many sessions and nobody can say where it goes | no per-step accounting | a per-step ledger metered from `modelUsage`, differencing resumed sessions | each session sees only its own total |
 | The person is not in the conversation but wants to follow and steer | nothing shows the work at a glance | a page of plan, history and cost, with a note box per step that reaches that step's agent | it speaks only when spoken to |
 
+## Designing any workflow piece
+
+When something does need building, these held across AgentBridge, Kernos and colony:
+
+- **Ask what consumes it.** An artifact nobody reads and nothing depends on is cost, however
+  professional it feels. But non-use in a small trial proves its cost, not its uselessness: cut what is
+  hollow at every scale, and keep scale machinery absent until the scale arrives.
+- **State the intention, not the mechanism,** except where a mistake must be physically blocked —
+  publishing, irreversible acts, data that is not the person's. Precise rules encode the first case
+  imagined; intentions survive the ones nobody imagined. Test every line: would a strong model do worse
+  without it? If not, cut it.
+- **Judgement on the model, plumbing in code.** A trigger is a count over the records, taken at a
+  boundary (a step's end, a checkpoint), never an agent's opinion and never every turn. The worker
+  never sees the machinery around it.
+- **Quality before cost in every gauge.** Report cost beside quality, always; never let a cost number
+  argue quality down, and never offer the person's declared stakes up for saving. Act on a miss at
+  least as fast as on an empty result.
+- **The person's "off" stands.** Nothing switches itself back on over their decision.
+- **Back-and-forth that is not about the work's own nuance** signals a mismatch between the workflow
+  and what helps: fix the architecture, do not keep patching.
+
 ## Measuring a change before adopting it
 
 16. **Test it against the plain agent first.** Pre-register a forecast; run at least three replicates
     (identical runs spread by up to 11 judged points); judge blind with labels swapped; keep the
     acceptance tests hidden from the builder; never hint with hindsight.
+16a. **Check the measure itself.** Pass rates tied at the ceiling in pilot 1; only the blind judge
+    found the real difference (the group's product refused a tampered log). A measure that cannot
+    separate the arms is not evidence they are equal.
+16b. **Make sure the task is fresh:** search for its published answer at design time. Pilot 2 was
+    void because both arms found and installed a published record.
+16c. **Wait out usage limits, repeat the refused call, and never count it as a round;** run the arms
+    of a comparison together so they face the same limits. Change settings only between experiment
+    sets, never inside one. Parallel writers to a shared log need a lock.
 17. **Replay a trigger against real histories before trusting it.** It is free: two automatic triggers
     here fired on most healthy projects when replayed.
 18. **Seed a long history instead of paying to grow one.**
