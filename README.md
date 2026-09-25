@@ -17,27 +17,42 @@ You are starting a long project for a person with colony. Follow these steps in 
    into `~/.claude/skills/`. Check with `colony --help`.
 2. **Make the project.** Ask the person for its name and where it should live; invent neither.
    `colony init PATH`, then work from inside `PATH`.
-3. **The front door is a conversation, not a form.** Find out, in their words: what it is and who it
+3. **Settle the model with the person** before anything is built. Ask which model will do the work.
+   Colony runs its agents through Claude Code, so any model Claude Code runs can be the builder.
+   - **Claude Opus 5.5:** the measured defaults apply (see *What we measured, and on what*); say so in
+     a line and move on.
+   - **Any other model:** look up what is published about its effort or reasoning levels: the
+     vendor's guidance and at least one independent evaluation. Answer the three questions in *What
+     we measured* for it, and tell the person what you found, with sources and how solid they are.
+     Then propose a `model` and an `effort`, and let them decide. If the sources are thin or
+     disagree, start at the vendor's recommended default; the checkpoint's cost lines will show
+     whether to move.
+   - **A model Claude Code cannot run** (Codex, for one): say so plainly. Colony's agents run through
+     Claude Code; the findings still guide effort, but there is no runner for that model yet.
+
+   Write the choice to `.colony/config.json` (`"model"`, `"effort"`, or `"effort_builder"` and
+   `"effort_specialist"` apart).
+4. **The front door is a conversation, not a form.** Find out, in their words: what it is and who it
    is for; what would make them *proud* of it, not merely satisfied; the best real example of this
    kind of work, and what makes it the bar; what would ruin it; what must never happen without them
    (publishing, spending, sending, touching data that is not theirs); where it goes. Reflect drafts
    rather than asking open questions. `colony door --goal "their words"` writes a first draft of
    `design/spine.md` to correct together.
-4. **The spine they approve** holds: their goal, quoted; what "good" means; what must never happen;
+5. **The spine they approve** holds: their goal, quoted; what "good" means; what must never happen;
    **checks** — commands that settle quality in seconds (tests, a build, a word count); **risky
    areas** — only paths where a mistake is truly expensive, since every change there is reviewed;
    and **rows**, smallest end-to-end thing first, each with *what done looks like* and an **impact**
    `1–10 — one sentence on what a mistake would hurt`. Put every other fact where the work's own
    tools already read it (a manifest, a manuscript folder, a calendar), not in new files.
-5. **The person approves.** They run `colony approve`, or tell you to; it shows what the risky areas
+6. **The person approves.** They run `colony approve`, or tell you to; it shows what the risky areas
    will cost. Never approve on their behalf.
-6. **Run and report.** `colony run --rows 3 --cap 10` builds the next rows and stops cleanly at the
+7. **Run and report.** `colony run --rows 3 --cap 10` builds the next rows and stops cleanly at the
    cap, a failing check, or a fork that needs them. After each run, give the person `colony cost` and
    point them to `colony page`, where a note left on any row reaches that row's builder.
    Every few rows run `colony checkpoint`: it costs nothing. Tell the person what it shows about
    the workflow and tokens, put its questions to them, and record each answer with `colony answer`
    (`--always` if they want it to become a rule). Never answer on their behalf.
-7. **Leave the defaults alone unless the project gives a reason.** They are what won the tests below.
+8. **Leave the defaults alone unless the project gives a reason.** They are what won the tests below.
    Raise `effort` only for work that proves hard; set `"review_if_risk_at_least": 30` in
    `.colony/config.json` if they want review wherever doubt times stakes runs high. Memory and
    structure take care of themselves: colony switches memory on when it sees evidence of lost context
@@ -68,6 +83,29 @@ each part's evidence and its status.
 - **Nothing irreversible without the person.** Publishing and remote commands are refused to every
   agent; anything else the spine names stops as a fork. A floor, not a sandbox: for isolation, run
   colony in a container.
+
+## What we measured, and on what
+
+Every number above was measured on **Claude Opus 5.5** in Claude Code, in September 2026, on
+software tasks with pre-registered tests, replicates and a blind judge (`design/claims.md`). A
+different model changes the numbers, not the questions. These are the three to answer for it:
+
+1. **Where is the value knee for building to a clear spec?** For Opus 5.5 it is medium. Low → medium
+   was the largest gain found (+11 judged points for $0.75, three runs each, one task). Above medium,
+   published evaluations found flat or negative returns on common work. CodeRabbit's lower-effort
+   configuration caught 51 known bugs against 50, with better precision. Medium matched or beat the
+   previous generation's high effort on about half the tokens.
+2. **Does effort pay for looking past the obvious** (review, subtle faults)? A little, not reliably.
+   Our low-effort reviewers barely looked and our medium ones found real problems. In CodeRabbit's
+   13 hard cases, higher effort caught 10 against 8, but not consistently, and the two missed
+   different faults.
+3. **Do more agents pay?** On well-specified work, no: a reviewer cost 1.3–2.4× for no measurable
+   gain. A fresh agent per row at medium was the best value up to fourteen rows. xhigh and max were
+   not worth testing further given the above.
+
+Sources: `design/claims.md` and the lab's results; [CodeRabbit's Opus 5.5
+review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
+[Anthropic's Opus 5.5 page](https://www.anthropic.com/claude-opus-5-5).
 
 ## Commands
 

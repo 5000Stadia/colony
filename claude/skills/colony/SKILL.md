@@ -33,6 +33,9 @@ review only where the person has said a mistake would be expensive.
 - `colony checkpoint`, every few rows, looks back at the workflow, progress and tokens for free and
   ends with questions only the person can settle. Ask them; record each answer with
   `colony answer KIND "text"` (`--always` makes it a rule in the spine). Never answer for them.
+- Before the first build, settle the model with the person (Quickstart step 3): Opus 5.5 at medium
+  is what was measured; for another model, find its published effort guidance, answer the three
+  questions in the README's *What we measured*, and let the person choose.
 - Settings live in `.colony/config.json`: `effort` (default medium), `review` (`auto` reviews only the
   spine's risky areas; `always`, `never`), `reconcile` (keep NOW, and write each row's narrative into its
   closing commit so `git log` is the history — worth it once a project is too large to re-read cheaply).
