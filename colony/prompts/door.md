@@ -36,7 +36,7 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    critic every colony has, write `.claude/agents/<name>.md` — a Claude Code subagent file:
    a front matter block (`---`, `name: <name>`, `description: "<one sentence>"`, `tools: Read, Grep,
    Glob, Bash`, `colony: reviewer`, `---`), then the mission — who would attack this work and how, in
-   two or three sentences — then an empty `## Memory` section. A numbers skeptic for money, a
+   two or three sentences. A numbers skeptic for money, a
    continuity reader for a novel's canon. Most goals need none: a single strong agent is the default,
    and review is for the places where a mistake would be expensive.
 

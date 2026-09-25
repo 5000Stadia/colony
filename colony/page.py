@@ -40,21 +40,19 @@ def model(project):
     by_row = {}
     for u in usage:
         role = u["agent"].split("@")[0]
-        kind = "build" if role == "builder" else "keep" if role in ("reconciler", "door") else "review"
-        by_row.setdefault(u["row"], {"build": 0.0, "review": 0.0, "keep": 0.0})[kind] += u.get("cost_usd", 0)
+        kind = "build" if role == "builder" else "door" if role == "door" else "review"
+        by_row.setdefault(u["row"], {"build": 0.0, "review": 0.0, "door": 0.0})[kind] += u.get("cost_usd", 0)
     live = field.signals(project, wave=99)
     return {
         "name": project.root.name, "goal": memory.goal(project) if project.spine.exists() else "",
         "rows": [dict(zip(("n", "target", "done"), r), impact=memory.stakes(project, r[0])[0],
                       stake=memory.stakes(project, r[0])[1], notes=[n for n in notes(project) if n.get("row") == r[0]])
                  for r in (memory.rows(project) if project.spine.exists() else [])],
-        "now": memory.now_text(project) if project.now.exists() else "",
         "forks": [s for s in live if s["kind"] == "fork"],
         "signals": [s for s in live if s["kind"] != "fork"],
         "stops": [e for e in ledger if e["kind"] == "run-stopped"][-1:],
         "history": closed_rows(project), "reviews": reviews, "closes": closes, "by_row": by_row,
         "total": sum(u.get("cost_usd", 0) for u in usage),
-        "moves": [e for e in ledger if e["kind"] == "threshold"],
         "project_notes": [n for n in notes(project) if n.get("row") in (0, None)],
     }
 
@@ -140,12 +138,10 @@ def render(project):
         out.append(f"<div class='card fork'><b>Waiting on you</b> — row {e(f['row'])}: {e(' | '.join(f['notes']))}</div>")
     for s in m["stops"]:
         out.append(f"<div class='card muted'>Last run stopped: {e(s.get('reason', ''))}</div>")
-    if m["now"]:
-        out.append(f"<div class='card'>{folded(m['now'])}</div>")
     if m["signals"]:
         out.append("<div class='card'><b>Open signals</b><ul>" + "".join(
             f"<li>{e(field.render(s))}</li>" for s in m["signals"][:12]) + "</ul></div>")
-    if not (m["forks"] or m["stops"] or m["now"] or m["signals"]):
+    if not (m["forks"] or m["stops"] or m["signals"]):
         out.append("<div class='card muted'>Nothing is waiting. The next row is at the top of the roadmap.</div>")
     # roadmap
     out.append("<h2>Roadmap</h2>")
@@ -173,10 +169,9 @@ def render(project):
         except (IndexError, ValueError):
             n = None
         rv, cl, cost = m["reviews"].get(n, {}), m["closes"].get(n, {}), m["by_row"].get(n, {})
-        a = rv.get("assessment") or {}
         facts = [f"{h['at']} · <code>{e(h['sha'])}</code>", f"${sum(cost.values()):.2f}"]
-        if a.get("confidence") is not None:
-            facts.append(f"confidence {a['confidence']}/10" + (f" · impact {a['impact']}" if a.get("impact") is not None else ""))
+        if rv.get("impact") is not None:
+            facts.append(f"impact {rv['impact']}/10")
         facts.append(("reviewed — " + e(rv.get("why", ""))) if rv.get("review") else "trusted")
         if cl.get("review_fixes"):
             facts.append(f"review fixed {cl['review_fixes']}")
@@ -184,35 +179,23 @@ def render(project):
                    + (folded(h["body"], keep=4) if h["body"] else "") + "</div></div>")
     # cost
     out.append("<h2>Cost</h2><div class='card'><div class='legend'><span class='k build'></span>building <span class='k review'></span>review "
-               "<span class='k keep'></span>keeping memory</div>")
+               "<span class='k door'></span>front door</div>")
     for n in sorted(k for k in m["by_row"] if k):
         v = m["by_row"][n]
-        bars = "".join(f"<span class='bar {k}' style='width:{100 * v[k] / top:.1f}%' title='{k} ${v[k]:.2f}'></span>" for k in ("build", "review", "keep") if v[k])
+        bars = "".join(f"<span class='bar {k}' style='width:{100 * v[k] / top:.1f}%' title='{k} ${v[k]:.2f}'></span>" for k in ("build", "review", "door") if v[k])
         out.append(f"<div class='row'><span class='rn'>row {n}</span><span class='bars'>{bars}</span><span class='amt'>${sum(v.values()):.2f}</span></div>")
     out.append("</div>")
-    esc = [x for x in project.read("ledger.jsonl") if x["kind"] in ("evidence", "structure-proposal")]
-    from .health import strain
-    signs = strain(project)
+    evidence = [x for x in project.read("ledger.jsonl") if x["kind"] == "evidence"]
     from .health import since_checkpoint
     _, cp_row = since_checkpoint(project)
     closed_since = [x for x in project.read("ledger.jsonl") if x["kind"] == "row-closed" and x["row"] > cp_row]
     if len(closed_since) >= project.config()["checkpoint_every"]:
         out.append(f"<div class='card fork'><b>A checkpoint is due</b> — {len(closed_since)} rows since the last. "
                    "Run <code>colony checkpoint</code> for a broad look; it reads the records and spends no tokens.</div>")
-    out.append("<h2>Health</h2>")
-    if not esc and not signs:
-        out.append("<div class='card muted'>No sign that the project has outgrown its shape.</div>")
-    for x in esc:
-        if x["kind"] == "evidence":
-            out.append(f"<div class='card'><b>Row {e(x['row'])} broke checks that had passed:</b> {e(', '.join(x['detail']))}</div>")
-        else:
-            out.append(f"<div class='card fork'><b>Proposal after row {e(x['row'])}:</b> {e(x['proposal'])}"
-                       f"<div class='facts'>{e('; '.join(x['signs']))}</div></div>")
-    if signs and not any(x["kind"] == "structure-proposal" for x in esc):
-        out.append(f"<div class='card muted'>Strain gauge: {e('; '.join(signs))}</div>")
-    if m["moves"]:
-        out.append("<h2>Review threshold</h2><div class='card'><ul>" + "".join(
-            f"<li>after row {e(x['row'])}: {e(x['from'])} → {e(x['to'])} — {e(x['why'])}</li>" for x in m["moves"]) + "</ul></div>")
+    if evidence:
+        out.append("<h2>Breaks</h2>")
+    for x in evidence:
+        out.append(f"<div class='card'><b>Row {e(x['row'])} broke checks that had passed:</b> {e(', '.join(x['detail']))}</div>")
     out.append("</main></body></html>")
     return "".join(out)
 
@@ -281,9 +264,9 @@ def serve(project, port):
 
 CSS = """
 :root { color-scheme: light dark; --bg:#fbfaf8; --card:#fff; --ink:#1a1a19; --muted:#6b6a66; --line:#e4e1db;
-  --accent:#2f5d50; --flag:#8a5a1e; --flag-bg:#fdf3e3; --sunk:#f4f3f0; --build:#2f5d50; --review:#b0702a; --keep:#8a86a8; }
+  --accent:#2f5d50; --flag:#8a5a1e; --flag-bg:#fdf3e3; --sunk:#f4f3f0; --build:#2f5d50; --review:#b0702a; --door:#8a86a8; }
 @media (prefers-color-scheme: dark) { :root { --bg:#16171a; --card:#1e2024; --ink:#e8e6e2; --muted:#9a9791; --line:#2f3238;
-  --accent:#7fb5a2; --flag:#d8a55f; --flag-bg:#2b2317; --sunk:#24262b; --build:#7fb5a2; --review:#d8a55f; --keep:#a9a5c9; } }
+  --accent:#7fb5a2; --flag:#d8a55f; --flag-bg:#2b2317; --sunk:#24262b; --build:#7fb5a2; --review:#d8a55f; --door:#a9a5c9; } }
 * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink);
   font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif }
 code { font-family:ui-monospace,Menlo,monospace; font-size:.9em; background:var(--sunk); padding:.1em .35em; border-radius:4px }
@@ -307,7 +290,7 @@ pre.now { white-space:pre-wrap; margin:8px 0 0; font:13px/1.5 ui-monospace,Menlo
 .doc li { margin:2px 0 } details summary { cursor:pointer; color:var(--accent); font-size:13px; margin-top:6px }
 .row { display:flex; align-items:center; gap:10px; margin:5px 0; font-size:13px } .rn { width:52px; color:var(--muted) }
 .bars { flex:1; display:flex; height:12px; background:var(--sunk); border-radius:6px; overflow:hidden } .bar { display:block; height:100% }
-.bar.build, .k.build { background:var(--build) } .bar.review, .k.review { background:var(--review) } .bar.keep, .k.keep { background:var(--keep) }
+.bar.build, .k.build { background:var(--build) } .bar.review, .k.review { background:var(--review) } .bar.door, .k.door { background:var(--door) }
 .amt { width:56px; text-align:right; font-variant-numeric:tabular-nums } .legend { font-size:12px; color:var(--muted); margin-bottom:8px }
 .k { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 10px }
 """

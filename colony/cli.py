@@ -8,7 +8,6 @@ located signals and a project memory.
     colony wait [--timeout S]        block until the run stops, then say how it went
     colony status                   the rows, NOW and the open signals
     colony cost                     dollars and tokens, per row and per agent
-    colony calibration              the builder's own forecast beside what review then found
     colony checkpoint               workflow, progress and tokens since the last checkpoint; questions for you
     colony answer KIND TEXT [--always]  answer a checkpoint question; --always keeps it as a rule
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
@@ -137,8 +136,10 @@ def cmd_run(a):
         env = dict(os.environ, COLONY_ROOT=str(project.root),
                    PYTHONPATH=os.pathsep.join(filter(None, [home, os.environ.get("PYTHONPATH")])))
         with open(project.state / "run.log", "a") as log:
-            subprocess.Popen(args, cwd=project.root, env=env, stdout=log, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, start_new_session=True)
+            child = subprocess.Popen(args, cwd=project.root, env=env, stdout=log, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL, start_new_session=True)
+        # The lock is written before returning, so `colony wait` right after can never miss the run.
+        (project.state / "run.json").write_text(json.dumps({"pid": child.pid, "started": time.strftime("%Y-%m-%d %H:%M")}))
         print("running in the background, safe from this session closing. `colony wait` blocks until it "
               "stops and says how it went; `colony page` shows it live.")
         return 0
@@ -192,7 +193,6 @@ def cmd_status(a):
     print("Rows:")
     for n, target, _ in memory.rows(project):
         print(f"  {n}. {target}")
-    print("\n" + memory.now_text(project).strip())
     live = field.signals(project, wave=int(os.environ.get("COLONY_WAVE", "0")))
     print("\nOpen signals:" + ("".join(f"\n  {field.render(s)}" for s in live) if live else " none"))
     return 0
@@ -210,24 +210,6 @@ def cmd_cost(a):
                 agg[k] += r.get(k, 0)
     total = {k: sum(v[k] for v in rows.values()) for k in keys}
     print(json.dumps({"total": total, "by_row": rows, "by_agent": agents}, indent=2))
-    return 0
-
-
-def cmd_calibration(a):
-    """How the builder's own assessments compared with what review then found, row by row."""
-    project = Project.here()
-    ledger = project.read("ledger.jsonl")
-    reviews = {e["row"]: e for e in ledger if e["kind"] == "review"}
-    closed = {e["row"]: e for e in ledger if e["kind"] == "row-closed"}
-    rows = []
-    for n in sorted(reviews):
-        a_ = reviews[n].get("assessment") or {}
-        rows.append({"row": n, "confidence": a_.get("confidence"), "impact": a_.get("impact"),
-                     "reviewed": reviews[n]["review"], "review_fixes": closed.get(n, {}).get("review_fixes"),
-                     "serious_fixes": closed.get(n, {}).get("serious_fixes"),
-                     "note": a_.get("note")})
-    moves = [e for e in ledger if e["kind"] == "threshold"]
-    print(json.dumps({"rows": rows, "threshold_moves": moves}, indent=2))
     return 0
 
 
@@ -301,7 +283,6 @@ def main(argv=None):
     p = sub.add_parser("wait"); p.add_argument("--timeout", type=float, help="seconds"); p.set_defaults(fn=cmd_wait)
     sub.add_parser("status").set_defaults(fn=cmd_status)
     sub.add_parser("cost").set_defaults(fn=cmd_cost)
-    sub.add_parser("calibration").set_defaults(fn=cmd_calibration)
     sub.add_parser("checkpoint").set_defaults(fn=cmd_checkpoint)
     p = sub.add_parser("answer"); p.add_argument("kind"); p.add_argument("text"); p.add_argument("--always", action="store_true")
     p.set_defaults(fn=cmd_answer)

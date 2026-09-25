@@ -5,24 +5,15 @@ from pathlib import Path
 
 # Lean by default: in pilots 1-7 a single agent at medium effort was the best value up to a
 # fourteen-row project, so every other mechanism starts off and is turned on where it earns its place.
-DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium", "waves_per_row": 2,
+DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium",
             "builder_budget_usd": 8.0, "fix_budget_usd": 4.0, "specialist_budget_usd": 1.5,
-            "reconcile_budget_usd": 0.75, "signals_per_specialist": 5,
-            "review": "auto",            # never | auto | always
-                                         # auto reviews a change that touches the spine's "## Risky areas".
-            "review_min_lines": None,    # Size alone is not a reason: on a 1000-line one-row build, review
-            "review_min_files": None,    # cost 1.3-2.4x and bought nothing measurable (pilots 5, 6). Set
-                                         # these to also review large or wide changes.
+            "signals_per_specialist": 5,
+            "review": "auto",            # never | auto | always. auto reviews a change that touches the
+                                         # spine's "## Risky areas", and nothing else unless the next is set.
             "review_at_impact": None,    # also review every row whose impact (set when it was assigned) is at
-                                         # least this, e.g. 9. Builders' own confidence was 8 or 9 on all 36
-                                         # rows measured, so it does not separate rows; the assigner's stakes do.
-            "review_adapt": True,        # the rule drifts with experience, one step on the 1-10 scale: down
-                                         # after a serious fix or a trusted row that broke a check, up after
-                                         # three reviews with nothing serious; every move is in the ledger
+                                         # least this, e.g. 9.
             "checkpoint_every": 5,       # the page says a checkpoint is due after this many rows; never stops a run
-            "reconcile": False,          # NOW and history, rewritten at every row close
-            "now_max_lines": 25,
-            "map_in_brief": False}
+            "allow_outward": []}         # refused commands the person lifts for work that needs them
 
 
 class Project:

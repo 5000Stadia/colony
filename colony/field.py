@@ -7,7 +7,7 @@ import fcntl
 import json
 
 RANK = {"critical": 3, "major": 2, "minor": 1}
-KINDS = ("hole", "gap", "friction", "duplicate", "fork", "check", "unfixed")
+KINDS = ("hole", "gap", "friction", "duplicate", "fork", "check")
 
 
 def signals(project, row=None, wave=0):
@@ -38,14 +38,10 @@ def signals(project, row=None, wave=0):
     return sorted(live, key=lambda s: (-s["strength"], -RANK[s["severity"]], s["id"]))
 
 
-def wakes_builder(s, wave):
-    """Critical, a failing check, a fork or a fix that did not hold always; major only in the first
-    wave; later, confirmation."""
-    if s["severity"] == "critical" or s["kind"] in ("check", "fork", "unfixed"):
-        return True
-    if wave <= 1 and s["severity"] == "major":
-        return True
-    return s["strength"] >= 2 and s["severity"] != "minor"
+def wakes_builder(s):
+    """Critical, major, a failing check or a fork wakes the builder; a minor one only when a second
+    reviewer found it too."""
+    return s["severity"] in ("critical", "major") or s["kind"] in ("check", "fork") or s["strength"] >= 2
 
 
 def _append_numbered(project, record):
@@ -85,7 +81,7 @@ def review_fixes(events, row):
     two lineages. A builder fixes almost anything it is shown (pilot 5: fixes every run, no gain in judged
     quality), so only a serious fix is evidence that review earned its place."""
     signals = {e["id"]: e for e in events if e["type"] == "signal" and e.get("row") == row
-               and e["kind"] not in ("check", "fork", "unfixed")}
+               and e["kind"] not in ("check", "fork")}
     finders = {}
     for e in signals.values():
         finders.setdefault(e["at"].strip(), set()).add(e["by"].split("@")[0])

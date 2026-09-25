@@ -18,7 +18,7 @@ review only where the person has said a mistake would be expensive.
 3. Write `design/spine.md` with them — sections *What we're making* (their words, quoted), *What "good"
    means here*, *What it must never do*, *Where it goes*, *Checks* (commands, each "- `command`"),
    *Risky areas* (paths where every change is reviewed; usually empty), and *The spec list* as a table
-   `| # | What to build now | What done looks like | Impact |`, smallest end-to-end thing first, impact
+   `| # | What to do now | What done looks like | Impact |`, smallest end-to-end thing first, impact
    written as `1–10 — one sentence on what a mistake would hurt`. For a quick
    draft instead, `colony door --goal "..."` writes one for them to correct.
 4. When they recognise themselves in it, they run `colony approve` — not you.
@@ -38,9 +38,9 @@ review only where the person has said a mistake would be expensive.
 - Before the first build, settle the model with the person (Quickstart step 3): Opus 5.5 at medium
   is what was measured; for another model, find its published effort guidance, answer the three
   questions in the README's *What we measured*, and let the person choose.
-- Settings live in `.colony/config.json`: `effort` (default medium), `review` (`auto` reviews only the
-  spine's risky areas; `always`, `never`), `reconcile` (keep NOW, and write each row's narrative into its
-  closing commit so `git log` is the history — worth it once a project is too large to re-read cheaply).
+- Settings live in `.colony/config.json`: `model` and `effort` (default Opus 5.5, medium), `review`
+  (`auto` reviews only changes touching the spine's risky areas; `always`, `never`), and
+  `review_at_impact` (also review rows at that impact or above).
 - The project's reviewers live in `.claude/agents/` (marked `colony: reviewer`), so they can also be
   called as subagents in any session.
 

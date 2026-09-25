@@ -5,8 +5,9 @@ be woken to answer what they find.
 {brief}
 
 Do this row now, fully. Before you make anything new, look at what already exists
-(`python3 -m colony map QUERY` finds it) and build on it rather than making it twice. Keep the design documents true to what you build, in the same step. Run the checks the goal
-names before you finish.
+(`python3 -m colony map QUERY` finds it) and build on it rather than making it twice. Keep the
+design documents true to what you build, in the same step. Run the checks the goal names before you
+finish.
 
 Where the goal is silent, make the call a good colleague would and say which calls you made in your
 final message. Leave a fork only when the row needs an act listed under "What it must never do", or a
@@ -16,8 +17,5 @@ and stop. If what you learned changes what should come next, add rows under `## 
 the end of `design/spine.md` (same columns); the person decides whether they join the plan. Change
 nothing else in the spine, and do not commit: colony commits each step.
 
-End your final message with two lines. First an honest forecast, which will be checked against what
-review and later checks find — your confidence that this row meets its done and breaks nothing (not
-how good it is — others judge that):
-`ASSESSMENT: confidence N/10 — <one sentence: what is least certain>`
-Then `STATUS: done`.
+End your final message with two lines: `LEAST CERTAIN: <one sentence on what you are least sure of>`,
+then `STATUS: done`.

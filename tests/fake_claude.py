@@ -53,8 +53,8 @@ if prompt.startswith("You are `builder") and "Do this row now" in prompt:
         finish("API Error: overloaded", error=True)
     if os.environ.get("FAKE_BUILDER_FORK"):
         colony("field", "signal", "--kind", "fork", "--severity", "critical", "--at", "design/spine.md", "--text", "which one?")
-    assess = os.environ.get("FAKE_ASSESS", "confidence 9/10 — routine")
-    finish(f"built\nASSESSMENT: {assess}\nSTATUS: done", cost=0.5)
+    doubt = os.environ.get("FAKE_ASSESS", "routine")
+    finish(f"built\nLEAST CERTAIN: {doubt}\nSTATUS: done", cost=0.5)
 elif prompt.startswith("Wave "):
     for sid in re.findall(r"^#(\d+) ", prompt, re.M):
         colony("field", "resolve", sid, "--fixed", "--text", "fixed it")
@@ -71,16 +71,6 @@ elif " · reads, never edits`" in prompt:
     elif wave == 1:
         colony("field", "signal", "--kind", "hole", "--severity", "major", "--at", "work.txt:1", "--text", f"{name} found a hole")
     finish("probed", cost=0.05)
-elif "trimming NOW" in prompt:
-    (root / "design" / "now.md").write_text("Status: trimmed.\n")
-    finish("trimmed", cost=0.01)
-elif prompt.startswith("You are `reconciler"):
-    if os.environ.get("FAKE_LONG_NOW"):
-        (root / "design" / "now.md").write_text("".join(f"line {i}\n" for i in range(40)))
-        finish("reconciled long", cost=0.02)
-    (root / "design" / "now.md").write_text("Status: row closed.\nNext: the next row.\n")
-    (root / ".colony" / "closing-note.md").write_text("Built the row; decided nothing new.\n")
-    finish("reconciled", cost=0.02)
 elif "Your role: the front door." in prompt:
     (root / "design" / "spine.md").write_text("# Draft — spine\n\n## The spec list\n| # | What | Done |\n|---|---|---|\n| 1 | a | b |\n\n**Approved:** no\n")
     finish("drafted", cost=0.2)

@@ -138,10 +138,6 @@ def close_row(project, number):
     project.spine.write_text("\n".join(kept))
 
 
-def now_text(project):
-    return project.now.read_text() if project.now.exists() else "Nothing has been built yet."
-
-
 def ledger(project, kind, **fields):
     project.append("ledger.jsonl", dict(fields, kind=kind, at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
 
@@ -159,46 +155,31 @@ def goal(project):
     return m.group(1).strip() if m else ""
 
 
-def specialist_brief(project, row, changed, assessment=None):
-    """A specialist's brief: where to look first (what the assigner said is at stake, what the builder is
-    least sure of), the goal, what must never happen, the row, and the map entries for the files that
-    changed — not the whole spine or NOW, which it does not need to attack a change."""
+def specialist_brief(project, row, doubt=""):
+    """A reviewer's brief: where to look first (what the assigner said is at stake, what the builder is
+    least sure of), the goal, what must never happen, and the row — nothing it does not need."""
     number, target, done = row
-    bearing = mapper.query(project, " ".join(changed) + f" {target}")
     impact_n, stake = stakes(project, number)
     look = []
     if impact_n is not None:
         look.append(f"- What is at stake (set when the row was assigned): impact {impact_n}/10" + (f" — {stake}" if stake else ""))
-    if assessment and assessment.get("confidence") is not None:
-        look.append(f"- Where the builder is least sure: confidence {assessment['confidence']}/10"
-                    + (f" — {assessment['note']}" if assessment.get("note") else ""))
+    if doubt:
+        look.append(f"- What the builder is least sure of: {doubt}")
     return "\n\n".join((["# Look here first\n\n" + "\n".join(look)] if look else []) + [
         "# The goal\n\n" + goal(project),
         "# What must never happen\n\n" + (irreversible(project) or "nothing listed"),
         f"# This row\n\nRow {number}: {target}\nDone looks like: {done}",
-        "# What already exists around the change (from the map)\n\n" + mapper.render(bearing),
     ])
 
 
-def brief(project, row, extra=""):
-    """What the builder needs for this row, and nothing else."""
+def brief(project, row):
+    """What the builder needs for this row, and nothing else: the project itself is the state."""
     number, target, done = row
     open_ = [field.render(s) for s in field.signals(project, row=number)]
-    bearing = ("# What already exists that bears on it (from the map; read these lines, not everything)\n\n"
-               + mapper.render(mapper.query(project, f"{target} {done} {extra}"))
-               if project.config().get("map_in_brief") else
-               "# What already exists\n\nAsk the map before making anything new: `python3 -m colony map QUERY`.")
-    # NOW only when it exists: without it the project itself is the state, and saying "nothing has been
-    # built" to a builder joining a project that has would be false.
-    now = ("# Where the project is now\n\n" + project.now.read_text()
-           + ("\n\n`git log` holds what every earlier row did and why, including decisions that were later "
-              "changed; read the entries that bear on this row." if project.config().get("reconcile") else "")
-           if project.now.exists() else "")
-    return "\n\n".join(filter(None, [
+    return "\n\n".join([
         "# The goal (the person's words — never change them)\n\n" + project.spine.read_text(),
-        now,
         f"# This row\n\nRow {number}: {target}\nDone looks like: {done}"
         + ("".join(f"\n\nA note from the person on this row ({n['at'][:10]}): {n['text']}" for n in waiting_notes(project, number))),
-        bearing,
+        "# What already exists\n\nAsk the map before making anything new: `python3 -m colony map QUERY`.",
         "# Open signals on this row\n\n" + ("\n".join(open_) if open_ else "none"),
-    ]))
+    ])

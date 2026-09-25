@@ -58,12 +58,11 @@ be in the way. Otherwise, follow these steps in order.
    Every few rows run `colony checkpoint`: it costs nothing. Tell the person what it shows about
    the workflow and tokens, put its questions to them, and record each answer with `colony answer`
    (`--always` if they want it to become a rule). Never answer on their behalf.
-8. **Leave the defaults alone unless the project gives a reason.** They are what won the tests below.
-   Raise `effort` only for work that proves hard. Memory and structure are the person's call at the
-   checkpoint: colony records what would call for them (checks breaking again, one builder
-   straining) and asks. Every agent is refused `git push`, `gh`,
-   publishing and `ssh`; if the work truly needs one, the person can lift it with
-   `"allow_outward": ["Bash(gh:*)"]`. Add nothing else without evidence.
+8. **Leave the defaults alone unless the project gives a reason.** Everything colony does was tested
+   against a single fresh agent; what did not earn its place was cut. Raise `effort` only for work
+   that proves hard. Every agent is refused `git push`, `gh`, publishing and `ssh`; if the work truly
+   needs one, the person can lift it with `"allow_outward": ["Bash(gh:*)"]`. Add nothing without
+   evidence.
 
 ## What the defaults are, and why
 
@@ -78,15 +77,12 @@ each part's evidence and its status.
   (+11 points of judged quality for 75¢).
 - **Review only where it pays.** Critics on well-specified work cost 1.3–2.4× for no measurable gain.
   Review runs where the spine declares risk: a change touching a risky area, or, if the project sets
-  `review_at_impact`, a row whose impact (set before the work) reaches it; that rule then drifts gently
-  with what reviews actually find. The builder's own confidence decides nothing: it was 8 or 9 on all
-  36 rows measured. `colony approve` prints exactly what will and will not be reviewed. Reviewers are
-  read-only and see the stakes and the builder's doubt first.
-- **Memory is off, and stays the person's call.** NOW, reconciliation, narrative history and the map
-  in every brief cost 1.7–2.8× without improving results — at fourteen rows, and on a seeded project
-  whose docs were cut to one line: fresh builders recovered every rule from code and tests. Colony
-  records checks that break again and asks at the checkpoint. Strain on one builder produces a
-  reorganisation proposal for the person.
+  `review_at_impact`, a row whose impact (set before the work) reaches it. One round: reviewers are
+  read-only, see the stakes and the builder's one-sentence doubt first, and the builder answers what
+  they find. `colony approve` prints exactly what will and will not be reviewed.
+- **No memory layer.** A rewritten status page, reconciliation and narrative history cost 1.7–2.8×
+  without improving results, at fourteen rows and on a seeded project whose docs were cut to one
+  line: fresh builders recovered every rule from code and tests. The project itself is the state.
 - **Names carry scope.** Free, so kept: in one border scenario (16 runs, mostly low effort) scoped names
   kept agents to their side and neutral names crossed, with no measurable harm either way.
 - **Nothing irreversible without the person.** Publishing and remote commands are refused to every
@@ -124,7 +120,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
     colony run --rows N --cap $  build the next N rows within a budget
     colony status                rows, where the project stands, open signals
     colony cost                  dollars and tokens by row and by agent
-    colony calibration           the builder's confidence beside what review found
     colony checkpoint            workflow, progress and tokens since the last checkpoint (no tokens); questions for you
     colony answer KIND TEXT      answer a checkpoint question; --always keeps it as a rule in the spine
     colony page                  the project at a glance, with a note box on every row

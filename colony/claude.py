@@ -46,7 +46,7 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
     cfg = project.config()
     binary = os.environ.get("COLONY_CLAUDE", "claude")
     role = agent.split("@")[0]
-    role = role if role in ("builder", "reconciler", "door") else "specialist"
+    role = role if role in ("builder", "door") else "specialist"
     effort = cfg.get(f"effort_{role}") or cfg["effort"]
     cmd = [binary, "-p", prompt, "--model", cfg["model"], "--effort", effort,
            "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "bypassPermissions",

@@ -1,12 +1,11 @@
-"""Health: evidence that the project has outgrown its current shape, and the remedy each kind calls for.
+"""Health: what the records show about how the work is going, for the person at each checkpoint.
 
-Dormant machinery switches itself on at the first real evidence it is needed, and small projects never
-pay for it. Memory remedies are cheap and reversible, so they turn on automatically, recorded with their
-evidence. Reorganisation is heavier, so strain produces a proposal for the person, with its numbers.
+Nothing here acts on its own. Every trigger that did was tested and removed: name-sharing and rising
+reading fired on most healthy projects (garden/harness/replay_*.py), memory switched on after breaks
+cost 1.7-2x without helping (garden/results/SEEDED.md). What remains is counted, costs no tokens, and
+is put to the person.
 """
 import statistics
-
-# Names too common to mean that something was made twice.
 
 
 def record_check(project, row, wave, command, passed):
@@ -21,67 +20,12 @@ def regressions(project, row):
     return sorted({e["command"] for e in ledger if e["row"] == row and not e["passed"] and e["command"] in passed_before})
 
 
-def builder_reading(project):
-    """Tokens the builder read to do each row's build, by row."""
-    per = {}
-    for u in project.read("usage.jsonl"):
-        if u["agent"] == "builder" and u.get("wave") == 0:
-            per[u["row"]] = per.get(u["row"], 0) + u.get("cache_read", 0) + u.get("input", 0)
-    return [per[k] for k in sorted(per)]
-
-
-def rising_reading(project, ratio=1.5):
-    """The builder's reading has kept climbing: the last three rows each read well above the first three."""
-    r = builder_reading(project)
-    if len(r) < 6:
-        return None
-    base = statistics.median(r[:3]) or 1
-    if all(x > ratio * base for x in r[-3:]):
-        return f"the builder read {int(statistics.mean(r[-3:]) / base * 100)}% of what it read in the first rows, three rows running"
-    return None
-
-
-def strain(project):
-    """A gauge of whether one builder is carrying more than it should: rows far above the typical cost,
-    builds that ran out of budget, and files reworked row after row."""
-    usage = project.read("usage.jsonl")
-    cost = {}
-    for u in usage:
-        cost[u["row"]] = cost.get(u["row"], 0) + u.get("cost_usd", 0)
-    rows = [cost[k] for k in sorted(k for k in cost if k)]
-    signs = []
-    if len(rows) >= 4:
-        typical = statistics.median(rows)
-        heavy = [c for c in rows[-4:] if c > 2.5 * typical]
-        if len(heavy) >= 2:
-            signs.append(f"{len(heavy)} of the last 4 rows cost over 2.5x the typical row (${typical:.2f})")
-    capped = [u for u in usage if u["agent"] == "builder" and "budget" in (u.get("subtype") or "")]
-    if len(capped) >= 2:
-        signs.append(f"the builder ran out of its row budget {len(capped)} times")
-    touched = [set(e.get("files", [])) for e in project.read("ledger.jsonl") if e["kind"] == "row-closed"][-4:]
-    if len(touched) == 4:
-        hot = set.intersection(*touched) - {"design/now.md", "README.md"}
-        if hot:
-            signs.append(f"{', '.join(sorted(hot))} changed in each of the last four rows")
-    return signs
-
-
 def review_health(project, row):
-    """Record what this row shows: checks that had passed and now fail, and strain on one builder.
-    Nothing switches itself on. Name-sharing and rising reading fired on most healthy projects
-    (garden/harness/replay_*.py), and memory switched on after breaks cost 1.7-2x without helping
-    (garden/results/SEEDED.md); so the evidence goes to the checkpoint, and the person decides."""
-    lost = []
+    """Record the checks this row broke that had passed before; the checkpoint asks when it recurs."""
     reg = regressions(project, row)
     if reg:
-        lost.append(("regression", reg))
         project.append("ledger.jsonl", {"kind": "evidence", "row": row, "type": "regression", "detail": reg})
-    signs = strain(project)
-    if len(signs) >= 2 and not any(e["kind"] == "structure-proposal" and e["row"] >= row - 3 for e in project.read("ledger.jsonl")):
-        project.append("ledger.jsonl", {"kind": "structure-proposal", "row": row, "signs": signs,
-                                        "proposal": "one builder is carrying more than it should: consider splitting the "
-                                                    "most-reworked area into its own lane"})
-    return lost, signs
+    return reg
 
 
 def since_checkpoint(project):
@@ -96,11 +40,8 @@ def since_checkpoint(project):
 # spine's `## Rules` (``- `kind` — what to do``) answers one in advance.
 QUESTIONS = {
     "row-stuck": "Row {row} has stopped {n} times (last: {reason}). Keep going, rescope it, or split it?",
-    "lane": "One builder is carrying a lot: {signs}. Give that area its own lane, or keep one builder?",
     "rows-costlier": "Rows went from about ${first:.2f} to about ${last:.2f} each. Accept it as the project grows, or make rows smaller?",
-    "breaks-recur": "Checks that had passed broke again in rows {rows}. Strengthen the checks, switch on NOW and "
-                    "reconciliation (in testing about 2x per row, with no gain up to 17 rows), or leave it?",
-    "memory-cost": "Keeping memory cost ${keep:.2f} this stretch, {pct}% on top of building. Keep it, or turn it off?",
+    "breaks-recur": "Checks that had passed broke again in rows {rows}. Look at why and strengthen the checks, or leave it?",
     "proposed-rows": "Builders proposed {n} row(s) under '## Proposed rows' in the spine: {rows}. Which join the plan?",
     "review-spend": "Review cost ${review:.2f} against ${build:.2f} for building, and fixed {fixes}. Keep it as it is, "
                     "or narrow the risky areas?",
@@ -131,22 +72,15 @@ def overview(project):
     rounds = {u["row"] for u in usage if u["agent"] == "builder" and u["wave"] >= 1}
     fixed = sum(1 for e in events if e["type"] == "resolve" and e.get("fixed"))
     declined = sum(1 for e in events if e["type"] == "resolve" and not e.get("fixed"))
-    unfixed = sum(1 for e in events if e["type"] == "signal" and e["kind"] == "unfixed")
-    lines.append(f"- review sent {len(rounds)} row(s) back for fixes: {fixed} fixed, {declined} declined"
-                 + (f", {unfixed} fix(es) that did not hold" if unfixed else ""))
+    lines.append(f"- review sent {len(rounds)} row(s) back for fixes: {fixed} fixed, {declined} declined")
     for e in ev:
         lines.append(f"- row {e['row']} broke a check that had passed: {', '.join(e['detail'])[:160]}")
-    signs = strain(project)
-    for s in signs:
-        lines.append(f"- strain: {s}")
-    review_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"].split("@")[0] not in ("builder", "reconciler", "door"))
+    review_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"].split("@")[0] not in ("builder", "door"))
     build_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "builder")
-    keep_cost = sum(u.get("cost_usd", 0) for u in usage if u["agent"] == "reconciler")
     review_fixes = sum(e.get("review_fixes", 0) for e in closed)
     serious = sum(e.get("serious_fixes", 0) for e in closed)
     lines += ["", "## Tokens"]
-    lines.append(f"- ${build_cost + review_cost + keep_cost:.2f} in all: building ${build_cost:.2f}, review ${review_cost:.2f}, "
-                 f"keeping memory ${keep_cost:.2f}")
+    lines.append(f"- ${build_cost + review_cost:.2f} in all: building ${build_cost:.2f}, review ${review_cost:.2f}")
     if len(costs) >= 2:
         lines.append(f"- per row: ${costs[0]:.2f} at the start of the stretch, ${costs[-1]:.2f} at the end, "
                      f"median ${statistics.median(costs):.2f}")
@@ -155,17 +89,10 @@ def overview(project):
         lines.append(f"- {len(reviewed)} of {len(reviews)} row(s) reviewed; the builder fixed {review_fixes} of review's "
                      f"findings, {serious} of them serious (critical, or found by two reviewers)"
                      + (f", ${review_cost / serious:.2f} per serious fix" if serious else ""))
-    reading = rising_reading(project)
-    if reading:
-        lines.append(f"- {reading}")
-    for m in (e for e in ledger if e["kind"] == "threshold"):
-        lines.append(f"- review threshold {m['from']}→{m['to']}: {m['why']}")
     asks = []
     for row, ss in stuck.items():
         if len(ss) >= 2:
             asks.append(("row-stuck", dict(row=row, n=len(ss), reason=ss[-1].get("reason", "")[:120])))
-    if len(signs) >= 2:
-        asks.append(("lane", dict(signs="; ".join(signs))))
     # Medians of the first and last three rows: single rows vary 2-3x on healthy projects.
     if len(costs) >= 6 and statistics.median(costs[-3:]) > 2 * statistics.median(costs[:3]):
         asks.append(("rows-costlier", dict(first=statistics.median(costs[:3]), last=statistics.median(costs[-3:]))))
@@ -174,9 +101,6 @@ def overview(project):
     broken = sorted({e["row"] for e in ev if e["type"] == "regression"})
     if len(broken) >= 2:
         asks.append(("breaks-recur", dict(rows=", ".join(map(str, broken)))))
-    cfg = project.config()
-    if (cfg.get("reconcile") or cfg.get("map_in_brief")) and build_cost and keep_cost > 0.25 * build_cost:
-        asks.append(("memory-cost", dict(keep=keep_cost, pct=round(100 * keep_cost / build_cost))))
     waiting = memory.proposed(project)
     if waiting:
         asks.append(("proposed-rows", dict(n=len(waiting), rows="; ".join(f"{n}: {t}" for n, t, _ in waiting)[:300])))
