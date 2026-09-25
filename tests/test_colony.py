@@ -398,6 +398,18 @@ class LookHereTest(Base):
         self.assertIn("least sure of: the refund path", head)
 
 
+class LessonTest(Base):
+    def test_a_serious_fixed_finding_becomes_a_lesson_the_reviewer_sees_next_time(self):
+        self.spine()
+        clock.run(self.project, max_rows=1)            # both reviewers find the same hole: serious, and fixed
+        reviewers = specialists.load(self.project)
+        self.assertEqual(len(reviewers["reuse"]["lessons"]), 1)
+        self.assertIn("work.txt:1", reviewers["fresh-eyes"]["lessons"][0])
+        clock.run(self.project, max_rows=1)
+        argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["reuse"][-1]
+        self.assertIn("row 1: hole at work.txt:1", argv[argv.index("-p") + 1])
+
+
 class SeriousTest(Base):
     def spine_rows(self, n, impact):
         rows = "".join(f"| {i} | Write line {i} | work.txt grows | {impact} |\n" for i in range(1, n + 1))

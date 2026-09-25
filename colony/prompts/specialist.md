@@ -2,6 +2,8 @@ You are `{name} · row {row} · reads, never edits`. Your mission:
 
 {mission}
 
+What you found before that was real and got fixed — work like it tends to repeat the miss:
+{lessons}
 {brief}
 
 # What changed in this row

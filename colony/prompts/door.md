@@ -17,18 +17,21 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    ## Where it goes            (local-only unless they said otherwise)
    ## Checks                   (commands that settle quality in seconds for this kind of work, each as
                                "- `command`" — tests, a build, a word count, a link check; or none)
-   ## Risky areas              (paths or files, each as "- `path`", where a mistake is expensive —
-                               money, data, security, anything published — and every change there is
-                               reviewed; leave it empty unless the person would want that)
+   ## Risky areas              (paths or files, each as "- `path`", where a mistake would slip past the
+                               checks and be costly to undo — something that leaves the person's hands
+                               or cannot be recomputed. Every change there is reviewed, so leave it
+                               empty unless the person would want that. Judge by consequence and
+                               reversibility, not by what the work is about.)
    ## The spec list            (a table: | # | What to do now | What done looks like | Impact |,
                                rows 1..n, the smallest thing that works end to end first — for work
                                whose path is unknown (research, a proof, a market), a first pass that
                                shows the shape of the answer. Impact is
-                               how much a mistake in that row would hurt, 1 to 10: 1 a cosmetic slip,
-                               10 money, data, or anything published or irreversible. You set it now,
-                               before the work, so the one who builds the row never rates its stakes.
-                               Write it as the number and one sentence on what a mistake would hurt:
-                               "8 — a wrong total reaches a tax filing".)
+                               how much a mistake that got past the checks would hurt, 1 to 10: 1 a
+                               slip anyone would notice and fix in a minute, 10 something that leaves
+                               the person's hands or cannot be undone. You set it now, before the
+                               work, so the one who builds the row never rates its stakes. Write it
+                               as the number and one sentence on what a mistake would hurt:
+                               "9 — the proposal goes to the client as written".)
    **Next ID:** <n+1>
    **Approved:** no
 
@@ -36,8 +39,8 @@ Draft what the colony needs to pursue it; the person will read, correct and appr
    critic every colony has, write `.claude/agents/<name>.md` — a Claude Code subagent file:
    a front matter block (`---`, `name: <name>`, `description: "<one sentence>"`, `tools: Read, Grep,
    Glob, Bash`, `colony: reviewer`, `---`), then the mission — who would attack this work and how, in
-   two or three sentences. A numbers skeptic for money, a
-   continuity reader for a novel's canon. Most goals need none: a single strong agent is the default,
+   two or three sentences: a reader who meets a document the way its recipient will, a continuity
+   reader for a novel's canon. Most goals need none: a single strong agent is the default,
    and review is for the places where a mistake would be expensive.
 
 3. Write `design/questions.md`: the questions whose answers would most change the spine, each with

@@ -117,7 +117,8 @@ def run_row(project, row, cap, baseline=0.0):
 
         def attack(name):
             prompt = (PROMPTS / "specialist.md").read_text().format(
-                name=name, row=number, mission=reviewers[name], limit=cfg["signals_per_specialist"],
+                name=name, row=number, mission=reviewers[name]["mission"], limit=cfg["signals_per_specialist"],
+                lessons="".join(f"- {l}\n" for l in reviewers[name]["lessons"]) or "- none yet\n",
                 brief=brief, change=change)
             return claude.call(project, prompt, agent=f"{name}@w1", row=number, wave=1,
                                budget=budget(cfg["specialist_budget_usd"]))
@@ -151,6 +152,7 @@ def close(project, row, start):
     number, target, _ = row
     memory.close_row(project, number)
     memory.fold_notes(project, number)
+    specialists.harvest(project, number)
     mapper.build(project)
     cost = sum(r["cost_usd"] for r in project.read("usage.jsonl") if r["row"] == number)
     fixed, serious = (len(x) for x in field.review_fixes(project.read("field.jsonl"), number))
