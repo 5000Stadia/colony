@@ -7,7 +7,6 @@
 - Settle the model and effort with the person. Medium effort gives the best quality for the cost. Higher effort adds little; save it for rare work where a small gain is worth the price. Low effort costs real quality on building but is fine for chores.
 - Get the goal in the person's words: what would make them proud, the best real example, what would ruin it, what must never happen without them. Offer your best guess with each question.
 - Plan the smallest end-to-end step toward the first milestone. Where the path is unknown (research, a proof, a market), make a first pass that shows the shape of the work.
-- If it fits in one sitting, just do it.
 
 ## Building
 - One agent in one continuing session does as well as a fresh agent per step, and costs less.
