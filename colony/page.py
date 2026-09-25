@@ -153,6 +153,11 @@ def render(project):
                    f"<form class='add' method='post' action='/note'><input type='hidden' name='row' value='{r['n']}'>"
                    f"<textarea name='text' placeholder='A note for whoever builds row {r['n']}…'></textarea>"
                    f"<button>Leave note</button></form></div>")
+    for n, target, done in memory.proposed(project):
+        out.append(f"<div class='card muted'><div class='head'><span class='num'>{n}?</span><div class='body'>"
+                   f"<p class='target'>{e(target)}</p><p class='done'><b>Done:</b> {e(done)}</p>"
+                   "<div class='stake'>proposed by a builder — move it into the spec list to add it to the plan</div>"
+                   "</div></div></div>")
     # history
     out.append("<h2>History</h2>")
     if not m["history"]:

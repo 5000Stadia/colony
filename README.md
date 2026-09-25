@@ -9,7 +9,10 @@ where a mistake would be expensive, and a page the person can read at a glance.
 > Tell your agent: *"Read the Quickstart in github.com/5000Stadia/colony and follow it. I want to start
 > a project."*
 
-You are starting a long project for a person with colony. Follow these steps in order.
+You are starting a long project for a person with colony. Colony is for work that outlives one
+session — many steps, built over days or weeks. If what they want fits in one sitting, or every step
+is an act in the world only they can take, tell them so and just do it with them; colony would only
+be in the way. Otherwise, follow these steps in order.
 
 1. **Install.** `gh repo clone 5000Stadia/colony ~/colony` (or `git clone`), then
    `python3 -m pip install --user -e ~/colony` — if pip refuses, add `--break-system-packages`, or
@@ -48,7 +51,9 @@ You are starting a long project for a person with colony. Follow these steps in 
    will cost. Never approve on their behalf.
 7. **Run and report.** `colony run --rows 3 --cap 10` builds the next rows and stops cleanly at the
    cap, a failing check, or a fork that needs them. After each run, give the person `colony cost` and
-   point them to `colony page`, where a note left on any row reaches that row's builder.
+   point them to `colony page`, where a note left on any row reaches that row's builder. Builders may
+   propose rows under `## Proposed rows` in the spine when the work teaches them something; the
+   person decides which join the plan.
    Every few rows run `colony checkpoint`: it costs nothing. Tell the person what it shows about
    the workflow and tokens, put its questions to them, and record each answer with `colony answer`
    (`--always` if they want it to become a rule). Never answer on their behalf.
@@ -56,7 +61,9 @@ You are starting a long project for a person with colony. Follow these steps in 
    Raise `effort` only for work that proves hard; set `"review_if_risk_at_least": 30` in
    `.colony/config.json` if they want review wherever doubt times stakes runs high. Memory and
    structure take care of themselves: colony switches memory on when it sees evidence of lost context
-   and proposes reorganisation when one builder is straining. Add nothing else without evidence.
+   and proposes reorganisation when one builder is straining. Every agent is refused `git push`, `gh`,
+   publishing and `ssh`; if the work truly needs one, the person can lift it with
+   `"allow_outward": ["Bash(gh:*)"]`. Add nothing else without evidence.
 
 ## What the defaults are, and why
 

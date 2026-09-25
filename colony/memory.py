@@ -46,6 +46,14 @@ def rows(project):
             for r in (ROW.match(line.strip()) for line in m.group(1).splitlines()) if r]
 
 
+def proposed(project):
+    """Rows builders proposed under '## Proposed rows'; they join the plan only when the person moves them."""
+    text = project.spine.read_text() if project.spine.exists() else ""
+    m = re.search(r"^##\s+Proposed rows\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
+    return [(int(r.group(1)), r.group(2).strip(), r.group(3).strip())
+            for r in (ROW.match(l.strip()) for l in m.group(1).splitlines()) if r] if m else []
+
+
 def stakes(project, number):
     """What the row's assigner said is at stake — (impact 1 to 10, one sentence) — or (None, "")."""
     for line in project.spine.read_text().splitlines():

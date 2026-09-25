@@ -51,7 +51,9 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
     cmd = [binary, "-p", prompt, "--model", cfg["model"], "--effort", effort,
            "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "bypassPermissions",
            "--output-format", "stream-json", "--verbose", "--max-budget-usd", f"{budget:.2f}"]
-    cmd += ["--disallowedTools", *OUTWARD, *(["Edit", "Write", "NotebookEdit"] if role == "specialist" else [])]
+    lifted = set(cfg.get("allow_outward") or [])      # the person's call, for work that needs gh or ssh
+    cmd += ["--disallowedTools", *[d for d in OUTWARD if d not in lifted],
+            *(["Edit", "Write", "NotebookEdit"] if role == "specialist" else [])]
     if session:
         cmd += ["--resume", session] if resume else ["--session-id", session]
     else:

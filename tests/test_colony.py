@@ -88,6 +88,24 @@ class BriefTest(Base):
         self.assertIn("Status: row 3 built.", memory.brief(self.project, (1, "x", "y")))
 
 
+class ProposedTest(Base):
+    def test_proposed_rows_wait_for_the_person(self):
+        self.spine()
+        self.project.spine.write_text(self.project.spine.read_text() + "\n## Proposed rows\n| 9 | Try another way | it works | 3 — cheap |\n")
+        self.assertEqual([r[0] for r in memory.rows(self.project)], [1, 2], "a proposal is not in the plan")
+        self.assertEqual(memory.proposed(self.project), [(9, "Try another way", "it works")])
+        _, _, qs = health.overview(self.project)
+        self.assertIn("proposed-rows", [q["kind"] for q in qs])
+
+    def test_the_person_can_lift_one_outward_refusal(self):
+        self.spine()
+        self.configure(review="never", allow_outward=["Bash(gh:*)"])
+        clock.run(self.project, max_rows=1)
+        argv = json.loads((self.project.state / "fake-state.json").read_text())["argv"]["builder"][0]
+        self.assertNotIn("Bash(gh:*)", argv)
+        self.assertIn("Bash(git push:*)", argv)
+
+
 class FieldTest(Base):
     def test_same_place_reinforces_and_confirmation_wakes_later_waves(self):
         field.post(self.project, by="a@w2", row=1, wave=2, kind="hole", severity="major", at="x.py:f", text="one")

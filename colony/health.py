@@ -143,6 +143,7 @@ QUESTIONS = {
     "rows-costlier": "Rows went from about ${first:.2f} to about ${last:.2f} each. Accept it as the project grows, or make rows smaller?",
     "remedy": "{remedy} has been on since row {row} ({why}). Since then rows cost about ${after:.2f} against "
               "${before:.2f} before, and what woke it happened {again} more time(s). Keep it, or turn it off?",
+    "proposed-rows": "Builders proposed {n} row(s) under '## Proposed rows' in the spine: {rows}. Which join the plan?",
     "review-spend": "Review cost ${review:.2f} against ${build:.2f} for building, and fixed {fixes}. Keep it as it is, "
                     "or narrow the risky areas?",
 }
@@ -216,6 +217,9 @@ def overview(project):
     if review_cost > build_cost > 0:
         asks.append(("review-spend", dict(review=review_cost, build=build_cost, fixes=review_fixes)))
     asks += remedy_reviews(project)
+    waiting = memory.proposed(project)
+    if waiting:
+        asks.append(("proposed-rows", dict(n=len(waiting), rows="; ".join(f"{n}: {t}" for n, t, _ in waiting)[:300])))
     rules = memory.rules(project)
     questions = [{"kind": k, "ask": QUESTIONS[k].format(**f)} for k, f in asks if k not in rules]
     handled = [f"`{k}` — {rules[k]}" for k, _ in asks if k in rules]
