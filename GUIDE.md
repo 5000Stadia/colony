@@ -4,7 +4,7 @@
 - Before planning the path, agree the horizon with the person: the few large milestones and what each looks like (v1, v2, v3 for a product; year 1, 2, 3 for a business; drafts for a book). Build each step toward them; a path built without the horizon leads to costly rebuilds.
 
 ## Day one
-- Settle the model and effort with the person. Plan at high effort, then build at medium: planning is a small share of the tokens and the most leveraged judgement in the project, since a wrong milestone costs a rebuild. Medium effort gives the best quality for the cost on real building. Higher effort adds little; save it for rare work where a small gain is worth the price. Low effort is enough for clear, small, well-specified steps at about half the cost, but loses real quality when one step is itself a large build.
+- Settle the model and effort with the person. Plan at high effort, then build at medium: planning is a small share of the tokens and the most leveraged judgement in the project, since a wrong milestone costs a rebuild. Medium effort gives the best quality for the cost on real building; higher effort adds little there, so save it for planning and rare work where a small gain is worth the price. Low effort is enough for clear, small, well-specified steps at about half the cost, but loses real quality when one step is itself a large build.
 - Get the goal in the person's words: what would make them proud, the best real example, what would ruin it, what must never happen without them. Offer your best guess with each question.
 - Plan the smallest end-to-end step toward the first milestone. Where the path is unknown (research, a proof, a market), make a first pass that shows the shape of the work.
 
