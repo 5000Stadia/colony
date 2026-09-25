@@ -185,7 +185,7 @@ def render(project):
         bars = "".join(f"<span class='bar {k}' style='width:{100 * v[k] / top:.1f}%' title='{k} ${v[k]:.2f}'></span>" for k in ("build", "review", "keep") if v[k])
         out.append(f"<div class='row'><span class='rn'>row {n}</span><span class='bars'>{bars}</span><span class='amt'>${sum(v.values()):.2f}</span></div>")
     out.append("</div>")
-    esc = [x for x in project.read("ledger.jsonl") if x["kind"] in ("escalation", "structure-proposal")]
+    esc = [x for x in project.read("ledger.jsonl") if x["kind"] in ("evidence", "structure-proposal")]
     from .health import strain
     signs = strain(project)
     from .health import since_checkpoint
@@ -196,11 +196,10 @@ def render(project):
                    "Run <code>colony checkpoint</code> for a broad look; it reads the records and spends no tokens.</div>")
     out.append("<h2>Health</h2>")
     if not esc and not signs:
-        out.append("<div class='card muted'>No sign that the project has outgrown its shape. Nothing extra is switched on.</div>")
+        out.append("<div class='card muted'>No sign that the project has outgrown its shape.</div>")
     for x in esc:
-        if x["kind"] == "escalation":
-            out.append(f"<div class='card'><b>Switched on after row {e(x['row'])}:</b> {e(', '.join(x['switched_on']))} — {e(x['why'])}"
-                       f"<div class='facts'>evidence: {e('; '.join(x['evidence']))}</div></div>")
+        if x["kind"] == "evidence":
+            out.append(f"<div class='card'><b>Row {e(x['row'])} broke checks that had passed:</b> {e(', '.join(x['detail']))}</div>")
         else:
             out.append(f"<div class='card fork'><b>Proposal after row {e(x['row'])}:</b> {e(x['proposal'])}"
                        f"<div class='facts'>{e('; '.join(x['signs']))}</div></div>")

@@ -58,10 +58,9 @@ be in the way. Otherwise, follow these steps in order.
    the workflow and tokens, put its questions to them, and record each answer with `colony answer`
    (`--always` if they want it to become a rule). Never answer on their behalf.
 8. **Leave the defaults alone unless the project gives a reason.** They are what won the tests below.
-   Raise `effort` only for work that proves hard; set `"review_if_risk_at_least": 30` in
-   `.colony/config.json` if they want review wherever doubt times stakes runs high. Memory and
-   structure take care of themselves: colony switches memory on when it sees evidence of lost context
-   and proposes reorganisation when one builder is straining. Every agent is refused `git push`, `gh`,
+   Raise `effort` only for work that proves hard. Memory and structure are the person's call at the
+   checkpoint: colony records what would call for them (checks breaking again, one builder
+   straining) and asks. Every agent is refused `git push`, `gh`,
    publishing and `ssh`; if the work truly needs one, the person can lift it with
    `"allow_outward": ["Bash(gh:*)"]`. Add nothing else without evidence.
 
@@ -69,7 +68,8 @@ be in the way. Otherwise, follow these steps in order.
 
 The core — one builder per row at medium effort, checks, the meter, review only where declared — was
 measured against a single fresh agent across seven pre-registered pilots and five focused tests. The
-mechanisms that switch on later are tested for behaviour, not yet for value. `design/claims.md` holds
+mechanisms around it were each tested, and those that did not earn their place were removed or
+made the person's call. `design/claims.md` holds
 each part's evidence and its status.
 
 - **One builder per row, at medium effort.** The best value on every task tested, up to a fourteen-row
@@ -79,12 +79,11 @@ each part's evidence and its status.
   Review runs where the spine declares risk, or where a row's impact (set before the work) times the
   builder's doubt (reported after) crosses the project's rule — which then drifts gently with what
   reviews actually find. Reviewers are read-only and see the stakes and the builder's doubt first.
-- **Memory switches on when the project shows it needs it.** NOW, reconciliation, narrative history and
-  the map in every brief cost more and grew faster at fourteen rows without improving results, so they
-  stay off — until checks that passed start failing again in a second row. Then NOW and
-  reconciliation switch on by themselves, with their evidence on the page, and every checkpoint asks
-  the person whether a remedy that costs more, or has not stopped the breaks, should stay. Strain on
-  one builder produces a reorganisation proposal for the person.
+- **Memory is off, and stays the person's call.** NOW, reconciliation, narrative history and the map
+  in every brief cost 1.7–2.8× without improving results — at fourteen rows, and on a seeded project
+  whose docs were cut to one line: fresh builders recovered every rule from code and tests. Colony
+  records checks that break again and asks at the checkpoint. Strain on one builder produces a
+  reorganisation proposal for the person.
 - **Names carry scope.** Free, so kept: in one border scenario (16 runs, mostly low effort) scoped names
   kept agents to their side and neutral names crossed, with no measurable harm either way.
 - **Nothing irreversible without the person.** Publishing and remote commands are refused to every

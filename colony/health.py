@@ -66,65 +66,22 @@ def strain(project):
     return signs
 
 
-def escalate(project, row, evidence, remedy, why):
-    """Switch a memory remedy on, once, with its evidence in the ledger; the person can switch it off."""
-    import json
-    path = project.state / "config.json"
-    cfg = json.loads(path.read_text()) if path.exists() else {}
-    ledger = project.read("ledger.jsonl")
-    turned_off = {k for e in ledger if e["kind"] == "escalation" for k in e["switched_on"] if cfg.get(k) is False}
-    changed = {k: v for k, v in remedy.items() if cfg.get(k) != v and k not in turned_off}   # the person's "off" stands
-    if not changed:
-        return False
-    cfg.update(changed)
-    path.write_text(json.dumps(cfg, indent=2))
-    project.append("ledger.jsonl", {"kind": "escalation", "row": row, "evidence": evidence, "switched_on": changed, "why": why})
-    return True
-
-
 def review_health(project, row):
-    """Run the detectors for this row and act on what they find. Only a check — the project's own
-    ground truth — can switch memory on; a shared name or a rising read did not, because on real
-    healthy projects both fired on most rows (garden/harness/replay_*.py)."""
+    """Record what this row shows: checks that had passed and now fail, and strain on one builder.
+    Nothing switches itself on. Name-sharing and rising reading fired on most healthy projects
+    (garden/harness/replay_*.py), and memory switched on after breaks cost 1.7-2x without helping
+    (garden/results/SEEDED.md); so the evidence goes to the checkpoint, and the person decides."""
     lost = []
     reg = regressions(project, row)
     if reg:
         lost.append(("regression", reg))
         project.append("ledger.jsonl", {"kind": "evidence", "row": row, "type": "regression", "detail": reg})
-        # One break can be a flaky check; a second, in another row, is the project forgetting.
-        rows_broken = {e["row"] for e in project.read("ledger.jsonl") if e["kind"] == "evidence" and e["type"] == "regression"}
-        if len(rows_broken) >= 2:
-            escalate(project, row, [f"{c} passed at the last close and failed in row {row}" for c in reg],
-                     {"reconcile": True},
-                     "the project broke what it had built, in two rows: NOW and each row's reasons now travel forward")
     signs = strain(project)
     if len(signs) >= 2 and not any(e["kind"] == "structure-proposal" and e["row"] >= row - 3 for e in project.read("ledger.jsonl")):
         project.append("ledger.jsonl", {"kind": "structure-proposal", "row": row, "signs": signs,
                                         "proposal": "one builder is carrying more than it should: consider splitting the "
                                                     "most-reworked area into its own lane"})
     return lost, signs
-
-
-def remedy_reviews(project):
-    """Every remedy still on, three rows or more after it switched on: does it pay? The same counts that
-    switched it on judge it, so a remedy that only costs is noticed and put to the person."""
-    ledger = project.read("ledger.jsonl")
-    cfg = project.config()
-    cost = {e["row"]: e["cost_usd"] for e in ledger if e["kind"] == "row-closed"}
-    asks = []
-    for esc in (e for e in ledger if e["kind"] == "escalation"):
-        on = [k for k in esc["switched_on"] if cfg.get(k)]
-        before = [c for r, c in cost.items() if r <= esc["row"]][-5:]
-        after = [c for r, c in cost.items() if r > esc["row"]]
-        if not on or len(after) < 3 or not before:
-            continue
-        kinds = {e["type"] for e in ledger if e["kind"] == "evidence" and e["row"] <= esc["row"]}
-        again = sum(1 for e in ledger if e["kind"] == "evidence" and e["type"] in kinds and e["row"] > esc["row"])
-        if statistics.median(after) <= 1.25 * statistics.median(before) and not again:
-            continue                                        # cheap and what woke it has not come back: it pays
-        asks.append(("remedy", dict(remedy=", ".join(on), row=esc["row"], why=esc["why"].split(":")[0],
-                                    before=statistics.median(before), after=statistics.median(after), again=again)))
-    return asks
 
 
 def since_checkpoint(project):
@@ -141,8 +98,9 @@ QUESTIONS = {
     "row-stuck": "Row {row} has stopped {n} times (last: {reason}). Keep going, rescope it, or split it?",
     "lane": "One builder is carrying a lot: {signs}. Give that area its own lane, or keep one builder?",
     "rows-costlier": "Rows went from about ${first:.2f} to about ${last:.2f} each. Accept it as the project grows, or make rows smaller?",
-    "remedy": "{remedy} has been on since row {row} ({why}). Since then rows cost about ${after:.2f} against "
-              "${before:.2f} before, and what woke it happened {again} more time(s). Keep it, or turn it off?",
+    "breaks-recur": "Checks that had passed broke again in rows {rows}. Strengthen the checks, switch on NOW and "
+                    "reconciliation (in testing about 2x per row, with no gain up to 17 rows), or leave it?",
+    "memory-cost": "Keeping memory cost ${keep:.2f} this stretch, {pct}% on top of building. Keep it, or turn it off?",
     "proposed-rows": "Builders proposed {n} row(s) under '## Proposed rows' in the spine: {rows}. Which join the plan?",
     "review-spend": "Review cost ${review:.2f} against ${build:.2f} for building, and fixed {fixes}. Keep it as it is, "
                     "or narrow the risky areas?",
@@ -159,7 +117,6 @@ def overview(project):
     events = [e for e in project.read("field.jsonl") if e.get("row", 0) > start]
     reviews = [e for e in ledger if e["kind"] == "review"]
     ev = [e for e in ledger if e["kind"] == "evidence"]
-    esc = [e for e in ledger if e["kind"] == "escalation"]
     stops = [e for e in ledger if e["kind"] == "run-stopped"]
     costs = [e["cost_usd"] for e in closed]
     last = closed[-1]["row"] if closed else start
@@ -179,8 +136,6 @@ def overview(project):
                  + (f", {unfixed} fix(es) that did not hold" if unfixed else ""))
     for e in ev:
         lines.append(f"- row {e['row']} broke a check that had passed: {', '.join(e['detail'])[:160]}")
-    for e in esc:
-        lines.append(f"- switched on after row {e['row']}: {', '.join(e['switched_on'])}")
     signs = strain(project)
     for s in signs:
         lines.append(f"- strain: {s}")
@@ -216,7 +171,12 @@ def overview(project):
         asks.append(("rows-costlier", dict(first=statistics.median(costs[:3]), last=statistics.median(costs[-3:]))))
     if review_cost > build_cost > 0:
         asks.append(("review-spend", dict(review=review_cost, build=build_cost, fixes=review_fixes)))
-    asks += remedy_reviews(project)
+    broken = sorted({e["row"] for e in ev if e["type"] == "regression"})
+    if len(broken) >= 2:
+        asks.append(("breaks-recur", dict(rows=", ".join(map(str, broken)))))
+    cfg = project.config()
+    if (cfg.get("reconcile") or cfg.get("map_in_brief")) and build_cost and keep_cost > 0.25 * build_cost:
+        asks.append(("memory-cost", dict(keep=keep_cost, pct=round(100 * keep_cost / build_cost))))
     waiting = memory.proposed(project)
     if waiting:
         asks.append(("proposed-rows", dict(n=len(waiting), rows="; ".join(f"{n}: {t}" for n, t, _ in waiting)[:300])))

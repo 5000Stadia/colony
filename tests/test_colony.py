@@ -542,7 +542,7 @@ class HealthTest(Base):
         self.assertEqual(self.escalations(), [])
         self.assertFalse(any(e["kind"] == "structure-proposal" for e in self.project.read("ledger.jsonl")))
 
-    def test_breaking_what_was_built_twice_switches_reconciliation_on(self):
+    def test_breaks_in_two_rows_become_a_question_not_a_switch(self):
         self.spine(check="test ! -f broken.txt")
         self.project.spine.write_text(self.project.spine.read_text().replace(
             "| 2 | Write the second line | work.txt has two lines |\n",
@@ -551,22 +551,16 @@ class HealthTest(Base):
         os.environ["FAKE_BREAK_ROW"] = "2"
         with self.assertRaises(clock.Stop):
             clock.run(self.project, max_rows=2)
-        self.assertEqual(self.escalations(), [], "one break can be a flaky check")
+        _, _, qs = health.overview(self.project)
+        self.assertNotIn("breaks-recur", [q["kind"] for q in qs], "one break can be a flaky check")
         (self.dir / "broken.txt").unlink()
         os.environ["FAKE_BREAK_ROW"] = "3"
         with self.assertRaises(clock.Stop):
             clock.run(self.project, max_rows=2)
-        [esc] = self.escalations()
-        self.assertEqual(esc["switched_on"], {"reconcile": True})
-        self.assertIn("passed at the last close", esc["evidence"][0])
-
-    def test_a_remedy_the_person_turned_off_stays_off(self):
-        from colony import health
-        self.configure(reconcile=False)
-        self.assertTrue(health.escalate(self.project, 1, ["x"], {"reconcile": True}, "why"))
-        self.configure(reconcile=False)
-        self.assertFalse(health.escalate(self.project, 4, ["y"], {"reconcile": True}, "why"))
-        self.assertFalse(self.project.config()["reconcile"])
+        _, _, qs = health.overview(self.project)
+        [q] = [q for q in qs if q["kind"] == "breaks-recur"]
+        self.assertIn("rows 2, 3", q["ask"])
+        self.assertFalse(self.project.config()["reconcile"], "nothing switches itself on")
 
     def test_the_checkpoint_is_free_puts_workflow_first_and_resets_its_window(self):
         self.spine()
@@ -603,34 +597,14 @@ class HealthTest(Base):
         self.assertIn("## Settled by your rules\n- `row-stuck` — split it and carry on", out)
         self.assertNotIn("`row-stuck` — Row", out)
 
-    def test_a_remedy_that_only_costs_is_put_to_the_person(self):
-        self.configure(reconcile=False)
-        for r, c in enumerate([0.3, 0.3, 0.3], start=1):
-            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": c, "review_fixes": 0})
-        self.project.append("ledger.jsonl", {"kind": "evidence", "row": 3, "type": "regression", "detail": ["t"]})
-        health.escalate(self.project, 3, ["t"], {"reconcile": True}, "the project broke what it had built: more")
-        for r, c in enumerate([0.8, 0.9, 0.8], start=4):
-            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": c, "review_fixes": 0})
+    def test_memory_that_costs_is_put_to_the_person(self):
+        self.configure(reconcile=True)
+        self.project.append("ledger.jsonl", {"kind": "row-closed", "row": 1, "cost_usd": 1.0, "review_fixes": 0})
+        self.project.append("usage.jsonl", {"row": 1, "wave": 0, "agent": "builder", "cost_usd": 0.6})
+        self.project.append("usage.jsonl", {"row": 1, "wave": 0, "agent": "reconciler", "cost_usd": 0.4})
         _, _, qs = health.overview(self.project)
-        [q] = [q for q in qs if q["kind"] == "remedy"]
-        self.assertIn("reconcile has been on since row 3", q["ask"])
-        self.assertIn("$0.80 against $0.30", q["ask"])
-
-    def test_a_remedy_that_pays_is_left_alone(self):
-        self.configure(reconcile=False)
-        for r in range(1, 4):
-            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": 0.3, "review_fixes": 0})
-        health.escalate(self.project, 3, ["t"], {"reconcile": True}, "why")
-        for r in range(4, 7):
-            self.project.append("ledger.jsonl", {"kind": "row-closed", "row": r, "cost_usd": 0.32, "review_fixes": 0})
-        self.assertEqual(health.remedy_reviews(self.project), [])
-
-    def test_a_remedy_already_on_is_not_switched_again(self):
-        self.spine()
-        self.configure(review="never", reconcile=True)
-        self.assertFalse(health.escalate(self.project, 1, ["x"], {"reconcile": True}, "why"))
-        self.assertEqual(self.escalations(), [])
-
+        [q] = [q for q in qs if q["kind"] == "memory-cost"]
+        self.assertIn("$0.40 this stretch, 67% on top of building", q["ask"])
     def test_rising_reading_and_strain_are_measured(self):
         from colony import health
         for r, (read, cost) in enumerate([(100, 1), (110, 1), (90, 1), (400, 4), (420, 4), (450, 1)], start=1):
