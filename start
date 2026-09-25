@@ -10,12 +10,8 @@ if ! command -v colony >/dev/null; then
   python3 -m pip install --user -q -e "$here" 2>/dev/null || python3 -m pip install --user -q -e "$here" --break-system-packages
   export PATH="$HOME/.local/bin:$PATH"
 fi
-colony board "$@"
-port=8790
-case " $* " in *" --port "*) port=$(echo "$*" | sed -n 's/.*--port \([0-9]*\).*/\1/p') ;; esac
+colony board "$@" >/dev/null
+echo "colony is running. Open the board:"
+colony urls
 echo
-echo "Open the board:  http://127.0.0.1:$port/"
-case " $* " in *" --lan "*)
-  for ip in $(hostname -I 2>/dev/null); do case $ip in *:*) ;; *) echo "From other devices:  http://$ip:$port/" ;; esac; done ;;
-esac
 echo "The monitor is the front page; your projects are in the sidebar. Stop everything with: colony stop"

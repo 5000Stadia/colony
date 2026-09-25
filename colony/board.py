@@ -37,6 +37,10 @@ PROTOCOL = """
 - When something needs the person (a decision costly to undo, an act that leaves their hands), run
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note.
+- Other projects on this board have their own agents and mailboxes; `colony projects` lists them with
+  their addresses. When your work depends on another project (a format it exports, a behaviour you rely
+  on), ask its agent with `agentpost question ADDRESS -` rather than guessing; read its code yourself
+  only when that is clearly quicker. Messages to you arrive by themselves; answer with `agentpost reply`.
 """
 
 # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
@@ -80,9 +84,14 @@ def registry():
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
-DEFAULT_SETTINGS = {"remote": True, "monitor": True, "model": "", "effort": ""}
+DEFAULT_SETTINGS = {"remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
+                    "permissions": "ask"}
+PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
     "remote": "new consoles start with Remote Control, reachable from the Claude app",
+    "lan": "the board answers other devices on your network, not only this machine",
+    "messaging": "each project gets an AgentPost mailbox so project agents can message each other",
+    "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
     "model": "model for new project sessions (blank: Claude Code's default)",
     "effort": "effort for new project sessions (blank: Claude Code's default)",
@@ -95,14 +104,64 @@ def set_setting(key, value):
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
-    elif key in ("remote", "monitor"):
+    elif key in ("remote", "monitor", "lan", "messaging"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
+    elif key == "permissions":
+        if value not in PERMISSIONS:
+            raise KeyError(key)
+        reg["settings"][key] = value
     else:
         raise KeyError(key)
     save_registry(reg)
     return reg
+
+
+PROJECT_KEYS = ("permissions", "remote", "model", "effort")
+
+
+def project_settings(root, changes=None):
+    """A project's own choices, each falling back to the global setting when not made."""
+    path = Path(root) / ".board" / "settings.json"
+    own = json.loads(path.read_text()) if path.exists() else {}
+    if changes:
+        for k, v in changes.items():
+            if k not in PROJECT_KEYS:
+                raise KeyError(k)
+            if v in ("", None, "default"):
+                own.pop(k, None)
+            elif k == "remote":
+                own[k] = str(v).lower() in ("on", "true", "yes", "1")
+            elif k == "permissions" and v not in PERMISSIONS:
+                raise KeyError(k)
+            else:
+                own[k] = v
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps(own, indent=2) + "\n")
+    merged = {k: registry()["settings"][k] for k in PROJECT_KEYS}
+    merged.update(own)
+    return merged, own
+
+
+def urls(port):
+    """Every address the board can be opened at, for the person to use from each place."""
+    import socket
+    out = [f"http://127.0.0.1:{port}/"]
+    if registry()["settings"]["lan"]:
+        seen = set()
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("192.0.2.1", 9))                  # no packet is sent; this only picks the outward address
+            seen.add(s.getsockname()[0])
+            s.close()
+        except OSError:
+            pass
+        for ip in subprocess.run(["hostname", "-I"], capture_output=True, text=True).stdout.split():
+            if ":" not in ip:
+                seen.add(ip)
+        out += [f"http://{ip}:{port}/" for ip in sorted(seen) if not ip.startswith("127.")]
+    return out
 
 
 def projects(reg=None):
@@ -257,6 +316,69 @@ def render_notes(ns, heading):
     return "\n".join(lines)
 
 
+def post_office():
+    """The board's own AgentPost post office: empty until the first project is created or added, and
+    separate from any other the person uses."""
+    return home() / "post"
+
+
+def post_env():
+    return {"AGENTPOST_ROOT": str(post_office())}
+
+
+def _agentpost(*args, cwd=None):
+    env = dict(os.environ, **post_env())
+    env.pop("AGENTPOST_AGENT", None)
+    return subprocess.run(["agentpost", *args], capture_output=True, text=True, cwd=cwd, timeout=60, env=env)
+
+
+def mailbox_record(root):
+    path = Path(root) / ".board" / "mailbox.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def mailbox(root, full=False):
+    """The project's AgentPost mailbox: the seat its session runs as, and the full address other projects
+    write to. A folder AgentPost already knows keeps its mailbox; a new one is registered and joined the
+    first time. None when messaging is off or AgentPost isn't installed."""
+    import shutil
+    root = Path(root)
+    if not registry()["settings"]["messaging"] or not shutil.which("agentpost"):
+        return None
+    rec = mailbox_record(root)
+    if not rec:
+        known = {}
+        _agentpost("init")
+        listing = _agentpost("identities").stdout.splitlines()
+        for line in listing[1:]:
+            cols = line.split("\t")
+            if len(cols) > 3:
+                known[cols[1]] = cols[3] if cols[3] != "-" else cols[1]
+        found = _agentpost("identify", "--cli", "claude", "--cwd", str(root))
+        seat = found.stdout.strip().splitlines()[-1] if found.returncode == 0 and found.stdout.strip() else None
+        if not seat:
+            # A folder that already names its agent (.agentpost.toml) keeps that name here too, so the marker
+            # means the same thing to every post office; a new folder is named for itself.
+            marker = root / ".agentpost.toml"
+            named = re.search(r'^default_agent\s*=\s*"([^"]+)"', marker.read_text(), re.M) if marker.exists() else None
+            base = named.group(1) if named else (re.sub(r"[^a-z0-9-]+", "-", root.name.lower()).strip("-") or "project")
+            seat, n = base, 2
+            while seat in known and not named:
+                seat, n = f"{base}-{n}", n + 1
+            made = _agentpost("profile-register", seat, "--display-name", root.name, "--kind", "project",
+                              "--summary", f"Owns the {root.name} project at {root}; ask it about that project's work, "
+                                           "the formats it exports and the behaviour others rely on.",
+                              "--projects", seat, "--project-roots", str(root), "--handles", f"{seat},{root.name} questions")
+            if made.returncode != 0:
+                return None
+            _agentpost("join", seat, "--cli", "claude", cwd=root)
+            known[seat] = f"{seat}.{seat}"
+        rec = {"seat": seat, "address": known.get(seat, seat)}
+        (root / ".board").mkdir(exist_ok=True)
+        (root / ".board" / "mailbox.json").write_text(json.dumps(rec) + "\n")
+    return rec["address"] if full else rec["seat"]
+
+
 def track(path, register=True):
     """Put a project on the board: its roadmap, its .board folder, the agent's three habits in CLAUDE.md,
     and the delivery hooks in .claude/settings.json — added to whatever the project already has."""
@@ -268,8 +390,14 @@ def track(path, register=True):
         (root / "ROADMAP.md").write_text(SKELETON)
     claude_md = root / "CLAUDE.md"
     have = claude_md.read_text() if claude_md.exists() else ""
-    if "## The board" not in have:
-        claude_md.write_text(have + ("\n" if have and not have.endswith("\n") else "") + PROTOCOL.lstrip("\n"))
+    block = PROTOCOL.lstrip("\n")
+    if "## The board" in have:                       # an older block is brought up to date, in place
+        start = have.index("## The board")
+        end = have.find("\n## ", start + 5)
+        have = have[:start] + block + (have[end + 1:] if end != -1 else "")
+        claude_md.write_text(have)
+    else:
+        claude_md.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
     settings = root / ".claude" / "settings.json"
     settings.parent.mkdir(exist_ok=True)
     cfg = json.loads(settings.read_text()) if settings.exists() else {}
@@ -278,6 +406,7 @@ def track(path, register=True):
         if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
             entries.append({"hooks": [{"type": "command", "command": command}]})
     settings.write_text(json.dumps(cfg, indent=2) + "\n")
+    mailbox(root)
     reg = registry()
     inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
     if register and not inside_a_root and str(root) not in reg["projects"]:
@@ -423,7 +552,14 @@ def render(reg, pid, view="overview"):
         return shell(reg, pid, "")
     if view == "console":
         root = plist[pid]
-        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>"
+        others = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(plist) if i != pid)
+        message = (f"<details class='msgbox'><summary>Message another project</summary>"
+                   f"<form method='post' action='/message'><input type='hidden' name='p' value='{pid}'>"
+                   f"<label>To <select name='to'>{others}</select></label>"
+                   f"<label class='grow'>What should this agent message them about?"
+                   f"<textarea name='text' placeholder='{e(root.name)}’s agent writes the message itself, with its own context'></textarea></label>"
+                   f"<button>Have {e(root.name)} send it</button></form></details>") if others else ""
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
                      + console.PAGE.format(path=e(root), name=e(console.session_name(root)), pid=pid, token=console.TOKEN),
                      wide=True)
     root = plist[pid]
@@ -433,6 +569,10 @@ def render(reg, pid, view="overview"):
     done = sum(1 for m in road["milestones"] for i in m["items"] if i["state"] == "done")
     total = sum(len(m["items"]) for m in road["milestones"])
     out.append(f"<header><h1>{e(root.name)}</h1>{tabs(pid, view)}<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
+    merged, own = project_settings(root)
+    out.append(f"<details class='card psettings'><summary>Project settings</summary>{project_settings_form(pid, own)}"
+               f"<p class='muted'>Blank means the global setting ({e(', '.join(f'{k} {v}' for k, v in reg['settings'].items() if k in PROJECT_KEYS))}). "
+               f"Applies when its console next starts.</p></details>")
     snap = console.snapshot(root)
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
@@ -578,6 +718,19 @@ def render_item(reg, pid, iid):
     return shell(reg, pid, "".join(body))
 
 
+def project_settings_form(pid, own, action="/project-settings"):
+    """The choices a project can make for itself; blank keeps the global one."""
+    opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
+        f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
+    remote = "" if "remote" not in own else ("on" if own["remote"] else "off")
+    return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
+            f"<label>Permissions {opt('permissions', [('', 'global'), ('ask', 'ask each time'), ('edits', 'accept edits'), ('all', 'allow everything'), ('plan', 'plan only')], own.get('permissions', ''))}</label>"
+            f"<label>Remote Control {opt('remote', [('', 'global'), ('on', 'on'), ('off', 'off')], remote)}</label>"
+            f"<label>Model <input name='model' value='{e(own.get('model', ''))}' placeholder='global'></label>"
+            f"<label>Effort <input name='effort' value='{e(own.get('effort', ''))}' placeholder='global'></label>"
+            f"<button>Save</button></form>")
+
+
 def folder_browser(reg, current, purpose):
     """Browse the machine running the board, to add a folder as a project, make a new one, or add a
     folder whose subfolders are all projects."""
@@ -596,10 +749,14 @@ def folder_browser(reg, current, purpose):
     out += [f"<li><a href='/add?dir={q(d)}&for={purpose}'>{e(d.name)}/</a></li>" for d in subs] or ["<li class='muted'>no subfolders</li>"]
     out.append("</ul>")
     if purpose == "project":
-        out.append(f"<form method='post' action='/add'><input type='hidden' name='path' value='{e(here)}'>"
-                   f"<button>Add this folder as a project</button></form>"
-                   f"<form class='add' method='post' action='/new'><input type='hidden' name='within' value='{e(here)}'>"
-                   f"<input name='name' placeholder='name of a new, empty project here'><button>Create new project here</button></form>")
+        choices = (project_settings_form(0, {}, action="")
+                   .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0])
+        out.append(f"<form method='post' action='/add' class='options'><input type='hidden' name='path' value='{e(here)}'>"
+                   f"<p class='muted'>This folder becomes the project's root. Its settings (blank: global):</p>{choices}"
+                   f"<button>Add this folder as a project</button></form><hr>"
+                   f"<form method='post' action='/new' class='options'><input type='hidden' name='within' value='{e(here)}'>"
+                   f"<label>New project named <input name='name' placeholder='a new, empty project in this folder'></label>{choices}"
+                   f"<button>Create new project here</button></form>")
     else:
         out.append(f"<form method='post' action='/roots'><input type='hidden' name='add' value='{e(here)}'>"
                    f"<button>Use this folder: every subfolder becomes a project</button></form>")
@@ -621,17 +778,37 @@ def settings_page(reg):
                f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
                f"<span class='muted'>(reach them from the Claude app)</span></label>"
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
+               f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
+               f"<span class='muted'>(after colony restart)</span></label>"
+               f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
+               f"<span class='muted'>(an AgentPost mailbox per project)</span></label>"
+               f"<label>Permissions for new sessions <select name='permissions'>"
+               + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in
+                         [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
+               + "</select></label>"
                f"<label>Model for new project sessions <input name='model' value='{e(s['model'])}' placeholder='Claude Code default'></label>"
                f"<label>Effort for new project sessions <input name='effort' value='{e(s['effort'])}' placeholder='Claude Code default'></label>"
                f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
                f"<button>Save</button><p class='muted'>Remote, model and effort apply to consoles started from now on.</p></form>")
-    body = (f"<header><h1>Settings</h1></header><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
+    port = getattr(settings_page, "port", 8790)
+    where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
+    body = (f"<header><h1>Settings</h1></header><h2>Open this board</h2><div class='card'><ul class='dirs'>{where}</ul>"
+            f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='dirs'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
             f"<h2>Projects added one by one</h2><div class='card'><ul class='dirs'>{single or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add'>+ Add a project folder</a></p></div>"
             f"<p class='muted'>Removing leaves every file where it is; the project just leaves the board.</p>")
     return shell(reg, -2, body)
+
+
+def message_instruction(dest, address, text):
+    """What the board types into the sending project's console: the person's intent; the agent writes the
+    message with its own context."""
+    return (f"[board] The person asks you to send a message to the {dest} project (AgentPost address {address}). "
+            f"What it should be about: {text} — Write it so their agent can act on it without our context. If you "
+            f"need an answer, use `agentpost question {address} -`; otherwise `agentpost message {address} -`, with "
+            "the message on stdin. Then tell the person it is sent.")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -691,6 +868,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/add":
             return self._send(200, folder_browser(reg, (q.get("dir") or [""])[0], (q.get("for") or ["project"])[0]).encode())
         if url.path == "/settings":
+            settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
         if url.path == "/monitor":
             from . import monitor
@@ -731,6 +909,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/options":
             set_setting("remote", form.get("remote", "off"))
             set_setting("monitor", form.get("monitor", "off"))
+            set_setting("lan", form.get("lan", "off"))
+            set_setting("messaging", form.get("messaging", "off"))
+            if form.get("permissions"):
+                set_setting("permissions", form["permissions"])
             set_setting("model", form.get("model", ""))
             set_setting("effort", form.get("effort", ""))
             if form.get("new_root", "").strip():
@@ -740,15 +922,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/message":
+            src, dst = projects(reg)[int(form.get("p", "0"))], projects(reg)[int(form.get("to", "0"))]
+            text = form.get("text", "").strip()
+            if text:
+                address = mailbox(dst, full=True) or dst.name
+                console.type_into(console.ensure(src), message_instruction(dst.name, address, text))
+            self.send_response(303)
+            self.send_header("Location", f"/?p={form.get('p', '0')}&view=console")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/project-settings":
+            project_settings(projects(reg)[int(form.get("p", "0"))], {k: form.get(k, "") for k in PROJECT_KEYS})
+            self.send_response(303)
+            self.send_header("Location", f"/?p={form.get('p', '0')}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in ("/add", "/new", "/roots"):
             target = "/settings" if path == "/roots" else "/"
+            chosen = {k: form.get(k, "") for k in PROJECT_KEYS if form.get(k)}
             if path == "/add" and form.get("path"):
                 track(Path(form["path"]))
+                if chosen:
+                    project_settings(root_of(form["path"]), chosen)
                 target = f"/?p={projects().index(root_of(form['path']))}"
             elif path == "/new" and form.get("name", "").strip():
                 new = Path(form["within"]) / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
                 new.mkdir(parents=True, exist_ok=True)
                 track(new)
+                if chosen:
+                    project_settings(new, chosen)
                 console.ensure(new)
                 target = f"/?p={projects().index(new)}"
             elif path == "/roots":
@@ -861,6 +1066,13 @@ form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit;
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:10px; align-items:center }
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:260px } form.options button { align-self:flex-start }
+.msgbox { margin-left:auto } .msgbox summary { cursor:pointer; color:var(--accent); font-size:13px }
+.msgbox form { position:absolute; right:24px; z-index:10; width:420px; display:flex; flex-direction:column; gap:8px;
+  padding:14px; border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) }
+.msgbox label { display:flex; flex-direction:column; gap:4px; font-size:13px } .msgbox textarea { min-height:80px; font:inherit;
+  padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.msgbox select, .options select { font:inherit; padding:4px 6px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.psettings summary { cursor:pointer; color:var(--accent) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
 .sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }

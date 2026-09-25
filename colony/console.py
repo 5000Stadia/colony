@@ -26,14 +26,16 @@ TOKEN = secrets.token_urlsafe(24)          # made fresh each time the board star
 COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace claude (tests, demos)
 
 
-def command(label):
-    """The person's own `claude`, as their settings say: Remote Control on unless turned off, and their
-    chosen model and effort if any."""
+def command(label, root=None):
+    """The person's own `claude`, as the project's settings say (falling back to the global ones):
+    permissions, Remote Control, model and effort."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
     from . import board
-    s = board.registry()["settings"]
+    s = board.project_settings(root)[0] if root else board.registry()["settings"]
     parts = ["claude"]
+    if board.PERMISSIONS.get(s.get("permissions") or "ask"):
+        parts += ["--permission-mode", board.PERMISSIONS[s["permissions"]]]
     if s["remote"]:
         parts += ["--remote-control", shlex.quote(label)]
     if s["model"]:
@@ -57,8 +59,12 @@ def ensure(root, name=None, label=None):
     """Start the session if it is not running: the person's own `claude`, in the project, remote-enabled."""
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
-        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50",
-                        command(label or Path(root).name)],
+        from . import board
+        seat = board.mailbox(root) if label is None else None          # the monitor has no mailbox
+        env = [x for k, v in board.post_env().items() for x in ("-e", f"{k}={v}")]
+        env += ["-e", f"AGENTPOST_AGENT={seat}"] if seat else []
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50", *env,
+                        command(label or Path(root).name, None if label else root)],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
     return name

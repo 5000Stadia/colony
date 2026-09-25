@@ -22,7 +22,8 @@ located signals and a project memory.
     colony peek NAME [-n 30]        a project console's last lines
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
-    colony settings [KEY VALUE]     the global options: remote, monitor, model, effort, new-folder
+    colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
+    colony urls                     every address the board can be opened at
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
@@ -304,8 +305,13 @@ def _tmux_env():
     return [x for k in keep if os.environ.get(k) for x in ("-e", f"{k}={os.environ[k]}")]
 
 
+def _lan(a):
+    from . import board
+    return a.lan or (board.registry()["settings"]["lan"] and not a.local)
+
+
 def _server_args(a):
-    return ["--port", str(a.port)] + (["--lan"] if a.lan else []) + (["--no-monitor"] if a.no_monitor else [])
+    return ["--port", str(a.port)] + (["--lan"] if _lan(a) else ["--local"]) + (["--no-monitor"] if a.no_monitor else [])
 
 
 def cmd_board(a):
@@ -313,7 +319,7 @@ def cmd_board(a):
     monitor can restart it; --foreground runs it here instead."""
     from . import board
     if a.foreground:
-        board.serve(a.port, lan=a.lan, monitor=not a.no_monitor)
+        board.serve(a.port, lan=_lan(a), monitor=not a.no_monitor)
         return 0
     if subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode == 0:
         print(f"the board is already running: http://127.0.0.1:{a.port}/  (colony restart to reload it)")
@@ -322,7 +328,26 @@ def cmd_board(a):
     (board.home() / "server.json").write_text(json.dumps(_server_args(a)))
     cmd = " ".join([shlex.quote(sys.executable), "-m", "colony", "board", "--foreground", *_server_args(a)])
     subprocess.run(["tmux", "new-session", "-d", "-s", server(), *_tmux_env(), cmd], check=True)
-    print(f"the board is running: http://127.0.0.1:{a.port}/  (it keeps running in tmux session {server()})")
+    print(f"the board is running (tmux session {server()}); open it at:")
+    for u in board.urls(a.port) if _lan(a) else [f"http://127.0.0.1:{a.port}/"]:
+        print(f"  {u}")
+    return 0
+
+
+def cmd_urls(a):
+    """Every address the running board can be opened at."""
+    from . import board
+    saved = board.home() / "server.json"
+    args = json.loads(saved.read_text()) if saved.exists() else []
+    port = int(args[args.index("--port") + 1]) if "--port" in args else a.port
+    lan = "--lan" in args or (not args and board.registry()["settings"]["lan"])
+    print(f"On this machine:      http://127.0.0.1:{port}/")
+    for u in (board.urls(port)[1:] if lan else []):
+        print(f"From your network:    {u}")
+    if not lan:
+        print("From your network:    off (colony settings lan on, then colony restart)")
+    if board.registry()["settings"]["remote"]:
+        print("From anywhere:        the Claude app, where each project's session and the monitor appear")
     return 0
 
 
@@ -437,7 +462,9 @@ def cmd_projects(a):
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
         waiting = sum(1 for g in board.gates(p) if not g["answer"]) if p.exists() else 0
         last = snap["lines"][-1] if snap["lines"] else ""
-        print(f"{p.name:24} {snap['state']:10} {str(waiting) + ' gate(s) open' if waiting else '':16} {last[:80]}")
+        rec = board.mailbox_record(p) if p.exists() else None
+        address = rec["address"] if rec else "-"
+        print(f"{p.name:22} {address:22} {snap['state']:10} {str(waiting) + ' gate(s) open' if waiting else '':16} {last[:70]}")
     return 0
 
 
@@ -472,11 +499,20 @@ def cmd_new(a):
 
 def cmd_settings(a):
     from . import board
+    if a.project:
+        root = _project(a.project)
+        try:
+            merged, own = board.project_settings(root, {a.key: a.value or ""} if a.key else None)
+        except KeyError:
+            raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
+        for k in board.PROJECT_KEYS:
+            print(f"{k:12} {str(merged[k]) or '(Claude Code default)':24} {'set for this project' if k in own else 'global'}")
+        return 0
     if a.key:
         try:
             board.set_setting(a.key, a.value or "")
         except KeyError:
-            raise SystemExit(f"no setting {a.key}; the settings are: remote, monitor, model, effort, new-folder")
+            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.DEFAULT_SETTINGS)}, new-folder")
     reg = board.registry()
     for k, v in reg["settings"].items():
         shown = ("on" if v else "off") if isinstance(v, bool) else (v or "(Claude Code's default)")
@@ -515,9 +551,11 @@ def main(argv=None):
     p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
     p.add_argument("--no-monitor", action="store_true", help="don't start the monitor session and its watcher")
     p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
+    p.add_argument("--local", action="store_true", help="answer only this machine, whatever the settings say")
     p.set_defaults(fn=cmd_board)
     sub.add_parser("restart").set_defaults(fn=cmd_restart)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
+    p = sub.add_parser("urls"); p.add_argument("--port", type=int, default=8790); p.set_defaults(fn=cmd_urls)
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
@@ -531,6 +569,7 @@ def main(argv=None):
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
     p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within"); p.set_defaults(fn=cmd_new)
     p = sub.add_parser("settings"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
+    p.add_argument("--project", help="a project's own settings instead of the global ones")
     p.set_defaults(fn=cmd_settings)
     p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_helm)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)

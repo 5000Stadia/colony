@@ -33,7 +33,8 @@ class BoardBase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
-        board.save_registry({"roots": []})       # a test board sees no one's real project folders
+        # A test board sees no one's real project folders and, unless a test says so, posts no mail.
+        board.save_registry({"roots": [], "settings": {"messaging": False}})
         self.root = base / "plants"
         self.root.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -371,6 +372,79 @@ class SettingsTest(BoardBase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class ProjectSettingsTest(BoardBase):
+    def test_a_project_chooses_for_itself_and_falls_back_to_the_global_settings(self):
+        board.track(self.root)
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertEqual(console.command("plants", self.root), "claude --remote-control plants")
+            board.project_settings(self.root, {"permissions": "edits", "remote": "off", "effort": "high"})
+            self.assertEqual(console.command("plants", self.root), "claude --permission-mode acceptEdits --effort high")
+            board.set_setting("model", "claude-opus-5-5")
+            self.assertIn("--model claude-opus-5-5", console.command("plants", self.root), "unset here: the global one")
+            board.project_settings(self.root, {"permissions": ""})
+            self.assertNotIn("--permission-mode", console.command("plants", self.root), "blank returns to global")
+            with self.assertRaises(KeyError):
+                board.project_settings(self.root, {"permissions": "everything"})
+        finally:
+            console.COMMAND = saved
+
+    def test_the_urls_name_this_machine_and_the_network(self):
+        board.set_setting("lan", "on")
+        us = board.urls(8790)
+        self.assertEqual(us[0], "http://127.0.0.1:8790/")
+        self.assertTrue(all(u.startswith("http://") and u.endswith(":8790/") for u in us))
+        board.set_setting("lan", "off")
+        self.assertEqual(board.urls(8790), ["http://127.0.0.1:8790/"])
+
+
+class MessagingTest(BoardBase):
+    def test_the_person_asks_one_project_to_message_another_through_its_own_agent(self):
+        other = Path(self.tmp.name) / "shop"
+        other.mkdir()
+        board.track(self.root)
+        board.track(other)
+        typed = []
+        saved = (console.type_into, console.ensure)
+        console.type_into = lambda name, text: typed.append((name, text))
+        console.ensure = lambda root, name=None, label=None: console.session_name(root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=console").read().decode()
+            self.assertIn("What should this agent message them about?", page)
+            self.assertIn(">shop</option>", page)
+            data = urllib.parse.urlencode({"p": 0, "to": 1, "text": "which CSV columns do you export?"}).encode()
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/message", data=data))
+            [(name, text)] = typed
+            self.assertEqual(name, console.session_name(self.root), "the sending project's own agent gets it")
+            self.assertIn("which CSV columns do you export?", text)
+            self.assertIn("agentpost question shop -", text)
+        finally:
+            console.type_into, console.ensure = saved
+            httpd.shutdown()
+            httpd.server_close()
+
+    @unittest.skipUnless(__import__("shutil").which("agentpost"), "AgentPost is not installed")
+    def test_the_boards_post_office_starts_empty_and_a_project_gets_its_mailbox(self):
+        board.set_setting("messaging", "on")
+        board._agentpost("init")
+        rows = board._agentpost("identities").stdout.strip().splitlines()[1:]
+        self.assertEqual(rows, [], "no mailboxes until the first project")
+        self.assertTrue(str(board.post_office()).startswith(os.environ["COLONY_BOARD_HOME"]), "never the person's own")
+        board.track(self.root)
+        self.assertEqual(board.mailbox(self.root, full=True), "plants.plants")
+        rows = board._agentpost("identities").stdout.strip().splitlines()[1:]
+        self.assertEqual([r.split("\t")[1] for r in rows], ["plants"])
+        self.assertTrue((self.root / ".claude" / "settings.local.json").exists(), "delivery wired by AgentPost's join")
+        named = Path(self.tmp.name) / "books"
+        named.mkdir()
+        (named / ".agentpost.toml").write_text('version = 1\ndefault_agent = "ledger"\nknown_agents = ["ledger"]\n')
+        board.track(named)
+        self.assertEqual(board.mailbox(named), "ledger", "a folder that already names its agent keeps the name")
 
 
 class ServerTest(BoardBase):

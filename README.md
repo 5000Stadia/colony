@@ -9,8 +9,8 @@ projects with one strong agent.
 
     gh repo clone 5000Stadia/colony ~/colony && ~/colony/start
 
-It installs what it needs, starts the board and prints its address; `~/colony/start --lan` also prints
-the address for your phone and other devices at home. The monitor is the front page. Put project
+It installs what it needs, starts the board, and prints every address it answers at: this machine,
+your home network, and the Claude app for each session (`colony urls` prints them again). The monitor is the front page. Put project
 folders in `~/colony/projects`, or use **+ Add project** to pick any folder or start a new one. Global
 options are under **Settings**. `colony stop` ends it all. It needs tmux, Claude Code and Python 3.10+.
 
@@ -58,6 +58,16 @@ The board runs in its own tmux session, so it needs no open terminal. The monito
 board itself: it runs `colony doctor` when something seems off, fixes bugs in this repository (tests,
 `colony restart`, a local commit; it asks before pushing), and proposes improvements for you to decide
 on, always after the projects' needs.
+
+**Projects talk to each other.** The board keeps its own AgentPost post office (in
+`~/.config/colony/post`, apart from any other you use). It starts empty; each project gets a mailbox
+when it is created or added, and AgentPost's hook wakes its session when mail arrives. Next to a
+project's console, "Message another project" lists the others; you say what the message should be
+about and that project's agent writes and sends it with its own context. Agents also know to ask
+another project's agent rather than guess at what it exports.
+
+**Each project has its own settings** (permissions, Remote Control, model, effort), chosen when it is
+added or created and changeable from its Overview; blank keeps the global setting.
 
 The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
 from the board's console or the app.
