@@ -8,12 +8,12 @@ import unittest
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from colony import board, console, monitor  # noqa: E402
+from colony import board, console, mail, monitor  # noqa: E402
 import base64, socket, time  # noqa: E402
 
 ROADMAP = """# Roadmap
@@ -64,7 +64,7 @@ class BoardTest(BoardBase):
     def test_track_adds_to_what_the_project_has(self):
         board.track(self.root)
         self.assertTrue((self.root / "CLAUDE.md").read_text().startswith("Our own rules."))
-        self.assertIn("## The board", (self.root / "CLAUDE.md").read_text())
+        self.assertIn("## This project is part of a colony", (self.root / "CLAUDE.md").read_text())
         cfg = json.loads((self.root / ".claude" / "settings.json").read_text())
         self.assertEqual(cfg["model"], "x")
         commands = [h["command"] for e in cfg["hooks"]["UserPromptSubmit"] for h in e["hooks"]]
@@ -422,29 +422,91 @@ class MessagingTest(BoardBase):
             [(name, text)] = typed
             self.assertEqual(name, console.session_name(self.root), "the sending project's own agent gets it")
             self.assertIn("which CSV columns do you export?", text)
-            self.assertIn("agentpost question shop -", text)
+            self.assertIn("colony send shop --ask", text)
         finally:
             console.type_into, console.ensure = saved
             httpd.shutdown()
             httpd.server_close()
 
-    @unittest.skipUnless(__import__("shutil").which("agentpost"), "AgentPost is not installed")
-    def test_the_boards_post_office_starts_empty_and_a_project_gets_its_mailbox(self):
+    def test_a_question_and_its_answer_travel_between_two_projects(self):
         board.set_setting("messaging", "on")
-        board._agentpost("init")
-        rows = board._agentpost("identities").stdout.strip().splitlines()[1:]
-        self.assertEqual(rows, [], "no mailboxes until the first project")
-        self.assertTrue(str(board.post_office()).startswith(os.environ["COLONY_BOARD_HOME"]), "never the person's own")
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
         board.track(self.root)
-        self.assertEqual(board.mailbox(self.root, full=True), "plants.plants")
-        rows = board._agentpost("identities").stdout.strip().splitlines()[1:]
-        self.assertEqual([r.split("\t")[1] for r in rows], ["plants"])
-        self.assertTrue((self.root / ".claude" / "settings.local.json").exists(), "delivery wired by AgentPost's join")
-        named = Path(self.tmp.name) / "books"
-        named.mkdir()
-        (named / ".agentpost.toml").write_text('version = 1\ndefault_agent = "ledger"\nknown_agents = ["ledger"]\n')
-        board.track(named)
-        self.assertEqual(board.mailbox(named), "ledger", "a folder that already names its agent keeps the name")
+        board.track(shop)
+        run = lambda cwd, *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=cwd, capture_output=True,
+                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertIn("sent", run(self.root, "send", "shop", "Which CSV columns do you export?", "--ask").stdout)
+        got = run(shop, "notes", "--deliver").stdout
+        self.assertIn("plants asks: Which CSV columns do you export?", got)
+        self.assertEqual(run(shop, "notes", "--deliver").stdout, "", "handed over once")
+        self.assertIn("haven't answered", run(shop, "notes", "--deliver", "--session").stdout, "an open question is repeated")
+        [q] = mail.inbox(shop)
+        self.assertIn("answered", run(shop, "reply", q["id"], "sku,name,qty,price").stdout)
+        self.assertIn("shop writes: sku,name,qty,price", run(self.root, "notes", "--deliver").stdout)
+        self.assertEqual(mail.unanswered(shop), [])
+        self.assertIn("Which CSV columns", run(self.root, "mail").stdout, "the sender keeps its side of the thread")
+
+    def test_projects_inside_another_repository_are_their_own_roots(self):
+        board.set_setting("messaging", "on")
+        outer = Path(self.tmp.name) / "outer"
+        (outer / "projects" / "a").mkdir(parents=True)
+        (outer / "projects" / "b").mkdir()
+        subprocess.run(["git", "init", "-q", str(outer)], check=True)
+        reg = board.registry()
+        reg["roots"] = [str(outer / "projects")]
+        board.save_registry(reg)
+        self.assertEqual([p.name for p in board.projects()], ["a", "b"])
+        self.assertTrue((outer / "projects" / "a" / ".board").is_dir())
+        self.assertFalse((outer / ".board").exists(), "the outer repository is not made a project")
+        self.assertEqual(board.root_of(outer / "projects" / "a"), outer / "projects" / "a")
+        run = lambda cwd, *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=cwd, capture_output=True,
+                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        run(outer / "projects" / "a", "send", "b", "hello from a")
+        self.assertIn("a writes: hello from a", run(outer / "projects" / "b", "notes", "--deliver").stdout)
+
+    def test_messaging_can_be_switched_off(self):
+        board.track(self.root)
+        with self.assertRaises(PermissionError):
+            mail.send("plants", "hello")
+
+
+class MailWakeTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.set_setting("messaging", "on")
+        board.track(self.root)
+        self.saved = (console.snapshot, console.type_into, console.ensure, monitor.snapshot)
+        self.typed, self.started, self.state = [], [], {"state": "idle"}
+        console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}
+        console.type_into = lambda name, text: self.typed.append(text)
+        console.ensure = lambda root, name=None, label=None: self.started.append(root)
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+
+    def tearDown(self):
+        console.snapshot, console.type_into, console.ensure, monitor.snapshot = self.saved
+        super().tearDown()
+
+    def test_mail_wakes_an_idle_project_once_and_starts_one_that_is_off(self):
+        w = monitor.Watcher()
+        mail.send("plants", "hello")
+        w.mail()
+        w.mail()
+        self.assertEqual(self.typed, ["[colony] Mail from another project in the colony has arrived."], "one nudge per message")
+        self.state["state"] = "off"
+        mail.send("plants", "and again")
+        w.mail()
+        self.assertEqual(self.started, [self.root], "a project that isn't running is started for its mail")
+
+    def test_busy_projects_wait_unless_the_mail_is_urgent(self):
+        w = monitor.Watcher()
+        self.state["state"] = "working"
+        mail.send("plants", "when you get a moment")
+        w.mail()
+        self.assertEqual(self.typed, [], "a busy session is not interrupted")
+        mail.send("plants", "stop: the export format changed", urgent=True)
+        w.mail()
+        self.assertEqual(len(self.typed), 1, "urgent mail is typed in even mid-turn")
 
 
 class ServerTest(BoardBase):
@@ -464,13 +526,11 @@ class ServerTest(BoardBase):
         s.close()
         self.assertNotEqual(board.scoped("board-server"), "board-server", "a test board never touches the real one")
         self.assertIn("the board is running", self.run_cli("board", "--port", port, "--no-monitor").stdout)
-        time.sleep(1.5)
         doctor = self.run_cli("doctor")
         self.assertEqual(doctor.returncode, 0, doctor.stdout)
         self.assertIn(f"board answers on port {port}", doctor.stdout)
         self.assertIn("plants: wired", doctor.stdout)
         self.assertIn("restarted", self.run_cli("restart").stdout)
-        time.sleep(1.5)
         self.assertEqual(self.run_cli("doctor").returncode, 0)
         (self.root / "CLAUDE.md").write_text("Our own rules.\n")
         broken = self.run_cli("doctor")
@@ -479,6 +539,24 @@ class ServerTest(BoardBase):
         stopped = self.run_cli("stop").stdout
         self.assertIn(board.scoped("board-server"), stopped)
         self.assertNotEqual(subprocess.run(["tmux", "has-session", "-t", board.scoped("board-server")]).returncode, 0)
+
+    def test_a_port_held_by_another_program_is_never_mistaken_for_the_board(self):
+        other = HTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler)      # answers every request with an error page
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        port = str(other.server_address[1])
+        try:
+            taken = self.run_cli("board", "--port", port, "--no-monitor")
+            self.assertEqual(taken.returncode, 1)
+            self.assertIn("taken by another program", taken.stderr)
+            (board.home() / "server.json").write_text(json.dumps(["--port", port, "--local", "--no-monitor"]))
+            self.assertIn("does not answer", self.run_cli("doctor").stdout)
+            moved = self.run_cli("board", "--no-monitor")        # no port named: it finds a free one
+            self.assertEqual(moved.returncode, 0, moved.stderr)
+            self.assertNotIn(f":{port}/", moved.stdout)
+            self.assertIn("board answers", self.run_cli("doctor").stdout)
+        finally:
+            other.shutdown()
+            other.server_close()
 
 
 if __name__ == "__main__":

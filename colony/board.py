@@ -27,7 +27,10 @@ ITEM = re.compile(r"^\s*-\s*\[( |x|X|~)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,
 STATE = {" ": "todo", "~": "doing", "x": "done", "X": "done"}
 
 PROTOCOL = """
-## The board (how the person follows and steers this project)
+## This project is part of a colony
+
+The colony is the person's set of projects, each with its own agent (you are this project's). The
+person follows and steers them all from one board, and the projects can write to each other.
 
 - The plan is `ROADMAP.md`: milestones as `## M1 — name`, items as `- [ ] R1 text` (`[~]` in progress,
   `[x]` done). Keep it current as you work, and commit each finished piece with a clear message.
@@ -37,10 +40,10 @@ PROTOCOL = """
 - When something needs the person (a decision costly to undo, an act that leaves their hands), run
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note.
-- Other projects on this board have their own agents and mailboxes; `colony projects` lists them with
-  their addresses. When your work depends on another project (a format it exports, a behaviour you rely
-  on), ask its agent with `agentpost question ADDRESS -` rather than guessing; read its code yourself
-  only when that is clearly quicker. Messages to you arrive by themselves; answer with `agentpost reply`.
+- The other projects in the colony are a message away: `colony projects` lists them with their goals.
+  When your work depends on one (a format it exports, a behaviour you rely on), ask its agent with
+  `colony send NAME --ask "..."` rather than guessing; read its code yourself only when that is clearly
+  quicker. Mail from the colony arrives by itself; answer a question with `colony reply ID "..."`.
 """
 
 # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
@@ -90,7 +93,7 @@ PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", 
 SETTING_HELP = {
     "remote": "new consoles start with Remote Control, reachable from the Claude app",
     "lan": "the board answers other devices on your network, not only this machine",
-    "messaging": "each project gets an AgentPost mailbox so project agents can message each other",
+    "messaging": "project agents can message each other (colony send, colony reply)",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
     "model": "model for new project sessions (blank: Claude Code's default)",
@@ -192,8 +195,14 @@ def git(root, *args):
 
 
 def root_of(path="."):
+    """The project a command runs in: the nearest folder upward that is on the board (it has a .board).
+    Not git's top level: a project can live inside another repository, like colony's own projects/."""
+    here = Path(path).resolve()
+    for d in (here, *here.parents):
+        if (d / ".board").is_dir():
+            return d
     top = git(path, "rev-parse", "--show-toplevel").strip()
-    return Path(top) if top else Path(path).resolve()
+    return Path(top) if top else here
 
 
 def read(root, name):
@@ -202,10 +211,14 @@ def read(root, name):
 
 
 def append(root, name, record):
+    """One line, whole: agents and the board may write at the same moment, so each append holds a lock."""
+    import fcntl
     path = Path(root) / ".board" / name
     path.parent.mkdir(exist_ok=True)
     with path.open("a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        fh.flush()
 
 
 def now():
@@ -316,73 +329,10 @@ def render_notes(ns, heading):
     return "\n".join(lines)
 
 
-def post_office():
-    """The board's own AgentPost post office: empty until the first project is created or added, and
-    separate from any other the person uses."""
-    return home() / "post"
-
-
-def post_env():
-    return {"AGENTPOST_ROOT": str(post_office())}
-
-
-def _agentpost(*args, cwd=None):
-    env = dict(os.environ, **post_env())
-    env.pop("AGENTPOST_AGENT", None)
-    return subprocess.run(["agentpost", *args], capture_output=True, text=True, cwd=cwd, timeout=60, env=env)
-
-
-def mailbox_record(root):
-    path = Path(root) / ".board" / "mailbox.json"
-    return json.loads(path.read_text()) if path.exists() else None
-
-
-def mailbox(root, full=False):
-    """The project's AgentPost mailbox: the seat its session runs as, and the full address other projects
-    write to. A folder AgentPost already knows keeps its mailbox; a new one is registered and joined the
-    first time. None when messaging is off or AgentPost isn't installed."""
-    import shutil
-    root = Path(root)
-    if not registry()["settings"]["messaging"] or not shutil.which("agentpost"):
-        return None
-    rec = mailbox_record(root)
-    if not rec:
-        known = {}
-        _agentpost("init")
-        listing = _agentpost("identities").stdout.splitlines()
-        for line in listing[1:]:
-            cols = line.split("\t")
-            if len(cols) > 3:
-                known[cols[1]] = cols[3] if cols[3] != "-" else cols[1]
-        found = _agentpost("identify", "--cli", "claude", "--cwd", str(root))
-        seat = found.stdout.strip().splitlines()[-1] if found.returncode == 0 and found.stdout.strip() else None
-        if not seat:
-            # A folder that already names its agent (.agentpost.toml) keeps that name here too, so the marker
-            # means the same thing to every post office; a new folder is named for itself.
-            marker = root / ".agentpost.toml"
-            named = re.search(r'^default_agent\s*=\s*"([^"]+)"', marker.read_text(), re.M) if marker.exists() else None
-            base = named.group(1) if named else (re.sub(r"[^a-z0-9-]+", "-", root.name.lower()).strip("-") or "project")
-            seat, n = base, 2
-            while seat in known and not named:
-                seat, n = f"{base}-{n}", n + 1
-            made = _agentpost("profile-register", seat, "--display-name", root.name, "--kind", "project",
-                              "--summary", f"Owns the {root.name} project at {root}; ask it about that project's work, "
-                                           "the formats it exports and the behaviour others rely on.",
-                              "--projects", seat, "--project-roots", str(root), "--handles", f"{seat},{root.name} questions")
-            if made.returncode != 0:
-                return None
-            _agentpost("join", seat, "--cli", "claude", cwd=root)
-            known[seat] = f"{seat}.{seat}"
-        rec = {"seat": seat, "address": known.get(seat, seat)}
-        (root / ".board").mkdir(exist_ok=True)
-        (root / ".board" / "mailbox.json").write_text(json.dumps(rec) + "\n")
-    return rec["address"] if full else rec["seat"]
-
-
 def track(path, register=True):
     """Put a project on the board: its roadmap, its .board folder, the agent's three habits in CLAUDE.md,
     and the delivery hooks in .claude/settings.json — added to whatever the project already has."""
-    root = root_of(path)
+    root = Path(path).expanduser().resolve()      # the folder chosen is the root, whatever repository holds it
     if not (root / ".git").exists():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".board").mkdir(exist_ok=True)
@@ -391,8 +341,9 @@ def track(path, register=True):
     claude_md = root / "CLAUDE.md"
     have = claude_md.read_text() if claude_md.exists() else ""
     block = PROTOCOL.lstrip("\n")
-    if "## The board" in have:                       # an older block is brought up to date, in place
-        start = have.index("## The board")
+    marker = next((m for m in ("## This project is part of a colony", "## The board") if m in have), None)
+    if marker:                                       # an older block is brought up to date, in place
+        start = have.index(marker)
         end = have.find("\n## ", start + 5)
         have = have[:start] + block + (have[end + 1:] if end != -1 else "")
         claude_md.write_text(have)
@@ -406,7 +357,6 @@ def track(path, register=True):
         if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
             entries.append({"hooks": [{"type": "command", "command": command}]})
     settings.write_text(json.dumps(cfg, indent=2) + "\n")
-    mailbox(root)
     reg = registry()
     inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
     if register and not inside_a_root and str(root) not in reg["projects"]:
@@ -553,7 +503,7 @@ def render(reg, pid, view="overview"):
     if view == "console":
         root = plist[pid]
         others = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(plist) if i != pid)
-        message = (f"<details class='msgbox'><summary>Message another project</summary>"
+        message = (f"<details class='msgbox'><summary>Message another project in the colony</summary>"
                    f"<form method='post' action='/message'><input type='hidden' name='p' value='{pid}'>"
                    f"<label>To <select name='to'>{others}</select></label>"
                    f"<label class='grow'>What should this agent message them about?"
@@ -640,6 +590,19 @@ def render(reg, pid, view="overview"):
         out.append(f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
                    + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
                    + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn") + "</details>")
+    from . import mail
+    ms = mail.messages(root)[-15:]
+    if ms:
+        me = mail.address(root)
+        rows = []
+        for m in reversed(ms):
+            way = f"from <b>{e(m['from'])}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
+            state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
+            if m["to"] == me and not m["delivered_at"]:
+                state = "reaches the agent on its next turn"
+            rows.append(f"<div class='note'><span class='who'>{e(m['at'][:16].replace('T', ' '))} · {way}"
+                        f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>")
+        out.append("</div><h2>Mail with other projects</h2><div class='card'>" + "".join(rows))
     out.append("</div><h2>About the whole project</h2><div class='card'>" + thread([n for n in all_notes if not n["anchor"]], items(road))
                + note_box(pid, "project", "", "Anything for the agent about the project as a whole") + "</div>")
     return shell(reg, pid, "".join(out))
@@ -781,7 +744,7 @@ def settings_page(reg):
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
-               f"<span class='muted'>(an AgentPost mailbox per project)</span></label>"
+               f"<span class='muted'>(one inbox per project)</span></label>"
                f"<label>Permissions for new sessions <select name='permissions'>"
                + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
@@ -800,15 +763,6 @@ def settings_page(reg):
             f"<p><a href='/add'>+ Add a project folder</a></p></div>"
             f"<p class='muted'>Removing leaves every file where it is; the project just leaves the board.</p>")
     return shell(reg, -2, body)
-
-
-def message_instruction(dest, address, text):
-    """What the board types into the sending project's console: the person's intent; the agent writes the
-    message with its own context."""
-    return (f"[board] The person asks you to send a message to the {dest} project (AgentPost address {address}). "
-            f"What it should be about: {text} — Write it so their agent can act on it without our context. If you "
-            f"need an answer, use `agentpost question {address} -`; otherwise `agentpost message {address} -`, with "
-            "the message on stdin. Then tell the person it is sent.")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -882,7 +836,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor
-            body = json.dumps({"projects": [console.snapshot(p) if p.exists() else {"state": "off", "lines": []}
+            body = json.dumps({"board": str(home()), "projects": [console.snapshot(p) if p.exists() else {"state": "off", "lines": []}
                                             for p in plist], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -926,8 +880,8 @@ class Handler(BaseHTTPRequestHandler):
             src, dst = projects(reg)[int(form.get("p", "0"))], projects(reg)[int(form.get("to", "0"))]
             text = form.get("text", "").strip()
             if text:
-                address = mailbox(dst, full=True) or dst.name
-                console.type_into(console.ensure(src), message_instruction(dst.name, address, text))
+                from . import mail
+                console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text))
             self.send_response(303)
             self.send_header("Location", f"/?p={form.get('p', '0')}&view=console")
             self.send_header("Content-Length", "0")

@@ -19,6 +19,9 @@ located signals and a project memory.
     colony stop                     end the board, the monitor and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
     colony projects                 every project on the board, its console state and latest line
+    colony send NAME "TEXT" [--ask] a message to another project's agent; --ask expects an answer
+    colony reply ID "TEXT"          answer a message
+    colony mail [--project NAME]    a project's mail, in and out
     colony peek NAME [-n 30]        a project console's last lines
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
@@ -36,6 +39,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -314,20 +318,75 @@ def _server_args(a):
     return ["--port", str(a.port)] + (["--lan"] if _lan(a) else ["--local"]) + (["--no-monitor"] if a.no_monitor else [])
 
 
+def _answers(port):
+    """Is this board, not some other program, answering on the port?"""
+    from . import board
+    import urllib.request
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/status", headers={"Host": f"127.0.0.1:{port}"})
+        return json.loads(urllib.request.urlopen(req, timeout=3).read()).get("board") == str(board.home())
+    except Exception:
+        return False
+
+
+def _free(port, lan):
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("0.0.0.0" if lan else "127.0.0.1", port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+def _launch(args):
+    """Start the board's server in its tmux session and wait until it answers; if it doesn't, say why."""
+    from . import board
+    log = board.home() / "server.log"
+    log.write_text("")
+    cmd = " ".join([shlex.quote(sys.executable), "-m", "colony", "board", "--foreground", *args])
+    # Started from the board's own folder: from ~, a clone at ~/colony would shadow the installed package.
+    subprocess.run(["tmux", "new-session", "-d", "-s", server(), "-c", str(board.home()), *_tmux_env(),
+                    f"{cmd} 2>&1 | tee -a {shlex.quote(str(log))}"], check=True)
+    port = args[args.index("--port") + 1]
+    for _ in range(40):
+        if _answers(port):
+            return True
+        if subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode != 0:
+            break
+        time.sleep(0.25)
+    subprocess.run(["tmux", "kill-session", "-t", server()], capture_output=True)
+    print(f"colony: the board did not start on port {port}:\n" + "\n".join(log.read_text().splitlines()[-8:]),
+          file=sys.stderr)
+    return False
+
+
 def cmd_board(a):
     """The board runs in its own tmux session, so it outlives the terminal that started it and the
     monitor can restart it; --foreground runs it here instead."""
     from . import board
     if a.foreground:
-        board.serve(a.port, lan=_lan(a), monitor=not a.no_monitor)
+        board.serve(a.port or 8790, lan=_lan(a), monitor=not a.no_monitor)
         return 0
+    saved = board.home() / "server.json"
     if subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode == 0:
-        print(f"the board is already running: http://127.0.0.1:{a.port}/  (colony restart to reload it)")
+        print("the board is already running (colony urls shows where; colony restart reloads it)")
         return 0
+    if a.port is None:
+        # The port it had last time, else 8790; if another program holds it, the next free one.
+        old = json.loads(saved.read_text()) if saved.exists() else []
+        a.port = int(old[old.index("--port") + 1]) if "--port" in old else 8790
+        a.port = next(p for p in range(a.port, a.port + 50) if _free(p, _lan(a)))
+    elif not _free(a.port, _lan(a)):
+        print(f"colony: port {a.port} is taken by another program; choose another with --port, "
+              f"or leave it out and colony finds a free one", file=sys.stderr)
+        return 1
     board.home().mkdir(parents=True, exist_ok=True)
-    (board.home() / "server.json").write_text(json.dumps(_server_args(a)))
-    cmd = " ".join([shlex.quote(sys.executable), "-m", "colony", "board", "--foreground", *_server_args(a)])
-    subprocess.run(["tmux", "new-session", "-d", "-s", server(), *_tmux_env(), cmd], check=True)
+    saved.write_text(json.dumps(_server_args(a)))
+    if not _launch(_server_args(a)):
+        return 1
     print(f"the board is running (tmux session {server()}); open it at:")
     for u in board.urls(a.port) if _lan(a) else [f"http://127.0.0.1:{a.port}/"]:
         print(f"  {u}")
@@ -365,9 +424,16 @@ def cmd_restart(a):
     from . import board
     saved = board.home() / "server.json"
     args = json.loads(saved.read_text()) if saved.exists() else []
+    if "--port" not in args:
+        print("colony: the board has not been started here yet: colony board", file=sys.stderr)
+        return 1
     subprocess.run(["tmux", "kill-session", "-t", server()], capture_output=True)
-    cmd = " ".join([shlex.quote(sys.executable), "-m", "colony", "board", "--foreground", *args])
-    subprocess.run(["tmux", "new-session", "-d", "-s", server(), *_tmux_env(), cmd], check=True)
+    for _ in range(20):                   # let the old server let go of the port
+        if not _answers(args[args.index("--port") + 1]):
+            break
+        time.sleep(0.25)
+    if not _launch(args):
+        return 1
     print("the board restarted; consoles and the monitor were not touched")
     return 0
 
@@ -380,11 +446,11 @@ def cmd_doctor(a):
     saved = board.home() / "server.json"
     args = json.loads(saved.read_text()) if saved.exists() else []
     port = args[args.index("--port") + 1] if "--port" in args else "8790"
-    try:
-        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/", headers={"Host": f"127.0.0.1:{port}"}), timeout=5)
+    if _answers(port):
         print(f"ok    board answers on port {port}")
-    except Exception as err:
-        problems.append(f"the board does not answer on port {port} ({err}): colony board, or colony restart")
+    else:
+        problems.append(f"the board does not answer on port {port}: colony board, or colony restart"
+                        + ("" if _free(int(port), False) else " (another program holds that port: colony stop, then colony board)"))
     if "--no-monitor" not in args:
         (print("ok    monitor session running") if monitor.snapshot()["state"] != "off"
          else problems.append("the monitor session is not running: colony restart starts it"))
@@ -395,7 +461,7 @@ def cmd_doctor(a):
         claude_md = (p / "CLAUDE.md").read_text() if (p / "CLAUDE.md").exists() else ""
         settings = json.loads((p / ".claude" / "settings.json").read_text()) if (p / ".claude" / "settings.json").exists() else {}
         hooks = json.dumps(settings.get("hooks", {}))
-        if "## The board" not in claude_md or "colony notes --deliver" not in hooks:
+        if "## This project is part of a colony" not in claude_md or "colony notes --deliver" not in hooks:
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
@@ -426,10 +492,14 @@ def cmd_notes(a):
     if not (root / ".board").exists():
         return 0                                  # not on the board: the hooks stay silent
     if a.deliver:
+        from . import mail
         fresh, still = board.deliver(root, session=a.session)
+        new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
             board.render_notes(fresh, "The person left notes for you on the board:"),
-            board.render_notes(still, "Still open from earlier (delivered, not yet acted on):")]))
+            board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
+            mail.render(new_mail, "Mail from other projects in the colony:"),
+            mail.render(open_asks, "Questions from the colony you haven't answered yet:")]))
     else:
         text = board.render_notes(board.open_notes(root, a.item), "Open notes from the person:") or "No open notes."
     if text:
@@ -457,14 +527,13 @@ def _project(name):
 
 
 def cmd_projects(a):
-    from . import board, console
+    from . import board, console, mail
     for p in board.projects():
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
         waiting = sum(1 for g in board.gates(p) if not g["answer"]) if p.exists() else 0
         last = snap["lines"][-1] if snap["lines"] else ""
-        rec = board.mailbox_record(p) if p.exists() else None
-        address = rec["address"] if rec else "-"
-        print(f"{p.name:22} {address:22} {snap['state']:10} {str(waiting) + ' gate(s) open' if waiting else '':16} {last[:70]}")
+        goal = board.roadmap(p)["goal"] if p.exists() else ""
+        print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' gate(s) open' if waiting else '':16} {goal[:90]}")
     return 0
 
 
@@ -522,6 +591,42 @@ def cmd_settings(a):
     return 0
 
 
+def cmd_send(a):
+    from . import mail
+    try:
+        m = mail.send(a.to, mail.read_text(a.text), ask=a.ask, urgent=a.urgent)
+    except KeyError:
+        raise SystemExit(f"no project named {a.to}; `colony projects` lists them")
+    except PermissionError as err:
+        raise SystemExit(str(err))
+    print(f"sent {m['id']} to {a.to}" + (" (it will answer with colony reply)" if a.ask else ""))
+    return 0
+
+
+def cmd_reply(a):
+    from . import mail
+    try:
+        m = mail.reply(a.id, mail.read_text(a.text))
+    except KeyError:
+        raise SystemExit(f"no message {a.id} here; `colony mail` lists them")
+    print(f"answered {a.id}: sent {m['id']} to {m['to']}")
+    return 0
+
+
+def cmd_mail(a):
+    from . import board, mail
+    root = _project(a.project) if a.project else board.root_of()
+    ms = mail.messages(root)
+    if not ms:
+        print("no mail")
+    me = mail.address(root)
+    for m in ms[-a.last:]:
+        way = f"from {m['from']}" if m["to"] == me else f"to {m['to']}"
+        flag = (" [answered]" if m["answer"] else " [asks]") if m["ask"] else ""
+        print(f"{m['id']}  {m['at'][:16]}  {way}{flag}: {m['text']}")
+    return 0
+
+
 def cmd_helm(a):
     from . import monitor
     if a.state:
@@ -547,7 +652,7 @@ def main(argv=None):
     p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("track"); p.add_argument("path", nargs="?", default="."); p.set_defaults(fn=cmd_track)
-    p = sub.add_parser("board"); p.add_argument("--port", type=int, default=8790)
+    p = sub.add_parser("board"); p.add_argument("--port", type=int)
     p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
     p.add_argument("--no-monitor", action="store_true", help="don't start the monitor session and its watcher")
     p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
@@ -564,6 +669,13 @@ def main(argv=None):
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
+    p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")
+    p.add_argument("--ask", action="store_true", help="it expects an answer")
+    p.add_argument("--urgent", action="store_true", help="deliver even mid-turn, not when the turn ends")
+    p.set_defaults(fn=cmd_send)
+    p = sub.add_parser("reply"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_reply)
+    p = sub.add_parser("mail"); p.add_argument("--project"); p.add_argument("--last", type=int, default=20)
+    p.set_defaults(fn=cmd_mail)
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)

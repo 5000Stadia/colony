@@ -20,7 +20,7 @@ ROLE = """# You are `monitor · every project on this board · until the person 
 You act for the person across their projects. They reach you from the Claude app or the board; each
 project also has its own session they can talk to directly.
 
-- **Events wake you.** A message starting `[board]` means a project changed: it needs input, finished
+- **Events wake you.** A message starting `[colony]` means a project changed: it needs input, finished
   a turn, or opened a gate. Tell the person briefly what happened and what, if anything, needs them.
   Don't poll or watch; you are woken when something matters.
 - **Relay cleanly.** When the person asks for something in a project, turn it into a clear, complete
@@ -94,6 +94,7 @@ class Watcher:
     def __init__(self, interval=4.0, quiet=20.0):
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
+        self.nudged = set()
 
     def events(self):
         out = []
@@ -114,11 +115,29 @@ class Watcher:
                 out.append(f"{p.name} opened a gate: {g['question']}")
         return out
 
+    def mail(self):
+        """Wake a project that has mail it hasn't been handed: start its session if it isn't running, and
+        once it is idle, nudge it; its delivery hook then hands the mail over. A busy session, or one
+        waiting on a question, is left alone."""
+        from . import mail
+        for p in board.projects():
+            waiting = [m["id"] for m in mail.inbox(p) if not m["delivered_at"]]
+            if not waiting or set(waiting) <= self.nudged:
+                continue
+            state = console.snapshot(p, lines=1)["state"]
+            urgent = any(m.get("urgent") for m in mail.inbox(p) if m["id"] in waiting)
+            if state == "off":
+                console.ensure(p)
+            elif state == "idle" or (urgent and state == "working"):
+                console.type_into(console.session_name(p), "[colony] Mail from another project in the colony has arrived.")
+                self.nudged |= set(waiting)
+
     def tick(self):
+        self.mail()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             note = HELM_ON_NOTE if helm() else HELM_OFF_NOTE
-            console.type_into(name(), "[board] " + " | ".join(self.pending) + f" ({note})")
+            console.type_into(name(), "[colony] " + " | ".join(self.pending) + f" ({note})")
             self.pending = []
 
     def run(self):

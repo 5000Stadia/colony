@@ -59,12 +59,14 @@ board itself: it runs `colony doctor` when something seems off, fixes bugs in th
 `colony restart`, a local commit; it asks before pushing), and proposes improvements for you to decide
 on, always after the projects' needs.
 
-**Projects talk to each other.** The board keeps its own AgentPost post office (in
-`~/.config/colony/post`, apart from any other you use). It starts empty; each project gets a mailbox
-when it is created or added, and AgentPost's hook wakes its session when mail arrives. Next to a
-project's console, "Message another project" lists the others; you say what the message should be
-about and that project's agent writes and sends it with its own context. Agents also know to ask
-another project's agent rather than guess at what it exports.
+**Projects talk to each other.** Each project gets an inbox when it is created or added; there are
+none before. `colony send NAME "..."` (`--ask` when an answer is expected) writes to another project's
+agent and `colony reply ID "..."` answers; `colony projects` lists each project with its goal, so an
+agent can tell whom to ask. Mail reaches the recipient on its next turn; if its session is idle the
+board nudges it, and if it isn't running the board starts it; `--urgent` is delivered even mid-turn.
+Next to a project's console, "Message another project" lists the others: you say what the message
+should be about and that project's agent writes and sends it with its own context. Agents also know to
+ask another project's agent rather than guess at what it exports. Nothing extra to install.
 
 **Each project has its own settings** (permissions, Remote Control, model, effort), chosen when it is
 added or created and changeable from its Overview; blank keeps the global setting.
