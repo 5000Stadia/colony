@@ -74,6 +74,18 @@ class BoardTest(BoardBase):
         self.assertEqual(len(cfg["hooks"]["SessionStart"]), 1)
         self.assertEqual(board.registry()["projects"], [str(self.root)])
 
+    def test_the_persons_open_notes_are_listed_and_none_is_lost_with_its_item(self):
+        board.track(self.root)
+        kept = board.add_note(self.root, {"item": "R1"}, "use the wording from the brief")
+        board.add_note(self.root, {"item": "R9"}, "an item later dropped from the plan")
+        page = board.render(board.registry(), 0, "")
+        self.assertIn("Your notes, not yet acted on (2)", page)
+        self.assertIn("Notes on items no longer on the roadmap (R9)", page)
+        board.append(self.root, "notes.jsonl", {"type": "addressed", "of": kept["id"], "at": board.now(), "text": "done"})
+        page = board.render(board.registry(), 0, "")
+        self.assertIn("Your notes, not yet acted on (1)", page)
+        self.assertIn("an item later dropped from the plan", page.split("no longer on the roadmap")[1])
+
     def test_notes_reach_the_agent_when_they_are_relevant(self):
         board.track(self.root)
         board.add_note(self.root, {"commit": "abc1234"}, "the log format is wrong")

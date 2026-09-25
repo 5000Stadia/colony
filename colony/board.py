@@ -321,15 +321,18 @@ def status(n, road_items):
     return "reaches the agent on its next turn"
 
 
+def where(n):
+    a = n["anchor"] or {}
+    return (f"on gate {a['gate']}" if a.get("gate") else f"on roadmap item {a['item']}" if a.get("item")
+            else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
+
+
 def render_notes(ns, heading):
     if not ns:
         return ""
     lines = [heading]
     for n in ns:
-        a = n["anchor"] or {}
-        where = (f"on gate {a['gate']}" if a.get("gate") else f"on roadmap item {a['item']}" if a.get("item")
-                 else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
-        lines.append(f"- [{n['id']}] {where}: {n['text']}")
+        lines.append(f"- [{n['id']}] {where(n)}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
     return "\n".join(lines)
 
@@ -539,6 +542,14 @@ def render(reg, pid, view="overview"):
                    f"<button>Answer</button></form></div>")
     if not open_gates:
         out.append("<div class='card muted'>Nothing is waiting on you.</div>")
+    # the person's own notes the agent has not acted on yet, wherever they were left
+    its_now = items(road)
+    mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
+    if mine:
+        out.append(f"<h2>Your notes, not yet acted on ({len(mine)})</h2><div class='card'>"
+                   + "".join(f"<div class='note'><span class='who'>{e(where(n))} · {e(n['at'][:10])}</span>"
+                             f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>" for n in mine)
+                   + "</div>")
     # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
     out.append("<h2>Roadmap</h2>")
     if road["milestones"]:
@@ -571,6 +582,10 @@ def render(reg, pid, view="overview"):
             out.append("</details>")
     else:
         out.append("<div class='card muted'>No roadmap yet: the agent keeps it in ROADMAP.md.</div>")
+    gone = sorted({(n["anchor"] or {}).get("item") for n in all_notes} - set(items(road)) - {None})
+    if gone:                        # an item renamed or dropped keeps its conversation
+        out.append(f"<details class='card'><summary>Notes on items no longer on the roadmap ({', '.join(map(e, gone))})</summary>"
+                   + "".join(f"<h3>{e(g)}</h3>" + thread(by("item", g), items(road)) for g in gone) + "</details>")
     # history
     out.append("<h2>History</h2><div class='card'>")
     for line in git(root, "log", "-n", "20", "--format=%h\x1f%aI\x1f%s").splitlines():
