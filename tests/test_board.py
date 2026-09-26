@@ -546,11 +546,20 @@ class MailWakeTest(BoardBase):
         mail.send("plants", "hello")
         w.mail()
         w.mail()
-        self.assertEqual(self.typed, ["[colony] Mail from another project in the colony has arrived."], "one nudge per message")
+        self.assertEqual(self.typed, ["[colony] You have mail from another project in the colony."], "one nudge per message")
         self.state["state"] = "off"
         mail.send("plants", "and again")
         w.mail()
         self.assertEqual(self.started, [self.root], "a project that isn't running is started for its mail")
+
+    def test_a_note_left_while_the_agent_is_idle_does_not_wait_for_the_person_to_type(self):
+        w = monitor.Watcher()
+        board.add_note(self.root, {"item": "R3"}, "for when reminders start")        # R3 not started: it waits
+        w.mail()
+        self.assertEqual(self.typed, [])
+        board.add_note(self.root, None, "add a one-line README")
+        w.mail()
+        self.assertEqual(self.typed, ["[colony] You have a note from the person on the board."])
 
     def test_busy_projects_wait_unless_the_mail_is_urgent(self):
         w = monitor.Watcher()

@@ -65,6 +65,16 @@ def type_into(name, text):
     subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
 
 
+def press(name, keys):
+    """Press keys in a session (tmux key names: Up, Down, Enter, Escape...)."""
+    for k in keys:
+        subprocess.run(["tmux", "send-keys", "-t", name, k], check=True)
+
+
+def screen(name):
+    return subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
+
+
 def stop(root):
     subprocess.run(["tmux", "kill-session", "-t", session_name(root)], capture_output=True)
 

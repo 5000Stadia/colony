@@ -31,6 +31,11 @@ project also has its own session they can talk to directly.
 - **Relay cleanly.** When the person asks for something in a project, turn it into a clear, complete
   request and send it with `colony tell NAME "..."`. Look first with `colony peek NAME` if you need
   the context. `colony projects` lists everything with its state.
+- **A choice on a project's screen** (a folder-trust question, a permission prompt) is answered with
+  `colony choose NAME "text of the option"`, never `colony tell`: that types text and presses Enter on
+  whatever is highlighted, which on a trust question is "No, exit".
+- **Check before you report.** After acting on a project, look (`colony choose` prints the result; else
+  `colony peek NAME`) and tell the person what actually happened, not what you meant to happen.
 - **The helm.** `colony helm` shows whether you hold it; the person says "take the helm" or "hand it
   back" and you run `colony helm on|off`. With the helm off, relay and ask; decide nothing. With it on,
   answer a project's routine questions yourself within the direction the person has given, and tell
@@ -111,9 +116,11 @@ class Watcher:
             if not p.exists():
                 continue
             snap = console.snapshot(p, lines=4)
-            before, now = self.states.get(str(p)), snap["state"]
+            # A project not seen before counts as off, so one already waiting (a new folder's trust question,
+            # a question left while the board was down) is reported, not taken as where it always was.
+            before, now = self.states.get(str(p), "off"), snap["state"]
             self.states[str(p)] = now
-            kind = WAKE.get((before, now)) if before is not None else None
+            kind = WAKE.get((before, now))
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
                 out.append(f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]))
@@ -125,21 +132,29 @@ class Watcher:
         return out
 
     def mail(self):
-        """Wake a project that has mail it hasn't been handed: start its session if it isn't running, and
-        once it is idle, nudge it; its delivery hook then hands the mail over. A busy session, or one
-        waiting on a question, is left alone."""
+        """Wake a project that has something it hasn't been handed: mail from another project, or a note or
+        gate answer from the person whose moment has come. Start its session if it isn't running, and once
+        it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
+        on a question, is left alone until its turn ends, unless the mail is urgent."""
         from . import mail
         for p in board.projects():
-            waiting = [m["id"] for m in mail.inbox(p) if not m["delivered_at"]]
-            if not waiting or set(waiting) <= self.nudged:
+            if not p.exists():
+                continue
+            letters = [m for m in mail.inbox(p) if not m["delivered_at"]]
+            notes = [n for n in board.open_notes(p) if not n["delivered_at"]]
+            waiting = {m["id"] for m in letters} | {n["id"] for n in notes}
+            if not waiting or waiting <= self.nudged:
                 continue
             state = console.snapshot(p, lines=1)["state"]
-            urgent = any(m.get("urgent") for m in mail.inbox(p) if m["id"] in waiting)
+            urgent = any(m.get("urgent") for m in letters)
             if state == "off":
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
-                console.type_into(console.session_name(p), "[colony] Mail from another project in the colony has arrived.")
-                self.nudged |= set(waiting)
+                what = " and ".join(filter(None, [
+                    "a note from the person on the board" if notes else "",
+                    "mail from another project in the colony" if letters else ""]))
+                console.type_into(console.session_name(p), f"[colony] You have {what}.")
+                self.nudged |= waiting
 
     def tick(self):
         self.mail()

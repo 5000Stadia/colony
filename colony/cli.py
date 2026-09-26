@@ -24,6 +24,7 @@ located signals and a project memory.
     colony mail [--project NAME]    a project's mail, in and out
     colony peek NAME [-n 30]        a project console's last lines
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
+    colony choose NAME "OPTION"     pick an option a project is showing (trust question, permission prompt)
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
@@ -592,6 +593,24 @@ def cmd_settings(a):
     return 0
 
 
+def cmd_choose(a):
+    """Pick an option a project's agent is showing (a trust question, a permission prompt) by its text:
+    `colony tell` would type the text and press Enter on whatever is highlighted."""
+    from . import console, providers
+    root = _project(a.name)
+    name = console.session_name(root)
+    keys = providers.of(root).choose(console.screen(name), a.option)
+    if not keys:
+        print(f"{a.name} shows no choice containing \"{a.option}\"; colony peek {a.name} shows its screen", file=sys.stderr)
+        return 1
+    console.press(name, keys)
+    time.sleep(2)
+    snap = console.snapshot(root, lines=4)
+    print(f"chose \"{a.option}\" in {a.name}; it is now {snap['state']}:")
+    print("\n".join("  " + l for l in snap["lines"]))
+    return 0
+
+
 def cmd_send(a):
     from . import mail
     try:
@@ -680,6 +699,7 @@ def main(argv=None):
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
+    p = sub.add_parser("choose"); p.add_argument("name"); p.add_argument("option"); p.set_defaults(fn=cmd_choose)
     p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within")
     for k in ("provider", "model", "effort", "permissions"):
         p.add_argument(f"--{k}", help="for this project (default: the global setting)")

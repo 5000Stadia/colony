@@ -16,6 +16,8 @@ what it assumes and what a second provider needs there. What a provider supplies
   wired(root)              whether wire() has been done (the doctor asks)
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
+  choose(screen, text)     the keys that pick the on-screen option matching `text` (a trust question, a
+                           permission prompt), or None if there is no such choice; `colony choose` uses it.
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -84,6 +86,32 @@ class ClaudeCode:
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"
         return "idle"
+
+    def choose(self, screen, text):
+        """Claude Code draws a choice as a column of options, the highlighted one marked `❯`; the arrows move
+        the mark and Enter confirms. The keys that confirm the option containing `text`, or None."""
+        import re
+        lines = screen.splitlines()
+        cur = next((i for i, l in enumerate(lines) if re.match(r"^\s*❯ \S", l)), None)
+        if cur is None:
+            return None
+        col = lines[cur].index("❯") + 2
+        is_option = lambda l: len(l) > col and l[col] != " " and l[:col].strip() in ("", "❯")
+        block, i = [], cur
+        while i > 0 and (is_option(lines[i - 1]) or lines[i - 1][:col + 1].strip() == ""):
+            i -= 1                                                       # up to the first option
+        for l in lines[i:]:
+            if is_option(l):
+                block.append(l)
+            elif l[:col + 1].strip():                                    # shallower text: the list has ended
+                break
+        want = text.lower().strip()
+        label = lambda l: re.sub(r"^\d+\.\s*", "", l[col:].strip()).lower()
+        hit = next((k for k, l in enumerate(block) if want in label(l)), None)
+        if hit is None:
+            return None
+        here = next(k for k, l in enumerate(block) if l.lstrip().startswith("❯"))
+        return (["Down"] * (hit - here) if hit > here else ["Up"] * (here - hit)) + ["Enter"]
 
 
 PROVIDERS = {"claude": ClaudeCode()}
