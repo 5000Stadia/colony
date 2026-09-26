@@ -32,6 +32,7 @@
 - Where yes, have a separate agent, without the builder's context, try to break it and use it the way its real users will; let it decide how for this kind of work. In testing this caught nearly all of what it went after at about twice the build's cost, which is cheap next to fixing what later work was built on.
 - Your own tests share your understanding: if you misread the spec, they pass anyway. Where the spec itself is long, subtle or ambiguous, also have a separate agent write tests from the spec alone.
 - For what tests can't express (prose, design, a document leaving the person's hands), use a reader who meets it as its recipient will. The reviewer reads, never edits, and sees the stakes and your doubts first.
+- Where the goal is quality rather than correctness, and above all where quality is in the person's eye (how it looks, feels or reads), pin their standard down before building: the best real example they would hold it to, and what in it makes it good to them. Then iterate with a fresh critic that scores the work against those named qualities and that example, rather than picking a winner, backed by measurements it can't see (a profiler, image diffs, the state read as data).
 - One reviewer always finds something "major". Act on critical findings and on ones two reviewers found independently.
 
 ## As the project grows
