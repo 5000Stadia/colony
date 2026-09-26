@@ -17,6 +17,7 @@
 - Judge stakes by consequence and reversibility, never by subject.
 - If the work shows the plan or a milestone is wrong, say so with the reason. How to do a step is your call; scope, order and milestones are the person's.
 - Guard against what would fail silently or spoil what later work builds on; skip guards nobody would miss. Every extra layer is something later changes must work around.
+- Where the running product has state that tests don't reach (a game world, a UI, a simulation), give yourself a way to read it as data, such as a debug export of the state as JSON, and check against that. Screenshots and video are the fallback.
 
 - If the person wants to follow and steer the project without being in the conversation, put it on the board (`colony track`): one page for all their projects, with gates for their decisions and notes that reach you when they're relevant.
 
