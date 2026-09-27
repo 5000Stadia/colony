@@ -482,6 +482,29 @@ def cmd_gate(a):
     return 0
 
 
+def _hook_input():
+    """What a hook was handed on stdin, if anything: never waits on a terminal or an open pipe."""
+    import select
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+        return json.loads(sys.stdin.read() or "{}") if ready else {}
+    except (ValueError, OSError):
+        return {}
+
+
+def cmd_turn(a):
+    """The provider's end-of-turn hook: if the turn asked the person something, it waits on them."""
+    from . import board, providers
+    root = board.root_of()
+    if not (root / ".board").exists():
+        return 0
+    key, text = providers.of(root).turn_text(_hook_input())
+    board.record_ask(root, key, text)
+    return 0
+
+
 def cmd_notes(a):
     from . import board
     root = board.root_of()
@@ -490,6 +513,9 @@ def cmd_notes(a):
     if a.deliver:
         # Printed for the provider to put in the agent's context: Claude Code's hooks do (providers.py wire()).
         from . import mail
+        prompt = str(_hook_input().get("prompt") or "")
+        if prompt and not prompt.startswith("[colony]"):
+            board.answer_asks(root, "in the console")        # the person answered there themselves
         fresh, still = board.deliver(root, session=a.session)
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
@@ -699,6 +725,7 @@ def main(argv=None):
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
+    sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something").set_defaults(fn=cmd_turn)
     p = sub.add_parser("choose"); p.add_argument("name"); p.add_argument("option"); p.set_defaults(fn=cmd_choose)
     p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within")
     for k in ("provider", "model", "effort", "permissions"):

@@ -298,6 +298,40 @@ def items(road):
     return {i["id"]: i for m in road["milestones"] for i in m["items"]}
 
 
+# ---------------------------------------------------------------- questions the agent asked in its console
+
+def asks_question(text):
+    """A sentence ending in "?", outside code: the agent is asking the person something."""
+    prose = re.sub(r"```.*?```|`[^`]*`|https?://\S+", " ", text, flags=re.S)
+    return bool(re.search(r"\?(?=[\s)*_\"'»]|$)", prose))
+
+
+def asks(root):
+    """The turns that asked the person something and haven't had an answer: at most the latest one."""
+    out = {}
+    for e in read(root, "asks.jsonl"):
+        if e["type"] == "ask":
+            out[e["id"]] = e
+        elif e["type"] == "answered":
+            out.pop(e["of"], None)
+    return list(out.values())
+
+
+def record_ask(root, key, text):
+    """One entry per turn: the turn's whole text. A newer question replaces an unanswered older one."""
+    if not text or not asks_question(text) or any(e.get("key") == key for e in read(root, "asks.jsonl") if key):
+        return None
+    answer_asks(root, "superseded by a later turn")
+    ask = {"type": "ask", "id": "a" + secrets.token_hex(3), "at": now(), "key": key, "text": text.strip()}
+    append(root, "asks.jsonl", ask)
+    return ask
+
+
+def answer_asks(root, how):
+    for a in asks(root):
+        append(root, "asks.jsonl", {"type": "answered", "of": a["id"], "at": now(), "how": how})
+
+
 def gates(root):
     out = {}
     for e in read(root, "gates.jsonl"):
@@ -545,9 +579,12 @@ def render(reg, pid, view="overview"):
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
                f"<pre id='peek-lines-{pid}'>{e(chr(10).join(snap['lines']))}</pre></a>")
-    # waiting on you
+    # waiting on you: gates, and the latest turn that asked something in the console
     open_gates = [g for g in gs if not g["answer"]]
-    out.append(f"<h2>Waiting on you ({len(open_gates)})</h2>")
+    open_asks = asks(root)
+    out.append(f"<h2>Waiting on you ({len(open_gates) + len(open_asks)})</h2>")
+    for a in open_asks:
+        out.append(ask_card(pid, a, f"/?p={pid}"))
     for g in open_gates:
         item = f" · {e(g['item'])}" if g.get("item") else ""
         out.append(f"<div class='card gate'><b>{e(g['question'])}</b><div class='who'>{e(g['at'][:10])}{item}</div>"
@@ -555,7 +592,7 @@ def render(reg, pid, view="overview"):
                    f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(g['id'])}'>"
                    f"<textarea name='text' placeholder='Your answer reaches the agent next time it works'></textarea>"
                    f"<button>Answer</button></form></div>")
-    if not open_gates:
+    if not open_gates and not open_asks:
         out.append("<div class='card muted'>Nothing is waiting on you.</div>")
     # since you were last here: "I'm caught up" at both ends of the list, and only when there is a list
     s = since(root, reg["seen"].get(str(root)))
@@ -798,13 +835,19 @@ def folder_browser(reg, current, purpose):
     return shell(reg, -2, "".join(out) + "</div>")
 
 
+def ask_card(pid, a, back):
+    """A turn that asked the person something: the whole turn, and a reply typed into its console."""
+    return (f"<div class='card gate ask'><div class='who'>asked in its console · {e(a['at'][:16].replace('T', ' '))}</div>"
+            f"<div class='asktext'>{e(a['text'])}</div><form class='add' method='post' action='/reply'>"
+            f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>"
+            f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
+
+
 def needs_you(reg):
     """Everything across the projects that is waiting on the person, each answerable where it stands: a gate
-    (the answer reaches the agent as a note), a choice on a console's screen (a button per option), a
-    project that finished its turn and waits (the reply is typed into its console), and an item waiting to
-    be checked (a note on the item)."""
-    from . import monitor
-    waiting = monitor.WATCHER.waiting if monitor.WATCHER else {}
+    (the answer reaches the agent as a note), a choice on a console's screen (a button per option), a turn
+    that asked the person something (the reply is typed into its console), and an item waiting to be
+    checked (a note on the item)."""
     rows = []
     hidden = lambda pid, back="/monitor": (f"<input type='hidden' name='p' value='{pid}'>"
                                            f"<input type='hidden' name='back' value='{back}'>")
@@ -827,9 +870,9 @@ def needs_you(reg):
                             + "<div class='choices'>" + "".join(
                                 f"<form method='post' action='/choose'>{hidden(pid)}<input type='hidden' name='option' value='{e(o)}'>"
                                 f"<button class='quiet'>{e(o)}</button></form>" for o in options) + "</div></div>")
-        elif str(p) in waiting and snap["state"] == "idle":
-            rows.append(f"<div class='need'><div class='who'>{name} · finished, waiting for you</div>"
-                        f"<pre>{e(chr(10).join(waiting[str(p)]))}</pre>"
+        for a in asks(p):
+            rows.append(f"<div class='need'><div class='who'>{name} · asked in its console</div>"
+                        f"<div class='asktext'>{e(a['text'])}</div>"
                         f"<form class='add' method='post' action='/reply'>{hidden(pid)}"
                         f"<textarea name='text' placeholder='Reply to {name}'></textarea><button>Send</button></form></div>")
         for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
@@ -1085,10 +1128,8 @@ class Handler(BaseHTTPRequestHandler):
             if keys:
                 console.press(name, keys)
         elif path == "/reply" and text:
-            from . import monitor
             console.type_into(console.session_name(root), text)
-            if monitor.WATCHER:
-                monitor.WATCHER.waiting.pop(str(root), None)
+            answer_asks(root, "from the board")
         elif path == "/console/stop":
             console.stop(root)
         elif path == "/seen":
@@ -1174,7 +1215,7 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
-.caughtup { margin:4px 0 8px } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
+.caughtup { margin:4px 0 8px } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
 .keys button { flex:1 0 auto; min-width:44px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }

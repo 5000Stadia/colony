@@ -614,16 +614,15 @@ class NeedsYouTest(BoardBase):
     def setUp(self):
         super().setUp()
         board.track(self.root)
-        self.saved = (console.snapshot, console.screen, console.press, console.type_into, monitor.WATCHER)
+        self.saved = (console.snapshot, console.screen, console.press, console.type_into)
         self.pressed, self.typed, self.state = [], [], {"state": "idle"}
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": ["done."]}
         console.screen = lambda name: self.CHOICE
         console.press = lambda name, keys: self.pressed.append(keys)
         console.type_into = lambda name, text: self.typed.append(text)
-        monitor.WATCHER = monitor.Watcher()
 
     def tearDown(self):
-        console.snapshot, console.screen, console.press, console.type_into, monitor.WATCHER = self.saved
+        console.snapshot, console.screen, console.press, console.type_into = self.saved
         super().tearDown()
 
     def post(self, port, path, **form):
@@ -646,16 +645,51 @@ class NeedsYouTest(BoardBase):
             self.post(port, "/choose", p=0, option="Yes, and don't ask again", back="/monitor")
             self.assertEqual(self.pressed, [["Down", "Enter"]], "the button picks its own option")
             self.state["state"] = "idle"
-            monitor.WATCHER.waiting[str(self.root)] = ["Which format do you want?"]
-            self.assertIn("finished, waiting for you", board.needs_you(board.registry()))
+            board.record_ask(self.root, "u1", "Export is done. Which format do you want?")
+            self.assertIn("asked in its console", board.needs_you(board.registry()))
             self.post(port, "/reply", p=0, text="CSV please", back="/monitor")
             self.assertEqual(self.typed, ["CSV please"], "the reply is typed into its console")
-            self.assertNotIn("finished, waiting for you", board.needs_you(board.registry()))
+            self.assertNotIn("asked in its console", board.needs_you(board.registry()))
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class AskTest(BoardBase):
+    """A turn that asks the person something waits on them: one entry, the whole turn, until they answer."""
+    def hook(self, *args, payload=None):
+        return subprocess.run([sys.executable, "-m", "colony", *args], cwd=self.root, capture_output=True, text=True,
+                              input=json.dumps(payload or {}), env=dict(os.environ, PYTHONPATH=str(ROOT)))
+
+    def transcript(self, *turns):
+        path = Path(self.tmp.name) / "t.jsonl"
+        lines = []
+        for n, (who, content) in enumerate(turns):
+            body = content if who == "user" else [{"type": "text", "text": content}] if isinstance(content, str) else content
+            lines.append(json.dumps({"type": who, "uuid": f"u{n}", "message": {"role": who, "content": body}}))
+        path.write_text("\n".join(lines) + "\n")
+        return {"transcript_path": str(path)}
+
+    def test_one_entry_per_turn_with_all_of_it_and_it_clears_when_the_person_answers(self):
+        board.track(self.root)
+        t = self.transcript(("user", "tidy the export"),
+                            ("assistant", [{"type": "text", "text": "I looked at the export."},
+                                           {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}]),
+                            ("user", [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}]),
+                            ("assistant", "Two options. Keep the old column? Or drop it?"))
+        self.hook("turn", payload=t)
+        self.hook("turn", payload=t)                                   # the same turn again: no second entry
+        [a] = board.asks(self.root)
+        self.assertIn("I looked at the export.", a["text"], "the whole turn, not just the question")
+        self.assertIn("Keep the old column? Or drop it?", a["text"])
+        self.hook("notes", "--deliver", payload={"prompt": "[colony] You have mail from another project."})
+        self.assertEqual(len(board.asks(self.root)), 1, "colony's own nudge is not an answer")
+        self.hook("notes", "--deliver", payload={"prompt": "keep it"})
+        self.assertEqual(board.asks(self.root), [], "answering in the console clears it")
+        self.hook("turn", payload=self.transcript(("user", "go"), ("assistant", "Done; all tests pass. See `x?y` and https://a.b/?q")))
+        self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
 
 
 class ServerTest(BoardBase):

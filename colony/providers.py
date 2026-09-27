@@ -18,6 +18,8 @@ what it assumes and what a second provider needs there. What a provider supplies
   wired(root)              whether wire() has been done (the doctor asks)
   own_defaults()           the model and effort the CLI uses when colony names none, or None where it
                            decides itself; the forms show them as "Default (...)"
+  turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
+                           turn that asks the person something shows under "Waiting on you"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
@@ -41,7 +43,9 @@ class ClaudeCode:
     efforts = ["low", "medium", "high", "xhigh", "max"]
     # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
     # SessionStart gives the backlog at start; UserPromptSubmit gives what is new before every turn.
-    hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver"}
+    # Stop runs when a turn ends: `colony turn` records the turn if it asks the person something.
+    hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
+             "Stop": "colony turn"}
 
     def command(self, label, s):
         """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort."""
@@ -82,6 +86,31 @@ class ClaudeCode:
     def model_name(self, value):
         """The model a value means, by name: an ID or alias; anything else as typed."""
         return dict(self.models).get(value) or self.aliases.get(str(value).lower()) or value
+
+    def turn_text(self, payload):
+        """What the agent wrote in the turn that just ended, from the Stop hook's payload: every piece of prose
+        since the person's last message, and a key naming that turn. PROVIDER: reads Claude Code's own
+        transcript file; another CLI reports its turn however it can, as the same (key, text)."""
+        path = payload.get("transcript_path")
+        if not path or not Path(path).exists():
+            return None, ""
+        prose, key = [], None
+        for line in Path(path).read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            m = e.get("message") or {}
+            content = m.get("content")
+            if e.get("type") == "user" and (isinstance(content, str) or any(
+                    isinstance(c, dict) and c.get("type") == "text" for c in content or [])):
+                prose, key = [], None                          # the person spoke: a new turn starts
+            elif e.get("type") == "assistant" and isinstance(content, list):
+                text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text").strip()
+                if text:
+                    prose.append(text)
+                    key = e.get("uuid") or key
+        return key, "\n\n".join(prose)
 
     def own_defaults(self):
         """What Claude Code uses when colony names nothing: its own settings file, where the person may have
