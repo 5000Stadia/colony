@@ -1279,11 +1279,12 @@ def settings_page(reg):
     rows = []
     for r in reg["roots"]:
         default = r == reg["new_root"]
-        rows.append(f"<li><code>{e(r)}</code>{' <b>new projects go here</b>' if default else ''}"
-                    + ("" if default else f"<form class='inline' method='post' action='/roots'><input type='hidden' name='default' value='{e(r)}'><button class='quiet'>Make default</button></form>")
-                    + f"<form class='inline' method='post' action='/roots'><input type='hidden' name='remove' value='{e(r)}'><button class='quiet'>Remove</button></form></li>")
-    single = "".join(f"<li><code>{e(p)}</code><form class='inline' method='post' action='/roots'><input type='hidden' name='untrack' value='{e(p)}'>"
-                     f"<button class='quiet'>Remove from board</button></form></li>" for p in reg["projects"])
+        # a folder row: its path on its own line, then what it is and what can be done with it
+        rows.append(f"<li><code class='path'>{e(r)}</code><div class='folderacts'>{'<b>New projects go here</b>' if default else ''}"
+                    + ("" if default else f"<form method='post' action='/roots'><input type='hidden' name='default' value='{e(r)}'><button class='quiet'>Make default</button></form>")
+                    + f"<form method='post' action='/roots'><input type='hidden' name='remove' value='{e(r)}'><button class='quiet'>Remove</button></form></div></li>")
+    single = "".join(f"<li><code class='path'>{e(p)}</code><div class='folderacts'><form method='post' action='/roots'><input type='hidden' name='untrack' value='{e(p)}'>"
+                     f"<button class='quiet'>Remove from board</button></form></div></li>" for p in reg["projects"])
     s = reg["settings"]
     check = lambda k: " checked" if s[k] else ""
     options = (f"<form method='post' action='/options' class='options'>"
@@ -1304,11 +1305,11 @@ def settings_page(reg):
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
-    body = (f"<header><h1>Settings</h1></header><h2>Open this board</h2><div class='card'><ul class='dirs'>{where}</ul>"
+    body = (f"<header><h1>Settings</h1></header><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
-            f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='dirs'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
+            f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
-            f"<h2>Projects added one by one</h2><div class='card'><ul class='dirs'>{single or '<li class=muted>none</li>'}</ul>"
+            f"<h2>Projects added one by one</h2><div class='card'><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add'>+ Add a project folder</a></p></div>"
             f"<p class='muted'>Removing leaves every file where it is; the project just leaves the board.</p>")
     return shell(reg, -2, body)
@@ -1705,6 +1706,10 @@ nav .proj { flex-direction:column; align-items:stretch; gap:1px } .pname { displ
 nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0 0; margin-bottom:8px; padding-bottom:9px }
 .navfoot { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px; font-size:13px }
 .navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
+@media (max-width: 700px) { ul.dirs { columns:1 } }
+ul.folders { list-style:none; padding:0; margin:0 } ul.folders li { padding:8px 0; border-top:1px solid var(--line) } ul.folders li:first-child { border-top:0 }
+ul.folders .path { display:block; overflow-wrap:anywhere } .folderacts { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px }
+.folderacts form { margin:0 } .folderacts b { margin-right:auto; font-size:13px }
 form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
