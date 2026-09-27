@@ -1632,7 +1632,7 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
 .since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
   pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
-.since ul { padding-right:4px } .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
+.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
