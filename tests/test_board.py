@@ -87,11 +87,11 @@ class BoardTest(BoardBase):
         board.track(self.root)
         kept = board.add_note(self.root, {"item": "R1"}, "use the wording from the brief")
         board.add_note(self.root, {"item": "R9"}, "an item later dropped from the plan")
-        page = board.render(board.registry(), 0, "")
+        page = board.render(board.registry(), 0, "roadmap")
         self.assertIn("Your notes, not yet acted on (2)", page)
         self.assertIn("Notes on items no longer on the roadmap (R9)", page)
         board.append(self.root, "notes.jsonl", {"type": "addressed", "of": kept["id"], "at": board.now(), "text": "done"})
-        page = board.render(board.registry(), 0, "")
+        page = board.render(board.registry(), 0, "roadmap")
         self.assertIn("Your notes, not yet acted on (1)", page)
         self.assertIn("an item later dropped from the plan", page.split("no longer on the roadmap")[1])
 
@@ -169,8 +169,13 @@ class BoardTest(BoardBase):
         self.assertEqual([c[2] for c in s["commits"]], ["water log done"])
         self.assertEqual(s["moved"], [("R2", "doing", "done", "water log")])
         html_ = board.render(board.registry(), 0)
-        for part in ("Since you were last here", "doing → done", "Waiting on you", "Roadmap", "R3", "History"):
+        for part in ("Pinned", "Waiting on you", "Since you were last here", "doing → done"):
             self.assertIn(part, html_)
+        self.assertNotIn("History", html_, "the plan and its record are on the Roadmap tab")
+        plan = board.render(board.registry(), 0, "roadmap")
+        for part in ("R3", "History", "Map of the roadmap"):
+            self.assertIn(part, plan)
+        self.assertNotIn("Since you were last here", plan)
 
     def test_the_board_answers_only_itself(self):
         board.track(self.root)

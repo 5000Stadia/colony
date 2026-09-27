@@ -564,8 +564,9 @@ setInterval(poll, 2500);
 
 
 def tabs(pid, view):
-    return (f"<div class='tabs'><a class='{'on' if view != 'console' else ''}' href='/?p={pid}'>Overview</a>"
-            f"<a class='{'on' if view == 'console' else ''}' href='/?p={pid}&view=console'>Console</a></div>")
+    tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
+    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}") + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
+            + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
 def render(reg, pid, view="overview"):
@@ -597,94 +598,97 @@ def render(reg, pid, view="overview"):
                 f"<p class='muted'>Applies when its console next starts.</p></div></details>")
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{settings}</div>{tabs(pid, view)}"
                f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
-    out.append(pinned_section(pid, root))
-    # waiting on you: the same as this project's part of Needs you
-    waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
-    out.append(f"<h2>Waiting on you ({len(waiting)})</h2><div class='card'>"
-               + ("".join(waiting) if waiting else "<p class='muted'>Nothing is waiting on you.</p>") + "</div>")
-    # since you were last here: one timeline, newest first; "I'm caught up" rides down the list as you read,
-    # and stays within it
-    s = since(root, reg["seen"].get(str(root)))
-    out.append("<h2>Since you were last here</h2><div class='card since'>")
-    if s["first"]:
-        out.append("<p class='muted'>First visit: everything below is the current state.</p>")
-    events = [(s["moved_at"], f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>") for i, a, b, t in s["moved"]]
-    events += [(g["at"], f"<li>gate opened: {e(g['question'])}</li>") for g in s["opened"]]
-    events += [(n["addressed_at"], f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>") for n in s["replies"]]
-    events += [(p["at"], f"<li>the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(p['title'])}</a>"
-                + (f": {e(p['why'])}" if p.get("why") else "") + "</li>") for p in s["pinned"]]
-    events += [(stamp(t), f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>") for h, t, subj in s["commits"][:15]]
-    lines = [html_ for _, html_ in sorted(events, key=lambda ev: ev[0] or "", reverse=True)]
-    caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
-                 f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
-    out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
-    out.append("</div>")
-    # the person's own notes the agent has not acted on yet, wherever they were left
-    its_now = items(road)
-    mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
-    if mine:
-        out.append(f"<h2>Your notes, not yet acted on ({len(mine)})</h2><div class='card'>"
-                   + "".join(f"<div class='note'><span class='who'>{e(where(n))} · {e(n['at'][:10])}</span>"
-                             f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>" for n in mine)
-                   + "</div>")
-    # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
-    out.append("<h2>Roadmap</h2>")
-    if road["milestones"]:
-        its = items(road)
-        order = list(its)
-        branched = any(it["after"] != ([order[i - 1]] if i else []) for i, it in enumerate(its.values()))
-        out.append(f"<details class='mapbox'{' open' if branched else ''}><summary>Map of the roadmap"
-                   f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
-        for m in road["milestones"]:
-            done_m = sum(1 for i in m["items"] if i["state"] == "done")
-            out.append(f"<details class='card ms' open><summary><h3>{e(m['id'])} — {e(m['title'])}</h3>"
-                       f"<span class='muted'>{done_m} of {len(m['items'])} done</span></summary>")
-            for it in m["items"]:
-                i = order.index(it["id"])
-                default = [order[i - 1]] if i else []
-                ns = by("item", it["id"])
-                waiting = sum(1 for g in gs if g.get("item") == it["id"] and not g["answer"])
-                unlocks = [x for x, y in its.items() if it["id"] in y["after"]]
-                out.append(
-                    f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
-                    f"<b>{e(it['id'])}</b> {e(it['text'])}"
-                    + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
-                    + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
-                    + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
-                    + f"</summary><div class='body'><p>{e(it['desc'] or 'No description yet.')}</p>"
-                    + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
-                    + thread(ns, its)
-                    + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item")
-                    + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
-            out.append("</details>")
-    else:
-        out.append("<div class='card muted'>No roadmap yet: the agent keeps it in ROADMAP.md.</div>")
-    gone = sorted({(n["anchor"] or {}).get("item") for n in all_notes} - set(items(road)) - {None})
-    if gone:                        # an item renamed or dropped keeps its conversation
-        out.append(f"<details class='card'><summary>Notes on items no longer on the roadmap ({', '.join(map(e, gone))})</summary>"
-                   + "".join(f"<h3>{e(g)}</h3>" + thread(by("item", g), items(road)) for g in gone) + "</details>")
-    # history
-    out.append("<h2>History</h2><div class='card'>")
-    for line in git(root, "log", "-n", "20", "--format=%h\x1f%aI\x1f%s").splitlines():
-        h, t, subj = line.split("\x1f")
-        out.append(f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
-                   + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
-                   + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn") + "</details>")
-    from . import mail
-    ms = mail.messages(root)[-15:]
-    if ms:
-        me = mail.address(root)
-        rows = []
-        for m in reversed(ms):
-            way = f"from <b>{e(m['from'])}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
-            state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
-            if m["to"] == me and not m["delivered_at"]:
-                state = "reaches the agent on its next turn"
-            rows.append(f"<div class='note'><span class='who'>{e(m['at'][:16].replace('T', ' '))} · {way}"
-                        f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>")
-        out.append("</div><h2>Mail with other projects</h2><div class='card'>" + "".join(rows))
-    out.append("</div><h2>About the whole project</h2><div class='card'>" + thread([n for n in all_notes if not n["anchor"]], items(road))
-               + note_box(pid, "project", "", "Anything for the agent about the project as a whole") + "</div>")
+    if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
+        # the person's own notes the agent has not acted on yet, wherever they were left
+        its_now = items(road)
+        mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
+        if mine:
+            out.append(f"<h2>Your notes, not yet acted on ({len(mine)})</h2><div class='card'>"
+                       + "".join(f"<div class='note'><span class='who'>{e(where(n))} · {e(n['at'][:10])}</span>"
+                                 f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>" for n in mine)
+                       + "</div>")
+        # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
+        out.append("<h2>Roadmap</h2>")
+        if road["milestones"]:
+            its = items(road)
+            order = list(its)
+            branched = any(it["after"] != ([order[i - 1]] if i else []) for i, it in enumerate(its.values()))
+            out.append(f"<details class='mapbox'{' open' if branched else ''}><summary>Map of the roadmap"
+                       f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
+            for m in road["milestones"]:
+                done_m = sum(1 for i in m["items"] if i["state"] == "done")
+                out.append(f"<details class='card ms' open><summary><h3>{e(m['id'])} — {e(m['title'])}</h3>"
+                           f"<span class='muted'>{done_m} of {len(m['items'])} done</span></summary>")
+                for it in m["items"]:
+                    i = order.index(it["id"])
+                    default = [order[i - 1]] if i else []
+                    ns = by("item", it["id"])
+                    waiting = sum(1 for g in gs if g.get("item") == it["id"] and not g["answer"])
+                    unlocks = [x for x, y in its.items() if it["id"] in y["after"]]
+                    out.append(
+                        f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
+                        f"<b>{e(it['id'])}</b> {e(it['text'])}"
+                        + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
+                        + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
+                        + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
+                        + f"</summary><div class='body'><p>{e(it['desc'] or 'No description yet.')}</p>"
+                        + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
+                        + thread(ns, its)
+                        + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
+                        + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
+                out.append("</details>")
+        else:
+            out.append("<div class='card muted'>No roadmap yet: the agent keeps it in ROADMAP.md.</div>")
+        gone = sorted({(n["anchor"] or {}).get("item") for n in all_notes} - set(items(road)) - {None})
+        if gone:                        # an item renamed or dropped keeps its conversation
+            out.append(f"<details class='card'><summary>Notes on items no longer on the roadmap ({', '.join(map(e, gone))})</summary>"
+                       + "".join(f"<h3>{e(g)}</h3>" + thread(by("item", g), items(road)) for g in gone) + "</details>")
+        # history
+        out.append("<h2>History</h2><div class='card'>")
+        for line in git(root, "log", "-n", "20", "--format=%h\x1f%aI\x1f%s").splitlines():
+            h, t, subj = line.split("\x1f")
+            out.append(f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
+                       + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
+                       + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"/?p={pid}&view=roadmap") + "</details>")
+        from . import mail
+        ms = mail.messages(root)[-15:]
+        if ms:
+            me = mail.address(root)
+            rows = []
+            for m in reversed(ms):
+                way = f"from <b>{e(m['from'])}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
+                state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
+                if m["to"] == me and not m["delivered_at"]:
+                    state = "reaches the agent on its next turn"
+                rows.append(f"<div class='note'><span class='who'>{e(m['at'][:16].replace('T', ' '))} · {way}"
+                            f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>")
+            out.append("</div><h2>Mail with other projects</h2><div class='card'>" + "".join(rows))
+        out.append("</div>")
+    else:                                 # what needs the person now, and what changed
+        out.append(pinned_section(pid, root))
+        # waiting on you: the same as this project's part of Needs you
+        waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
+        out.append(f"<h2>Waiting on you ({len(waiting)})</h2><div class='card'>"
+                   + ("".join(waiting) if waiting else "<p class='muted'>Nothing is waiting on you.</p>") + "</div>")
+        # since you were last here: one timeline, newest first; "I'm caught up" rides down the list as you read,
+        # and stays within it
+        s = since(root, reg["seen"].get(str(root)))
+        out.append("<h2>Since you were last here</h2><div class='card since'>")
+        if s["first"]:
+            out.append("<p class='muted'>First visit: everything below is the current state.</p>")
+        events = [(s["moved_at"], f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>") for i, a, b, t in s["moved"]]
+        events += [(g["at"], f"<li>gate opened: {e(g['question'])}</li>") for g in s["opened"]]
+        events += [(n["addressed_at"], f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>") for n in s["replies"]]
+        events += [(p["at"], f"<li>the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(p['title'])}</a>"
+                    + (f": {e(p['why'])}" if p.get("why") else "") + "</li>") for p in s["pinned"]]
+        events += [(stamp(t), f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>") for h, t, subj in s["commits"][:15]]
+        lines = [html_ for _, html_ in sorted(events, key=lambda ev: ev[0] or "", reverse=True)]
+        caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
+                     f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
+        out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
+        out.append("</div>")
+        out.append("<h2>About the whole project</h2><div class='card'>" + thread([n for n in all_notes if not n["anchor"]], items(road))
+                   + note_box(pid, "project", "", "Anything for the agent about the project as a whole") + "</div>")
     return shell(reg, pid, "".join(out))
 
 
