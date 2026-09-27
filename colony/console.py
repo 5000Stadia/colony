@@ -227,7 +227,7 @@ connect();
 document.addEventListener('visibilitychange', () => {{
   if (!document.hidden && (!ws || ws.readyState > 1)) {{ tries = 0; connect(); }}
 }});
-term.onData((d) => send({{i: d}}));
+term.onData((d) => {{ send({{i: d}}); scrolled(-above); }});   // typing brings Claude Code back to the bottom
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
 const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', left: '\\x1b[D', right: '\\x1b[C'}};
 document.querySelectorAll('.keys button[data-k]').forEach((b) => b.addEventListener('click', (ev) => {{
@@ -250,12 +250,22 @@ const termEl = document.getElementById('term'), STEP = 14;
 const pad = document.createElement('div');
 pad.className = 'touchpad';
 termEl.appendChild(pad);
+// Scrolled up, a ↓ at the bottom brings the latest back: the count of steps up says how far up we are.
+const jump = document.createElement('button');
+jump.className = 'jump'; jump.textContent = '↓'; jump.hidden = true; jump.setAttribute('aria-label', 'Jump to the latest');
+termEl.appendChild(jump);
+let above = 0;
+const scrolled = (n) => {{ above = Math.max(0, above + n); jump.hidden = above === 0; }};
+jump.addEventListener('click', (ev) => {{
+  ev.preventDefault(); cancelAnimationFrame(glide); acc = 0;
+  send({{i: wheel(false).repeat(Math.min(400, above * 3 + 10))}}); scrolled(-above);
+}});
 const wheel = (up) => `\\x1b[<${{up ? 64 : 65}};${{Math.ceil(term.cols / 2)}};${{Math.ceil(term.rows / 2)}}M`;
 let y0 = null, lastY = 0, lastT = 0, acc = 0, vel = 0, moved = false, glide = null, frame = null;
 // Steps go out once per screen refresh, together, so the terminal redraws in time with the finger.
 const drain = () => {{ if (!frame) frame = requestAnimationFrame(() => {{
   frame = null; let out = '';
-  while (Math.abs(acc) >= STEP) {{ out += wheel(acc > 0); acc -= Math.sign(acc) * STEP; }}
+  while (Math.abs(acc) >= STEP) {{ out += wheel(acc > 0); scrolled(acc > 0 ? 1 : -1); acc -= Math.sign(acc) * STEP; }}
   if (out) send({{i: out}});
 }}); }};
 pad.addEventListener('touchstart', (ev) => {{

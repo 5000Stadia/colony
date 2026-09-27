@@ -1246,6 +1246,9 @@ body.copying .keys .selectall, body.copying .keys .exit { display:block }
 #term, #term .xterm-viewport, #term .xterm-screen { touch-action:none } #term { position:relative }
 .touchpad { display:none; position:absolute; inset:0; z-index:5; touch-action:none; -webkit-user-select:none; user-select:none }
 @media (pointer: coarse) { .touchpad { display:block } }
+.jump { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:6; width:44px; height:44px;
+  border-radius:50%; padding:0; font-size:20px; background:var(--accent); color:var(--card); box-shadow:0 2px 10px rgba(0,0,0,.35) }
+.jump[hidden] { display:none }
 @media (pointer: coarse) { #term .xterm-viewport { overflow-y:hidden !important } }
 #hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;
