@@ -421,9 +421,10 @@ def track(path, register=True):
     return root
 
 
-def add_note(root, anchor, text, author="person"):
+def add_note(root, anchor, text, author="person", quiet=False):
+    """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
-            "anchor": anchor, "text": text.strip()}
+            "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {})}
     append(root, "notes.jsonl", note)
     return note
 
@@ -859,7 +860,43 @@ def waiting_items(p, snap=None):
     out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]} for a in asks(p)]
     out += [{"kind": "verify", "key": "verify:" + it["id"], "item": it, "summary": f"has {it['id']} to verify: {it['text']}"}
             for it in items(roadmap(p)).values() if it["state"] == "verify"]
+    cleared = dismissed(p)
+    gone = cleared - {w["key"] for w in out}
+    for key in gone:                     # its item has gone: if the same thing comes back later, it shows again
+        append(p, "dismissed.jsonl", {"type": "restored", "key": key, "at": now()})
+    return [w for w in out if w["key"] not in cleared]
+
+
+def dismissed(root):
+    out = set()
+    for e in read(root, "dismissed.jsonl"):
+        (out.add if e["type"] == "dismissed" else out.discard)(e["key"])
     return out
+
+
+def clear_waiting(root, key):
+    """The person cleared something from what waits on them. A gate or a question is closed; an item to
+    verify or a choice on screen is set aside until it goes. The agent hears of it quietly, on its next turn,
+    without being woken: it may already be handled."""
+    w = next((w for w in waiting_items(root) if w["key"] == key), None)
+    if not w:
+        return
+    if w["kind"] == "gate":
+        g = w["gate"]
+        answer_gate(root, g["id"], "(cleared by the person without an answer)", tell=False)
+        add_note(root, {"gate": g["id"], "item": g.get("item")}, f"The person cleared your gate \"{g['question']}\" from "
+                 "their list without answering. Treat it as handled; if it still blocks you, open it again with the reason.", quiet=True)
+    elif w["kind"] == "ask":
+        answer_asks(root, "cleared by the person")
+        asked = [s.strip() for s in re.split(r"(?<=[.!?])\s+", w["ask"]["text"]) if s.strip().endswith("?")]
+        add_note(root, None, f"The person cleared your question from their list: \"{(asked or [w['ask']['text'][-200:]])[-1]}\" "
+                 "Treat it as handled; ask again only if it still blocks you.", quiet=True)
+    else:
+        append(root, "dismissed.jsonl", {"type": "dismissed", "key": key, "at": now()})
+        if w["kind"] == "verify":
+            it = w["item"]
+            add_note(root, {"item": it["id"]}, f"The person cleared {it['id']} from their list of things to verify: they "
+                     "consider it handled. Update the roadmap if you agree.", quiet=True)
 
 
 def waiting_on(pid, p, back, label=True):
@@ -867,9 +904,11 @@ def waiting_on(pid, p, back, label=True):
     agent as a note, a choice gets a button per option, a question gets a reply typed into the console, an
     item to verify gets a note on the item."""
     rows = []
-    who = lambda what: f"<div class='who'>{e(p.name) + ' · ' if label else ''}{what}</div>"
     hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
     for w in waiting_items(p):
+        clear = (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(w['key'])}'>"
+                 f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
+        who = lambda what: f"<div class='who'>{e(p.name) + ' · ' if label else ''}{what}{clear}</div>"
         if w["kind"] == "gate":
             g = w["gate"]
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
@@ -1164,6 +1203,8 @@ class Handler(BaseHTTPRequestHandler):
             keys = providers.of(root).choose(console.screen(name), form["option"])
             if keys:
                 console.press(name, keys)
+        elif path == "/clear" and form.get("key"):
+            clear_waiting(root, form["key"])
         elif path == "/reply" and text:
             console.type_into(console.session_name(root), text)
             answer_asks(root, "from the board")
@@ -1252,7 +1293,7 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
-.caughtup { margin:4px 0 8px } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
+.caughtup { margin:4px 0 8px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 0 0 auto } form.clear button { padding:2px 10px; font-size:12px } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
 .keys button { flex:1 0 auto; min-width:40px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }

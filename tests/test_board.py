@@ -696,6 +696,38 @@ class NeedsYouTest(BoardBase):
             httpd.server_close()
 
 
+class ClearTest(BoardBase):
+    def test_clear_closes_or_sets_aside_each_kind_tells_the_agent_quietly_and_lets_it_come_back(self):
+        board.track(self.root)
+        saved = (console.snapshot, console.screen, console.type_into, console.ensure)
+        state = {"state": "idle"}
+        typed = []
+        console.snapshot = lambda root, lines=6, name=None: {"state": state["state"], "lines": ["x"]}
+        console.screen = lambda name: NeedsYouTest.CHOICE
+        console.type_into = lambda name, text: typed.append(text)
+        console.ensure = lambda root, name=None, label=None: None
+        try:
+            (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
+            board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(), "question": "Ship it?"})
+            board.record_ask(self.root, "t1", "Done. Keep the old column?")
+            state["state"] = "needs you"
+            kinds = {w["kind"]: w["key"] for w in board.waiting_items(self.root)}
+            self.assertEqual(set(kinds), {"gate", "ask", "verify", "choice"})
+            for key in kinds.values():
+                board.clear_waiting(self.root, key)
+            self.assertEqual(board.waiting_items(self.root), [], "all cleared, everywhere")
+            quiet = [n for n in board.notes(self.root) if n.get("quiet")]
+            self.assertEqual(len(quiet), 3, "gate, question and item to verify are told; a blocked prompt can't be")
+            monitor.Watcher().mail()
+            self.assertEqual(typed, [], "a quiet note doesn't wake the agent")
+            state["state"] = "idle"
+            board.waiting_items(self.root)                        # the prompt has gone: its clearing is forgotten
+            state["state"] = "needs you"
+            self.assertEqual([w["kind"] for w in board.waiting_items(self.root)], ["choice"], "the same prompt again shows again")
+        finally:
+            console.snapshot, console.screen, console.type_into, console.ensure = saved
+
+
 class AskTest(BoardBase):
     """A turn that asks the person something waits on them: one entry, the whole turn, until they answer."""
     def hook(self, *args, payload=None):

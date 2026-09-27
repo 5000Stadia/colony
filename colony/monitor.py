@@ -154,7 +154,7 @@ class Watcher:
             if not p.exists():
                 continue
             letters = [m for m in mail.inbox(p) if not m["delivered_at"]]
-            notes = [n for n in board.open_notes(p) if not n["delivered_at"]]
+            notes = [n for n in board.open_notes(p) if not n["delivered_at"] and not n.get("quiet")]
             waiting = {m["id"] for m in letters} | {n["id"] for n in notes}
             if not waiting or waiting <= self.nudged:
                 continue
