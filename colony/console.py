@@ -101,7 +101,9 @@ def snapshot(root, lines=6, name=None):
     shown = [BORDER.sub("", l) for l in screen.splitlines()]
     shown = [l for l in shown if l.strip()]
     from . import providers
-    return {"state": providers.of(root).classify(screen), "lines": shown[-lines:]}
+    p = providers.of(root)
+    return {"state": p.classify(screen), "lines": shown[-lines:],
+            "activity": p.activity(screen) if hasattr(p, "activity") else {"line": None, "agents": []}}
 
 
 # ---------------------------------------------------------------- a minimal WebSocket (RFC 6455)

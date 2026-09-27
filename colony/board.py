@@ -562,6 +562,20 @@ async function poll() {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
       if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
+      const status = document.getElementById('status-' + i);
+      if (status) {
+        const act = s.activity || {}, st = s.state.replace(' ', '-');
+        status.querySelector('.sdot').className = 'sdot ' + st;
+        status.querySelector('b').textContent = s.state;
+        status.querySelector('.statusline .muted').textContent = act.line ? ' · ' + act.line : '';
+        const box = status.querySelector('.agents'); box.textContent = '';
+        (act.agents || []).forEach((a) => {
+          const row = document.createElement('div'); row.className = 'agent' + (a.current ? ' current' : '');
+          const n = document.createElement('span'); n.textContent = (a.current ? '● ' : '○ ') + a.name;
+          const d = document.createElement('span'); d.className = 'muted'; d.textContent = a.detail;
+          row.append(n, d); box.append(row);
+        });
+      }
       const badge = document.getElementById('badge-' + i);
       if (badge) { badge.hidden = !s.waiting; badge.textContent = s.waiting; }
     });
@@ -673,6 +687,7 @@ def render(reg, pid, view="overview"):
             out.append("</div><h2>Mail with other projects</h2><div class='card'>" + "".join(rows))
         out.append("</div>")
     else:                                 # what needs the person now, and what changed
+        out.append(status_card(pid, console.snapshot(root)))
         out.append(pinned_section(pid, root))
         # waiting on you: the same as this project's part of Needs you
         waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
@@ -950,6 +965,18 @@ def clone(url, within, name=""):
     if r.returncode != 0:
         raise ValueError("git clone failed: " + (r.stderr.strip().splitlines() or ["no detail"])[-1])
     return dest
+
+
+def status_card(pid, snap):
+    """The project's status, as its console shows it: working / needs you / idle / off, what it's doing,
+    and its background agents."""
+    act = snap.get("activity") or {}
+    agents = "".join(f"<div class='agent{' current' if a['current'] else ''}'><span>{'●' if a['current'] else '○'} {e(a['name'])}</span>"
+                     f"<span class='muted'>{e(a['detail'])}</span></div>" for a in act.get("agents", []))
+    return (f"<a class='status' id='status-{pid}' href='/?p={pid}&view=console'><div class='statusline'>"
+            f"<span class='sdot {snap['state'].replace(' ', '-')}'></span><b>{e(snap['state'])}</b>"
+            f"<span class='muted'>{(' · ' + e(act['line'])) if act.get('line') else ''}</span></div>"
+            f"<div class='agents'>{agents}</div></a>")
 
 
 def pinned_section(pid, root):
@@ -1614,9 +1641,18 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .chosen { max-width:100% } .chosen input, form.options .chosen input:not([type]) { min-width:0; flex:1 1 auto; width:auto } .chosen button { flex:none }
 .psettings .panel { position:absolute; right:0; z-index:10; width:min(440px, calc(100vw - 32px)); padding:14px 16px;
   border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
-.sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
-.sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
-.sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }
+.sdot { width:10px; height:10px; border-radius:50%; flex:none; background:transparent; border:2px solid var(--line); box-sizing:border-box }
+.sdot.off { opacity:.55 }
+.sdot.idle { border-color:var(--accent) }
+.sdot.working { border-color:var(--accent); border-top-color:transparent; animation:spin .8s linear infinite }
+.sdot.needs-you { background:var(--flag); border-color:var(--flag); animation:beat 1.1s ease-in-out infinite }
+@keyframes spin { to { transform:rotate(360deg) } }
+@keyframes beat { 50% { transform:scale(1.35); box-shadow:0 0 0 4px color-mix(in srgb, var(--flag) 25%, transparent) } }
+.status { display:block; margin:10px 0 4px; padding:10px 14px; border-radius:10px; background:var(--card); border:1px solid var(--line);
+  color:var(--ink); text-decoration:none } .statusline { display:flex; align-items:center; gap:8px; min-width:0 }
+.statusline .muted { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.agents { font:12.5px/1.6 ui-monospace,Menlo,monospace; margin-top:4px } .agents:empty { display:none }
+.agent { display:flex; justify-content:space-between; gap:12px; color:var(--muted) } .agent.current { color:var(--ink); font-weight:600 }
 @keyframes pulse { 50% { opacity:.35 } }
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
@@ -1689,7 +1725,7 @@ body.copying .keys .selectall { display:block }
     padding:8px 10px; overflow-x:auto; white-space:nowrap }
   nav .proj, nav .proj.monitor { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
     border-radius:999px; background:var(--sunk) }
-  nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot { border-color:var(--card) }
+  nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working { border-top-color:transparent }
   nav .sline, nav .badge.new { display:none }
   .navfoot { flex-direction:row; margin:0 0 0 auto; padding:0; border:0; gap:2px; font-size:16px }
   .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline }

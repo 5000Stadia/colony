@@ -273,6 +273,10 @@ class GlanceTest(BoardBase):
         self.assertEqual(claude.classify("✻ Calculating… (thinking with high effort)\n❯\n⏵⏵ bypass permissions on · esc…"),
                          "working", "a phone-width window cuts the status line; the spinner still says working")
         self.assertEqual(claude.classify("✻ Worked for 3s · done 10:58 PM\n❯ "), "idle")
+        act = claude.activity("* Waiting for 4 background agents to finish\n  ● main\n  ○ general-purpose    7m 0s · ↓ 138.2k tokens\n")
+        self.assertEqual(act["line"], "Waiting for 4 background agents to finish")
+        self.assertEqual([(a["name"], a["current"]) for a in act["agents"]], [("main", True), ("general-purpose", False)])
+        self.assertEqual(act["agents"][1]["detail"], "7m 0s · ↓ 138.2k tokens")
 
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)

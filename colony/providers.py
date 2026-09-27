@@ -19,6 +19,8 @@ what it assumes and what a second provider needs there. What a provider supplies
   own_defaults()           the model and effort the CLI uses when colony names none, or None where it
                            decides itself; the forms show them as "Default (...)"
   history_text(root)       the session's conversation as plain text, for Select on a phone (or None)
+  activity(screen)         what it's doing now, off its screen: {"line": the current activity or None,
+                           "agents": [{"name", "detail", "current"}]}, shown as the project's status
   scrolled_marker          text on screen while the view is scrolled up from the latest ("" if none); the
                            phone console's ↓ shows while it's there
   turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
@@ -177,6 +179,18 @@ class ClaudeCode:
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"
         return "idle"
+
+    def activity(self, screen):
+        """What the session is doing, as Claude Code shows it: its spinner line ("✻ Waiting for 4 background
+        agents to finish", "✻ Worked for 3s") and its background agents with their time and tokens."""
+        import re
+        line, agents = None, []
+        for l in screen.splitlines():
+            if m := re.match(r"^\s*[✻✶✳✢✽·*+]\s+(\S.*?)\s*$", l):
+                line = m.group(1)
+            elif m := re.match(r"^\s*([●○◯◉])\s+([\w.:-]+)(?:\s{2,}(\S.*?))?\s*$", l):
+                agents.append({"name": m.group(2), "detail": m.group(3) or "", "current": m.group(1) in "●◉"})
+        return {"line": line, "agents": agents if len(agents) > 1 else []}
 
     def choice(self, screen):
         """The choice on screen, if any: (question lines, options, index of the highlighted one). Claude Code
