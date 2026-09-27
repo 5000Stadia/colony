@@ -256,6 +256,8 @@ class ConsoleTest(BoardBase):
         self.assertIn(">Select<", page)
         self.assertIn("touchmove", page, "a finger swipe scrolls the live console")
         self.assertNotIn("data-k='ctrlc'", page, "on a phone Ctrl-C quits Claude Code; it doesn't copy")
+        self.assertIn("data-k='enter'>Send<", page)
+        self.assertNotIn("id='exit'", page, "the tabs and chips stay on screen: no Exit")
 
 
 class GlanceTest(BoardBase):
@@ -860,6 +862,24 @@ class AskTest(BoardBase):
         self.assertEqual(board.asks(self.root), [], "answering in the console clears it")
         self.hook("turn", payload=self.transcript(("user", "go"), ("assistant", "Done; all tests pass. See `x?y` and https://a.b/?q")))
         self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
+
+
+class TabMemoryTest(BoardBase):
+    def test_a_project_opens_on_the_tab_last_used(self):
+        board.track(self.root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        try:
+            r = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=roadmap")
+            cookie = r.headers["Set-Cookie"].split(";")[0]
+            page = urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/?p=0", headers={"Cookie": cookie})).read().decode()
+            self.assertIn("class='on' href='/?p=0&view=roadmap'", page, "a bare link opens the tab last used")
+            fresh = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
+            self.assertIn("class='on' href='/?p=0&view=overview'", fresh, "with nothing remembered, the Overview")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 class ServerTest(BoardBase):

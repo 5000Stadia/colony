@@ -196,7 +196,7 @@ PAGE = """
  <button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>
  <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-mod='ctrl'>Ctrl</button><button data-mod='alt'>Alt</button>
  <button class='copy' id='history'>Select</button><button class='selectall' id='selectall'>Select all</button>
- <button class='exit' id='exit'>Exit</button></div>
+ <button class='send' data-k='enter'>Send</button></div>
 <div id='term'></div>
 <pre id='hist' hidden></pre>
 <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css'>
@@ -212,7 +212,17 @@ fit.fit();
 // reconnect by itself, and reload the page if that keeps failing. The session runs on regardless.
 let ws, tries = 0;
 const send = (m) => ws && ws.readyState === 1 && ws.send(JSON.stringify(m));
-const refit = () => {{ fit.fit(); send({{r: [term.cols, term.rows]}}); }};
+// Full screen on a phone: the terminal takes what the chips above and the keys and tabs below leave.
+const refit = () => {{
+  if (document.body.classList.contains('focus')) {{
+    const tabs = document.querySelector('.tabs'), keys = document.querySelector('.keys');
+    const tabsH = tabs && getComputedStyle(tabs).position === 'fixed' ? tabs.offsetHeight : 0;
+    keys.style.bottom = tabsH + 'px';
+    const h = (window.visualViewport ? visualViewport.height : innerHeight) - termEl.getBoundingClientRect().top - keys.offsetHeight - tabsH;
+    termEl.style.height = Math.max(120, h) + 'px';
+  }}
+  fit.fit(); send({{r: [term.cols, term.rows]}});
+}};
 function connect() {{
   ws = new WebSocket(`ws://${{location.host}}/console/ws?p={pid}&t={token}`);
   ws.binaryType = 'arraybuffer';
@@ -250,17 +260,13 @@ const withMod = (d) => {{
 }};
 term.onData((d) => {{ send({{i: withMod(d)}}); scrolled(-above); }});   // typing brings Claude Code back to the bottom
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
-const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B'}};
+const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', enter: '\\r'}};
 document.querySelectorAll('.keys button[data-k]').forEach((b) => tap(b, () => send({{i: KEYS[b.dataset.k]}})));
 // On a phone the console takes the whole screen: the terminal, the keys, a way out.
 const touch = matchMedia('(pointer: coarse)').matches;
 const focus = (on) => {{ document.body.classList.toggle('focus', on); setTimeout(refit, 50); }};
 if (touch && {focus}) focus(true);
 document.getElementById('fullscreen').addEventListener('click', () => focus(true));
-document.getElementById('exit').addEventListener('click', () => {{
-  if (document.body.classList.contains('copying')) return showText(false);
-  if ('{exit}') location.href = '{exit}'; else focus(false);
-}});
 // A finger swipe scrolls: each stretch of movement is sent as a mouse-wheel event, as a desktop wheel would
 // be, and tmux hands it to the program in the session (Claude Code scrolls its own history). A flick glides
 // on; a tap still opens the keyboard. The touches land on a still layer over the terminal: a touch belongs
@@ -312,13 +318,15 @@ pad.addEventListener('touchend', release, {{passive: true}});
 pad.addEventListener('touchcancel', release, {{passive: true}});
 // Selecting text in the terminal is poor on a phone: what is on screen, as plain text, selects natively.
 const hist = document.getElementById('hist'), histBtn = document.getElementById('history');
+termEl.appendChild(hist);                           // over the terminal, between the chips and the keys
 async function showText(on) {{
+  histBtn.textContent = on ? 'Live' : 'Select';
   if (!on) {{ hist.hidden = true; document.body.classList.remove('copying'); return term.focus(); }}
   const r = await fetch('/console/text?p={pid}', {{cache: 'no-store'}});
   hist.textContent = r.ok ? await r.text() : '(could not read the session)';
   hist.hidden = false; document.body.classList.add('copying'); hist.scrollTop = hist.scrollHeight;
 }}
-histBtn.addEventListener('click', () => showText(true));
+histBtn.addEventListener('click', () => showText(hist.hidden));
 // Select all, and copy it where the browser allows (a plain-http page may not): else it stays selected.
 const allBtn = document.getElementById('selectall');
 allBtn.addEventListener('click', () => {{

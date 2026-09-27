@@ -539,7 +539,7 @@ def sidebar(reg, pid):
 
 
 def shell(reg, pid, body, wide=False):
-    return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+    return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}</script></body></html>")
 
@@ -565,7 +565,7 @@ setInterval(poll, 2500);
 
 def tabs(pid, view):
     tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
-    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}") + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
+    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview") + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
@@ -584,7 +584,7 @@ def render(reg, pid, view="overview"):
                    f"<textarea name='text' placeholder='{e(root.name)}’s agent writes the message itself, with its own context'></textarea></label>"
                    f"<button>Have {e(root.name)} send it</button></form></details>") if others else ""
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
-                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token(), exit=f'/?p={pid}', focus='true'),
+                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true'),
                      wide=True)
     root = plist[pid]
     road, gs = roadmap(root), gates(root)
@@ -1243,8 +1243,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _send(self, code, body):
+    def _send(self, code, body, cookie=None):
         self.send_response(code)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -1266,7 +1268,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if url.path == "/":
-            return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
+            # a project opens on the tab last used, so switching projects keeps the person where they were
+            view = (q.get("view") or [""])[0]
+            if view in ("overview", "roadmap", "console"):
+                return self._send(200, render(reg, pid, view).encode(), cookie=f"colony_view={view}; Path=/; SameSite=Lax; Max-Age=31536000")
+            last = re.search(r"colony_view=(overview|roadmap|console)", self.headers.get("Cookie", ""))
+            return self._send(200, render(reg, pid, last.group(1) if last else "overview").encode())
         if url.path == "/add":
             if (q.get("for") or ["project"])[0] == "project":
                 return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())
@@ -1338,7 +1345,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
                     f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
                     f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
-                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.token(), exit='', focus='false'))
+                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.token(), focus='false'))
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor
@@ -1620,16 +1627,17 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
 .keys button { flex:1 0 auto; min-width:40px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }
-.keys .exit, body:not(.focus) .keys .exit { display:none } .touch-only { display:none }
+.touch-only { display:none }
 @media (pointer: coarse) { .keys { display:flex } .touch-only { display:inline-block } }
-body.focus nav, body.focus header, body.focus .console-bar, body.focus #needs-box { display:none }
-body.focus main { padding:0; max-width:none } body.focus #term { height:calc(100dvh - 58px); border-radius:0; padding:2px }
-body.focus .keys { position:fixed; left:0; right:0; bottom:0; z-index:30; margin:0; padding:6px; gap:5px; flex-wrap:nowrap;
+/* On a phone the console fills the space between the project chips (top) and the tabs (bottom). */
+body.focus header > :not(.tabs), body.focus .console-bar, body.focus #needs-box { display:none }
+body.focus header { margin:0 } body.focus main { padding:0; max-width:none } body.focus #term { border-radius:0; padding:2px }
+body.focus .keys { position:fixed; left:0; right:0; z-index:30; margin:0; padding:6px; gap:5px; flex-wrap:nowrap;
   overflow-x:auto; background:var(--card); border-top:1px solid var(--line) }
-body.focus .keys .exit { display:block; background:var(--accent); color:var(--card) }
+.keys .send { background:var(--accent); color:var(--card) }
 .keys button[data-mod].on { background:var(--flag); color:var(--card) }
-.keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys button[data-mod], body.copying .keys .copy { display:none }
-body.copying .keys .selectall, body.copying .keys .exit { display:block }
+.keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys button[data-mod], body.copying .keys .send { display:none }
+body.copying .keys .selectall { display:block }
 #term, #term .xterm-viewport, #term .xterm-screen { touch-action:none } #term { position:relative }
 .touchpad { display:none; position:absolute; inset:0; z-index:5; touch-action:none; -webkit-user-select:none; user-select:none }
 @media (pointer: coarse) { .touchpad { display:block } }
@@ -1637,10 +1645,9 @@ body.copying .keys .selectall, body.copying .keys .exit { display:block }
   border-radius:50%; padding:0; font-size:20px; background:var(--accent); color:var(--card); box-shadow:0 2px 10px rgba(0,0,0,.35) }
 .jump[hidden], .badge[hidden] { display:none }
 @media (pointer: coarse) { #term .xterm-viewport { overflow-y:hidden !important } }
-#hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
+#hist { position:absolute; inset:0; z-index:25; margin:0; padding:12px; overflow:auto;
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;
   -webkit-user-select:text; user-select:text; -webkit-overflow-scrolling:touch }
-body:not(.focus) #hist { position:static; max-height:70vh; margin-top:8px; border-radius:10px }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
@@ -1667,5 +1674,9 @@ body:not(.focus) #hist { position:static; max-height:70vh; margin-top:8px; borde
   nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot { border-color:var(--card) }
   nav .sline, nav .badge.new { display:none }
   .navfoot { flex-direction:row; margin:0 0 0 auto; padding:0; border:0; gap:2px; font-size:16px }
-  .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline } }
+  .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline }
+  nav { position:sticky; top:0; z-index:40 }
+  .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
+    border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
+  .tabs a { flex:1; text-align:center; padding:9px 4px } main { padding-bottom:78px } }
 """
