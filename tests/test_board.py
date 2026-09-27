@@ -184,7 +184,7 @@ class ConsoleTest(BoardBase):
     def test_the_console_answers_only_this_page_with_its_token(self):
         board.track(self.root)
         port = self.serve()
-        _, head = self.handshake(port, "http://evil.example", console.TOKEN)
+        _, head = self.handshake(port, "http://evil.example", console.token())
         self.assertIn("403", head.splitlines()[0])
         _, head = self.handshake(port, f"http://127.0.0.1:{port}", "wrong")
         self.assertIn("403", head.splitlines()[0])
@@ -194,7 +194,7 @@ class ConsoleTest(BoardBase):
         board.track(self.root)
         console.COMMAND = "cat"
         port = self.serve()
-        s, head = self.handshake(port, f"http://127.0.0.1:{port}", console.TOKEN)
+        s, head = self.handshake(port, f"http://127.0.0.1:{port}", console.token())
         self.assertIn("101", head.splitlines()[0])
         msg = json.dumps({"i": "hello board\r"}).encode()
         mask = os.urandom(4)

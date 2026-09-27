@@ -506,7 +506,7 @@ def render(reg, pid, view="overview"):
                    f"<textarea name='text' placeholder='{e(root.name)}’s agent writes the message itself, with its own context'></textarea></label>"
                    f"<button>Have {e(root.name)} send it</button></form></details>") if others else ""
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
-                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.TOKEN),
+                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token()),
                      wide=True)
     root = plist[pid]
     road, gs = roadmap(root), gates(root)
@@ -831,7 +831,7 @@ class Handler(BaseHTTPRequestHandler):
         """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a
         WebSocket; it must be this page's, and the token must be the one this board made."""
         origin_ok = self._from_this_page() and self.headers.get("Origin") is not None
-        if not origin_ok or not secrets.compare_digest(token, console.TOKEN) or \
+        if not origin_ok or not secrets.compare_digest(token, console.token()) or \
                 self.headers.get("Upgrade", "").lower() != "websocket":
             return self._send(403, b"not from this page")
         self.send_response(101)
@@ -880,7 +880,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
                     f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
                     f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
-                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.TOKEN))
+                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.token()))
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor

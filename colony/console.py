@@ -20,7 +20,16 @@ import subprocess
 import termios
 from pathlib import Path
 
-TOKEN = secrets.token_urlsafe(24)          # made fresh each time the board starts
+def token():
+    """The console's key: made once and kept in the board's folder, so a page open in the browser still
+    reattaches after the board restarts."""
+    from . import board
+    path = board.home() / "console-token"
+    if not path.exists():
+        board.home().mkdir(parents=True, exist_ok=True)
+        path.write_text(secrets.token_urlsafe(24))
+        path.chmod(0o600)
+    return path.read_text().strip()
 # How a session starts is its provider's (colony/providers.py): with Claude Code, Remote Control named for the
 # project, so the person can reach it from the Claude app anywhere; an idle session costs nothing.
 COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the provider's CLI (tests, demos)
@@ -196,12 +205,25 @@ const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
 term.open(document.getElementById('term'));
 fit.fit();
-const ws = new WebSocket(`ws://${{location.host}}/console/ws?p={pid}&t={token}`);
-ws.binaryType = 'arraybuffer';
-const send = (m) => ws.readyState === 1 && ws.send(JSON.stringify(m));
-ws.onopen = () => {{ send({{r: [term.cols, term.rows]}}); term.focus(); }};
-ws.onmessage = (ev) => term.write(new Uint8Array(ev.data));
-ws.onclose = () => term.write('\\r\\n[disconnected: reload to reattach; the session keeps running]\\r\\n');
+// A phone drops the connection whenever the browser goes to the background, and the board may restart:
+// reconnect by itself, and reload the page if that keeps failing. The session runs on regardless.
+let ws, tries = 0;
+const send = (m) => ws && ws.readyState === 1 && ws.send(JSON.stringify(m));
+function connect() {{
+  ws = new WebSocket(`ws://${{location.host}}/console/ws?p={pid}&t={token}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {{ tries = 0; term.reset(); send({{r: [term.cols, term.rows]}}); term.focus(); }};
+  ws.onmessage = (ev) => term.write(new Uint8Array(ev.data));
+  ws.onclose = () => {{
+    if (++tries > 4) return location.reload();
+    term.write('\\r\\n[reconnecting…]\\r\\n');
+    setTimeout(connect, 800 * tries);
+  }};
+}}
+connect();
+document.addEventListener('visibilitychange', () => {{
+  if (!document.hidden && (!ws || ws.readyState > 1)) {{ tries = 0; connect(); }}
+}});
 term.onData((d) => send({{i: d}}));
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
 const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', left: '\\x1b[D', right: '\\x1b[C',
