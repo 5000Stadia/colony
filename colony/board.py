@@ -834,6 +834,8 @@ class Handler(BaseHTTPRequestHandler):
         if not origin_ok or not secrets.compare_digest(token, console.token()) or \
                 self.headers.get("Upgrade", "").lower() != "websocket":
             return self._send(403, b"not from this page")
+        # RFC 6455 requires HTTP/1.1 here: Chrome forgives 1.0, but Safari and every iPhone browser refuse it.
+        self.protocol_version = "HTTP/1.1"
         self.send_response(101)
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")

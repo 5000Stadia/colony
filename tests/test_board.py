@@ -195,7 +195,7 @@ class ConsoleTest(BoardBase):
         console.COMMAND = "cat"
         port = self.serve()
         s, head = self.handshake(port, f"http://127.0.0.1:{port}", console.token())
-        self.assertIn("101", head.splitlines()[0])
+        self.assertTrue(head.startswith("HTTP/1.1 101"), "WebKit, so every iPhone browser, refuses anything else")
         msg = json.dumps({"i": "hello board\r"}).encode()
         mask = os.urandom(4)
         s.sendall(bytes([0x81, 0x80 | len(msg)]) + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(msg)))
