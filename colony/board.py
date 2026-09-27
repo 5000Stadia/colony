@@ -1243,7 +1243,9 @@ body.focus .keys { position:fixed; left:0; right:0; bottom:0; z-index:30; margin
 body.focus .keys .exit { display:block; background:var(--accent); color:var(--card) }
 .keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys .copy { display:none }
 body.copying .keys .selectall, body.copying .keys .exit { display:block }
-#term, #term .xterm-viewport, #term .xterm-screen { touch-action:none }
+#term, #term .xterm-viewport, #term .xterm-screen { touch-action:none } #term { position:relative }
+.touchpad { display:none; position:absolute; inset:0; z-index:5; touch-action:none; -webkit-user-select:none; user-select:none }
+@media (pointer: coarse) { .touchpad { display:block } }
 @media (pointer: coarse) { #term .xterm-viewport { overflow-y:hidden !important } }
 #hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;

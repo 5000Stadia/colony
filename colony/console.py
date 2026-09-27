@@ -244,8 +244,12 @@ document.getElementById('exit').addEventListener('click', () => {{
 }});
 // A finger swipe scrolls: each stretch of movement is sent as a mouse-wheel event, as a desktop wheel would
 // be, and tmux hands it to the program in the session (Claude Code scrolls its own history). A flick glides
-// on; a tap still opens the keyboard.
+// on; a tap still opens the keyboard. The touches land on a still layer over the terminal: a touch belongs
+// to the element it started on, and the terminal replaces its rows as it redraws, which ends the drag.
 const termEl = document.getElementById('term'), STEP = 14;
+const pad = document.createElement('div');
+pad.className = 'touchpad';
+termEl.appendChild(pad);
 const wheel = (up) => `\\x1b[<${{up ? 64 : 65}};${{Math.ceil(term.cols / 2)}};${{Math.ceil(term.rows / 2)}}M`;
 let y0 = null, lastY = 0, lastT = 0, acc = 0, vel = 0, moved = false, glide = null, frame = null;
 // Steps go out once per screen refresh, together, so the terminal redraws in time with the finger.
@@ -254,11 +258,11 @@ const drain = () => {{ if (!frame) frame = requestAnimationFrame(() => {{
   while (Math.abs(acc) >= STEP) {{ out += wheel(acc > 0); acc -= Math.sign(acc) * STEP; }}
   if (out) send({{i: out}});
 }}); }};
-termEl.addEventListener('touchstart', (ev) => {{
+pad.addEventListener('touchstart', (ev) => {{
   if (ev.touches.length !== 1) return;
   cancelAnimationFrame(glide); y0 = lastY = ev.touches[0].clientY; lastT = performance.now(); acc = 0; vel = 0; moved = false;
 }}, {{passive: true}});
-termEl.addEventListener('touchmove', (ev) => {{
+pad.addEventListener('touchmove', (ev) => {{
   if (y0 === null) return;
   const y = ev.touches[0].clientY, t = performance.now();
   vel = (y - lastY) / Math.max(1, t - lastT); acc += y - lastY; lastY = y; lastT = t;
@@ -267,6 +271,7 @@ termEl.addEventListener('touchmove', (ev) => {{
   if (moved) drain();
 }}, {{passive: false, capture: true}});
 const release = () => {{
+  if (!moved && y0 !== null) term.focus();          // a tap: the keyboard, as on the terminal itself
   if (moved && Math.abs(vel) > 0.25) {{
     let v = vel * 16;
     const step = () => {{ acc += v; drain(); v *= 0.94; if (Math.abs(v) >= 0.8) glide = requestAnimationFrame(step); }};
@@ -274,8 +279,8 @@ const release = () => {{
   }}
   y0 = null;
 }};
-termEl.addEventListener('touchend', release, {{passive: true}});
-termEl.addEventListener('touchcancel', release, {{passive: true}});
+pad.addEventListener('touchend', release, {{passive: true}});
+pad.addEventListener('touchcancel', release, {{passive: true}});
 // Selecting text in the terminal is poor on a phone: what is on screen, as plain text, selects natively.
 const hist = document.getElementById('hist'), histBtn = document.getElementById('history');
 async function showText(on) {{
