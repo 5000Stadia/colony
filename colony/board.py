@@ -475,8 +475,18 @@ def since(root, seen):
     opened = [g for g in gates(root) if g["at"] > at]
     replies = [n for n in notes(root) if n["addressed_at"] and n["addressed_at"] > at]
     pinned = [p for p in pins.pins(root) if p["at"] > at and p["by"] != "person"]
-    return {"head": head, "commits": commits, "moved": moved, "opened": opened, "replies": replies,
-            "pinned": pinned, "first": not seen}
+    moved_at = stamp(git(root, "log", "-1", "--format=%aI", "--", "ROADMAP.md").strip()) if moved else ""
+    return {"head": head, "commits": commits, "moved": moved, "moved_at": moved_at, "opened": opened,
+            "replies": replies, "pinned": pinned, "first": not seen}
+
+
+def stamp(iso):
+    """A git date (with its own offset) on the board's clock (UTC, "...Z"), so events from both sort together."""
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromisoformat(iso).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return iso
 
 
 # ---------------------------------------------------------------- the page
@@ -592,20 +602,22 @@ def render(reg, pid, view="overview"):
     waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
     out.append(f"<h2>Waiting on you ({len(waiting)})</h2><div class='card'>"
                + ("".join(waiting) if waiting else "<p class='muted'>Nothing is waiting on you.</p>") + "</div>")
-    # since you were last here: "I'm caught up" at both ends of the list, and only when there is a list
+    # since you were last here: one timeline, newest first; "I'm caught up" rides down the list as you read,
+    # and stays within it
     s = since(root, reg["seen"].get(str(root)))
-    out.append("<h2>Since you were last here</h2><div class='card'>")
+    out.append("<h2>Since you were last here</h2><div class='card since'>")
     if s["first"]:
         out.append("<p class='muted'>First visit: everything below is the current state.</p>")
-    lines = [f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>" for i, a, b, t in s["moved"]]
-    lines += [f"<li>gate opened: {e(g['question'])}</li>" for g in s["opened"]]
-    lines += [f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>" for n in s["replies"]]
-    lines += [f"<li>the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(p['title'])}</a>"
-              + (f": {e(p['why'])}" if p.get("why") else "") + "</li>" for p in s["pinned"]]
-    lines += [f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>" for h, t, subj in s["commits"][:15]]
+    events = [(s["moved_at"], f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>") for i, a, b, t in s["moved"]]
+    events += [(g["at"], f"<li>gate opened: {e(g['question'])}</li>") for g in s["opened"]]
+    events += [(n["addressed_at"], f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>") for n in s["replies"]]
+    events += [(p["at"], f"<li>the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(p['title'])}</a>"
+                + (f": {e(p['why'])}" if p.get("why") else "") + "</li>") for p in s["pinned"]]
+    events += [(stamp(t), f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>") for h, t, subj in s["commits"][:15]]
+    lines = [html_ for _, html_ in sorted(events, key=lambda ev: ev[0] or "", reverse=True)]
     caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
                  f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
-    out.append(caught_up + f"<ul>{''.join(lines)}</ul>" + caught_up if lines else "<p class='muted'>Nothing has changed.</p>")
+    out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
     out.append("</div>")
     # the person's own notes the agent has not acted on yet, wherever they were left
     its_now = items(road)
@@ -1460,7 +1472,9 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } .editbar { display:flex; align-items:center; gap:12px; padding:8px 0 }
 .editbar b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } form.editor textarea { flex:1; width:100%;
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
-.caughtup { margin:4px 0 8px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
+.since .caughtup { position:sticky; top:8px; z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
+  pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
+.since ul { padding-right:4px } .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
