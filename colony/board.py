@@ -579,10 +579,12 @@ def render(reg, pid, view="overview"):
     by = lambda key, val: [n for n in all_notes if (n["anchor"] or {}).get(key) == val and not (n["anchor"] or {}).get("gate")]
     done = sum(1 for m in road["milestones"] for i in m["items"] if i["state"] == "done")
     total = sum(len(m["items"]) for m in road["milestones"])
-    out.append(f"<header><h1>{e(root.name)}</h1>{tabs(pid, view)}<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     merged, own = project_settings(root)
-    out.append(f"<details class='card psettings'><summary>Project settings</summary>{project_settings_form(pid, own)}"
-               f"<p class='muted'>Applies when its console next starts.</p></details>")
+    # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
+    settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own)}"
+                f"<p class='muted'>Applies when its console next starts.</p></div></details>")
+    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{settings}</div>{tabs(pid, view)}"
+               f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     snap = console.snapshot(root)
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
@@ -1282,7 +1284,11 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .msgbox label { display:flex; flex-direction:column; gap:4px; font-size:13px } .msgbox textarea { min-height:80px; font:inherit;
   padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .msgbox select, .options select { font:inherit; padding:4px 6px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
-.psettings summary { cursor:pointer; color:var(--accent) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
+.psettings summary { cursor:pointer; color:var(--accent); list-style:none; font-size:14px }
+.psettings summary::-webkit-details-marker { display:none } header.project { position:relative }
+.titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings { margin-left:auto }
+.psettings .panel { position:absolute; right:0; z-index:10; width:min(440px, calc(100vw - 32px)); padding:14px 16px;
+  border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
 .sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }
