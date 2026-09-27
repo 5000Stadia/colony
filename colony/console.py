@@ -193,9 +193,10 @@ PAGE = """
  <input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=console'>
  <button class='quiet'>End session</button></form></div>
 <div class='keys' aria-label='Keys a phone keyboard lacks'>
- <button class='exit' id='exit'>Exit</button><button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>
+ <button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>
  <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-mod='ctrl'>Ctrl</button><button data-mod='alt'>Alt</button>
- <button class='copy' id='history'>Select text</button><button class='selectall' id='selectall'>Select all</button></div>
+ <button class='copy' id='history'>Select</button><button class='selectall' id='selectall'>Select all</button>
+ <button class='exit' id='exit'>Exit</button></div>
 <div id='term'></div>
 <pre id='hist' hidden></pre>
 <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css'>
