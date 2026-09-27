@@ -541,8 +541,16 @@ def sidebar(reg, pid):
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}{STUCK}</script></body></html>")
 
+
+# What stays pinned at the top (the project chips on a phone): things that stick sit below it, not under it.
+STUCK = """
+const stuck = () => { const n = document.querySelector('nav');
+  const h = n && getComputedStyle(n).position === 'sticky' ? n.offsetHeight : 0;
+  document.documentElement.style.setProperty('--stuck-top', h + 'px'); };
+stuck(); addEventListener('resize', stuck);
+"""
 
 # Every few seconds: each project's status dot, line and waiting count in the sidebar.
 POLL = """
@@ -687,7 +695,8 @@ def render(reg, pid, view="overview"):
                      f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
         out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
         out.append("</div>")
-        out.append("<h2>About the whole project</h2><div class='card'>" + thread([n for n in all_notes if not n["anchor"]], items(road))
+        out.append("<h2>Note to the agent</h2><div class='card'><p class='muted'>Anything about the project as a whole. It reaches "
+                   "the agent on its next turn, and the replies show here.</p>" + thread([n for n in all_notes if not n["anchor"]], items(road))
                    + note_box(pid, "project", "", "Anything for the agent about the project as a whole") + "</div>")
     return shell(reg, pid, "".join(out))
 
@@ -1621,7 +1630,7 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } .editbar { display:flex; align-items:center; gap:12px; padding:8px 0 }
 .editbar b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } form.editor textarea { flex:1; width:100%;
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
-.since .caughtup { position:sticky; top:8px; z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
+.since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
   pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
 .since ul { padding-right:4px } .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
