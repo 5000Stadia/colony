@@ -851,6 +851,92 @@ def folder_browser(reg, current, purpose):
     return shell(reg, -2, "".join(out) + "</div>")
 
 
+def add_project_page(reg, tab="new", error=""):
+    """Add a project three ways, one tab each: a new one, an existing folder, or a clone of a GitHub
+    repository. Folders are chosen with Browse…, which starts closed and opens in place."""
+    choices = (project_settings_form(0, {}, action="")
+               .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0])
+    where = reg["new_root"]
+    picker = lambda name, value, placeholder: (
+        f"<div class='picker'><div class='chosen'><input name='{name}' value='{e(value)}' placeholder='{e(placeholder)}' readonly>"
+        f"<button type='button' class='quiet browsebtn'>Browse…</button></div><div class='browse' hidden></div></div>")
+    panels = {
+        "new": ("New", f"<form method='post' action='/new' class='options'>"
+                       f"<label>Name <input name='name' placeholder='a new, empty project'></label>"
+                       f"<div class='muted'>Created in:</div>{picker('within', where, where)}{choices}<button>Create project</button></form>"),
+        "existing": ("Existing folder", f"<form method='post' action='/add' class='options'>"
+                     f"<div class='muted'>The folder becomes the project's root; its agent brings its plan over to the roadmap.</div>"
+                     f"{picker('path', '', 'No folder chosen')}{choices}<button>Add project</button></form>"),
+        "github": ("From GitHub", f"<form method='post' action='/clone' class='options'>"
+                   f"<label>Repository <input name='url' placeholder='https://github.com/owner/repo'></label>"
+                   f"<label>Folder name <input name='name' placeholder='the repository name'></label>"
+                   f"<div class='muted'>Cloned into:</div>{picker('within', where, where)}{choices}<button>Clone and add</button></form>"),
+    }
+    tab = tab if tab in panels else "new"
+    seg = "".join(f"<button type='button' class='seg{' on' if k == tab else ''}' data-tab='{k}'>{label}</button>" for k, (label, _) in panels.items())
+    body = "".join(f"<div class='panel-tab' data-tab='{k}'{'' if k == tab else ' hidden'}>{html_}</div>" for k, (_, html_) in panels.items())
+    return shell(reg, -2, f"""<header class='project'><div class='titlerow'><h1>Add a project</h1>
+<a class='exitlink' href='/'>✕ Cancel</a></div></header>{f"<div class='card gate'>{e(error)}</div>" if error else ""}
+<div class='segs'>{seg}</div><div class='card'>{body}</div>
+<script>
+document.querySelectorAll('.seg').forEach((b) => b.addEventListener('click', () => {{
+  document.querySelectorAll('.seg').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.panel-tab').forEach((p) => p.hidden = p.dataset.tab !== b.dataset.tab);
+}}));
+// Browse… opens the machine's folders in place: a folder goes in, "Use this folder" chooses it.
+async function openDir(picker, dir) {{
+  const r = await fetch('/add/browse?dir=' + encodeURIComponent(dir), {{cache: 'no-store'}});
+  const box = picker.querySelector('.browse'); box.innerHTML = await r.text(); box.hidden = false;
+}}
+document.querySelectorAll('.picker').forEach((picker) => {{
+  const input = picker.querySelector('input'), box = picker.querySelector('.browse');
+  picker.querySelector('.browsebtn').addEventListener('click', () => box.hidden ? openDir(picker, input.value) : (box.hidden = true));
+  box.addEventListener('click', (ev) => {{
+    const b = ev.target.closest('button'); if (!b) return;
+    ev.preventDefault();
+    if (b.dataset.use !== undefined) {{ input.value = b.dataset.use; box.hidden = true; return; }}
+    openDir(picker, b.dataset.dir);
+  }});
+}});
+const url = document.querySelector("input[name='url']"), repoName = document.querySelector(".panel-tab[data-tab='github'] input[name='name']");
+url.addEventListener('input', () => {{ repoName.placeholder = (url.value.replace(/\\.git$/, '').split(/[\\/:]/).pop() || 'the repository name'); }});
+</script>""")
+
+
+def machine_folders(current):
+    """One folder of the machine, for choosing where a project lives: subfolders to go into, and the choice."""
+    here = Path(current).expanduser() if current else Path.home()
+    if not here.is_dir():
+        here = Path.home()
+    try:
+        subs = sorted((d for d in here.iterdir() if d.is_dir() and not d.name.startswith(".")), key=lambda d: d.name.lower())
+    except OSError:
+        subs = []
+    out = [f"<div class='muted'><code>{e(here)}</code></div>",
+           f"<button type='button' data-use='{e(here)}'>Use this folder</button>"]
+    if here != here.parent:
+        out.append(f"<button type='button' class='quiet' data-dir='{e(here.parent)}'>↑ up</button>")
+    out += [f"<button type='button' class='quiet' data-dir='{e(d)}'>📁 {e(d.name)}/</button>" for d in subs[:400]]
+    return "".join(out)
+
+
+def clone(url, within, name=""):
+    """Clone a repository into a new folder under `within`; its path, or a ValueError saying what went wrong."""
+    url = url.strip()
+    if not re.match(r"^(https://|git@|ssh://|file://)[^\s]+$", url):
+        raise ValueError("That doesn't look like a repository link (https://github.com/owner/repo).")
+    name = re.sub(r"[^A-Za-z0-9_. -]", "-", (name or "").strip()) or re.sub(r"\.git$", "", re.split(r"[/:]", url.rstrip("/"))[-1])
+    dest = Path(within).expanduser() / name
+    if dest.exists() and any(dest.iterdir()):
+        raise ValueError(f"{dest} already exists and isn't empty: choose another folder name.")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    r = subprocess.run(["git", "clone", "--quiet", url, str(dest)], capture_output=True, text=True, timeout=900,
+                       env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    if r.returncode != 0:
+        raise ValueError("git clone failed: " + (r.stderr.strip().splitlines() or ["no detail"])[-1])
+    return dest
+
+
 def pinned_section(pid, root):
     """What the person and the agent show each other: tap to open (a text file opens to edit), comment to the
     agent about it, or unpin it."""
@@ -1182,7 +1268,11 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/":
             return self._send(200, render(reg, pid, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/add":
+            if (q.get("for") or ["project"])[0] == "project":
+                return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())
             return self._send(200, folder_browser(reg, (q.get("dir") or [""])[0], (q.get("for") or ["project"])[0]).encode())
+        if url.path == "/add/browse":
+            return self._send(200, machine_folders((q.get("dir") or [""])[0]).encode())
         if url.path == "/settings":
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
@@ -1315,6 +1405,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/clone":
+            chosen = {k: form.get(k, "") for k in PROJECT_KEYS if form.get(k)}
+            try:
+                dest = clone(form.get("url", ""), form.get("within") or reg["new_root"], form.get("name", ""))
+            except (ValueError, subprocess.TimeoutExpired) as err:
+                target = "/add?tab=github&error=" + urllib.parse.quote(str(err))
+            else:
+                if chosen:
+                    project_settings(dest, chosen)
+                track(dest)                        # a clone has work of its own: its agent brings the plan over
+                target = f"/?p={projects().index(dest.resolve())}"
+            self.send_response(303)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in ("/add", "/new", "/roots"):
             target = "/settings" if path == "/roots" else "/"
             chosen = {k: form.get(k, "") for k in PROJECT_KEYS if form.get(k)}
@@ -1324,7 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
                 track(Path(form["path"]))
                 target = f"/?p={projects().index(root_of(form['path']))}"
             elif path == "/new" and form.get("name", "").strip():
-                new = Path(form["within"]) / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
+                new = Path(form.get("within") or reg["new_root"]).expanduser() / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
                 new.mkdir(parents=True, exist_ok=True)
                 if chosen:
                     project_settings(new, chosen)
@@ -1480,6 +1586,9 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .psettings summary::-webkit-details-marker { display:none } header.project { position:relative }
 .titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings, .titlerow .exitlink { margin-left:auto }
 .exitlink { font-size:14px; text-decoration:none; white-space:nowrap }
+.segs { display:flex; gap:4px; margin:6px 0 12px; padding:3px; border-radius:10px; background:var(--sunk); width:fit-content; max-width:100% }
+.seg { background:transparent; color:var(--muted); padding:6px 12px; border-radius:8px } .seg.on { background:var(--card); color:var(--ink); font-weight:600 }
+.picker { display:flex; flex-direction:column; gap:6px }
 .psettings .panel { position:absolute; right:0; z-index:10; width:min(440px, calc(100vw - 32px)); padding:14px 16px;
   border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }

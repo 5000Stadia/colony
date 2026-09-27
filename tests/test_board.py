@@ -406,8 +406,24 @@ class FoldersTest(BoardBase):
         port = httpd.server_address[1]
         console.COMMAND = "cat"
         try:
-            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/add?dir={urllib.parse.quote(self.tmp.name)}").read().decode()
-            self.assertIn("plants/", page)
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/add").read().decode()
+            for tab in ("New", "Existing folder", "From GitHub"):
+                self.assertIn(f">{tab}</button>", page)
+            self.assertNotIn("plants/", page, "folders stay out of sight until Browse…")
+            folders = urllib.request.urlopen(f"http://127.0.0.1:{port}/add/browse?dir={urllib.parse.quote(self.tmp.name)}").read().decode()
+            self.assertIn("plants/", folders)
+            self.assertIn("Use this folder", folders)
+            origin = Path(self.tmp.name) / "origin"
+            subprocess.run(["git", "init", "-q", str(origin)], check=True)
+            (origin / "README.md").write_text("A recipe box.\n")
+            subprocess.run(["git", "-C", str(origin), "add", "-A"], check=True)
+            subprocess.run(["git", "-C", str(origin), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "first"], check=True)
+            clones = Path(self.tmp.name) / "clones"
+            data = urllib.parse.urlencode({"url": f"file://{origin}", "within": str(clones)}).encode()
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/clone", data=data))
+            self.assertTrue((clones / "origin" / "README.md").exists(), "cloned under the repository's name")
+            self.assertIn(str((clones / "origin").resolve()), [str(p) for p in board.projects()])
+            self.assertIn("bring the roadmap on board", board.notes(clones / "origin")[0]["text"], "a clone joins with its own work")
             self.post(port, "/add", path=str(self.root))
             self.assertIn(str(self.root), board.registry()["projects"])
             self.post(port, "/new", within=str(shelf), name="fresh idea")
