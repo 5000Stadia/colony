@@ -35,10 +35,12 @@ The colony is the person's set of projects, each with its own agent (you are thi
 person follows and steers them all from one board, and the projects can write to each other.
 
 - The plan is `ROADMAP.md`: milestones as `## M1 — name`, items as `- [ ] R1 text` (`[~]` in progress,
-  `[?]` built but waiting to be checked or accepted, `[x]` done). Keep it current as you work, and commit
-  each finished piece with a clear message. When you mark an item `[?]`, tell the person in plain words
-  what's ready and how they can see it for themselves: `colony ready R4 "what's ready" --check "how to
-  check"`. They approve it or say what's wrong, and it reaches you as a note.
+  `[?]` built and waiting for the person's own eye, `[x]` done). Keep it current as you work, and commit
+  each finished piece with a clear message. What you can check yourself (tests, the spec's definition of
+  done, a review), check, and mark done. Use `[?]` only for what needs the person's judgement: how it
+  looks, feels or reads, or whether it's what they wanted. Then tell them in plain words what's ready and
+  how to see it: `colony ready R4 "what's ready" --check "how to check"`. They approve it or say what's
+  wrong, and it reaches you as a note.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
   `colony noted ID "what you did"`. `colony notes` lists any still open.
@@ -65,8 +67,8 @@ CLAUDE.md, "This project is part of a colony", says how it works.
 
 Please bring the roadmap on board. Read how this project already plans its work (its plan and spec \
 documents, notes, open work and recent history) and write ROADMAP.md in the colony format: milestones as \
-`## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` for built but \
-waiting to be checked or accepted. Include what's \
+`## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` only for what \
+waits on my own eye; what you can check yourself, check. Include what's \
 done, what's under way, and features we've discussed but not built, as unchecked items under a later \
 milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
 documents stay where they are. Open the file with one line saying what this project is: the board shows it \
