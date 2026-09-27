@@ -519,7 +519,8 @@ def sidebar(reg, pid):
                     f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                     f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                     f"{' · ' + e(last) if last else ''}</span></a>")
-    side.append("<div class='navfoot'><a href='/add'>+ Add project</a><a href='/settings'>Settings</a></div>")
+    side.append("<div class='navfoot'><a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
+                "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
     return "".join(side)
 
 
@@ -1341,5 +1342,15 @@ body:not(.focus) #hist { position:static; max-height:70vh; margin-top:8px; borde
   background:var(--card); border:1px solid var(--line); box-shadow:0 6px 20px rgba(0,0,0,.14); color:var(--ink);
   flex-direction:column; gap:5px; white-space:normal } .node:hover .pop { display:flex }
 .st.done { color:var(--muted) } .st.doing { color:var(--accent); font-weight:600 } .st.todo { color:var(--ink) }
-@media (max-width: 700px) { body { display:block } nav { width:auto; border-right:0; border-bottom:1px solid var(--line) } }
+.navfoot .short { display:none }
+/* A phone: the sidebar becomes one row of chips (dot, name, waiting count), then + and ⚙; it scrolls sideways. */
+@media (max-width: 700px) { body { display:block }
+  nav { width:auto; border-right:0; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:6px;
+    padding:8px 10px; overflow-x:auto; white-space:nowrap }
+  nav .proj, nav .proj.monitor { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
+    border-radius:999px; background:var(--sunk) }
+  nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot { border-color:var(--card) }
+  nav .sline, nav .badge.new { display:none }
+  .navfoot { flex-direction:row; margin:0 0 0 auto; padding:0; border:0; gap:2px; font-size:16px }
+  .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline } }
 """
