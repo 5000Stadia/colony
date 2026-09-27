@@ -523,7 +523,7 @@ def sidebar(reg, pid):
             f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>monitor</span>"
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
     for i, p in enumerate(plist):
-        waiting = len(waiting_items(p))
+        waiting = len(moments(p))
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
         badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>" + \
                 (f"<span class='badge new'>{new} new</span>" if new else "")
@@ -1206,16 +1206,31 @@ def clear_waiting(root, key):
                      "consider it handled. Update the roadmap if you agree.", quiet=True)
 
 
+def moments(p, snap=None):
+    """What a project waits on the person for, as moments to answer rather than items: a gate or a choice
+    on screen is its own; a turn that asked something, together with the items it left to verify, is one;
+    items to verify with no question beside them are one. The counts count these."""
+    items = waiting_items(p, snap)
+    single = [[w] for w in items if w["kind"] in ("gate", "choice", "screen")]
+    asks, verify = [w for w in items if w["kind"] == "ask"], [w for w in items if w["kind"] == "verify"]
+    return single + ([asks + verify] if asks else [verify] if verify else [])
+
+
 def waiting_on(pid, p, back, label=True):
-    """The project's waiting items as the person answers them, where they stand: a gate's answer reaches the
-    agent as a note, a choice gets a button per option, a question gets a reply typed into the console, an
-    item to verify gets a note on the item."""
+    """The project's moments as the person answers them, where they stand: a gate's answer reaches the agent
+    as a note, a choice gets a button per option, a question (with what it left to verify) gets a reply typed
+    into the console, items to verify get one note about them."""
     rows = []
     hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
-    for w in waiting_items(p):
-        clear = (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(w['key'])}'>"
+    for group in moments(p):
+        w = group[0]
+        keys = ",".join(x["key"] for x in group)
+        clear = (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(keys)}'>"
                  f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
         who = lambda what: f"<div class='who'>{clear}<span class='kind'>{e(p.name) + ' · ' if label else ''}{what}</span></div>"
+        verify = [x["item"] for x in group if x["kind"] == "verify"]
+        to_verify = ("<div class='toverify'><div class='muted'>To verify:</div><ul>"
+                     + "".join(f"<li><b>{e(it['id'])}</b> {e(it['text'])}</li>" for it in verify) + "</ul></div>") if verify else ""
         if w["kind"] == "gate":
             g = w["gate"]
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
@@ -1234,15 +1249,14 @@ def waiting_on(pid, p, back, label=True):
         elif w["kind"] == "ask":
             a = w["ask"]
             rows.append(f"<div class='need'>{who('asked in its console · ' + e(a['at'][:16].replace('T', ' ')))}"
-                        f"<div class='asktext'>{e(a['text'])}</div>"
+                        f"<div class='asktext'>{e(a['text'])}</div>{to_verify}"
                         f"<form class='add' method='post' action='/reply'>{hidden}"
                         f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
-        elif w["kind"] == "verify":
-            it = w["item"]
-            rows.append(f"<div class='need'>{who('to verify')}<b>{e(it['id'])}</b> {e(it['text'])}"
-                        f"<form class='add' method='post' action='/note'>{hidden}<input type='hidden' name='kind' value='item'>"
-                        f"<input type='hidden' name='ref' value='{e(it['id'])}'>"
-                        f"<textarea name='text' placeholder='Checked it? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
+        else:                                         # items to verify, with no question beside them
+            ids = ",".join(it["id"] for it in verify)
+            rows.append(f"<div class='need'>{who(str(len(verify)) + ' to verify')}{to_verify}"
+                        f"<form class='add' method='post' action='/verified'>{hidden}<input type='hidden' name='ids' value='{e(ids)}'>"
+                        f"<textarea name='text' placeholder='Checked them? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
     return rows
 
 
@@ -1439,7 +1453,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/status":
             from . import monitor
             body = json.dumps({"board": str(home()), "projects": [
-                dict(console.snapshot(p), waiting=len(waiting_items(p))) if p.exists() else {"state": "off", "lines": [], "waiting": 0}
+                dict(console.snapshot(p), waiting=len(moments(p))) if p.exists() else {"state": "off", "lines": [], "waiting": 0}
                 for p in plist], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1610,7 +1624,10 @@ class Handler(BaseHTTPRequestHandler):
                 target.write_text(form.get("text", "").replace("\r\n", "\n"))
                 add_note(root, {"pin": pin["id"]}, f"The person edited the pinned {pins.describe(pin)} on the board.", quiet=True)
         elif path == "/clear" and form.get("key"):
-            clear_waiting(root, form["key"])
+            for key in form["key"].split(","):                # a moment may hold several items
+                clear_waiting(root, key)
+        elif path == "/verified" and text and form.get("ids"):
+            add_note(root, None, f"On {', '.join(form['ids'].split(','))} (built, waiting to be verified): {text}")
         elif path == "/reply" and text:
             console.type_into(console.session_name(root), text)
             answer_asks(root, "from the board")
@@ -1736,7 +1753,7 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
 .since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
   pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
-.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
+.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .toverify ul { margin:4px 0 6px; padding-left:18px }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }

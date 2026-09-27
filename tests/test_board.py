@@ -381,8 +381,9 @@ class MonitorTest(BoardBase):
         board.record_ask(self.root, "t2", "And the delimiter?")
         w.tick()
         self.assertEqual(len(sent), 2, "a new question is news")
-        n = len(board.waiting_items(self.root))
-        self.assertEqual(n, 2)
+        self.assertEqual(len(board.waiting_items(self.root)), 2, "two things wait")
+        n = len(board.moments(self.root))
+        self.assertEqual(n, 1, "one moment: the question, with the item it left to verify")
         self.assertIn(f"id='badge-0' title='waiting on you'>{n}<", board.sidebar(board.registry(), 0))
         self.assertEqual(board.needs_you(board.registry()).count("class='need'"), n)
 

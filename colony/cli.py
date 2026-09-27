@@ -592,7 +592,7 @@ def cmd_projects(a):
     from . import board, console, mail
     for p in board.projects():
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
-        waiting = len(board.waiting_items(p))
+        waiting = len(board.moments(p))
         goal = board.roadmap(p)["goal"] if p.exists() else ""
         print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' waiting on you' if waiting else '':16} {goal[:90]}")
     return 0
