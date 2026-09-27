@@ -109,6 +109,7 @@ class Watcher:
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
+        self.waiting = {}          # projects that finished a turn and have had nothing from the person since
 
     def events(self):
         out = []
@@ -120,6 +121,10 @@ class Watcher:
             # a question left while the board was down) is reported, not taken as where it always was.
             before, now = self.states.get(str(p), "off"), snap["state"]
             self.states[str(p)] = now
+            if (before, now) == ("working", "idle"):
+                self.waiting[str(p)] = snap["lines"][-3:]
+            elif now != "idle":
+                self.waiting.pop(str(p), None)
             kind = WAKE.get((before, now))
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
@@ -173,7 +178,12 @@ class Watcher:
             time.sleep(self.interval)
 
 
+WATCHER = None                 # the board's watcher, when the monitor runs: the board reads who is waiting
+
+
 def start():
     """The monitor's session and the watcher, alongside the board."""
+    global WATCHER
     ensure()
-    threading.Thread(target=Watcher().run, daemon=True).start()
+    WATCHER = Watcher()
+    threading.Thread(target=WATCHER.run, daemon=True).start()

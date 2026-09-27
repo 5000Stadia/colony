@@ -20,8 +20,9 @@ what it assumes and what a second provider needs there. What a provider supplies
                            decides itself; the forms show them as "Default (...)"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
-  choose(screen, text)     the keys that pick the on-screen option matching `text` (a trust question, a
-                           permission prompt), or None if there is no such choice; `colony choose` uses it.
+  choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
+                           options and which is highlighted, or None; the board shows it as buttons
+  choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -112,9 +113,9 @@ class ClaudeCode:
             return "needs you"
         return "idle"
 
-    def choose(self, screen, text):
-        """Claude Code draws a choice as a column of options, the highlighted one marked `❯`; the arrows move
-        the mark and Enter confirms. The keys that confirm the option containing `text`, or None."""
+    def choice(self, screen):
+        """The choice on screen, if any: (question lines, options, index of the highlighted one). Claude Code
+        draws a choice as a column of options, the highlighted one marked `❯`, under its question."""
         import re
         lines = screen.splitlines()
         cur = next((i for i, l in enumerate(lines) if re.match(r"^\s*❯ \S", l)), None)
@@ -122,22 +123,33 @@ class ClaudeCode:
             return None
         col = lines[cur].index("❯") + 2
         is_option = lambda l: len(l) > col and l[col] != " " and l[:col].strip() in ("", "❯")
-        block, i = [], cur
+        i = cur
         while i > 0 and (is_option(lines[i - 1]) or lines[i - 1][:col + 1].strip() == ""):
             i -= 1                                                       # up to the first option
+        block = []
         for l in lines[i:]:
             if is_option(l):
                 block.append(l)
             elif l[:col + 1].strip():                                    # shallower text: the list has ended
                 break
+        if len(block) < 2:
+            return None                                                  # the input prompt, not a choice
+        label = lambda l: re.sub(r"^\d+\.\s*", "", l[col:].strip())
+        question = [l.strip() for l in lines[max(0, i - 8):i] if l.strip()][-4:]
+        here = next(k for k, l in enumerate(block) if l.lstrip().startswith("❯"))
+        return question, [label(l) for l in block], here
+
+    def choose(self, screen, text):
+        """The keys that pick the on-screen option containing `text`: arrows to it, then Enter; or None."""
+        found = self.choice(screen)
+        if not found:
+            return None
+        _, options, here = found
         want = text.lower().strip()
-        label = lambda l: re.sub(r"^\d+\.\s*", "", l[col:].strip()).lower()
-        hit = next((k for k, l in enumerate(block) if want in label(l)), None)
+        hit = next((k for k, o in enumerate(options) if want in o.lower()), None)
         if hit is None:
             return None
-        here = next(k for k, l in enumerate(block) if l.lstrip().startswith("❯"))
         return (["Down"] * (hit - here) if hit > here else ["Up"] * (here - hit)) + ["Enter"]
-
 
 PROVIDERS = {"claude": ClaudeCode()}
 DEFAULT = "claude"

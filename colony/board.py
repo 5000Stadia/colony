@@ -23,8 +23,9 @@ from pathlib import Path
 from . import console, providers
 
 MILESTONE = re.compile(r"^##\s+(M\d+)\s*[—–-]+\s*(.+?)\s*$")
-ITEM = re.compile(r"^\s*-\s*\[( |x|X|~)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
-STATE = {" ": "todo", "~": "doing", "x": "done", "X": "done"}
+ITEM = re.compile(r"^\s*-\s*\[( |x|X|~|\?)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
+STATE = {" ": "todo", "~": "doing", "?": "verify", "x": "done", "X": "done"}
+LABEL = {"todo": "todo", "doing": "doing", "verify": "to verify", "done": "done"}
 
 PROTOCOL = """
 ## This project is part of a colony
@@ -33,7 +34,8 @@ The colony is the person's set of projects, each with its own agent (you are thi
 person follows and steers them all from one board, and the projects can write to each other.
 
 - The plan is `ROADMAP.md`: milestones as `## M1 — name`, items as `- [ ] R1 text` (`[~]` in progress,
-  `[x]` done). Keep it current as you work, and commit each finished piece with a clear message.
+  `[?]` built but waiting to be checked or accepted, `[x]` done). Keep it current as you work, and commit
+  each finished piece with a clear message.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
   `colony noted ID "what you did"`. `colony notes` lists any still open.
@@ -54,7 +56,8 @@ CLAUDE.md, "This project is part of a colony", says how it works.
 
 Please bring the roadmap on board. Read how this project already plans its work (its plan and spec \
 documents, notes, open work and recent history) and write ROADMAP.md in the colony format: milestones as \
-`## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done and `[~]` for in progress. Include what's \
+`## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` for built but \
+waiting to be checked or accepted. Include what's \
 done, what's under way, and features we've discussed but not built, as unchecked items under a later \
 milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
 documents stay where they are. Then show me the milestones before treating them as settled."""
@@ -593,7 +596,7 @@ def render(reg, pid, view="overview"):
                 waiting = sum(1 for g in gs if g.get("item") == it["id"] and not g["answer"])
                 unlocks = [x for x, y in its.items() if it["id"] in y["after"]]
                 out.append(
-                    f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{it['state']}</span> "
+                    f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
                     f"<b>{e(it['id'])}</b> {e(it['text'])}"
                     + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
                     + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
@@ -664,7 +667,7 @@ def roadmap_map(road, pid, all_notes, gs):
             f"<a class='node {it['state']}' href='/item?p={pid}&id={e(iid)}' style='left:{x}px;top:{y}px;width:{W}px;height:{H}px'>"
             f"<span class='nid'>{e(iid)} · {e(it['milestone'])}</span><span class='ntext'>{e(it['text'])}</span>"
             f"{'<span class=dot></span>' if n_gates else ''}"
-            f"<span class='pop'><b>{e(iid)} — {e(it['text'])}</b><span class='st {it['state']}'>{it['state']}</span>"
+            f"<span class='pop'><b>{e(iid)} — {e(it['text'])}</b><span class='st {it['state']}'>{LABEL[it['state']]}</span>"
             f"<span>{e(it['desc'] or 'No description yet.')}</span>{flags}</span></a>")
     legend = " · ".join(f"<b>{e(m['id'])}</b> {e(m['title'])}" for m in road["milestones"])
     return (f"<div class='card mapcard'><div class='legend'>{legend}</div><div class='mapwrap'><div class='map' "
@@ -684,7 +687,7 @@ def render_item(reg, pid, iid):
     unlocks = [i for i, x in its.items() if iid in x["after"]]
     link = lambda i: f"<a href='/item?p={pid}&id={e(i)}'>{e(i)} {e(its[i]['text'])}</a>" if i in its else e(i)
     body = [f"<p><a href='/?p={pid}'>← {e(root.name)}</a></p><header><h1>{e(iid)} — {e(it['text'])}</h1>"
-            f"<p><span class='st {it['state']}'>{it['state']}</span> · milestone {e(it['milestone'])}</p></header>"]
+            f"<p><span class='st {it['state']}'>{LABEL[it['state']]}</span> · milestone {e(it['milestone'])}</p></header>"]
     body.append(f"<div class='card'><p>{e(it['desc'] or 'No description yet: direct it below and the agent will pick it up.')}</p>"
                 f"<p class='muted'>Builds on: {', '.join(link(a) for a in it['after']) or 'nothing'}"
                 f"<br>Unlocks: {', '.join(link(u) for u in unlocks) or 'nothing yet'}</p></div>")
@@ -794,6 +797,50 @@ def folder_browser(reg, current, purpose):
     return shell(reg, -2, "".join(out) + "</div>")
 
 
+def needs_you(reg):
+    """Everything across the projects that is waiting on the person, each answerable where it stands: a gate
+    (the answer reaches the agent as a note), a choice on a console's screen (a button per option), a
+    project that finished its turn and waits (the reply is typed into its console), and an item waiting to
+    be checked (a note on the item)."""
+    from . import monitor
+    waiting = monitor.WATCHER.waiting if monitor.WATCHER else {}
+    rows = []
+    hidden = lambda pid, back="/monitor": (f"<input type='hidden' name='p' value='{pid}'>"
+                                           f"<input type='hidden' name='back' value='{back}'>")
+    for pid, p in enumerate(projects(reg)):
+        if not p.exists():
+            continue
+        name = e(p.name)
+        for g in (g for g in gates(p) if not g["answer"]):
+            rows.append(f"<div class='need'><div class='who'>{name} · gate{' on ' + e(g['item']) if g.get('item') else ''}</div>"
+                        f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
+                        + f"<form class='add' method='post' action='/answer'>{hidden(pid)}<input type='hidden' name='gate' value='{e(g['id'])}'>"
+                        f"<textarea name='text' placeholder='Your answer'></textarea><button>Send</button></form></div>")
+        snap = console.snapshot(p, lines=4)
+        if snap["state"] == "needs you":
+            found = providers.of(p).choice(console.screen(console.session_name(p)))
+            if found:
+                question, options, _ = found
+                rows.append(f"<div class='need'><div class='who'>{name} · asking in its console</div>"
+                            + "".join(f"<div>{e(q)}</div>" for q in question)
+                            + "<div class='choices'>" + "".join(
+                                f"<form method='post' action='/choose'>{hidden(pid)}<input type='hidden' name='option' value='{e(o)}'>"
+                                f"<button class='quiet'>{e(o)}</button></form>" for o in options) + "</div></div>")
+        elif str(p) in waiting and snap["state"] == "idle":
+            rows.append(f"<div class='need'><div class='who'>{name} · finished, waiting for you</div>"
+                        f"<pre>{e(chr(10).join(waiting[str(p)]))}</pre>"
+                        f"<form class='add' method='post' action='/reply'>{hidden(pid)}"
+                        f"<textarea name='text' placeholder='Reply to {name}'></textarea><button>Send</button></form></div>")
+        for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
+            rows.append(f"<div class='need'><div class='who'>{name} · to verify</div><b>{e(it['id'])}</b> {e(it['text'])}"
+                        f"<form class='add' method='post' action='/note'>{hidden(pid)}<input type='hidden' name='kind' value='item'>"
+                        f"<input type='hidden' name='ref' value='{e(it['id'])}'>"
+                        f"<textarea name='text' placeholder='Checked it? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
+    if not rows:
+        return "<p class='muted'>Nothing is waiting on you.</p>"
+    return "".join(rows)
+
+
 def settings_page(reg):
     rows = []
     for r in reg["roots"]:
@@ -894,11 +941,17 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/settings":
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
+        if url.path == "/needs":
+            return self._send(200, needs_you(reg).encode())
         if url.path == "/monitor":
             from . import monitor
             monitor.ensure()
             on = monitor.helm()
-            body = (f"<header class='slim'><h1>monitor</h1><form method='post' action='/helm'>"
+            body = (f"<details class='card needs' open><summary><b>Needs you</b></summary><div id='needs'>{needs_you(reg)}</div></details>"
+                    "<script>setInterval(async () => { const n = document.getElementById('needs');"
+                    " if (!n || n.contains(document.activeElement)) return;"
+                    " const r = await fetch('/needs', {cache: 'no-store'}); if (r.ok) n.innerHTML = await r.text(); }, 4000);</script>"
+                    f"<header class='slim'><h1>monitor</h1><form method='post' action='/helm'>"
                     f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
                     f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
                     f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
@@ -1025,6 +1078,16 @@ class Handler(BaseHTTPRequestHandler):
             add_note(root, {kind: ref} if kind in ("item", "commit") else None, text)
         elif path == "/answer" and text:
             answer_gate(root, form["gate"], text)
+        elif path == "/choose" and form.get("option"):
+            name = console.session_name(root)
+            keys = providers.of(root).choose(console.screen(name), form["option"])
+            if keys:
+                console.press(name, keys)
+        elif path == "/reply" and text:
+            from . import monitor
+            console.type_into(console.session_name(root), text)
+            if monitor.WATCHER:
+                monitor.WATCHER.waiting.pop(str(root), None)
         elif path == "/console/stop":
             console.stop(root)
         elif path == "/seen":
@@ -1072,7 +1135,8 @@ h3 { margin:0 0 8px; font-size:15px } a { color:var(--accent) } a:visited { colo
 .badge.gate { background:var(--flag-bg); color:var(--flag) } .badge.new + .badge, .badge + .badge { margin-left:4px }
 details.item { border-top:1px solid var(--line); padding:6px 0 } details.item summary { cursor:pointer }
 .st { display:inline-block; min-width:44px; font-size:12px; color:var(--muted) } .item.done summary { color:var(--muted) }
-.item.doing .st { color:var(--accent); font-weight:600 }
+.item.doing .st { color:var(--accent); font-weight:600 } .item.verify .st, .st.verify { color:var(--flag); font-weight:600 }
+.node.verify { border-color:var(--flag) }
 .note { margin:8px 0 0 18px; padding:6px 10px; background:var(--sunk); border-radius:7px }
 .reply { margin-top:6px; padding-left:10px; border-left:2px solid var(--accent) } .who { font-size:12px; color:var(--muted) }
 form.add { margin:8px 0 4px 18px; display:flex; gap:8px; flex-wrap:wrap } form.add textarea { flex:1 1 100%; min-height:44px;
@@ -1108,6 +1172,9 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .peek pre { margin:6px 0 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; max-height:9em; overflow:hidden }
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
+.needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
+.need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
+.need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
 .keys button { flex:1 0 auto; min-width:44px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }
 @media (pointer: coarse) { .keys { display:flex } }

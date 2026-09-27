@@ -597,6 +597,57 @@ class MailWakeTest(BoardBase):
         self.assertEqual(len(self.typed), 1, "urgent mail is typed in even mid-turn")
 
 
+class NeedsYouTest(BoardBase):
+    """Everything waiting on the person, across projects, answerable where it stands."""
+    CHOICE = " Do you want to make this edit to ledger.py?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No\n"
+
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.saved = (console.snapshot, console.screen, console.press, console.type_into, monitor.WATCHER)
+        self.pressed, self.typed, self.state = [], [], {"state": "idle"}
+        console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": ["done."]}
+        console.screen = lambda name: self.CHOICE
+        console.press = lambda name, keys: self.pressed.append(keys)
+        console.type_into = lambda name, text: self.typed.append(text)
+        monitor.WATCHER = monitor.Watcher()
+
+    def tearDown(self):
+        console.snapshot, console.screen, console.press, console.type_into, monitor.WATCHER = self.saved
+        super().tearDown()
+
+    def post(self, port, path, **form):
+        data = urllib.parse.urlencode(form).encode()
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data))
+
+    def test_a_gate_a_choice_a_finished_turn_and_an_item_to_verify_are_all_answerable_in_one_place(self):
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
+        self.assertEqual(board.items(board.roadmap(self.root))["R2"]["state"], "verify")
+        board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(), "question": "Keep the old export?"})
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            port = httpd.server_address[1]
+            self.state["state"] = "needs you"
+            html = board.needs_you(board.registry())
+            for want in ("Keep the old export?", "Do you want to make this edit", ">Yes, and don&#x27;t ask again<",
+                         "to verify", "water log"):
+                self.assertIn(want, html)
+            self.post(port, "/choose", p=0, option="Yes, and don't ask again", back="/monitor")
+            self.assertEqual(self.pressed, [["Down", "Enter"]], "the button picks its own option")
+            self.state["state"] = "idle"
+            monitor.WATCHER.waiting[str(self.root)] = ["Which format do you want?"]
+            self.assertIn("finished, waiting for you", board.needs_you(board.registry()))
+            self.post(port, "/reply", p=0, text="CSV please", back="/monitor")
+            self.assertEqual(self.typed, ["CSV please"], "the reply is typed into its console")
+            self.assertNotIn("finished, waiting for you", board.needs_you(board.registry()))
+            self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
+            self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
 class ServerTest(BoardBase):
     def run_cli(self, *a):
         return subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True,
