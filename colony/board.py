@@ -1580,9 +1580,9 @@ nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0
 .navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
 form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
-form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:10px; align-items:center }
+form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
-  border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:260px } form.options button { align-self:flex-start }
+  border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
 .msgbox { margin-left:auto } .msgbox summary { cursor:pointer; color:var(--accent); font-size:13px }
 .msgbox form { position:absolute; right:24px; z-index:10; width:420px; display:flex; flex-direction:column; gap:8px;
   padding:14px; border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) }
