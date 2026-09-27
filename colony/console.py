@@ -290,7 +290,19 @@ const markerShown = () => {{
   }}
   return false;
 }};
-const showJump = () => {{ jump.hidden = MARKER ? !markerShown() : above === 0; }};
+// It floats just above the typing box, which Claude Code draws between two rules of ─, never over it.
+const lift = () => {{
+  const b = term.buffer.active, top = b.viewportY, rules = [];
+  for (let r = term.rows - 1; r >= 0 && rules.length < 2; r--) {{
+    const t = (b.getLine(top + r) || {{translateToString: () => ''}}).translateToString(true).trim();
+    if (t.length > 8 && /^[─━-]+$/.test(t.slice(0, 8))) rules.push(r);
+  }}
+  const screen = termEl.querySelector('.xterm-screen');
+  const rowH = screen ? screen.clientHeight / term.rows : 17;
+  const boxTop = rules.length === 2 ? rules[1] : term.rows;
+  jump.style.bottom = Math.max(14, (term.rows - boxTop) * rowH + 10) + 'px';
+}};
+const showJump = () => {{ jump.hidden = MARKER ? !markerShown() : above === 0; if (!jump.hidden) lift(); }};
 const scrolled = (n) => {{ above = Math.max(0, above + n); if (!MARKER) showJump(); }};
 jump.addEventListener('click', (ev) => {{
   ev.preventDefault(); cancelAnimationFrame(glide); acc = 0;
