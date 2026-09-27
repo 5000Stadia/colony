@@ -690,9 +690,13 @@ def render(reg, pid, view="overview"):
         out.append(status_card(pid, console.snapshot(root)))
         out.append(pinned_section(pid, root))
         # waiting on you: the same as this project's part of Needs you
-        waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
-        out.append(f"<h2>Waiting on you ({len(waiting)})</h2><div class='card'>"
-                   + ("".join(waiting) if waiting else "<p class='muted'>Nothing is waiting on you.</p>") + "</div>")
+        # kept current like Needs you: what the agent settles meanwhile drops out, except while being typed in
+        out.append(f"<h2>Waiting on you (<span id='wcount'>{len(moments(root))}</span>)</h2><div class='card' id='waiting'>"
+                   f"{waiting_html(pid, root)}</div>"
+                   "<script>setInterval(async () => { const w = document.getElementById('waiting');"
+                   " if (!w || w.contains(document.activeElement)) return;"
+                   f" const r = await fetch('/needs?p={pid}', {{cache: 'no-store'}}); if (!r.ok) return;"
+                   " w.innerHTML = await r.text(); document.getElementById('wcount').textContent = w.querySelectorAll('.need').length; }, 4000);</script>")
         # since you were last here: one timeline, newest first; "I'm caught up" rides down the list as you read,
         # and stays within it
         s = since(root, reg["seen"].get(str(root)))
@@ -1260,6 +1264,11 @@ def waiting_on(pid, p, back, label=True):
     return rows
 
 
+def waiting_html(pid, root):
+    rows = waiting_on(pid, root, f"/?p={pid}", label=False)
+    return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
+
+
 def needs_you(reg):
     """Needs you: what every project is waiting on the person for, in one place."""
     rows = [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
@@ -1447,6 +1456,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(body)
         if url.path == "/needs":
+            if "p" in q:                                   # one project's Waiting on you
+                return self._send(200, waiting_html(pid, plist[pid]).encode())
             return self._send(200, needs_you(reg).encode())
         if url.path == "/monitor":
             return self._send(200, monitor_page(reg, (q.get("view") or ["overview"])[0]).encode())
