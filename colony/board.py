@@ -563,7 +563,7 @@ def render(reg, pid, view="overview"):
                    f"<textarea name='text' placeholder='{e(root.name)}’s agent writes the message itself, with its own context'></textarea></label>"
                    f"<button>Have {e(root.name)} send it</button></form></details>") if others else ""
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
-                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token()),
+                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token(), exit=f'/?p={pid}', focus='true'),
                      wide=True)
     root = plist[pid]
     road, gs = roadmap(root), gates(root)
@@ -985,13 +985,27 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/settings":
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
+        if url.path == "/console/text":
+            # The session's history as plain text, for scrolling and copying where the terminal can't.
+            from . import monitor
+            pid = int((q.get("p") or ["0"])[0])
+            name = monitor.name() if pid == -1 else console.session_name(plist[pid])
+            text = subprocess.run(["tmux", "capture-pane", "-p", "-J", "-S", "-3000", "-t", name],
+                                  capture_output=True, text=True).stdout.rstrip() or "(nothing yet)"
+            body = text.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(body)
         if url.path == "/needs":
             return self._send(200, needs_you(reg).encode())
         if url.path == "/monitor":
             from . import monitor
             monitor.ensure()
             on = monitor.helm()
-            body = (f"<details class='card needs' open><summary><b>Needs you</b></summary><div id='needs'>{needs_you(reg)}</div></details>"
+            body = (f"<details class='card needs' id='needs-box' open><summary><b>Needs you</b></summary><div id='needs'>{needs_you(reg)}</div></details>"
                     "<script>setInterval(async () => { const n = document.getElementById('needs');"
                     " if (!n || n.contains(document.activeElement)) return;"
                     " const r = await fetch('/needs', {cache: 'no-store'}); if (r.ok) n.innerHTML = await r.text(); }, 4000);</script>"
@@ -999,7 +1013,7 @@ class Handler(BaseHTTPRequestHandler):
                     f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
                     f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
                     f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
-                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.token()))
+                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.token(), exit='', focus='false'))
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor
@@ -1218,8 +1232,18 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .caughtup { margin:4px 0 8px } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
-.keys button { flex:1 0 auto; min-width:44px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }
-@media (pointer: coarse) { .keys { display:flex } }
+.keys button { flex:1 0 auto; min-width:40px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }
+.keys .exit, body:not(.focus) .keys .exit { display:none } .touch-only { display:none }
+@media (pointer: coarse) { .keys { display:flex } .touch-only { display:inline-block } }
+body.focus nav, body.focus header, body.focus .console-bar, body.focus #needs-box { display:none }
+body.focus main { padding:0; max-width:none } body.focus #term { height:calc(100dvh - 58px); border-radius:0; padding:2px }
+body.focus .keys { position:fixed; left:0; right:0; bottom:0; z-index:30; margin:0; padding:6px; gap:5px; flex-wrap:nowrap;
+  overflow-x:auto; background:var(--card); border-top:1px solid var(--line) }
+body.focus .keys .exit { display:block; background:var(--accent); color:var(--card) }
+#hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
+  white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;
+  -webkit-user-select:text; user-select:text; -webkit-overflow-scrolling:touch }
+body:not(.focus) #hist { position:static; max-height:70vh; margin-top:8px; border-radius:10px }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }

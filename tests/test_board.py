@@ -51,6 +51,7 @@ class BoardBase(unittest.TestCase):
     def tearDown(self):
         for d in Path(self.tmp.name).iterdir():
             console.stop(d)
+        subprocess.run(["tmux", "kill-session", "-t", monitor.name()], capture_output=True)   # a test board's monitor
         console.COMMAND = self._command
         os.environ.pop("COLONY_CONSOLE_CMD", None)
         os.environ.pop("COLONY_BOARD_HOME", None)
@@ -222,6 +223,9 @@ class ConsoleTest(BoardBase):
         port = self.serve()
         s, head = self.handshake(port, f"http://127.0.0.1:{port}", console.token())
         self.assertTrue(head.startswith("HTTP/1.1 101"), "WebKit, so every iPhone browser, refuses anything else")
+        s.settimeout(5)
+        s.recv(65536)                       # tmux's first screen: attached, so what is typed reaches the session
+        time.sleep(0.3)
         msg = json.dumps({"i": "hello board\r"}).encode()
         mask = os.urandom(4)
         s.sendall(bytes([0x81, 0x80 | len(msg)]) + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(msg)))
@@ -237,6 +241,11 @@ class ConsoleTest(BoardBase):
         time.sleep(0.5)
         self.assertTrue(console.live(self.root), "closing the browser detaches; the session keeps running")
         self.assertIn("sdot idle", board.sidebar(board.registry(), 0))
+        history = urllib.request.urlopen(f"http://127.0.0.1:{port}/console/text?p=0").read().decode()
+        self.assertIn("hello board", history, "the session's history as plain text, to scroll and copy on a phone")
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=console").read().decode()
+        self.assertIn("Scroll &amp; copy", page)
+        self.assertNotIn("data-k='ctrlc'", page, "on a phone Ctrl-C quits Claude Code; it doesn't copy")
 
 
 class GlanceTest(BoardBase):

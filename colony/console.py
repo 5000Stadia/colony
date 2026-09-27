@@ -188,14 +188,16 @@ def bridge(sock, root, name=None, label=None):
 PAGE = """
 <div class='console-bar'><span class='muted'>{label} in <code>{path}</code> · session <code>{name}</code>
  (also reachable with <code>tmux attach -t {name}</code>)</span>
+ <button class='quiet touch-only' id='fullscreen'>Full screen</button>
  <form method='post' action='/console/stop' onsubmit="return confirm('End this project\\'s session?')">
  <input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=console'>
  <button class='quiet'>End session</button></form></div>
 <div class='keys' aria-label='Keys a phone keyboard lacks'>
- <button data-k='esc'>Esc</button><button data-k='tab'>Tab</button><button data-k='up'>↑</button>
- <button data-k='down'>↓</button><button data-k='left'>←</button><button data-k='right'>→</button>
- <button data-k='enter'>Enter</button><button data-k='ctrlc'>Ctrl-C</button></div>
+ <button class='exit' id='exit'>Exit</button><button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>
+ <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-k='left'>←</button><button data-k='right'>→</button>
+ <button class='copy' id='history'>Scroll &amp; copy</button></div>
 <div id='term'></div>
+<pre id='hist' hidden></pre>
 <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css'>
 <script src='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js'></script>
 <script src='https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js'></script>
@@ -209,6 +211,7 @@ fit.fit();
 // reconnect by itself, and reload the page if that keeps failing. The session runs on regardless.
 let ws, tries = 0;
 const send = (m) => ws && ws.readyState === 1 && ws.send(JSON.stringify(m));
+const refit = () => {{ fit.fit(); send({{r: [term.cols, term.rows]}}); }};
 function connect() {{
   ws = new WebSocket(`ws://${{location.host}}/console/ws?p={pid}&t={token}`);
   ws.binaryType = 'arraybuffer';
@@ -226,11 +229,27 @@ document.addEventListener('visibilitychange', () => {{
 }});
 term.onData((d) => send({{i: d}}));
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
-const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', left: '\\x1b[D', right: '\\x1b[C',
-              enter: '\\r', ctrlc: '\\x03'}};
-document.querySelectorAll('.keys button').forEach((b) => b.addEventListener('click', (ev) => {{
+const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', left: '\\x1b[D', right: '\\x1b[C'}};
+document.querySelectorAll('.keys button[data-k]').forEach((b) => b.addEventListener('click', (ev) => {{
   ev.preventDefault(); send({{i: KEYS[b.dataset.k]}});
 }}));
-window.addEventListener('resize', () => {{ fit.fit(); send({{r: [term.cols, term.rows]}}); }});
+// On a phone the console takes the whole screen: the terminal, the keys, a way out.
+const touch = matchMedia('(pointer: coarse)').matches;
+const focus = (on) => {{ document.body.classList.toggle('focus', on); setTimeout(refit, 50); }};
+if (touch && {focus}) focus(true);
+document.getElementById('fullscreen').addEventListener('click', () => focus(true));
+document.getElementById('exit').addEventListener('click', () => {{
+  if ('{exit}') location.href = '{exit}'; else focus(false);
+}});
+// The terminal can't scroll back or select well on a phone: the session's history as plain text can.
+const hist = document.getElementById('hist'), histBtn = document.getElementById('history');
+histBtn.addEventListener('click', async () => {{
+  if (!hist.hidden) {{ hist.hidden = true; histBtn.textContent = 'Scroll & copy'; return term.focus(); }}
+  const r = await fetch('/console/text?p={pid}', {{cache: 'no-store'}});
+  hist.textContent = r.ok ? await r.text() : '(could not read the session)';
+  hist.hidden = false; histBtn.textContent = 'Live'; hist.scrollTop = hist.scrollHeight;
+}});
+window.addEventListener('resize', refit);
+if (window.visualViewport) visualViewport.addEventListener('resize', refit);
 </script>
 """
