@@ -741,6 +741,15 @@ def cmd_posture(a):
     return 0
 
 
+def cmd_ready(a):
+    """Tell the person, in plain words, what's ready for their OK and how to check it."""
+    from . import board
+    root = board.root_of()
+    board.mark_ready(root, a.item, a.what, a.check or "")
+    print(f"{a.item}: the person will see it ready for their OK")
+    return 0
+
+
 def cmd_remove(a):
     from . import board
     board.remove_project(_project(a.name))
@@ -824,6 +833,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_helm)
     p = sub.add_parser("posture", help="the monitor's stance toward each project: helm, direction, focus")
     p.add_argument("name", nargs="?"); p.add_argument("--direction"); p.set_defaults(fn=cmd_posture)
+    p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
+    p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")

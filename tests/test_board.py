@@ -372,7 +372,7 @@ class MonitorTest(BoardBase):
         w = monitor.Watcher(quiet=0)
         w.tick()
         self.assertEqual(len(sent), 1)
-        self.assertIn("has R2 to verify", sent[0])
+        self.assertIn("has R2 ready for your OK", sent[0])
         self.assertIn("asked you: Which format", sent[0])
         monitor.Watcher(quiet=0).tick()                                # the board restarted
         self.assertEqual(len(sent), 1, "nothing is announced twice")
@@ -757,7 +757,7 @@ class NeedsYouTest(BoardBase):
             self.state["state"] = "needs you"
             html = board.needs_you(board.registry())
             for want in ("Keep the old export?", "Do you want to make this edit", ">Yes, and don&#x27;t ask again<",
-                         "to verify", "water log"):
+                         "ready for your OK", "water log"):
                 self.assertIn(want, html)
             self.post(port, "/choose", p=0, option="Yes, and don't ask again", back="/monitor")
             self.assertEqual(self.pressed, [["Down", "Enter"]], "the button picks its own option")
@@ -770,7 +770,7 @@ class NeedsYouTest(BoardBase):
             own = board.render(board.registry(), 0, "")
             self.assertEqual(own.count("class='need'"), board.needs_you(board.registry()).count("class='need'"),
                              "the project's own Waiting on you and Needs you show the same things")
-            self.assertIn("to verify", own)
+            self.assertIn("ready for your OK", own)
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
         finally:
@@ -917,6 +917,36 @@ class AskTest(BoardBase):
         self.assertEqual(board.asks(self.root), [], "answering in the console clears it")
         self.hook("turn", payload=self.transcript(("user", "go"), ("assistant", "Done; all tests pass. See `x?y` and https://a.b/?q")))
         self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
+
+
+class ReadyTest(BoardBase):
+    def test_what_is_ready_reads_as_a_plain_request_and_approving_tells_the_agent(self):
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 Water log (spec row 5; built) — design/specs/5-log.md"))
+        html_ = "".join(board.waiting_on(0, self.root, "/"))
+        self.assertIn("Water log", html_)
+        self.assertNotIn("spec row", html_, "without the agent's words, at least not its working notes")
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        run("ready", "R2", "You can log each watering and see when each plant is due.", "--check", "Water a plant in the app, then look at its page.")
+        html_ = "".join(board.waiting_on(0, self.root, "/"))
+        self.assertIn("see when each plant is due", html_)
+        self.assertIn("Water a plant in the app", html_)
+        self.assertIn(">Approve<", html_)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        post = lambda **f: urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/approve", data=urllib.parse.urlencode(f).encode()))
+        try:
+            post(p=0, item="R2", verdict="not-yet", text="the dates are in the wrong format")
+            self.assertIn("Not yet, on R2: the dates", board.notes(self.root)[-1]["text"])
+            self.assertEqual(len(board.moments(self.root)), 1, "not yet: still waiting")
+            post(p=0, item="R2", text="")
+            self.assertIn("The person approved R2", board.notes(self.root)[-1]["text"])
+            self.assertEqual(board.moments(self.root), [], "approved: it's off the list at once")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
 
 
 class RemoveTest(BoardBase):

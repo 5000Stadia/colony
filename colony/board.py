@@ -36,7 +36,9 @@ person follows and steers them all from one board, and the projects can write to
 
 - The plan is `ROADMAP.md`: milestones as `## M1 — name`, items as `- [ ] R1 text` (`[~]` in progress,
   `[?]` built but waiting to be checked or accepted, `[x]` done). Keep it current as you work, and commit
-  each finished piece with a clear message.
+  each finished piece with a clear message. When you mark an item `[?]`, tell the person in plain words
+  what's ready and how they can see it for themselves: `colony ready R4 "what's ready" --check "how to
+  check"`. They approve it or say what's wrong, and it reaches you as a note.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
   `colony noted ID "what you did"`. `colony notes` lists any still open.
@@ -339,6 +341,27 @@ def record_ask(root, key, text):
 def answer_asks(root, how):
     for a in asks(root):
         append(root, "asks.jsonl", {"type": "answered", "of": a["id"], "at": now(), "how": how})
+
+
+# ---------------------------------------------------------------- what's ready for the person's OK, in their words
+
+def ready_notes(root):
+    """What the agent told the person about each item it marked ready: what's ready, and how to check it."""
+    out = {}
+    for e in read(root, "ready.jsonl"):
+        out[e["item"]] = e
+    return out
+
+
+def mark_ready(root, item, what, check=""):
+    append(root, "ready.jsonl", {"type": "ready", "item": item, "at": now(), "what": what.strip(), "check": check.strip()})
+
+
+def plain(text):
+    """A roadmap line as a person reads it: without the file it points at or the bracketed working notes."""
+    text = re.sub(r"\s+[—–-]\s+\S+\.(md|txt|py|html)\b.*$", "", text)
+    text = re.sub(r"\s*\([^)]*\)", "", text)
+    return text.strip()
 
 
 def gates(root):
@@ -1204,8 +1227,11 @@ def waiting_items(p, snap=None):
             out.append({"kind": "screen", "key": key, "lines": snap["lines"],
                         "summary": "needs you in its console: " + " / ".join(snap["lines"][-2:])})
     out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]} for a in asks(p)]
-    out += [{"kind": "verify", "key": "verify:" + it["id"], "item": it, "summary": f"has {it['id']} to verify: {it['text']}"}
-            for it in items(roadmap(p)).values() if it["state"] == "verify"]
+    told = ready_notes(p)
+    for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
+        r = told.get(it["id"], {})
+        it = dict(it, what=r.get("what") or plain(it["text"]), check=r.get("check", ""))
+        out.append({"kind": "verify", "key": "verify:" + it["id"], "item": it, "summary": f"has {it['id']} ready for your OK: {it['what']}"})
     cleared = dismissed(p)
     gone = cleared - {w["key"] for w in out}
     for key in gone:                     # its item has gone: if the same thing comes back later, it shows again
@@ -1274,8 +1300,14 @@ def waiting_on(pid, p, back, label=True):
                  f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
         who = lambda what: f"<div class='who'>{clear}<span class='kind'>{e(p.name) + ' · ' if label else ''}{what}</span></div>"
         verify = [x["item"] for x in group if x["kind"] == "verify"]
-        to_verify = ("<div class='toverify'><div class='muted'>To verify:</div><ul>"
-                     + "".join(f"<li><b>{e(it['id'])}</b> {e(it['text'])}</li>" for it in verify) + "</ul></div>") if verify else ""
+        def ready_row(it):
+            # a request for sign-off: what's ready, how to see it, and Approve or say what's wrong
+            return (f"<div class='ready'><div><span class='muted'>Ready for your OK:</span> {e(it['what'])}</div>"
+                    + (f"<div><span class='muted'>To check:</span> {e(it['check'])}</div>" if it.get("check") else "")
+                    + f"<form class='verdict' method='post' action='/approve'>{hidden}<input type='hidden' name='item' value='{e(it['id'])}'>"
+                    f"<button>Approve</button><input name='text' placeholder='or say what is wrong'>"
+                    f"<button class='quiet' name='verdict' value='not-yet'>Not yet</button></form></div>")
+        to_verify = "".join(ready_row(it) for it in verify)
         if w["kind"] == "gate":
             g = w["gate"]
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
@@ -1297,11 +1329,8 @@ def waiting_on(pid, p, back, label=True):
                         f"<div class='asktext'>{e(a['text'])}</div>{to_verify}"
                         f"<form class='add' method='post' action='/reply'>{hidden}"
                         f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
-        else:                                         # items to verify, with no question beside them
-            ids = ",".join(it["id"] for it in verify)
-            rows.append(f"<div class='need'>{who(str(len(verify)) + ' to verify')}{to_verify}"
-                        f"<form class='add' method='post' action='/verified'>{hidden}<input type='hidden' name='ids' value='{e(ids)}'>"
-                        f"<textarea name='text' placeholder='Checked them? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
+        else:                                         # items ready for the person's OK, with no question beside them
+            rows.append(f"<div class='need'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}</div>")
     return rows
 
 
@@ -1688,8 +1717,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/clear" and form.get("key"):
             for key in form["key"].split(","):                # a moment may hold several items
                 clear_waiting(root, key)
-        elif path == "/verified" and text and form.get("ids"):
-            add_note(root, None, f"On {', '.join(form['ids'].split(','))} (built, waiting to be verified): {text}")
+        elif path == "/approve" and form.get("item"):
+            iid = form["item"]
+            if form.get("verdict") == "not-yet":
+                if text:
+                    add_note(root, {"item": iid}, f"Not yet, on {iid}: {text}")
+            else:
+                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.")
+                append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
             console.type_into(console.session_name(root), text)
             answer_asks(root, "from the board")
@@ -1819,7 +1854,7 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
 .since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
   pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
-.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .toverify ul { margin:4px 0 6px; padding-left:18px }
+.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
