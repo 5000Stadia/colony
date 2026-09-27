@@ -277,6 +277,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(act["line"], "Waiting for 4 background agents to finish")
         self.assertEqual([(a["name"], a["current"]) for a in act["agents"]], [("main", True), ("general-purpose", False)])
         self.assertEqual(act["agents"][1]["detail"], "7m 0s · ↓ 138.2k tokens")
+        self.assertEqual(claude.classify("* Waiting for 4 background agents to finish\n❯ "), "working", "its agents are at work")
 
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)

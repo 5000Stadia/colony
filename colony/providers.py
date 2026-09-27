@@ -174,7 +174,8 @@ class ClaudeCode:
         is cut short, so its spinner counts too: "✻ Calculating…" while working, "✻ Worked for 3s" once done."""
         import re
         low = screen.lower()
-        if "esc to interrupt" in low or re.search(r"^\s*[✻✶✳✢✽·*+] \S[^\n]*?…", screen, re.M):
+        if "esc to interrupt" in low or re.search(r"^\s*[✻✶✳✢✽·*+] \S[^\n]*?…", screen, re.M) \
+                or re.search(r"waiting for \d+ background", low):     # its background agents are still at work
             return "working"
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"
