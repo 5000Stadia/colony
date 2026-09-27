@@ -320,13 +320,29 @@ class MonitorTest(BoardBase):
         sent = []
         console.type_into = lambda name, text: sent.append(text)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        monitor.helm(True)
         w = monitor.Watcher(quiet=0)
         for _ in range(6):
             w.tick()
         self.assertEqual(len(sent), 2, "busy work wakes nothing; needs-you and finished each wake it once")
         self.assertIn("plants needs you", sent[0])
         self.assertIn("plants finished a turn", sent[1])
-        self.assertIn("helm is off", sent[0])
+        self.assertIn("You hold the helm", sent[0])
+
+    def test_where_it_doesnt_hold_the_helm_the_monitor_sleeps_and_handed_it_hears_whats_waiting(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        sent = []
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        w = monitor.Watcher(quiet=0)
+        w.tick()
+        w.tick()
+        self.assertEqual(sent, [], "helm off: no wake, no tokens")
+        monitor.set_posture(self.root, helm=True)
+        w.tick()
+        self.assertEqual(len(sent), 1)
+        self.assertIn("asked you: Which format", sent[0], "handed the helm, it hears what's already waiting")
 
     def test_events_wait_until_the_monitor_is_free_and_a_new_gate_wakes_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
@@ -352,6 +368,7 @@ class MonitorTest(BoardBase):
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
         board.record_ask(self.root, "t1", "Which format do you want?")
+        monitor.helm(True)
         w = monitor.Watcher(quiet=0)
         w.tick()
         self.assertEqual(len(sent), 1)
@@ -385,8 +402,6 @@ class MonitorTest(BoardBase):
         self.assertIn("plants: helm on", posture)
         self.assertIn("never push", posture)
         self.assertIn("M1 — v1: it works for me", posture, "each project's current focus, from its roadmap")
-        note = monitor.helm_note([self.root, shop])
-        self.assertIn("You hold the helm for plants", note)
         run("decided", "plants", "Approved the formatter's permission prompt: routine, within direction.")
         self.assertIn("formatter", monitor.decisions(self.root)[0]["text"])
         saved = (console.ensure, console.snapshot)

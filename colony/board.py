@@ -990,7 +990,7 @@ def monitor_page(reg, view="overview"):
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form></div>"
             f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div>"
-            f"<p class='muted'>{'Board-wide, it holds the helm: it settles routine questions within each project' + chr(39) + 's direction.' if on else 'Board-wide, it relays and asks; you decide.'}"
+            f"<p class='muted'>{'Board-wide, it holds the helm: it settles routine questions within each project' + chr(39) + 's direction.' if on else 'Board-wide it sleeps: it is woken only for projects whose helm it holds, and costs nothing until you talk to it.'}"
             f" Each project can differ, on the Helm tab.</p></header>")
     plist = projects(reg)
     if view == "console":

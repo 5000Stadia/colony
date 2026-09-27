@@ -1,5 +1,8 @@
 """The monitor: one Claude Code session that acts for the person across all their projects.
 
+It is woken only for the projects whose helm it holds; elsewhere it sleeps, and costs nothing until the
+person talks to it, since the board already shows them everything that needs them.
+
 PROVIDER: the monitor is Claude Code whatever the projects use: its role is written to CLAUDE.md, it is
 reached from the Claude app, and its console is labelled so. To let another provider run it, add a
 "monitor provider" setting and have ensure() go through providers (wire the role into that CLI's
@@ -25,10 +28,11 @@ ROLE = """# You are `monitor · every project on this board · until the person 
 You act for the person across their projects. They reach you from the Claude app or the board; each
 project also has its own session they can talk to directly.
 
-- **Events wake you.** A message starting `[colony]` means a project changed: it finished a turn, or
-  something now waits on the person (a gate it opened, a choice on its console's screen, a question it
-  asked, an item to verify). Each is announced once, and each is also on the board's Needs you. Tell
-  the person briefly what happened and what, if anything, needs them.
+- **Events wake you, only where you hold the helm.** A message starting `[colony]` means one of those
+  projects changed: it finished a turn, or something now waits (a gate it opened, a choice on its
+  console's screen, a question it asked, an item to verify). Each is announced once. Settle what's
+  routine within that project's direction and tell the person briefly; bring the rest back. Where the
+  helm is off you aren't woken: the board shows the person those things itself.
   Don't poll or watch; you are woken when something matters.
 - **Relay cleanly.** When the person asks for something in a project, turn it into a clear, complete
   request and send it with `colony tell NAME "..."`. Look first with `colony peek NAME` if you need
@@ -127,17 +131,6 @@ def decisions(root=None, n=20):
     return [r for r in rows if root is None or r["project"] == str(root)][-n:][::-1]
 
 
-def helm_note(projects):
-    """What the monitor is told about its helm when woken: one line if it's the same everywhere."""
-    on = {p.name: helm_for(p) for p in projects}
-    if on and all(on.values()):
-        return HELM_ON_NOTE
-    if not any(on.values()):
-        return HELM_OFF_NOTE
-    return ("You hold the helm for " + ", ".join(n for n, v in on.items() if v) + "; for "
-            + ", ".join(n for n, v in on.items() if not v) + " relay and ask. `colony posture` has each one's direction.")
-
-
 def helm(value=None):
     path = board.home() / "helm"
     if value is not None:
@@ -183,6 +176,10 @@ class Watcher:
             # a question left while the board was down) is reported, not taken as where it always was.
             before, now = self.states.get(str(p), "off"), snap["state"]
             self.states[str(p)] = now
+            # It sleeps where it doesn't hold the helm: the board shows the person all of this for nothing,
+            # and waking it only to repeat it costs a turn. Handed the helm, it hears what's waiting there.
+            if not helm_for(p):
+                continue
             kind = WAKE.get((before, now))
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
@@ -232,7 +229,7 @@ class Watcher:
         self.mail()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
-            note = helm_note([p for p in board.projects() if p.exists()])
+            note = HELM_ON_NOTE
             console.type_into(name(), "[colony] " + " | ".join(self.pending) + f" ({note})")
             self.pending = []
 
