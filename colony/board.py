@@ -1067,6 +1067,9 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .peek pre { margin:6px 0 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; max-height:9em; overflow:hidden }
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
+.keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
+.keys button { flex:1 0 auto; min-width:44px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }
+@media (pointer: coarse) { .keys { display:flex } }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }

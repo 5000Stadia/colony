@@ -182,6 +182,10 @@ PAGE = """
  <form method='post' action='/console/stop' onsubmit="return confirm('End this project\\'s session?')">
  <input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=console'>
  <button class='quiet'>End session</button></form></div>
+<div class='keys' aria-label='Keys a phone keyboard lacks'>
+ <button data-k='esc'>Esc</button><button data-k='tab'>Tab</button><button data-k='up'>↑</button>
+ <button data-k='down'>↓</button><button data-k='left'>←</button><button data-k='right'>→</button>
+ <button data-k='enter'>Enter</button><button data-k='ctrlc'>Ctrl-C</button></div>
 <div id='term'></div>
 <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css'>
 <script src='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js'></script>
@@ -199,6 +203,12 @@ ws.onopen = () => {{ send({{r: [term.cols, term.rows]}}); term.focus(); }};
 ws.onmessage = (ev) => term.write(new Uint8Array(ev.data));
 ws.onclose = () => term.write('\\r\\n[disconnected: reload to reattach; the session keeps running]\\r\\n');
 term.onData((d) => send({{i: d}}));
+// A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
+const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', left: '\\x1b[D', right: '\\x1b[C',
+              enter: '\\r', ctrlc: '\\x03'}};
+document.querySelectorAll('.keys button').forEach((b) => b.addEventListener('click', (ev) => {{
+  ev.preventDefault(); send({{i: KEYS[b.dataset.k]}});
+}}));
 window.addEventListener('resize', () => {{ fit.fit(); send({{r: [term.cols, term.rows]}}); }});
 </script>
 """

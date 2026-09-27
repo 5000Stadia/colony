@@ -470,6 +470,8 @@ class MessagingTest(BoardBase):
             port = httpd.server_address[1]
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=console").read().decode()
             self.assertIn("What should this agent message them about?", page)
+            self.assertIn("data-k='down'", page, "a phone can answer an on-screen choice")
+            self.assertIn("down: '\\x1b[B'", page)
             self.assertIn(">shop</option>", page)
             data = urllib.parse.urlencode({"p": 0, "to": 1, "text": "which CSV columns do you export?"}).encode()
             urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/message", data=data))
