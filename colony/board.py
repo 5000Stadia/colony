@@ -1350,10 +1350,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _send(self, code, body, cookie=None):
+    def _send(self, code, body):
         self.send_response(code)
-        if cookie:
-            self.send_header("Set-Cookie", cookie)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -1375,12 +1373,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if url.path == "/":
-            # a project opens on the tab last used, so switching projects keeps the person where they were
-            view = (q.get("view") or [""])[0]
-            if view in ("overview", "roadmap", "console"):
-                return self._send(200, render(reg, pid, view).encode(), cookie=f"colony_view={view}; Path=/; SameSite=Lax; Max-Age=31536000")
-            last = re.search(r"colony_view=(overview|roadmap|console)", self.headers.get("Cookie", ""))
-            return self._send(200, render(reg, pid, last.group(1) if last else "overview").encode())
+            view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
+            return self._send(200, render(reg, pid, view if view in ("overview", "roadmap", "console") else "overview").encode())
         if url.path == "/add":
             if (q.get("for") or ["project"])[0] == "project":
                 return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())

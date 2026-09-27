@@ -918,19 +918,16 @@ class AskTest(BoardBase):
         self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
 
 
-class TabMemoryTest(BoardBase):
-    def test_a_project_opens_on_the_tab_last_used(self):
+class TabTest(BoardBase):
+    def test_switching_to_a_project_starts_on_its_overview(self):
         board.track(self.root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         try:
-            r = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=roadmap")
-            cookie = r.headers["Set-Cookie"].split(";")[0]
-            page = urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/?p=0", headers={"Cookie": cookie})).read().decode()
-            self.assertIn("class='on' href='/?p=0&view=roadmap'", page, "a bare link opens the tab last used")
-            fresh = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
-            self.assertIn("class='on' href='/?p=0&view=overview'", fresh, "with nothing remembered, the Overview")
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=roadmap").read()
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
+            self.assertIn("class='on' href='/?p=0&view=overview'", page, "a project's chip opens its Overview")
         finally:
             httpd.shutdown()
             httpd.server_close()
