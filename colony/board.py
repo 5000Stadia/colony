@@ -878,7 +878,8 @@ def pin_add_page(reg, pid):
     comment = "<textarea name='comment' placeholder='Optional: a comment to the agent about it'></textarea>"
     title = "<input name='title' placeholder='Title (optional)'>"
     hidden = f"<input type='hidden' name='p' value='{pid}'>"
-    body = (f"<header><h1>Pin to {e(Path(root).name)}</h1><p class='muted'>A file in the project, a link, or an upload. "
+    body = (f"<header class='project'><div class='titlerow'><h1>Pin to {e(Path(root).name)}</h1>"
+            f"<a class='exitlink' href='/?p={pid}'>✕ Cancel</a></div><p class='muted'>A file in the project, a link, or an upload. "
             f"The agent hears of it on its next turn; a comment reaches it as a message.</p></header>"
             f"<h2>A file in the project</h2><div class='card'><form class='add pinform' method='post' action='/pin'>{hidden}"
             f"<input type='hidden' name='kind' value='file'><div class='chosen'><input name='target' id='pick' placeholder='No file chosen' readonly>"
@@ -1477,7 +1478,8 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .msgbox select, .options select { font:inherit; padding:4px 6px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .psettings summary { cursor:pointer; color:var(--accent); list-style:none; font-size:14px }
 .psettings summary::-webkit-details-marker { display:none } header.project { position:relative }
-.titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings { margin-left:auto }
+.titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings, .titlerow .exitlink { margin-left:auto }
+.exitlink { font-size:14px; text-decoration:none; white-space:nowrap }
 .psettings .panel { position:absolute; right:0; z-index:10; width:min(440px, calc(100vw - 32px)); padding:14px 16px;
   border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
