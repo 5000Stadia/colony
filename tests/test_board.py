@@ -239,6 +239,9 @@ class GlanceTest(BoardBase):
         self.assertEqual(claude.classify("✻ Reading files… (esc to interrupt)"), "working")
         self.assertEqual(claude.classify("Do you want to make this edit?\n❯ 1. Yes"), "needs you")
         self.assertEqual(claude.classify("│ > │"), "idle")
+        self.assertEqual(claude.classify("✻ Calculating… (thinking with high effort)\n❯\n⏵⏵ bypass permissions on · esc…"),
+                         "working", "a phone-width window cuts the status line; the spinner still says working")
+        self.assertEqual(claude.classify("✻ Worked for 3s · done 10:58 PM\n❯ "), "idle")
 
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)

@@ -102,9 +102,11 @@ class ClaudeCode:
 
     def classify(self, screen):
         """Claude Code shows "esc to interrupt" while it works and a numbered choice when it asks permission;
-        anything else is waiting for the person to type."""
+        anything else is waiting for the person to type. On a narrow window (a phone attached) the status line
+        is cut short, so its spinner counts too: "✻ Calculating…" while working, "✻ Worked for 3s" once done."""
+        import re
         low = screen.lower()
-        if "esc to interrupt" in low:
+        if "esc to interrupt" in low or re.search(r"^\s*[✻✶✳✢✽·*+] \S[^\n]*?…", screen, re.M):
             return "working"
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"
