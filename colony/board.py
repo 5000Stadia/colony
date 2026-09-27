@@ -1240,6 +1240,8 @@ body.focus main { padding:0; max-width:none } body.focus #term { height:calc(100
 body.focus .keys { position:fixed; left:0; right:0; bottom:0; z-index:30; margin:0; padding:6px; gap:5px; flex-wrap:nowrap;
   overflow-x:auto; background:var(--card); border-top:1px solid var(--line) }
 body.focus .keys .exit { display:block; background:var(--accent); color:var(--card) }
+.keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys .copy { display:none }
+body.copying .keys .selectall, body.copying .keys .exit { display:block }
 #term { touch-action:none } #hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;
   -webkit-user-select:text; user-select:text; -webkit-overflow-scrolling:touch }
