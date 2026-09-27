@@ -545,18 +545,6 @@ def render(reg, pid, view="overview"):
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
                f"<pre id='peek-lines-{pid}'>{e(chr(10).join(snap['lines']))}</pre></a>")
-    # since you were last here
-    s = since(root, reg["seen"].get(str(root)))
-    out.append("<h2>Since you were last here</h2><div class='card'>")
-    if s["first"]:
-        out.append("<p class='muted'>First visit: everything below is the current state.</p>")
-    lines = [f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>" for i, a, b, t in s["moved"]]
-    lines += [f"<li>gate opened: {e(g['question'])}</li>" for g in s["opened"]]
-    lines += [f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>" for n in s["replies"]]
-    lines += [f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>" for h, t, subj in s["commits"][:15]]
-    out.append(f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
-    out.append(f"<form method='post' action='/seen'><input type='hidden' name='p' value='{pid}'>"
-               f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form></div>")
     # waiting on you
     open_gates = [g for g in gs if not g["answer"]]
     out.append(f"<h2>Waiting on you ({len(open_gates)})</h2>")
@@ -569,6 +557,19 @@ def render(reg, pid, view="overview"):
                    f"<button>Answer</button></form></div>")
     if not open_gates:
         out.append("<div class='card muted'>Nothing is waiting on you.</div>")
+    # since you were last here: "I'm caught up" at both ends of the list, and only when there is a list
+    s = since(root, reg["seen"].get(str(root)))
+    out.append("<h2>Since you were last here</h2><div class='card'>")
+    if s["first"]:
+        out.append("<p class='muted'>First visit: everything below is the current state.</p>")
+    lines = [f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>" for i, a, b, t in s["moved"]]
+    lines += [f"<li>gate opened: {e(g['question'])}</li>" for g in s["opened"]]
+    lines += [f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>" for n in s["replies"]]
+    lines += [f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>" for h, t, subj in s["commits"][:15]]
+    caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
+                 f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
+    out.append(caught_up + f"<ul>{''.join(lines)}</ul>" + caught_up if lines else "<p class='muted'>Nothing has changed.</p>")
+    out.append("</div>")
     # the person's own notes the agent has not acted on yet, wherever they were left
     its_now = items(road)
     mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
@@ -1173,7 +1174,7 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
-.need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
+.caughtup { margin:4px 0 8px } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
 .keys button { flex:1 0 auto; min-width:44px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }

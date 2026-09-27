@@ -110,6 +110,16 @@ class BoardTest(BoardBase):
         self.assertTrue((fresh / "ROADMAP.md").exists())
         self.assertEqual(board.notes(fresh), [], "a new project has nothing to bring over")
 
+    def test_what_waits_on_the_person_comes_first_and_caught_up_sits_at_both_ends_of_a_list(self):
+        board.track(self.root)
+        page = board.render(board.registry(), 0, "")
+        self.assertLess(page.index("Waiting on you"), page.index("Since you were last here"))
+        self.assertEqual(page.count("I'm caught up"), 2, "top and bottom of the list")
+        board.save_registry(dict(board.registry(), seen={str(self.root): {"at": board.now(), "head": self.git("rev-parse", "HEAD").strip()}}))
+        page = board.render(board.registry(), 0, "")
+        self.assertIn("Nothing has changed.", page)
+        self.assertNotIn("I'm caught up", page, "no list, no button")
+
     def test_notes_reach_the_agent_when_they_are_relevant(self):
         board.track(self.root)
         board.add_note(self.root, {"commit": "abc1234"}, "the log format is wrong")
