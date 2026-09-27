@@ -579,21 +579,10 @@ def render(reg, pid, view="overview"):
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
                f"<pre id='peek-lines-{pid}'>{e(chr(10).join(snap['lines']))}</pre></a>")
-    # waiting on you: gates, and the latest turn that asked something in the console
-    open_gates = [g for g in gs if not g["answer"]]
-    open_asks = asks(root)
-    out.append(f"<h2>Waiting on you ({len(open_gates) + len(open_asks)})</h2>")
-    for a in open_asks:
-        out.append(ask_card(pid, a, f"/?p={pid}"))
-    for g in open_gates:
-        item = f" · {e(g['item'])}" if g.get("item") else ""
-        out.append(f"<div class='card gate'><b>{e(g['question'])}</b><div class='who'>{e(g['at'][:10])}{item}</div>"
-                   f"<p>{e(g.get('why') or '')}</p><form class='add' method='post' action='/answer'>"
-                   f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(g['id'])}'>"
-                   f"<textarea name='text' placeholder='Your answer reaches the agent next time it works'></textarea>"
-                   f"<button>Answer</button></form></div>")
-    if not open_gates and not open_asks:
-        out.append("<div class='card muted'>Nothing is waiting on you.</div>")
+    # waiting on you: the same as this project's part of Needs you
+    waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
+    out.append(f"<h2>Waiting on you ({len(waiting)})</h2><div class='card'>"
+               + ("".join(waiting) if waiting else "<p class='muted'>Nothing is waiting on you.</p>") + "</div>")
     # since you were last here: "I'm caught up" at both ends of the list, and only when there is a list
     s = since(root, reg["seen"].get(str(root)))
     out.append("<h2>Since you were last here</h2><div class='card'>")
@@ -835,54 +824,47 @@ def folder_browser(reg, current, purpose):
     return shell(reg, -2, "".join(out) + "</div>")
 
 
-def ask_card(pid, a, back):
-    """A turn that asked the person something: the whole turn, and a reply typed into its console."""
-    return (f"<div class='card gate ask'><div class='who'>asked in its console · {e(a['at'][:16].replace('T', ' '))}</div>"
-            f"<div class='asktext'>{e(a['text'])}</div><form class='add' method='post' action='/reply'>"
-            f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>"
-            f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
+def waiting_on(pid, p, back, label=True):
+    """What one project is waiting on the person for, each answerable where it stands: a gate (the answer
+    reaches the agent as a note), a choice on its console's screen (a button per option), a turn that asked
+    the person something (the reply is typed into its console), and an item waiting to be checked (a note
+    on the item). The project's own page and Needs you both show exactly this."""
+    if not p.exists():
+        return []
+    rows = []
+    who = lambda what: f"<div class='who'>{e(p.name) + ' · ' if label else ''}{what}</div>"
+    hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
+    for g in (g for g in gates(p) if not g["answer"]):
+        rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
+                    f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
+                    + f"<form class='add' method='post' action='/answer'>{hidden}<input type='hidden' name='gate' value='{e(g['id'])}'>"
+                    f"<textarea name='text' placeholder='Your answer'></textarea><button>Send</button></form></div>")
+    if console.snapshot(p, lines=4)["state"] == "needs you":
+        found = providers.of(p).choice(console.screen(console.session_name(p)))
+        if found:
+            question, options, _ = found
+            rows.append(f"<div class='need'>{who('asking in its console')}"
+                        + "".join(f"<div>{e(q)}</div>" for q in question)
+                        + "<div class='choices'>" + "".join(
+                            f"<form method='post' action='/choose'>{hidden}<input type='hidden' name='option' value='{e(o)}'>"
+                            f"<button class='quiet'>{e(o)}</button></form>" for o in options) + "</div></div>")
+    for a in asks(p):
+        rows.append(f"<div class='need'>{who('asked in its console · ' + e(a['at'][:16].replace('T', ' ')))}"
+                    f"<div class='asktext'>{e(a['text'])}</div>"
+                    f"<form class='add' method='post' action='/reply'>{hidden}"
+                    f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
+    for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
+        rows.append(f"<div class='need'>{who('to verify')}<b>{e(it['id'])}</b> {e(it['text'])}"
+                    f"<form class='add' method='post' action='/note'>{hidden}<input type='hidden' name='kind' value='item'>"
+                    f"<input type='hidden' name='ref' value='{e(it['id'])}'>"
+                    f"<textarea name='text' placeholder='Checked it? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
+    return rows
 
 
 def needs_you(reg):
-    """Everything across the projects that is waiting on the person, each answerable where it stands: a gate
-    (the answer reaches the agent as a note), a choice on a console's screen (a button per option), a turn
-    that asked the person something (the reply is typed into its console), and an item waiting to be
-    checked (a note on the item)."""
-    rows = []
-    hidden = lambda pid, back="/monitor": (f"<input type='hidden' name='p' value='{pid}'>"
-                                           f"<input type='hidden' name='back' value='{back}'>")
-    for pid, p in enumerate(projects(reg)):
-        if not p.exists():
-            continue
-        name = e(p.name)
-        for g in (g for g in gates(p) if not g["answer"]):
-            rows.append(f"<div class='need'><div class='who'>{name} · gate{' on ' + e(g['item']) if g.get('item') else ''}</div>"
-                        f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
-                        + f"<form class='add' method='post' action='/answer'>{hidden(pid)}<input type='hidden' name='gate' value='{e(g['id'])}'>"
-                        f"<textarea name='text' placeholder='Your answer'></textarea><button>Send</button></form></div>")
-        snap = console.snapshot(p, lines=4)
-        if snap["state"] == "needs you":
-            found = providers.of(p).choice(console.screen(console.session_name(p)))
-            if found:
-                question, options, _ = found
-                rows.append(f"<div class='need'><div class='who'>{name} · asking in its console</div>"
-                            + "".join(f"<div>{e(q)}</div>" for q in question)
-                            + "<div class='choices'>" + "".join(
-                                f"<form method='post' action='/choose'>{hidden(pid)}<input type='hidden' name='option' value='{e(o)}'>"
-                                f"<button class='quiet'>{e(o)}</button></form>" for o in options) + "</div></div>")
-        for a in asks(p):
-            rows.append(f"<div class='need'><div class='who'>{name} · asked in its console</div>"
-                        f"<div class='asktext'>{e(a['text'])}</div>"
-                        f"<form class='add' method='post' action='/reply'>{hidden(pid)}"
-                        f"<textarea name='text' placeholder='Reply to {name}'></textarea><button>Send</button></form></div>")
-        for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
-            rows.append(f"<div class='need'><div class='who'>{name} · to verify</div><b>{e(it['id'])}</b> {e(it['text'])}"
-                        f"<form class='add' method='post' action='/note'>{hidden(pid)}<input type='hidden' name='kind' value='item'>"
-                        f"<input type='hidden' name='ref' value='{e(it['id'])}'>"
-                        f"<textarea name='text' placeholder='Checked it? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
-    if not rows:
-        return "<p class='muted'>Nothing is waiting on you.</p>"
-    return "".join(rows)
+    """Needs you: what every project is waiting on the person for, in one place."""
+    rows = [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
+    return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
 def settings_page(reg):

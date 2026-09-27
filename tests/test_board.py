@@ -661,6 +661,10 @@ class NeedsYouTest(BoardBase):
             self.post(port, "/reply", p=0, text="CSV please", back="/monitor")
             self.assertEqual(self.typed, ["CSV please"], "the reply is typed into its console")
             self.assertNotIn("asked in its console", board.needs_you(board.registry()))
+            own = board.render(board.registry(), 0, "")
+            self.assertEqual(own.count("class='need'"), board.needs_you(board.registry()).count("class='need'"),
+                             "the project's own Waiting on you and Needs you show the same things")
+            self.assertIn("to verify", own)
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
         finally:
