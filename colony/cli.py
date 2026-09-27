@@ -553,10 +553,9 @@ def cmd_projects(a):
     from . import board, console, mail
     for p in board.projects():
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
-        waiting = sum(1 for g in board.gates(p) if not g["answer"]) if p.exists() else 0
-        last = snap["lines"][-1] if snap["lines"] else ""
+        waiting = len(board.waiting_items(p))
         goal = board.roadmap(p)["goal"] if p.exists() else ""
-        print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' gate(s) open' if waiting else '':16} {goal[:90]}")
+        print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' waiting on you' if waiting else '':16} {goal[:90]}")
     return 0
 
 

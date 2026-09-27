@@ -502,9 +502,9 @@ def sidebar(reg, pid):
             f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>monitor</span>"
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
     for i, p in enumerate(plist):
-        waiting = sum(1 for g in gates(p) if not g["answer"]) if p.exists() else 0
+        waiting = len(waiting_items(p))
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
-        badge = (f"<span class='badge gate'>{waiting}</span>" if waiting else "") + \
+        badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>" + \
                 (f"<span class='badge new'>{new} new</span>" if new else "")
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "off", "lines": []}
         last = snap["lines"][-1] if snap["lines"] else ""
@@ -532,6 +532,8 @@ async function poll() {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
       if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
+      const badge = document.getElementById('badge-' + i);
+      if (badge) { badge.hidden = !s.waiting; badge.textContent = s.waiting; }
       const peek = document.getElementById('peek-' + i);
       if (peek) { peek.hidden = s.state === 'off';
         document.getElementById('peek-state-' + i).textContent = s.state;
@@ -824,40 +826,72 @@ def folder_browser(reg, current, purpose):
     return shell(reg, -2, "".join(out) + "</div>")
 
 
-def waiting_on(pid, p, back, label=True):
-    """What one project is waiting on the person for, each answerable where it stands: a gate (the answer
-    reaches the agent as a note), a choice on its console's screen (a button per option), a turn that asked
-    the person something (the reply is typed into its console), and an item waiting to be checked (a note
-    on the item). The project's own page and Needs you both show exactly this."""
+def waiting_items(p, snap=None):
+    """Everything a project is waiting on the person for. The one definition: Needs you, the project's
+    Waiting on you, the sidebar's count, `colony projects` and the monitor's wake-ups all read this.
+      gate    a decision the agent put to the person (`colony gate`)
+      choice  an on-screen choice in its console, such as a permission or trust question
+      screen  its console needs the person but the choice can't be read (answer it in the console)
+      ask     a turn that asked the person something in the console
+      verify  a roadmap item built but waiting to be checked or accepted
+    Each has a key that stays the same while it waits, so it is announced once."""
     if not p.exists():
         return []
-    rows = []
-    who = lambda what: f"<div class='who'>{e(p.name) + ' · ' if label else ''}{what}</div>"
-    hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
-    for g in (g for g in gates(p) if not g["answer"]):
-        rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
-                    f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
-                    + f"<form class='add' method='post' action='/answer'>{hidden}<input type='hidden' name='gate' value='{e(g['id'])}'>"
-                    f"<textarea name='text' placeholder='Your answer'></textarea><button>Send</button></form></div>")
-    if console.snapshot(p, lines=4)["state"] == "needs you":
+    out = [{"kind": "gate", "key": "gate:" + g["id"], "gate": g, "summary": f"opened a gate: {g['question']}"}
+           for g in gates(p) if not g["answer"]]
+    snap = snap or console.snapshot(p, lines=4)
+    if snap["state"] == "needs you":
         found = providers.of(p).choice(console.screen(console.session_name(p)))
         if found:
             question, options, _ = found
+            key = "choice:" + hashlib.sha1("\n".join(question + options).encode()).hexdigest()[:10]
+            out.append({"kind": "choice", "key": key, "question": question, "options": options,
+                        "summary": f"is asking in its console: {(question or [''])[-1]} ({' / '.join(options)})"})
+        else:
+            key = "screen:" + hashlib.sha1("\n".join(snap["lines"]).encode()).hexdigest()[:10]
+            out.append({"kind": "screen", "key": key, "lines": snap["lines"],
+                        "summary": "needs you in its console: " + " / ".join(snap["lines"][-2:])})
+    out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]} for a in asks(p)]
+    out += [{"kind": "verify", "key": "verify:" + it["id"], "item": it, "summary": f"has {it['id']} to verify: {it['text']}"}
+            for it in items(roadmap(p)).values() if it["state"] == "verify"]
+    return out
+
+
+def waiting_on(pid, p, back, label=True):
+    """The project's waiting items as the person answers them, where they stand: a gate's answer reaches the
+    agent as a note, a choice gets a button per option, a question gets a reply typed into the console, an
+    item to verify gets a note on the item."""
+    rows = []
+    who = lambda what: f"<div class='who'>{e(p.name) + ' · ' if label else ''}{what}</div>"
+    hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
+    for w in waiting_items(p):
+        if w["kind"] == "gate":
+            g = w["gate"]
+            rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
+                        f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
+                        + f"<form class='add' method='post' action='/answer'>{hidden}<input type='hidden' name='gate' value='{e(g['id'])}'>"
+                        f"<textarea name='text' placeholder='Your answer'></textarea><button>Send</button></form></div>")
+        elif w["kind"] == "choice":
             rows.append(f"<div class='need'>{who('asking in its console')}"
-                        + "".join(f"<div>{e(q)}</div>" for q in question)
+                        + "".join(f"<div>{e(q)}</div>" for q in w["question"])
                         + "<div class='choices'>" + "".join(
                             f"<form method='post' action='/choose'>{hidden}<input type='hidden' name='option' value='{e(o)}'>"
-                            f"<button class='quiet'>{e(o)}</button></form>" for o in options) + "</div></div>")
-    for a in asks(p):
-        rows.append(f"<div class='need'>{who('asked in its console · ' + e(a['at'][:16].replace('T', ' ')))}"
-                    f"<div class='asktext'>{e(a['text'])}</div>"
-                    f"<form class='add' method='post' action='/reply'>{hidden}"
-                    f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
-    for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
-        rows.append(f"<div class='need'>{who('to verify')}<b>{e(it['id'])}</b> {e(it['text'])}"
-                    f"<form class='add' method='post' action='/note'>{hidden}<input type='hidden' name='kind' value='item'>"
-                    f"<input type='hidden' name='ref' value='{e(it['id'])}'>"
-                    f"<textarea name='text' placeholder='Checked it? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
+                            f"<button class='quiet'>{e(o)}</button></form>" for o in w["options"]) + "</div></div>")
+        elif w["kind"] == "screen":
+            rows.append(f"<div class='need'>{who('needs you in its console')}<pre>{e(chr(10).join(w['lines']))}</pre>"
+                        f"<a href='/?p={pid}&view=console'>Open its console →</a></div>")
+        elif w["kind"] == "ask":
+            a = w["ask"]
+            rows.append(f"<div class='need'>{who('asked in its console · ' + e(a['at'][:16].replace('T', ' ')))}"
+                        f"<div class='asktext'>{e(a['text'])}</div>"
+                        f"<form class='add' method='post' action='/reply'>{hidden}"
+                        f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
+        elif w["kind"] == "verify":
+            it = w["item"]
+            rows.append(f"<div class='need'>{who('to verify')}<b>{e(it['id'])}</b> {e(it['text'])}"
+                        f"<form class='add' method='post' action='/note'>{hidden}<input type='hidden' name='kind' value='item'>"
+                        f"<input type='hidden' name='ref' value='{e(it['id'])}'>"
+                        f"<textarea name='text' placeholder='Checked it? Say so, or say what is wrong'></textarea><button>Send</button></form></div>")
     return rows
 
 
@@ -1000,8 +1034,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, shell(reg, -1, body, wide=True).encode())
         if url.path == "/status":
             from . import monitor
-            body = json.dumps({"board": str(home()), "projects": [console.snapshot(p) if p.exists() else {"state": "off", "lines": []}
-                                            for p in plist], "monitor": monitor.snapshot()}).encode()
+            body = json.dumps({"board": str(home()), "projects": [
+                dict(console.snapshot(p), waiting=len(waiting_items(p))) if p.exists() else {"state": "off", "lines": [], "waiting": 0}
+                for p in plist], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1230,7 +1265,7 @@ body.copying .keys .selectall, body.copying .keys .exit { display:block }
 @media (pointer: coarse) { .touchpad { display:block } }
 .jump { position:absolute; left:50%; bottom:14px; transform:translateX(-50%); z-index:6; width:44px; height:44px;
   border-radius:50%; padding:0; font-size:20px; background:var(--accent); color:var(--card); box-shadow:0 2px 10px rgba(0,0,0,.35) }
-.jump[hidden] { display:none }
+.jump[hidden], .badge[hidden] { display:none }
 @media (pointer: coarse) { #term .xterm-viewport { overflow-y:hidden !important } }
 #hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;

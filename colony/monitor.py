@@ -97,8 +97,8 @@ def snapshot():
 
 # ---------------------------------------------------------------- the watcher (no tokens)
 
-WAKE = {("working", "needs you"): "needs you", ("working", "idle"): "finished a turn",
-        ("idle", "needs you"): "needs you", ("off", "needs you"): "needs you"}
+# A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
+WAKE = {("working", "idle"): "finished a turn"}
 
 
 class Watcher:
@@ -109,6 +109,8 @@ class Watcher:
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
+        path = board.home() / "announced.json"
+        self.announced = json.loads(path.read_text()) if path.exists() else {}
 
     def events(self):
         out = []
@@ -124,12 +126,21 @@ class Watcher:
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
                 out.append(f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]))
-            open_gates = {g["id"] for g in board.gates(p) if not g["answer"]}
-            new = open_gates - self.gates.get(str(p), open_gates)
-            self.gates[str(p)] = open_gates
-            for g in (g for g in board.gates(p) if g["id"] in new):
-                out.append(f"{p.name} opened a gate: {g['question']}")
+            # Each thing the project waits on the person for is announced once, even across board restarts.
+            waiting = board.waiting_items(p, snap)
+            told = set(self.announced.get(str(p), []))
+            for w in waiting:
+                if w["key"] not in told:
+                    out.append(f"{p.name} {w['summary']}")
+            now_keys = {w["key"] for w in waiting}
+            if now_keys != told:                      # what was answered drops out; if it comes back, it is news
+                self.announced[str(p)] = sorted(now_keys)
+                self.save_announced()
         return out
+
+    def save_announced(self):
+        board.home().mkdir(parents=True, exist_ok=True)
+        (board.home() / "announced.json").write_text(json.dumps(self.announced))
 
     def mail(self):
         """Wake a project that has something it hasn't been handed: mail from another project, or a note or

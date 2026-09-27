@@ -329,6 +329,30 @@ class MonitorTest(BoardBase):
         self.assertIn("opened a gate: Ship it?", sent[0])
         self.assertIn("You hold the helm", sent[0])
 
+    def test_each_thing_waiting_is_announced_once_even_across_a_restart_and_every_view_counts_it_alike(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        sent = []
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        w = monitor.Watcher(quiet=0)
+        w.tick()
+        self.assertEqual(len(sent), 1)
+        self.assertIn("has R2 to verify", sent[0])
+        self.assertIn("asked you: Which format", sent[0])
+        monitor.Watcher(quiet=0).tick()                                # the board restarted
+        self.assertEqual(len(sent), 1, "nothing is announced twice")
+        board.answer_asks(self.root, "in the console")
+        w.tick()
+        board.record_ask(self.root, "t2", "And the delimiter?")
+        w.tick()
+        self.assertEqual(len(sent), 2, "a new question is news")
+        n = len(board.waiting_items(self.root))
+        self.assertEqual(n, 2)
+        self.assertIn(f"id='badge-0' title='waiting on you'>{n}<", board.sidebar(board.registry(), 0))
+        self.assertEqual(board.needs_you(board.registry()).count("class='need'"), n)
+
     def test_tell_new_and_helm_from_the_command_line(self):
         env = {"COLONY_CONSOLE_CMD": "cat"}
         run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
