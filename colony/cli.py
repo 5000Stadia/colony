@@ -475,6 +475,14 @@ def cmd_doctor(a):
 def cmd_gate(a):
     from . import board
     root = board.root_of()
+    if a.answered:                       # the person settled it in conversation: record it, and it stops waiting
+        try:
+            board.answer_gate(root, a.answered, a.question, tell=False)
+        except StopIteration:
+            print(f"no gate {a.answered}", file=sys.stderr)
+            return 2
+        print(f"gate {a.answered} answered: {a.question}")
+        return 0
     gid = "g" + __import__("secrets").token_hex(3)
     board.append(root, "gates.jsonl", {"type": "gate", "id": gid, "at": board.now(), "question": a.question,
                                        "item": a.item, "why": a.why})
@@ -709,6 +717,7 @@ def main(argv=None):
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
+    p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.set_defaults(fn=cmd_gate)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)

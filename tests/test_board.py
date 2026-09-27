@@ -711,6 +711,14 @@ class AskTest(BoardBase):
         path.write_text("\n".join(lines) + "\n")
         return {"transcript_path": str(path)}
 
+    def test_a_gate_settled_in_conversation_is_recorded_by_the_agent_and_stops_waiting(self):
+        board.track(self.root)
+        gid = self.hook("gate", "Keep the old column?").stdout.split()[1]
+        self.assertEqual([w["kind"] for w in board.waiting_items(self.root)], ["gate"])
+        self.assertIn("answered", self.hook("gate", "--answered", gid, "keep it, they said").stdout)
+        self.assertEqual(board.waiting_items(self.root), [], "it clears everywhere")
+        self.assertEqual(board.notes(self.root), [], "the agent heard it already: no note back")
+
     def test_one_entry_per_turn_with_all_of_it_and_it_clears_when_the_person_answers(self):
         board.track(self.root)
         t = self.transcript(("user", "tidy the export"),

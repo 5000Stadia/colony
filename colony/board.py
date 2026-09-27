@@ -41,7 +41,10 @@ person follows and steers them all from one board, and the projects can write to
   `colony noted ID "what you did"`. `colony notes` lists any still open.
 - When something needs the person (a decision costly to undo, an act that leaves their hands), run
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
-  until it is answered; the answer reaches you as a note.
+  until it is answered; the answer reaches you as a note. If the person settles it with you in
+  conversation instead, record it: `colony gate --answered ID "what they decided"`.
+- A turn that ends asking the person something waits for them on the board until they answer. If they
+  ask you something first, answer it and end by asking your question again, so it keeps waiting.
 - The other projects in the colony are a message away: `colony projects` lists them with their goals.
   When your work depends on one (a format it exports, a behaviour you rely on), ask its agent with
   `colony send NAME --ask "..."` rather than guessing; read its code yourself only when that is clearly
@@ -425,11 +428,13 @@ def add_note(root, anchor, text, author="person"):
     return note
 
 
-def answer_gate(root, gate_id, text):
+def answer_gate(root, gate_id, text, tell=True):
+    """The person's answer to a gate. From the board it reaches the agent the way every other word from the
+    person does, as a note; settled in conversation, the agent records it and already knows (tell=False)."""
     gate = next(g for g in gates(root) if g["id"] == gate_id)
     append(root, "gates.jsonl", {"type": "answer", "of": gate_id, "at": now(), "text": text.strip()})
-    # The answer reaches the agent the way every other word from the person does: as a note.
-    add_note(root, {"gate": gate_id, "item": gate.get("item")}, f"On \"{gate['question']}\": {text.strip()}")
+    if tell:
+        add_note(root, {"gate": gate_id, "item": gate.get("item")}, f"On \"{gate['question']}\": {text.strip()}")
 
 
 def open_notes(root, item=None):
