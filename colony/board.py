@@ -534,7 +534,7 @@ def shell(reg, pid, body, wide=False):
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}</script></body></html>")
 
 
-# Every few seconds: each project's status in the sidebar, and the peek strip if this page has one.
+# Every few seconds: each project's status dot, line and waiting count in the sidebar.
 POLL = """
 async function poll() {
   try {
