@@ -229,9 +229,18 @@ document.addEventListener('visibilitychange', () => {{
 }});
 // Ctrl and Alt are sticky: tap one, then a key on the phone's keyboard; tap it again to let go.
 let mod = null;
+// The key row acts on touch without taking focus, so the phone's keyboard stays as it was.
+const tap = (b, fn) => {{
+  b.addEventListener('touchstart', (ev) => {{ ev.preventDefault(); fn(); }}, {{passive: false}});
+  b.addEventListener('click', (ev) => {{ ev.preventDefault(); fn(); }});
+}};
 const modBtns = document.querySelectorAll('.keys button[data-mod]');
 const arm = (m) => {{ mod = m; modBtns.forEach((b) => b.classList.toggle('on', b.dataset.mod === m)); }};
-modBtns.forEach((b) => b.addEventListener('click', (ev) => {{ ev.preventDefault(); arm(mod === b.dataset.mod ? null : b.dataset.mod); term.focus(); }}));
+modBtns.forEach((b) => tap(b, () => {{
+  const on = mod !== b.dataset.mod;
+  arm(on ? b.dataset.mod : null);
+  if (on) term.focus();                             // the next key comes from the keyboard: open it if closed
+}}));
 const withMod = (d) => {{
   if (!mod || d.length !== 1) return d;
   const out = mod === 'alt' ? '\\x1b' + d : String.fromCharCode(d.toUpperCase().charCodeAt(0) & 0x1f);
@@ -241,9 +250,7 @@ const withMod = (d) => {{
 term.onData((d) => {{ send({{i: withMod(d)}}); scrolled(-above); }});   // typing brings Claude Code back to the bottom
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
 const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B'}};
-document.querySelectorAll('.keys button[data-k]').forEach((b) => b.addEventListener('click', (ev) => {{
-  ev.preventDefault(); send({{i: KEYS[b.dataset.k]}});
-}}));
+document.querySelectorAll('.keys button[data-k]').forEach((b) => tap(b, () => send({{i: KEYS[b.dataset.k]}})));
 // On a phone the console takes the whole screen: the terminal, the keys, a way out.
 const touch = matchMedia('(pointer: coarse)').matches;
 const focus = (on) => {{ document.body.classList.toggle('focus', on); setTimeout(refit, 50); }};
