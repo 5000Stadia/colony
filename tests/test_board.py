@@ -456,6 +456,7 @@ class ProjectSettingsTest(BoardBase):
             label, models, efforts = "Other CLI", [("big-1", "Big 1")], ["deep"]
             own_defaults = lambda self: {"model": None, "effort": None}
             model_name = lambda self, v: v
+            history_text = lambda self, root: None
             command = lambda self, label, s: f"other --model {s.get('model')}"
             wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
             wired = lambda self, root: (root / "AGENTS.md").exists()

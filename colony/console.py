@@ -262,17 +262,20 @@ termEl.addEventListener('touchmove', (ev) => {{
   if (y0 === null) return;
   const y = ev.touches[0].clientY, t = performance.now();
   vel = (y - lastY) / Math.max(1, t - lastT); acc += y - lastY; lastY = y; lastT = t;
+  ev.preventDefault(); ev.stopPropagation();        // from the first movement, or the phone takes the drag over
   if (!moved && Math.abs(y - y0) > 8) moved = true;
-  if (moved) {{ ev.preventDefault(); ev.stopPropagation(); drain(); }}
+  if (moved) drain();
 }}, {{passive: false, capture: true}});
-termEl.addEventListener('touchend', () => {{
+const release = () => {{
   if (moved && Math.abs(vel) > 0.25) {{
     let v = vel * 16;
     const step = () => {{ acc += v; drain(); v *= 0.94; if (Math.abs(v) >= 0.8) glide = requestAnimationFrame(step); }};
     glide = requestAnimationFrame(step);
   }}
   y0 = null;
-}}, {{passive: true}});
+}};
+termEl.addEventListener('touchend', release, {{passive: true}});
+termEl.addEventListener('touchcancel', release, {{passive: true}});
 // Selecting text in the terminal is poor on a phone: what is on screen, as plain text, selects natively.
 const hist = document.getElementById('hist'), histBtn = document.getElementById('history');
 async function showText(on) {{

@@ -989,9 +989,10 @@ class Handler(BaseHTTPRequestHandler):
             # The session's history as plain text, for scrolling and copying where the terminal can't.
             from . import monitor
             pid = int((q.get("p") or ["0"])[0])
-            name = monitor.name() if pid == -1 else console.session_name(plist[pid])
-            text = subprocess.run(["tmux", "capture-pane", "-p", "-J", "-S", "-3000", "-t", name],
-                                  capture_output=True, text=True).stdout.rstrip() or "(nothing yet)"
+            root, name = (monitor.home(), monitor.name()) if pid == -1 else (plist[pid], console.session_name(plist[pid]))
+            text = providers.of(root).history_text(root) or subprocess.run(
+                ["tmux", "capture-pane", "-p", "-J", "-S", "-3000", "-t", name], capture_output=True, text=True
+            ).stdout.rstrip() or "(nothing yet)"
             body = text.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -1242,7 +1243,9 @@ body.focus .keys { position:fixed; left:0; right:0; bottom:0; z-index:30; margin
 body.focus .keys .exit { display:block; background:var(--accent); color:var(--card) }
 .keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys .copy { display:none }
 body.copying .keys .selectall, body.copying .keys .exit { display:block }
-#term { touch-action:none } #hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
+#term, #term .xterm-viewport, #term .xterm-screen { touch-action:none }
+@media (pointer: coarse) { #term .xterm-viewport { overflow-y:hidden !important } }
+#hist { position:fixed; left:0; right:0; top:0; bottom:58px; z-index:25; margin:0; padding:12px; overflow:auto;
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;
   -webkit-user-select:text; user-select:text; -webkit-overflow-scrolling:touch }
 body:not(.focus) #hist { position:static; max-height:70vh; margin-top:8px; border-radius:10px }

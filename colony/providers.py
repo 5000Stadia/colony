@@ -18,6 +18,7 @@ what it assumes and what a second provider needs there. What a provider supplies
   wired(root)              whether wire() has been done (the doctor asks)
   own_defaults()           the model and effort the CLI uses when colony names none, or None where it
                            decides itself; the forms show them as "Default (...)"
+  history_text(root)       the session's conversation as plain text, for Select text on a phone (or None)
   turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
                            turn that asks the person something shows under "Waiting on you"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
@@ -111,6 +112,37 @@ class ClaudeCode:
                     prose.append(text)
                     key = e.get("uuid") or key
         return key, "\n\n".join(prose)
+
+    def history_text(self, root, limit=200_000):
+        """The session's conversation as plain text, for reading and copying on a phone: the person's
+        messages, the agent's replies, one line per tool it ran. Claude Code draws in the alternate screen,
+        so the terminal keeps no history of its own. PROVIDER: reads the newest transcript Claude Code keeps
+        for this folder; None if there is none (the board then shows the screen)."""
+        import re
+        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(Path(root).resolve()))
+        files = sorted(folder.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
+        if not files:
+            return None
+        out = []
+        for line in files[-1].read_text(errors="replace").splitlines():
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("isMeta"):
+                continue
+            content = (e.get("message") or {}).get("content")
+            parts = [{"type": "text", "text": content}] if isinstance(content, str) else content or []
+            for c in parts:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "text" and c.get("text", "").strip() and not c["text"].startswith("<"):
+                    out.append(("❯ " if e.get("type") == "user" else "") + c["text"].strip())
+                elif c.get("type") == "tool_use":
+                    arg = next((str(v) for v in (c.get("input") or {}).values() if isinstance(v, str)), "")
+                    out.append(f"● {c.get('name')}({arg.splitlines()[0][:100] if arg else ''})")
+        text = "\n\n".join(out)
+        return text[-limit:] if text else None
 
     def own_defaults(self):
         """What Claude Code uses when colony names nothing: its own settings file, where the person may have
