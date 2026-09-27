@@ -1596,6 +1596,7 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .segs { display:flex; gap:4px; margin:6px 0 12px; padding:3px; border-radius:10px; background:var(--sunk); width:fit-content; max-width:100% }
 .seg { background:transparent; color:var(--muted); padding:6px 12px; border-radius:8px } .seg.on { background:var(--card); color:var(--ink); font-weight:600 }
 .picker { display:flex; flex-direction:column; gap:6px }
+.chosen { max-width:100% } .chosen input, form.options .chosen input:not([type]) { min-width:0; flex:1 1 auto; width:auto } .chosen button { flex:none }
 .psettings .panel { position:absolute; right:0; z-index:10; width:min(440px, calc(100vw - 32px)); padding:14px 16px;
   border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:8px; height:8px; border-radius:50%; flex:none; background:transparent; border:1.5px solid var(--line) }
