@@ -195,7 +195,7 @@ PAGE = """
 <div class='keys' aria-label='Keys a phone keyboard lacks'>
  <button class='exit' id='exit'>Exit</button><button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>
  <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-k='left'>←</button><button data-k='right'>→</button>
- <button class='copy' id='history'>Scroll &amp; copy</button></div>
+ <button class='copy' id='history'>Select text</button></div>
 <div id='term'></div>
 <pre id='hist' hidden></pre>
 <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css'>
@@ -241,10 +241,35 @@ document.getElementById('fullscreen').addEventListener('click', () => focus(true
 document.getElementById('exit').addEventListener('click', () => {{
   if ('{exit}') location.href = '{exit}'; else focus(false);
 }});
-// The terminal can't scroll back or select well on a phone: the session's history as plain text can.
+// A finger swipe scrolls: each stretch of movement is sent as a mouse-wheel event, as a desktop wheel would
+// be, and tmux hands it to the program in the session (Claude Code scrolls its own history). A flick glides
+// on; a tap still opens the keyboard.
+const termEl = document.getElementById('term'), STEP = 18;
+const wheel = (up) => send({{i: `\\x1b[<${{up ? 64 : 65}};${{Math.ceil(term.cols / 2)}};${{Math.ceil(term.rows / 2)}}M`}});
+let y0 = null, lastY = 0, lastT = 0, acc = 0, vel = 0, moved = false, glide = null;
+const drain = () => {{ while (Math.abs(acc) >= STEP) {{ wheel(acc > 0); acc -= Math.sign(acc) * STEP; }} }};
+termEl.addEventListener('touchstart', (ev) => {{
+  if (ev.touches.length !== 1) return;
+  clearInterval(glide); y0 = lastY = ev.touches[0].clientY; lastT = performance.now(); acc = 0; vel = 0; moved = false;
+}}, {{passive: true}});
+termEl.addEventListener('touchmove', (ev) => {{
+  if (y0 === null) return;
+  const y = ev.touches[0].clientY, t = performance.now();
+  vel = (y - lastY) / Math.max(1, t - lastT); acc += y - lastY; lastY = y; lastT = t;
+  if (!moved && Math.abs(y - y0) > 8) moved = true;
+  if (moved) {{ ev.preventDefault(); ev.stopPropagation(); drain(); }}
+}}, {{passive: false, capture: true}});
+termEl.addEventListener('touchend', () => {{
+  if (moved && Math.abs(vel) > 0.25) {{
+    let v = vel * 16;
+    glide = setInterval(() => {{ acc += v; drain(); v *= 0.92; if (Math.abs(v) < 1) clearInterval(glide); }}, 16);
+  }}
+  y0 = null;
+}}, {{passive: true}});
+// Selecting text in the terminal is poor on a phone: what is on screen, as plain text, selects natively.
 const hist = document.getElementById('hist'), histBtn = document.getElementById('history');
 histBtn.addEventListener('click', async () => {{
-  if (!hist.hidden) {{ hist.hidden = true; histBtn.textContent = 'Scroll & copy'; return term.focus(); }}
+  if (!hist.hidden) {{ hist.hidden = true; histBtn.textContent = 'Select text'; return term.focus(); }}
   const r = await fetch('/console/text?p={pid}', {{cache: 'no-store'}});
   hist.textContent = r.ok ? await r.text() : '(could not read the session)';
   hist.hidden = false; histBtn.textContent = 'Live'; hist.scrollTop = hist.scrollHeight;

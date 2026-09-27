@@ -244,7 +244,8 @@ class ConsoleTest(BoardBase):
         history = urllib.request.urlopen(f"http://127.0.0.1:{port}/console/text?p=0").read().decode()
         self.assertIn("hello board", history, "the session's history as plain text, to scroll and copy on a phone")
         page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=console").read().decode()
-        self.assertIn("Scroll &amp; copy", page)
+        self.assertIn("Select text", page)
+        self.assertIn("touchmove", page, "a finger swipe scrolls the live console")
         self.assertNotIn("data-k='ctrlc'", page, "on a phone Ctrl-C quits Claude Code; it doesn't copy")
 
 
