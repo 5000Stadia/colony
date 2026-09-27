@@ -1678,5 +1678,8 @@ body.copying .keys .selectall { display:block }
   nav { position:sticky; top:0; z-index:40 }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
-  .tabs a { flex:1; text-align:center; padding:9px 4px } main { padding-bottom:78px } }
+  .tabs a { flex:1; text-align:center; padding:10px 4px 9px; border-radius:0; color:var(--muted) } main { padding-bottom:78px }
+  /* the tab bar reads as navigation, not as more keys: its own tinted ground, the current tab in the accent */
+  .tabs { background:color-mix(in srgb, var(--accent) 12%, var(--bg)); border-top:0; box-shadow:0 -1px 0 var(--line) }
+  .tabs a.on { background:transparent; color:var(--accent); font-weight:700; box-shadow:inset 0 3px 0 var(--accent) } }
 """
