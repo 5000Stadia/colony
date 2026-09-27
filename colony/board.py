@@ -695,9 +695,15 @@ def render(reg, pid, view="overview"):
                      f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
         out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
         out.append("</div>")
-        out.append("<h2>Note to the agent</h2><div class='card'><p class='muted'>Anything about the project as a whole. It reaches "
-                   "the agent on its next turn, and the replies show here.</p>" + thread([n for n in all_notes if not n["anchor"]], items(road))
-                   + note_box(pid, "project", "", "Anything for the agent about the project as a whole") + "</div>")
+        # the box first, "Leave note" at the section's top right, then the thread, newest first
+        whole = sorted((n for n in all_notes if not n["anchor"]), key=lambda n: n["at"], reverse=True)
+        out.append(f"<h2>Note to the agent</h2><div class='card'><form class='notetop' method='post' action='/note'>"
+                   f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}'>"
+                   f"<input type='hidden' name='kind' value='project'><input type='hidden' name='ref' value=''>"
+                   f"<div class='noterow'><span class='muted'>Anything about the project as a whole. It reaches the agent on its "
+                   f"next turn, and the replies show here.</span><button>Leave note</button></div>"
+                   f"<textarea name='text' placeholder='A note for the agent'></textarea></form>"
+                   + thread(whole, items(road)) + "</div>")
     return shell(reg, pid, "".join(out))
 
 
@@ -1615,6 +1621,8 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
+.notetop .noterow { display:flex; align-items:flex-start; gap:12px } .notetop .noterow button { margin-left:auto; flex:none }
+.notetop textarea { width:100%; min-height:64px; margin:8px 0 4px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
 .pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
