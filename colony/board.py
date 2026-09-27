@@ -63,7 +63,8 @@ documents, notes, open work and recent history) and write ROADMAP.md in the colo
 waiting to be checked or accepted. Include what's \
 done, what's under way, and features we've discussed but not built, as unchecked items under a later \
 milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
-documents stay where they are. Then show me the milestones before treating them as settled."""
+documents stay where they are. Open the file with one line saying what this project is: the board shows it \
+as the project's goal. Then show me the milestones before treating them as settled."""
 
 SKELETON = """# Roadmap
 
