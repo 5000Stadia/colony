@@ -490,6 +490,37 @@ def cmd_gate(a):
     return 0
 
 
+def cmd_pin(a):
+    """Pin something for the person: a file in the project or a URL, shown at the top of its page."""
+    from . import board, pins
+    root = board.root_of()
+    try:
+        pin = pins.add(root, a.target, a.title or "", a.why or "", by="agent")
+    except FileNotFoundError:
+        print(f"no file {a.target} in this project", file=sys.stderr)
+        return 2
+    print(f"pinned {pin['id']}: {pin['title']}")
+    return 0
+
+
+def cmd_unpin(a):
+    from . import board, pins
+    root = board.root_of()
+    if not pins.get(root, a.id):
+        print(f"no pin {a.id}", file=sys.stderr)
+        return 2
+    pins.remove(root, a.id)
+    print(f"unpinned {a.id}")
+    return 0
+
+
+def cmd_pins(a):
+    from . import board, pins
+    for p in pins.pins(board.root_of()):
+        print(f"{p['id']}  {p['kind']:6} {p['by']:6} {p['title']}  ({p['target']})")
+    return 0
+
+
 def _hook_input():
     """What a hook was handed on stdin, if anything: never waits on a terminal or an open pipe."""
     import select
@@ -733,6 +764,10 @@ def main(argv=None):
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
+    p = sub.add_parser("pin", help="pin a file in the project or a URL for the person")
+    p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why"); p.set_defaults(fn=cmd_pin)
+    p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
+    sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
     sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something").set_defaults(fn=cmd_turn)
     p = sub.add_parser("choose"); p.add_argument("name"); p.add_argument("option"); p.set_defaults(fn=cmd_choose)
     p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within")

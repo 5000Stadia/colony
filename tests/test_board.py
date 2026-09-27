@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from colony import board, console, mail, monitor, providers  # noqa: E402
+from colony import board, console, mail, monitor, pins, providers  # noqa: E402
 import base64, socket, time  # noqa: E402
 
 ROADMAP = """# Roadmap
@@ -691,6 +691,67 @@ class NeedsYouTest(BoardBase):
             self.assertIn("to verify", own)
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+class PinTest(BoardBase):
+    def test_pins_from_either_side_opened_edited_and_told_to_the_agent_as_it_matters(self):
+        board.track(self.root)
+        (self.root / "notes.md").write_text("# Chapter 2\n")
+        (self.root / "report.pdf").write_bytes(b"%PDF-1.4 x")
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertIn("pinned", run("pin", "http://localhost:5173", "--title", "The app", "--why", "running dev build").stdout)
+        self.assertEqual(run("pin", "../../etc/passwd").returncode, 2, "nothing outside the project is pinned")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        post = lambda path, **f: urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", data=urllib.parse.urlencode(f).encode()))
+        try:
+            post("/pin", p=0, kind="file", target="notes.md", title="Chapter 2")
+            post("/pin", p=0, kind="file", target="report.pdf", comment="Is this the final one?")
+            ps = {p["title"]: p for p in pins.pins(self.root)}
+            self.assertEqual(set(ps), {"The app", "Chapter 2", "report.pdf"})
+            told = {n["text"][:40]: n.get("quiet", False) for n in board.notes(self.root)}
+            self.assertEqual(sorted(told.values()), [False, True], "a comment is a message; a plain pin is quiet")
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
+            self.assertIn("Pinned", page)
+            self.assertIn("The app", page)
+            editor = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['Chapter 2']['id']}").read().decode()
+            self.assertIn("# Chapter 2", editor, "a text file opens to edit")
+            post("/pin/save", p=0, id=ps["Chapter 2"]["id"], text="# Chapter 2\nIt was a dark and stormy night.\n")
+            self.assertIn("stormy", (self.root / "notes.md").read_text())
+            pdf = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['report.pdf']['id']}")
+            self.assertEqual(pdf.headers["Content-Type"], "application/pdf")
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['The app']['id']}")
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *a):
+                    return None
+            try:
+                urllib.request.build_opener(NoRedirect).open(req)
+            except urllib.error.HTTPError as err:
+                self.assertEqual(err.headers["Location"], "http://localhost:5173", "from this machine, localhost stays")
+            httpd.lan = True
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['The app']['id']}",
+                                         headers={"Host": f"192.168.1.5:{port}"})
+            try:
+                urllib.request.build_opener(NoRedirect).open(req)
+            except urllib.error.HTTPError as err:
+                self.assertEqual(err.headers["Location"], "http://192.168.1.5:5173", "from a phone, the machine's own address")
+            httpd.lan = False
+            boundary = "xyz"
+            body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"p\"\r\n\r\n0\r\n"
+                    f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"sketch.png\"\r\n"
+                    f"Content-Type: image/png\r\n\r\nPNGDATA\r\n--{boundary}--\r\n").encode()
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/pin/upload", data=body,
+                                   headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}))
+            self.assertTrue((self.root / ".board" / "uploads" / "sketch.png").exists())
+            self.assertEqual((self.root / ".board" / "uploads" / ".gitignore").read_text(), "*\n", "uploads stay out of git")
+            post("/unpin", p=0, id=ps["The app"]["id"])
+            self.assertNotIn("The app", [p["title"] for p in pins.pins(self.root)])
         finally:
             httpd.shutdown()
             httpd.server_close()

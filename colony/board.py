@@ -20,7 +20,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import console, providers
+from . import console, pins, providers
 
 MILESTONE = re.compile(r"^##\s+(M\d+)\s*[—–-]+\s*(.+?)\s*$")
 ITEM = re.compile(r"^\s*-\s*\[( |x|X|~|\?)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
@@ -43,6 +43,9 @@ person follows and steers them all from one board, and the projects can write to
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note. If the person settles it with you in
   conversation instead, record it: `colony gate --answered ID "what they decided"`.
+- Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
+  chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
+  lists what's pinned. Their pins, edits and comments reach you as notes.
 - A turn that ends asking the person something waits for them on the board until they answer. If they
   ask you something first, answer it and end by asking your question again, so it keeps waiting.
 - The other projects in the colony are a message away: `colony projects` lists them with their goals.
@@ -382,7 +385,7 @@ def status(n, road_items):
 
 def where(n):
     a = n["anchor"] or {}
-    return (f"on gate {a['gate']}" if a.get("gate") else f"on roadmap item {a['item']}" if a.get("item")
+    return (f"on pinned {a['pin']}" if a.get("pin") else f"on gate {a['gate']}" if a.get("gate") else f"on roadmap item {a['item']}" if a.get("item")
             else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
 
 
@@ -471,8 +474,9 @@ def since(root, seen):
                 moved.append((iid, was or "new", it["state"], it["text"]))
     opened = [g for g in gates(root) if g["at"] > at]
     replies = [n for n in notes(root) if n["addressed_at"] and n["addressed_at"] > at]
+    pinned = [p for p in pins.pins(root) if p["at"] > at and p["by"] != "person"]
     return {"head": head, "commits": commits, "moved": moved, "opened": opened, "replies": replies,
-            "first": not seen}
+            "pinned": pinned, "first": not seen}
 
 
 # ---------------------------------------------------------------- the page
@@ -591,6 +595,7 @@ def render(reg, pid, view="overview"):
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
                f"<pre id='peek-lines-{pid}'>{e(chr(10).join(snap['lines']))}</pre></a>")
+    out.append(pinned_section(pid, root))
     # waiting on you: the same as this project's part of Needs you
     waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
     out.append(f"<h2>Waiting on you ({len(waiting)})</h2><div class='card'>"
@@ -603,6 +608,8 @@ def render(reg, pid, view="overview"):
     lines = [f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>" for i, a, b, t in s["moved"]]
     lines += [f"<li>gate opened: {e(g['question'])}</li>" for g in s["opened"]]
     lines += [f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>" for n in s["replies"]]
+    lines += [f"<li>the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(p['title'])}</a>"
+              + (f": {e(p['why'])}" if p.get("why") else "") + "</li>" for p in s["pinned"]]
     lines += [f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>" for h, t, subj in s["commits"][:15]]
     caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
                  f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
@@ -836,6 +843,71 @@ def folder_browser(reg, current, purpose):
     return shell(reg, -2, "".join(out) + "</div>")
 
 
+def pinned_section(pid, root):
+    """What the person and the agent show each other: tap to open (a text file opens to edit), comment to the
+    agent about it, or unpin it."""
+    rows = []
+    for p in pins.pins(root):
+        icon = {"url": "🔗", "upload": "📎"}.get(p["kind"], "📄")
+        new_tab = "" if pins.is_text(p) else " target='_blank' rel='noopener'"
+        hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='id' value='{e(p['id'])}'>"
+        rows.append(f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(p['id'])}'{new_tab}>"
+                    f"{icon} {e(p['title'])}</a><details class='pinmore'><summary>⋯</summary><div class='pinmenu'>"
+                    f"<form class='add' method='post' action='/pin/comment'>{hidden}"
+                    f"<textarea name='text' placeholder='Comment to the agent about this'></textarea><button>Send</button></form>"
+                    f"<form method='post' action='/unpin'>{hidden}<button class='quiet'>Unpin</button></form></div></details></div>"
+                    f"<div class='who'>{'by the agent · ' if p['by'] == 'agent' else ''}{e(p['target'] if p['kind'] != 'url' else p['target'][:60])}"
+                    + (f" · {e(p['why'])}" if p.get("why") else "") + "</div></div>")
+    return (f"<div class='pinned'><div class='pinhead'><h2>Pinned</h2><a href='/pins/add?p={pid}'>+ Pin</a></div>"
+            + ("".join(rows) if rows else "<p class='muted'>Nothing pinned yet: files, links and uploads you and the agent want at hand.</p>")
+            + "</div>")
+
+
+def pin_add_page(reg, pid, rel=""):
+    """Pin a file in the project (browse its folders), a link, or an upload; each with an optional comment."""
+    root = projects(reg)[pid]
+    here = pins.inside(root, rel) or Path(root).resolve()
+    if not here.is_dir():
+        here = Path(root).resolve()
+    rel_here = str(here.relative_to(Path(root).resolve()))
+    rel_here = "" if rel_here == "." else rel_here
+    comment = "<textarea name='comment' placeholder='Optional: a comment to the agent about it'></textarea>"
+    hidden = f"<input type='hidden' name='p' value='{pid}'>"
+    try:
+        entries = sorted((c for c in here.iterdir() if not c.name.startswith(".")), key=lambda c: (c.is_file(), c.name.lower()))
+    except OSError:
+        entries = []
+    q = lambda r: urllib.parse.quote(r)
+    browse = [f"<a href='/pins/add?p={pid}&dir={q(str(Path(rel_here).parent) if rel_here else '')}'>↑ up</a>"] if rel_here else []
+    for c in entries[:400]:
+        r = str(Path(rel_here) / c.name) if rel_here else c.name
+        if c.is_dir():
+            browse.append(f"<a href='/pins/add?p={pid}&dir={q(r)}'>📁 {e(c.name)}/</a>")
+        else:
+            browse.append(f"<form class='pickfile' method='post' action='/pin'>{hidden}<input type='hidden' name='kind' value='file'>"
+                          f"<input type='hidden' name='target' value='{e(r)}'><button class='quiet'>📄 {e(c.name)}</button></form>")
+    body = (f"<header><h1>Pin to {e(Path(root).name)}</h1><p class='muted'>A file in the project, a link, or an upload. "
+            f"The agent hears of it on its next turn; a comment reaches it as a message.</p></header>"
+            f"<h2>A file in the project</h2><div class='card'><p><code>/{e(rel_here)}</code></p><div class='browse'>{''.join(browse)}</div></div>"
+            f"<h2>A link</h2><div class='card'><form class='add pinform' method='post' action='/pin'>{hidden}<input type='hidden' name='kind' value='url'>"
+            f"<input name='target' placeholder='https://… or http://localhost:5173'><input name='title' placeholder='Title (optional)'>{comment}"
+            f"<button>Pin link</button></form></div>"
+            f"<h2>An upload</h2><div class='card'><form class='add pinform' method='post' action='/pin/upload' enctype='multipart/form-data'>{hidden}"
+            f"<input type='file' name='file'><input name='title' placeholder='Title (optional)'>{comment}<button>Upload and pin</button></form></div>")
+    return shell(reg, pid, body)
+
+
+def pin_editor(reg, pid, pin):
+    """A pinned text file, to read and edit in place; saving tells the agent quietly."""
+    root = projects(reg)[pid]
+    path = pins.inside(root, pin["target"])
+    text = path.read_text(errors="replace") if path and path.exists() else ""
+    body = (f"<form class='editor' method='post' action='/pin/save'><input type='hidden' name='p' value='{pid}'>"
+            f"<input type='hidden' name='id' value='{e(pin['id'])}'><div class='editbar'><a href='/?p={pid}'>← {e(Path(root).name)}</a>"
+            f"<b>{e(pin['title'])}</b><button>Save</button></div><textarea name='text' spellcheck='true'>{e(text)}</textarea></form>")
+    return shell(reg, pid, body, wide=True)
+
+
 def waiting_items(p, snap=None):
     """Everything a project is waiting on the person for. The one definition: Needs you, the project's
     Waiting on you, the sidebar's count, `colony projects` and the monitor's wake-ups all read this.
@@ -869,6 +941,12 @@ def waiting_items(p, snap=None):
     for key in gone:                     # its item has gone: if the same thing comes back later, it shows again
         append(p, "dismissed.jsonl", {"type": "restored", "key": key, "at": now()})
     return [w for w in out if w["key"] not in cleared]
+
+
+def tell_pinned(root, pin, comment=""):
+    """The agent hears of the person's pin: with a comment, as a message; without one, quietly."""
+    text = f"The person pinned {pins.describe(pin)} on the board."
+    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""), quiet=not comment)
 
 
 def dismissed(root):
@@ -1020,6 +1098,33 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         console.bridge(self.connection, root, name, label)
 
+    def _upload(self):
+        """An uploaded file to pin: multipart form, the whole body read (up to the upload limit)."""
+        import email.parser, email.policy
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > pins.UPLOAD_LIMIT + 64 * 1024:
+            return self._send(413, b"that file is too large to pin (25 MB at most)")
+        raw = self.rfile.read(length)
+        msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(
+            b"Content-Type: " + self.headers.get("Content-Type", "").encode() + b"\r\n\r\n" + raw)
+        fields, upload = {}, None
+        for part in msg.iter_parts() if msg.is_multipart() else []:
+            name = part.get_param("name", header="content-disposition")
+            if part.get_filename():
+                upload = (part.get_filename(), part.get_payload(decode=True) or b"")
+            elif name:
+                fields[name] = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+        pid = int(fields.get("p", "0"))
+        root = projects(registry())[pid]
+        if upload and upload[1]:
+            rel = pins.save_upload(root, *upload)
+            pin = pins.add(root, rel, fields.get("title", ""), kind="upload")
+            tell_pinned(root, pin, fields.get("comment", "").strip())
+        self.send_response(303)
+        self.send_header("Location", f"/?p={pid}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _send(self, code, body):
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1049,6 +1154,37 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/settings":
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
+        if url.path == "/pins/add":
+            return self._send(200, pin_add_page(reg, pid, (q.get("dir") or [""])[0]).encode())
+        if url.path == "/pin/open":
+            pin = pins.get(plist[pid], (q.get("id") or [""])[0])
+            if not pin:
+                return self._send(404, b"no such pin")
+            if pin["kind"] == "url":
+                target = pin["target"]
+                host = self.headers.get("Host", "").split(":")[0]
+                # a link to this machine's localhost works from a phone at the machine's own address
+                parts = urllib.parse.urlsplit(target)
+                if parts.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and host not in ("", "localhost", "127.0.0.1"):
+                    netloc = host + (f":{parts.port}" if parts.port else "")
+                    target = urllib.parse.urlunsplit(parts._replace(netloc=netloc))
+                self.send_response(303)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if pins.is_text(pin):
+                return self._send(200, pin_editor(reg, pid, pin).encode())
+            path = pins.inside(plist[pid], pin["target"])
+            if not path or not path.is_file():
+                return self._send(404, b"the file is gone")
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", pins.mime(pin))
+            self.send_header("Content-Disposition", f"inline; filename=\"{path.name}\"")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         if url.path == "/console/text":
             # The session's history as plain text, for scrolling and copying where the terminal can't.
             from . import monitor
@@ -1103,6 +1239,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._from_this_page():
             return self._send(403, b"not from this page")
+        if urllib.parse.urlparse(self.path).path == "/pin/upload":
+            return self._upload()
         length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
         reg = registry()
@@ -1207,6 +1345,24 @@ class Handler(BaseHTTPRequestHandler):
             keys = providers.of(root).choose(console.screen(name), form["option"])
             if keys:
                 console.press(name, keys)
+        elif path == "/pin" and form.get("target", "").strip():
+            try:
+                pin = pins.add(root, form["target"].strip(), form.get("title", ""), kind=form.get("kind"))
+                tell_pinned(root, pin, form.get("comment", "").strip())
+            except FileNotFoundError:
+                pass
+        elif path == "/unpin" and form.get("id"):
+            pins.remove(root, form["id"])
+        elif path == "/pin/comment" and text and form.get("id"):
+            pin = pins.get(root, form["id"])
+            if pin:
+                add_note(root, {"pin": pin["id"]}, f"On the pinned {pins.describe(pin)}: {text}")
+        elif path == "/pin/save" and form.get("id"):
+            pin = pins.get(root, form["id"])
+            target = pins.inside(root, pin["target"]) if pin and pins.is_text(pin) else None
+            if target:
+                target.write_text(form.get("text", "").replace("\r\n", "\n"))
+                add_note(root, {"pin": pin["id"]}, f"The person edited the pinned {pins.describe(pin)} on the board.", quiet=True)
         elif path == "/clear" and form.get("key"):
             clear_waiting(root, form["key"])
         elif path == "/reply" and text:
@@ -1301,6 +1457,20 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
+.pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
+.pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
+.pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.pinmore { position:relative } .pinmore summary { list-style:none; cursor:pointer; padding:0 8px; color:var(--muted) }
+.pinmore summary::-webkit-details-marker { display:none }
+.pinmenu { position:absolute; right:0; z-index:10; width:min(360px, calc(100vw - 32px)); padding:10px; border-radius:10px;
+  background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } .pinmenu form.add { margin:0 0 8px }
+.browse { display:flex; flex-direction:column; gap:4px } .browse a, .pickfile button { text-align:left }
+.pickfile { margin:0 } .pinform input { font:inherit; padding:6px 9px; border-radius:7px; border:1px solid var(--line);
+  background:var(--bg); color:var(--ink); flex:1 1 100% }
+form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } .editbar { display:flex; align-items:center; gap:12px; padding:8px 0 }
+.editbar b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } form.editor textarea { flex:1; width:100%;
+  font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
 .caughtup { margin:4px 0 8px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
