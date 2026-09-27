@@ -508,6 +508,7 @@ class ProjectSettingsTest(BoardBase):
             own_defaults = lambda self: {"model": None, "effort": None}
             model_name = lambda self, v: v
             history_text = lambda self, root: None
+            scrolled_marker = ""
             command = lambda self, label, s: f"other --model {s.get('model')}"
             wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
             wired = lambda self, root: (root / "AGENTS.md").exists()

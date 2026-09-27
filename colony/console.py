@@ -227,7 +227,7 @@ function connect() {{
   ws = new WebSocket(`ws://${{location.host}}/console/ws?p={pid}&t={token}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {{ tries = 0; term.reset(); send({{r: [term.cols, term.rows]}}); term.focus(); }};
-  ws.onmessage = (ev) => term.write(new Uint8Array(ev.data));
+  ws.onmessage = (ev) => term.write(new Uint8Array(ev.data), () => {{ if (typeof showJump === 'function') showJump(); }});
   ws.onclose = () => {{
     if (++tries > 4) return location.reload();
     term.write('\\r\\n[reconnecting…]\\r\\n');
@@ -258,7 +258,7 @@ const withMod = (d) => {{
   arm(null);
   return out;
 }};
-term.onData((d) => {{ send({{i: withMod(d)}}); scrolled(-above); }});   // typing brings Claude Code back to the bottom
+term.onData((d) => send({{i: withMod(d)}}));
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
 const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', enter: '\\r'}};
 document.querySelectorAll('.keys button[data-k]').forEach((b) => tap(b, () => send({{i: KEYS[b.dataset.k]}})));
@@ -279,11 +279,25 @@ termEl.appendChild(pad);
 const jump = document.createElement('button');
 jump.className = 'jump'; jump.textContent = '↓'; jump.hidden = true; jump.setAttribute('aria-label', 'Jump to the latest');
 termEl.appendChild(jump);
+// The ↓ follows the program's own sign that its view is scrolled up (Claude Code prints "Jump to bottom"),
+// so typing or scrolling any other way keeps it true; without such a sign it counts the swipes.
+const MARKER = '{scrolled}';
 let above = 0;
-const scrolled = (n) => {{ above = Math.max(0, above + n); jump.hidden = above === 0; }};
+const markerShown = () => {{
+  const b = term.buffer.active;
+  for (let i = b.length - 1; i >= Math.max(0, b.length - term.rows); i--) {{
+    const line = b.getLine(i); if (line && line.translateToString(true).includes(MARKER)) return true;
+  }}
+  return false;
+}};
+const showJump = () => {{ jump.hidden = MARKER ? !markerShown() : above === 0; }};
+const scrolled = (n) => {{ above = Math.max(0, above + n); if (!MARKER) showJump(); }};
 jump.addEventListener('click', (ev) => {{
   ev.preventDefault(); cancelAnimationFrame(glide); acc = 0;
-  send({{i: wheel(false).repeat(Math.min(400, above * 3 + 10))}}); scrolled(-above);
+  let tries = 0;
+  const down = () => {{ send({{i: wheel(false).repeat(40)}}); above = 0;
+    setTimeout(() => {{ showJump(); if (!jump.hidden && ++tries < 8) down(); }}, 250); }};
+  down();
 }});
 const wheel = (up) => `\\x1b[<${{up ? 64 : 65}};${{Math.ceil(term.cols / 2)}};${{Math.ceil(term.rows / 2)}}M`;
 let y0 = null, lastY = 0, lastT = 0, acc = 0, vel = 0, moved = false, glide = null, frame = null;
