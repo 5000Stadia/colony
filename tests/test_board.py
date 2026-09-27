@@ -369,6 +369,39 @@ class MonitorTest(BoardBase):
         self.assertIn(f"id='badge-0' title='waiting on you'>{n}<", board.sidebar(board.registry(), 0))
         self.assertEqual(board.needs_you(board.registry()).count("class='need'"), n)
 
+    def test_the_monitor_holds_the_helm_project_by_project_with_a_direction_and_records_what_it_decided(self):
+        board.track(self.root)
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
+        board.track(shop)
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertIn("with the person", run("helm", "--project", "plants").stdout)
+        run("helm", "on", "--project", "plants")
+        run("posture", "plants", "--direction", "Approve routine permission prompts; never push.")
+        self.assertTrue(monitor.helm_for(self.root))
+        self.assertFalse(monitor.helm_for(shop), "the others keep the board-wide setting")
+        posture = run("posture").stdout
+        self.assertIn("plants: helm on", posture)
+        self.assertIn("never push", posture)
+        self.assertIn("M1 — v1: it works for me", posture, "each project's current focus, from its roadmap")
+        note = monitor.helm_note([self.root, shop])
+        self.assertIn("You hold the helm for plants", note)
+        run("decided", "plants", "Approved the formatter's permission prompt: routine, within direction.")
+        self.assertIn("formatter", monitor.decisions(self.root)[0]["text"])
+        saved = (console.ensure, console.snapshot)
+        console.ensure = lambda root, name=None, label=None: name
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": [], "activity": {}}
+        try:
+            helm_tab = board.monitor_page(board.registry(), "helm")
+            self.assertIn("never push", helm_tab)
+            self.assertIn("monitor holds the helm", helm_tab)
+            overview = board.monitor_page(board.registry(), "overview")
+            for part in ("Needs you", "Projects", "What the monitor decided", ">Helm<", ">Console<"):
+                self.assertIn(part, overview)
+        finally:
+            console.ensure, console.snapshot = saved
+
     def test_tell_new_and_helm_from_the_command_line(self):
         env = {"COLONY_CONSOLE_CMD": "cat"}
         run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,

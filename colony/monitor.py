@@ -38,10 +38,12 @@ project also has its own session they can talk to directly.
   whatever is highlighted, which on a trust question is "No, exit".
 - **Check before you report.** After acting on a project, look (`colony choose` prints the result; else
   `colony peek NAME`) and tell the person what actually happened, not what you meant to happen.
-- **The helm.** `colony helm` shows whether you hold it; the person says "take the helm" or "hand it
-  back" and you run `colony helm on|off`. With the helm off, relay and ask; decide nothing. With it on,
-  answer a project's routine questions yourself within the direction the person has given, and tell
-  them what you decided.
+- **The helm, project by project.** `colony posture` shows, for each project, whether you hold its
+  helm, the person's standing direction for it, and its current focus from its roadmap. The person
+  says "take the helm (for X)" or "hand it back" and you run `colony helm on|off [--project X]`; a
+  direction they give you for a project goes in with `colony posture X --direction "..."`. Where the
+  helm is off, relay and ask; decide nothing. Where it's on, answer routine questions yourself within
+  that project's direction, record each with `colony decided X "what and why"`, and tell the person.
 - **Always come back to the person**, helm or not, for planning, the horizon, scope, order or
   milestones; anything costly to undo or that leaves their hands; and anything you're not sure they
   would want. Bring it back with the question, the options and your recommendation.
@@ -71,12 +73,69 @@ Its source is `{source}` (a git repository; its `GUIDE.md` is how work is done t
   one only once they agree. Try it against the plain setup first; add nothing that doesn't earn its place.
 """
 
-HELM_ON_NOTE = "You hold the helm: settle routine questions yourself, but bring planning, scope and anything costly back."
+HELM_ON_NOTE = ("You hold the helm: settle routine questions yourself within each project's direction (colony posture), "
+                "record each decision (colony decided), and bring planning, scope and anything costly back.")
 HELM_OFF_NOTE = "The helm is off: relay and ask the person; decide nothing yourself."
 
 
 def home():
     return board.home() / "monitor"
+
+
+# ---------------------------------------------------------------- its stance toward each project
+
+def posture(root=None):
+    """The monitor's stance toward each project: whether it holds the helm there (None: the board-wide
+    setting) and the person's standing direction for it. For one project, or all, keyed by path."""
+    path = board.home() / "posture.json"
+    allp = json.loads(path.read_text()) if path.exists() else {}
+    if root is None:
+        return allp
+    return dict({"helm": None, "direction": ""}, **allp.get(str(root), {}))
+
+
+def set_posture(root, helm=None, direction=None):
+    """Change the stance toward one project; helm "default" returns it to the board-wide setting."""
+    path = board.home() / "posture.json"
+    allp = posture()
+    p = dict({"helm": None, "direction": ""}, **allp.get(str(root), {}))
+    if helm is not None:
+        p["helm"] = None if helm == "default" else bool(helm)
+    if direction is not None:
+        p["direction"] = direction.strip()
+    allp[str(root)] = p
+    board.home().mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(allp, indent=1))
+    return p
+
+
+def helm_for(root):
+    p = posture(root)
+    return helm() if p["helm"] is None else p["helm"]
+
+
+def decided(root, text):
+    """What the monitor settled for a project while holding its helm: shown to the person on the board."""
+    board.home().mkdir(parents=True, exist_ok=True)
+    with open(board.home() / "decisions.jsonl", "a") as fh:
+        fh.write(json.dumps({"at": board.now(), "project": str(root), "text": text.strip()}) + "\n")
+
+
+def decisions(root=None, n=20):
+    path = board.home() / "decisions.jsonl"
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
+    return [r for r in rows if root is None or r["project"] == str(root)][-n:][::-1]
+
+
+def helm_note(projects):
+    """What the monitor is told about its helm when woken: one line if it's the same everywhere."""
+    on = {p.name: helm_for(p) for p in projects}
+    if on and all(on.values()):
+        return HELM_ON_NOTE
+    if not any(on.values()):
+        return HELM_OFF_NOTE
+    return ("You hold the helm for " + ", ".join(n for n, v in on.items() if v) + "; for "
+            + ", ".join(n for n, v in on.items() if not v) + " relay and ask. `colony posture` has each one's direction.")
 
 
 def helm(value=None):
@@ -173,7 +232,7 @@ class Watcher:
         self.mail()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
-            note = HELM_ON_NOTE if helm() else HELM_OFF_NOTE
+            note = helm_note([p for p in board.projects() if p.exists()])
             console.type_into(name(), "[colony] " + " | ".join(self.pending) + f" ({note})")
             self.pending = []
 

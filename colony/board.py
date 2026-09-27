@@ -967,6 +967,71 @@ def clone(url, within, name=""):
     return dest
 
 
+def focus(root):
+    """Where a project stands, from its roadmap: the milestone in progress and what's under way, to verify
+    and next."""
+    road = roadmap(root)
+    for m in road["milestones"]:
+        open_ = [i for i in m["items"] if i["state"] != "done"]
+        if open_:
+            pick = lambda st, n=5: [f"{i['id']} {i['text'][:70]}" for i in open_ if i["state"] == st][:n]
+            return {"milestone": f"{m['id']} — {m['title']}", "doing": pick("doing"), "verify": pick("verify"), "next": pick("todo", 3)}
+    return {"milestone": "", "doing": [], "verify": [], "next": []}
+
+
+def monitor_page(reg, view="overview"):
+    """The monitor, like a project: Overview (what needs the person, every project's status, what the
+    monitor decided), Helm (its stance toward each project), Console."""
+    from . import monitor
+    monitor.ensure()
+    tab = lambda v, label: f"<a class='{'on' if view == v else ''}' href='/monitor?view={v}'>{label}</a>"
+    on = monitor.helm()
+    head = (f"<header class='project'><div class='titlerow'><h1>monitor</h1><form method='post' action='/helm' class='helmform'>"
+            f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
+            f"{'Take the helm back' if on else 'Give it the helm'}</button></form></div>"
+            f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div>"
+            f"<p class='muted'>{'Board-wide, it holds the helm: it settles routine questions within each project' + chr(39) + 's direction.' if on else 'Board-wide, it relays and asks; you decide.'}"
+            f" Each project can differ, on the Helm tab.</p></header>")
+    plist = projects(reg)
+    if view == "console":
+        body = head + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1,
+                                          token=console.token(), focus='true', scrolled=e(providers.get('claude').scrolled_marker))
+        return shell(reg, -1, body, wide=True)
+    if view == "helm":
+        cards = []
+        for pid, p in enumerate(plist):
+            if not p.exists():
+                continue
+            pos, f, held = monitor.posture(p), focus(p), monitor.helm_for(p)
+            opt = lambda v, label, cur: f"<option value='{v}'{' selected' if cur == v else ''}>{label}</option>"
+            cur = "default" if pos["helm"] is None else ("on" if pos["helm"] else "off")
+            lines = "".join(f"<li><span class='kind'>{k}</span> {e(x)}</li>" for k in ("doing", "verify", "next") for x in f[k])
+            made = "".join(f"<div class='note'><span class='who'>{e(d['at'][:16].replace('T', ' '))}</span><div>{e(d['text'])}</div></div>"
+                           for d in monitor.decisions(p, 8))
+            cards.append(f"<div class='card helmcard'><div class='titlerow'><h3>{e(p.name)}</h3>"
+                         f"<span class='badge {'gate' if held else ''}'>{'monitor holds the helm' if held else 'helm with you'}</span></div>"
+                         f"<form class='options' method='post' action='/posture'><input type='hidden' name='p' value='{pid}'>"
+                         f"<label>Helm <select name='helm'>{opt('default', 'board-wide (' + ('on' if on else 'off') + ')', cur)}"
+                         f"{opt('on', 'on for this project', cur)}{opt('off', 'off for this project', cur)}</select></label>"
+                         f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='What it may settle here on its own, and what must come back to you'>{e(pos['direction'])}</textarea></label>"
+                         f"<button>Save</button></form>"
+                         f"<div class='focus'><b>Now: {e(f['milestone'] or 'no roadmap yet')}</b><ul>{lines}</ul></div>"
+                         + (f"<details><summary>What it decided here</summary>{made}</details>" if made else "") + "</div>")
+        body = head + ("".join(cards) or "<p class='muted'>No projects yet.</p>")
+        return shell(reg, -1, body)
+    statuses = "".join(f"<div class='mstatus'><div class='who'>{e(p.name)}</div>{status_card(pid, console.snapshot(p))}</div>"
+                       for pid, p in enumerate(plist) if p.exists())
+    recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(d['at'][:16].replace('T', ' '))}</span>"
+                     f"<div>{e(d['text'])}</div></div>" for d in monitor.decisions(None, 10))
+    body = (head + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
+            "<script>setInterval(async () => { const n = document.getElementById('needs');"
+            " if (!n || n.contains(document.activeElement)) return;"
+            " const r = await fetch('/needs', {cache: 'no-store'}); if (r.ok) n.innerHTML = await r.text(); }, 4000);</script>"
+            f"<h2>Projects</h2>{statuses or '<p class=muted>No projects yet.</p>'}"
+            + (f"<h2>What the monitor decided</h2><div class='card'>{recent}</div>" if recent else ""))
+    return shell(reg, -1, body)
+
+
 def status_card(pid, snap):
     """The project's status, as its console shows it: working / needs you / idle / off, what it's doing,
     and its background agents."""
@@ -1376,19 +1441,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/needs":
             return self._send(200, needs_you(reg).encode())
         if url.path == "/monitor":
-            from . import monitor
-            monitor.ensure()
-            on = monitor.helm()
-            body = (f"<details class='card needs' id='needs-box' open><summary><b>Needs you</b></summary><div id='needs'>{needs_you(reg)}</div></details>"
-                    "<script>setInterval(async () => { const n = document.getElementById('needs');"
-                    " if (!n || n.contains(document.activeElement)) return;"
-                    " const r = await fetch('/needs', {cache: 'no-store'}); if (r.ok) n.innerHTML = await r.text(); }, 4000);</script>"
-                    f"<header class='slim'><h1>monitor</h1><form method='post' action='/helm'>"
-                    f"<input type='hidden' name='state' value='{'off' if on else 'on'}'>"
-                    f"<button class='{'quiet' if on else ''}'>{'Take the helm back' if on else 'Give the monitor the helm'}</button>"
-                    f"</form><span class='muted'>{'The monitor answers routine questions for you.' if on else 'The monitor relays and asks; you decide.'}"
-                    f"</span></header>" + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1, token=console.token(), focus='false', scrolled=e(providers.get('claude').scrolled_marker)))
-            return self._send(200, shell(reg, -1, body, wide=True).encode())
+            return self._send(200, monitor_page(reg, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/status":
             from . import monitor
             body = json.dumps({"board": str(home()), "projects": [
@@ -1501,6 +1554,16 @@ class Handler(BaseHTTPRequestHandler):
                 save_registry(reg)
             self.send_response(303)
             self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/posture":
+            from . import monitor
+            root = projects(reg)[int(form.get("p", "0"))]
+            monitor.set_posture(root, helm={"on": True, "off": False}.get(form.get("helm"), "default"),
+                                direction=form.get("direction", ""))
+            self.send_response(303)
+            self.send_header("Location", "/monitor?view=helm")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -1657,7 +1720,10 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
-.notetop .noterow { display:flex; align-items:flex-start; gap:12px } .notetop .noterow button { margin-left:auto; flex:none }
+.helmform { margin-left:auto } .helmcard .titlerow .badge { margin-left:auto } .helmcard label.stack { flex-direction:column; align-items:stretch }
+.helmcard textarea { width:100%; min-height:56px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.focus ul { margin:6px 0 0; padding-left:0; list-style:none } .focus li .kind { display:inline-block; min-width:52px; font-size:12px; color:var(--muted) }
+.mstatus .who { margin:10px 0 -6px } .notetop .noterow { display:flex; align-items:flex-start; gap:12px } .notetop .noterow button { margin-left:auto; flex:none }
 .notetop textarea { width:100%; min-height:64px; margin:8px 0 4px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
@@ -1680,7 +1746,7 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
-.keys button { flex:1 0 auto; min-width:40px; padding:10px 8px; background:var(--sunk); color:var(--ink); font-size:15px }
+.keys button { flex:1 1 auto; min-width:0; padding:10px 6px; background:var(--sunk); color:var(--ink); font-size:15px; white-space:nowrap }
 .touch-only { display:none }
 @media (pointer: coarse) { .keys { display:flex } .touch-only { display:inline-block } }
 /* On a phone the console fills the space between the project chips (top) and the tabs (bottom). */

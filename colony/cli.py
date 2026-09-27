@@ -713,9 +713,38 @@ def cmd_mail(a):
 
 def cmd_helm(a):
     from . import monitor
+    if a.project:
+        root = _project(a.project)
+        if a.state:
+            monitor.set_posture(root, helm=a.state == "on")
+        print(f"{a.project}: " + ("the monitor holds the helm" if monitor.helm_for(root) else "the helm is with the person"))
+        return 0
     if a.state:
         monitor.helm(a.state == "on")
     print("the monitor holds the helm" if monitor.helm() else "the helm is with the person")
+    return 0
+
+
+def cmd_posture(a):
+    """The monitor's stance toward each project: helm, the person's direction, the current focus."""
+    from . import board, monitor
+    if a.name and a.direction is not None:
+        monitor.set_posture(_project(a.name), direction=a.direction)
+    for p in [_project(a.name)] if a.name else board.projects():
+        f, pos = board.focus(p), monitor.posture(p)
+        print(f"{p.name}: helm {'on' if monitor.helm_for(p) else 'off'}{'' if pos['helm'] is not None else ' (board-wide)'}")
+        print(f"  direction: {pos['direction'] or '(none given)'}")
+        print(f"  focus: {f['milestone'] or '(no roadmap)'}")
+        for label in ("doing", "verify", "next"):
+            if f[label]:
+                print(f"    {label}: " + "; ".join(f[label]))
+    return 0
+
+
+def cmd_decided(a):
+    from . import monitor
+    monitor.decided(_project(a.name), a.text)
+    print(f"recorded for {a.name}")
     return 0
 
 
@@ -777,7 +806,12 @@ def main(argv=None):
     p = sub.add_parser("settings"); p.add_argument("key", nargs="?"); p.add_argument("value", nargs="?")
     p.add_argument("--project", help="a project's own settings instead of the global ones")
     p.set_defaults(fn=cmd_settings)
-    p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_helm)
+    p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.add_argument("--project")
+    p.set_defaults(fn=cmd_helm)
+    p = sub.add_parser("posture", help="the monitor's stance toward each project: helm, direction, focus")
+    p.add_argument("name", nargs="?"); p.add_argument("--direction"); p.set_defaults(fn=cmd_posture)
+    p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
+    p.set_defaults(fn=cmd_decided)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
     f = sub.add_parser("field"); fs = f.add_subparsers(dest="action", required=True); f.set_defaults(fn=cmd_field)
     fs.add_parser("view")
