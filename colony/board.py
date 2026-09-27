@@ -1483,7 +1483,8 @@ body.focus main { padding:0; max-width:none } body.focus #term { height:calc(100
 body.focus .keys { position:fixed; left:0; right:0; bottom:0; z-index:30; margin:0; padding:6px; gap:5px; flex-wrap:nowrap;
   overflow-x:auto; background:var(--card); border-top:1px solid var(--line) }
 body.focus .keys .exit { display:block; background:var(--accent); color:var(--card) }
-.keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys .copy { display:none }
+.keys button[data-mod].on { background:var(--flag); color:var(--card) }
+.keys .selectall { display:none } body.copying .keys button[data-k], body.copying .keys button[data-mod], body.copying .keys .copy { display:none }
 body.copying .keys .selectall, body.copying .keys .exit { display:block }
 #term, #term .xterm-viewport, #term .xterm-screen { touch-action:none } #term { position:relative }
 .touchpad { display:none; position:absolute; inset:0; z-index:5; touch-action:none; -webkit-user-select:none; user-select:none }

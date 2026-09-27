@@ -194,7 +194,7 @@ PAGE = """
  <button class='quiet'>End session</button></form></div>
 <div class='keys' aria-label='Keys a phone keyboard lacks'>
  <button class='exit' id='exit'>Exit</button><button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>
- <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-k='left'>←</button><button data-k='right'>→</button>
+ <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-mod='ctrl'>Ctrl</button><button data-mod='alt'>Alt</button>
  <button class='copy' id='history'>Select text</button><button class='selectall' id='selectall'>Select all</button></div>
 <div id='term'></div>
 <pre id='hist' hidden></pre>
@@ -227,9 +227,20 @@ connect();
 document.addEventListener('visibilitychange', () => {{
   if (!document.hidden && (!ws || ws.readyState > 1)) {{ tries = 0; connect(); }}
 }});
-term.onData((d) => {{ send({{i: d}}); scrolled(-above); }});   // typing brings Claude Code back to the bottom
+// Ctrl and Alt are sticky: tap one, then a key on the phone's keyboard; tap it again to let go.
+let mod = null;
+const modBtns = document.querySelectorAll('.keys button[data-mod]');
+const arm = (m) => {{ mod = m; modBtns.forEach((b) => b.classList.toggle('on', b.dataset.mod === m)); }};
+modBtns.forEach((b) => b.addEventListener('click', (ev) => {{ ev.preventDefault(); arm(mod === b.dataset.mod ? null : b.dataset.mod); term.focus(); }}));
+const withMod = (d) => {{
+  if (!mod || d.length !== 1) return d;
+  const out = mod === 'alt' ? '\\x1b' + d : String.fromCharCode(d.toUpperCase().charCodeAt(0) & 0x1f);
+  arm(null);
+  return out;
+}};
+term.onData((d) => {{ send({{i: withMod(d)}}); scrolled(-above); }});   // typing brings Claude Code back to the bottom
 // A phone keyboard has no arrows or Esc, which every on-screen choice needs: these send the same bytes.
-const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B', left: '\\x1b[D', right: '\\x1b[C'}};
+const KEYS = {{esc: '\\x1b', tab: '\\t', up: '\\x1b[A', down: '\\x1b[B'}};
 document.querySelectorAll('.keys button[data-k]').forEach((b) => b.addEventListener('click', (ev) => {{
   ev.preventDefault(); send({{i: KEYS[b.dataset.k]}});
 }}));
