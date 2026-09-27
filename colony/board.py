@@ -867,38 +867,61 @@ def pinned_section(pid, root):
             + "</div>")
 
 
-def pin_add_page(reg, pid, rel=""):
-    """Pin a file in the project (browse its folders), a link, or an upload; each with an optional comment."""
+def pin_add_page(reg, pid):
+    """Pin a file in the project (Browse… to choose it), a link, or an upload; each with a title and an
+    optional comment to the agent."""
     root = projects(reg)[pid]
+    comment = "<textarea name='comment' placeholder='Optional: a comment to the agent about it'></textarea>"
+    title = "<input name='title' placeholder='Title (optional)'>"
+    hidden = f"<input type='hidden' name='p' value='{pid}'>"
+    body = (f"<header><h1>Pin to {e(Path(root).name)}</h1><p class='muted'>A file in the project, a link, or an upload. "
+            f"The agent hears of it on its next turn; a comment reaches it as a message.</p></header>"
+            f"<h2>A file in the project</h2><div class='card'><form class='add pinform' method='post' action='/pin'>{hidden}"
+            f"<input type='hidden' name='kind' value='file'><div class='chosen'><input name='target' id='pick' placeholder='No file chosen' readonly>"
+            f"<button type='button' class='quiet' id='browse'>Browse…</button></div><div class='browse' id='browser' hidden></div>"
+            f"{title}{comment}<button>Pin file</button></form></div>"
+            f"<h2>A link</h2><div class='card'><form class='add pinform' method='post' action='/pin'>{hidden}<input type='hidden' name='kind' value='url'>"
+            f"<input name='target' placeholder='https://… or http://localhost:5173'>{title}{comment}<button>Pin link</button></form></div>"
+            f"<h2>An upload</h2><div class='card'><form class='add pinform' method='post' action='/pin/upload' enctype='multipart/form-data'>{hidden}"
+            f"<input type='file' name='file'>{title}{comment}<button>Upload and pin</button></form></div>"
+            # browsing happens in place: folders open without leaving the page, a file fills the choice
+            f"""<script>
+const browser = document.getElementById('browser'), pick = document.getElementById('pick');
+async function open_(dir) {{
+  const r = await fetch('/pins/browse?p={pid}&dir=' + encodeURIComponent(dir), {{cache: 'no-store'}});
+  browser.innerHTML = await r.text(); browser.hidden = false;
+}}
+document.getElementById('browse').addEventListener('click', () => browser.hidden ? open_('') : (browser.hidden = true));
+browser.addEventListener('click', (ev) => {{
+  const b = ev.target.closest('button'); if (!b) return;
+  ev.preventDefault();
+  if (b.dataset.dir !== undefined) return open_(b.dataset.dir);
+  pick.value = b.dataset.file; browser.hidden = true;
+}});
+</script>""")
+    return shell(reg, pid, body)
+
+
+def pin_browse(root, rel=""):
+    """One folder of the project, for choosing a file to pin: folders open in place, files choose."""
     here = pins.inside(root, rel) or Path(root).resolve()
     if not here.is_dir():
         here = Path(root).resolve()
     rel_here = str(here.relative_to(Path(root).resolve()))
     rel_here = "" if rel_here == "." else rel_here
-    comment = "<textarea name='comment' placeholder='Optional: a comment to the agent about it'></textarea>"
-    hidden = f"<input type='hidden' name='p' value='{pid}'>"
     try:
         entries = sorted((c for c in here.iterdir() if not c.name.startswith(".")), key=lambda c: (c.is_file(), c.name.lower()))
     except OSError:
         entries = []
-    q = lambda r: urllib.parse.quote(r)
-    browse = [f"<a href='/pins/add?p={pid}&dir={q(str(Path(rel_here).parent) if rel_here else '')}'>↑ up</a>"] if rel_here else []
+    out = [f"<div class='muted'><code>/{e(rel_here)}</code></div>"]
+    if rel_here:
+        up = str(Path(rel_here).parent)
+        out.append(f"<button type='button' class='quiet' data-dir='{e('' if up == '.' else up)}'>↑ up</button>")
     for c in entries[:400]:
         r = str(Path(rel_here) / c.name) if rel_here else c.name
-        if c.is_dir():
-            browse.append(f"<a href='/pins/add?p={pid}&dir={q(r)}'>📁 {e(c.name)}/</a>")
-        else:
-            browse.append(f"<form class='pickfile' method='post' action='/pin'>{hidden}<input type='hidden' name='kind' value='file'>"
-                          f"<input type='hidden' name='target' value='{e(r)}'><button class='quiet'>📄 {e(c.name)}</button></form>")
-    body = (f"<header><h1>Pin to {e(Path(root).name)}</h1><p class='muted'>A file in the project, a link, or an upload. "
-            f"The agent hears of it on its next turn; a comment reaches it as a message.</p></header>"
-            f"<h2>A file in the project</h2><div class='card'><p><code>/{e(rel_here)}</code></p><div class='browse'>{''.join(browse)}</div></div>"
-            f"<h2>A link</h2><div class='card'><form class='add pinform' method='post' action='/pin'>{hidden}<input type='hidden' name='kind' value='url'>"
-            f"<input name='target' placeholder='https://… or http://localhost:5173'><input name='title' placeholder='Title (optional)'>{comment}"
-            f"<button>Pin link</button></form></div>"
-            f"<h2>An upload</h2><div class='card'><form class='add pinform' method='post' action='/pin/upload' enctype='multipart/form-data'>{hidden}"
-            f"<input type='file' name='file'><input name='title' placeholder='Title (optional)'>{comment}<button>Upload and pin</button></form></div>")
-    return shell(reg, pid, body)
+        out.append(f"<button type='button' class='quiet' data-dir='{e(r)}'>📁 {e(c.name)}/</button>" if c.is_dir()
+                   else f"<button type='button' class='quiet' data-file='{e(r)}'>📄 {e(c.name)}</button>")
+    return "".join(out)
 
 
 def pin_editor(reg, pid, pin):
@@ -1159,7 +1182,9 @@ class Handler(BaseHTTPRequestHandler):
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
         if url.path == "/pins/add":
-            return self._send(200, pin_add_page(reg, pid, (q.get("dir") or [""])[0]).encode())
+            return self._send(200, pin_add_page(reg, pid).encode())
+        if url.path == "/pins/browse":
+            return self._send(200, pin_browse(plist[pid], (q.get("dir") or [""])[0]).encode())
         if url.path == "/pin/open":
             pin = pins.get(plist[pid], (q.get("id") or [""])[0])
             if not pin:
@@ -1466,7 +1491,8 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .pinmore summary::-webkit-details-marker { display:none }
 .pinmenu { position:absolute; right:0; z-index:10; width:min(360px, calc(100vw - 32px)); padding:10px; border-radius:10px;
   background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } .pinmenu form.add { margin:0 0 8px }
-.browse { display:flex; flex-direction:column; gap:4px } .browse a, .pickfile button { text-align:left }
+.browse { display:flex; flex-direction:column; gap:4px; max-height:50vh; overflow:auto; flex:1 1 100% } .browse button { text-align:left }
+.chosen { display:flex; gap:8px; flex:1 1 100% } .chosen input { flex:1; font:inherit; padding:6px 9px; border-radius:7px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
 .pickfile { margin:0 } .pinform input { font:inherit; padding:6px 9px; border-radius:7px; border:1px solid var(--line);
   background:var(--bg); color:var(--ink); flex:1 1 100% }
 form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } .editbar { display:flex; align-items:center; gap:12px; padding:8px 0 }

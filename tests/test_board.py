@@ -715,6 +715,11 @@ class PinTest(BoardBase):
         post = lambda path, **f: urllib.request.urlopen(urllib.request.Request(
             f"http://127.0.0.1:{port}{path}", data=urllib.parse.urlencode(f).encode()))
         try:
+            add = urllib.request.urlopen(f"http://127.0.0.1:{port}/pins/add?p=0").read().decode()
+            self.assertIn("Browse…", add)
+            self.assertNotIn("notes.md", add, "the project's files stay out of sight until Browse")
+            listing = urllib.request.urlopen(f"http://127.0.0.1:{port}/pins/browse?p=0&dir=").read().decode()
+            self.assertIn("data-file='notes.md'", listing)
             post("/pin", p=0, kind="file", target="notes.md", title="Chapter 2")
             post("/pin", p=0, kind="file", target="report.pdf", comment="Is this the final one?")
             ps = {p["title"]: p for p in pins.pins(self.root)}
