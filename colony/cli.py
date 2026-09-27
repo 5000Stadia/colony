@@ -294,6 +294,9 @@ def cmd_field(a):
 
 def cmd_track(a):
     from . import board
+    if not Path(a.path).expanduser().is_dir():
+        print(f"colony: no folder {a.path}", file=sys.stderr)
+        return 2
     root = board.track(a.path)
     print(f"{root.name} is on the board. Open it with: colony board")
     return 0
