@@ -919,6 +919,29 @@ class AskTest(BoardBase):
         self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
 
 
+class RemoveTest(BoardBase):
+    def test_any_project_can_come_off_the_board_or_be_deleted_into_the_trash(self):
+        shelf = Path(self.tmp.name) / "shelf"
+        (shelf / "bird").mkdir(parents=True)
+        (shelf / "bird" / "game.html").write_text("<canvas></canvas>")
+        board.save_registry(dict(board.registry(), roots=[str(shelf)]))
+        board.track(self.root)
+        bird = shelf / "bird"
+        self.assertIn(bird, board.projects())
+        board.remove_project(bird)
+        self.assertNotIn(bird, board.projects(), "off the board, though its folder is still a project folder's subfolder")
+        self.assertTrue((bird / "game.html").exists(), "its files stay")
+        board.show_project(bird)
+        self.assertIn(bird, board.projects())
+        dest = board.delete_project(bird)
+        self.assertFalse(bird.exists())
+        self.assertTrue((dest / "game.html").exists(), "deleted into the trash, where it can be restored")
+        self.assertEqual(dest.parent, board.home() / "trash")
+        self.assertNotIn(bird, board.projects())
+        board.remove_project(self.root)
+        self.assertNotIn(str(self.root), board.registry()["projects"], "a project added by hand comes off too")
+
+
 class TabTest(BoardBase):
     def test_switching_to_a_project_starts_on_its_overview(self):
         board.track(self.root)

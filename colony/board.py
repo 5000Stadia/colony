@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import time
 import urllib.parse
@@ -102,6 +103,7 @@ def registry():
     reg.setdefault("seen", {})
     reg.setdefault("roots", [str(PACKAGE_PROJECTS)])  # folders whose every subfolder is a project
     reg.setdefault("new_root", reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS))
+    reg.setdefault("hidden", [])                       # subfolders of project folders taken off the board
     reg["settings"] = dict(DEFAULT_SETTINGS, **reg.get("settings", {}))
     return reg
 
@@ -209,7 +211,7 @@ def projects(reg=None):
         if not root.is_dir():
             continue
         for sub in sorted(d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")):
-            if sub not in out:
+            if sub not in out and str(sub) not in reg["hidden"]:
                 if not (sub / ".board").exists():
                     track(sub, register=False)
                 out.append(sub)
@@ -425,6 +427,41 @@ def track(path, register=True):
     return root
 
 
+def remove_project(root):
+    """Take a project off the board: its session stops, its files stay where they are."""
+    root = Path(root)
+    console.stop(root)
+    reg = registry()
+    if str(root) in reg["projects"]:
+        reg["projects"].remove(str(root))
+    elif str(root) not in reg["hidden"]:
+        reg["hidden"].append(str(root))                # inside a project folder: kept off the board by name
+    save_registry(reg)
+
+
+def show_project(root):
+    reg = registry()
+    if str(root) in reg["hidden"]:
+        reg["hidden"].remove(str(root))
+        save_registry(reg)
+
+
+def delete_project(root):
+    """Delete a project: its session stops and its folder moves to colony's trash, where it can be restored
+    by moving it back. Nothing is erased."""
+    root = Path(root)
+    remove_project(root)
+    trash = home() / "trash"
+    trash.mkdir(parents=True, exist_ok=True)
+    dest = trash / f"{root.name}-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.move(str(root), str(dest))
+    reg = registry()
+    if str(root) in reg["hidden"]:
+        reg["hidden"].remove(str(root))
+        save_registry(reg)
+    return dest
+
+
 def add_note(root, anchor, text, author="person", quiet=False):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
@@ -617,7 +654,11 @@ def render(reg, pid, view="overview"):
     merged, own = project_settings(root)
     # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
     settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own)}"
-                f"<p class='muted'>Applies when its console next starts.</p></div></details>")
+                f"<p class='muted'>Applies when its console next starts.</p><hr><div class='dangers'>"
+                f"<form method='post' action='/project/remove' onsubmit=\"return confirm('Take {e(root.name)} off the board? Its session stops; its files stay where they are.')\">"
+                f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
+                f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
+                f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{settings}</div>{tabs(pid, view)}"
                f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
@@ -1309,7 +1350,7 @@ def settings_page(reg):
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
-            f"<h2>Projects added one by one</h2><div class='card'><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>"
+            f"<h2>Projects added one by one</h2><div class='card'><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>{('<h3>Hidden from the board</h3><ul class=folders>' + ''.join(f"<li><code class='path'>{e(h)}</code><div class='folderacts'><form method='post' action='/roots'><input type='hidden' name='show' value='{e(h)}'><button class='quiet'>Show again</button></form></div></li>" for h in reg['hidden']) + '</ul>') if reg['hidden'] else ''}"
             f"<p><a href='/add'>+ Add a project folder</a></p></div>"
             f"<p class='muted'>Removing leaves every file where it is; the project just leaves the board.</p>")
     return shell(reg, -2, body)
@@ -1571,6 +1612,8 @@ class Handler(BaseHTTPRequestHandler):
                     reg["new_root"] = form["default"]
                 if form.get("untrack") in reg["projects"]:
                     reg["projects"].remove(form["untrack"])
+                if form.get("show") in reg["hidden"]:
+                    reg["hidden"].remove(form["show"])
                 save_registry(reg)
             self.send_response(303)
             self.send_header("Location", target)
@@ -1617,6 +1660,13 @@ class Handler(BaseHTTPRequestHandler):
             keys = providers.of(root).choose(console.screen(name), form["option"])
             if keys:
                 console.press(name, keys)
+        elif path in ("/project/remove", "/project/delete"):
+            (remove_project if path == "/project/remove" else delete_project)(root)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif path == "/pin" and form.get("target", "").strip():
             try:
                 pin = pins.add(root, form["target"].strip(), form.get("title", ""), kind=form.get("kind"))
@@ -1709,7 +1759,7 @@ nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0
 @media (max-width: 700px) { ul.dirs { columns:1 } }
 ul.folders { list-style:none; padding:0; margin:0 } ul.folders li { padding:8px 0; border-top:1px solid var(--line) } ul.folders li:first-child { border-top:0 }
 ul.folders .path { display:block; overflow-wrap:anywhere } .folderacts { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px }
-.folderacts form { margin:0 } .folderacts b { margin-right:auto; font-size:13px }
+.folderacts form { margin:0 } .dangers { display:flex; gap:8px; flex-wrap:wrap } .dangers form { margin:0 } button.danger { background:#b3261e; color:#fff } .folderacts b { margin-right:auto; font-size:13px }
 form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }

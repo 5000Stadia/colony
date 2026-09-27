@@ -741,6 +741,20 @@ def cmd_posture(a):
     return 0
 
 
+def cmd_remove(a):
+    from . import board
+    board.remove_project(_project(a.name))
+    print(f"{a.name} is off the board; its files are where they were")
+    return 0
+
+
+def cmd_delete(a):
+    from . import board
+    dest = board.delete_project(_project(a.name))
+    print(f"{a.name} deleted: its folder is in the trash at {dest}")
+    return 0
+
+
 def cmd_decided(a):
     from . import monitor
     monitor.decided(_project(a.name), a.text)
@@ -810,6 +824,8 @@ def main(argv=None):
     p.set_defaults(fn=cmd_helm)
     p = sub.add_parser("posture", help="the monitor's stance toward each project: helm, direction, focus")
     p.add_argument("name", nargs="?"); p.add_argument("--direction"); p.set_defaults(fn=cmd_posture)
+    p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
+    p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
     p.set_defaults(fn=cmd_decided)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)
