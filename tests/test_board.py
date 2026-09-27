@@ -414,7 +414,9 @@ class ProjectSettingsTest(BoardBase):
 
     def test_a_new_project_names_its_provider_and_model_and_another_provider_can_join(self):
         class Other:                       # what another CLI supplies to join: start, wire, read the screen
-            label, models, efforts = "Other CLI", ["big"], ["deep"]
+            label, models, efforts = "Other CLI", [("big-1", "Big 1")], ["deep"]
+            own_defaults = lambda self: {"model": None, "effort": None}
+            model_name = lambda self, v: v
             command = lambda self, label, s: f"other --model {s.get('model')}"
             wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
             wired = lambda self, root: (root / "AGENTS.md").exists()
@@ -427,7 +429,9 @@ class ProjectSettingsTest(BoardBase):
             port = httpd.server_address[1]
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/add?for=project&dir={self.tmp.name}").read().decode()
             self.assertIn(">Claude Code</option>", page)
-            self.assertIn("<option value='fable'>", page, "the provider's models are suggested")
+            self.assertIn("<option value='claude-opus-5-5'>Opus 5.5</option>", page, "exact models are suggested, by name")
+            self.assertIn("<option value='claude' selected>Claude Code</option>", page, "a new project starts filled in")
+            self.assertNotIn(">global<", page)
             for name, provider in (("seeds", "claude"), ("soil", "other")):
                 data = urllib.parse.urlencode({"within": self.tmp.name, "name": name, "provider": provider, "model": "big"}).encode()
                 urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/new", data=data))

@@ -517,8 +517,7 @@ def render(reg, pid, view="overview"):
     out.append(f"<header><h1>{e(root.name)}</h1>{tabs(pid, view)}<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     merged, own = project_settings(root)
     out.append(f"<details class='card psettings'><summary>Project settings</summary>{project_settings_form(pid, own)}"
-               f"<p class='muted'>Blank means the global setting ({e(', '.join(f'{k} {v}' for k, v in reg['settings'].items() if k in PROJECT_KEYS))}). "
-               f"Applies when its console next starts.</p></details>")
+               f"<p class='muted'>Applies when its console next starts.</p></details>")
     snap = console.snapshot(root)
     out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
                f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
@@ -690,23 +689,41 @@ def render_item(reg, pid, iid):
 
 
 def suggestions(name, values):
-    return f"<datalist id='{name}'>" + "".join(f"<option value='{e(v)}'>" for v in values) + "</datalist>"
+    """A datalist: plain values, or (value, label) pairs."""
+    pair = lambda v: v if isinstance(v, tuple) else (v, "")
+    return f"<datalist id='{name}'>" + "".join(
+        f"<option value='{e(pair(v)[0])}'>{e(pair(v)[1])}</option>" for v in values) + "</datalist>"
+
+
+def default_label(value, fallback="Claude Code picks"):
+    return f"Default ({value})" if value else f"Default ({fallback})"
 
 
 def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
-    with the provider's own suggestions."""
+    with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
+    will use; the global form leaves them blank to mean the provider's own, and says what that is."""
     # PROVIDER: the model and effort suggestions are those of the provider shown first, fixed when the page is
     # drawn. With two providers, swap the datalists when the select changes (a few lines of script), and let
     # permissions and Remote Control say when the chosen provider has no equivalent.
     from .providers import PROVIDERS, get
-    p = get(cur)
+    g = registry()["settings"]
+    p = get(cur or g["provider"])
+    own = p.own_defaults()
+    in_project = blank == "global"
+    if in_project:              # a project's form starts filled with what it will actually use
+        cur = cur or g["provider"]
+        model = model or g["model"] or own["model"] or ""
+        effort = effort or g["effort"] or own["effort"] or ""
+        dm, de = "Claude Code picks", "Claude Code picks"
+    else:                       # the global form: blank leaves it to the provider, and says what that is
+        dm = default_label(p.model_name(own["model"]) if own["model"] else None)
+        de = default_label(own["effort"])
     return (f"<label>Provider <select name='provider'>"
-            + (f"<option value=''>{blank}</option>" if blank == "global" else "")
             + "".join(f"<option value='{k}'{' selected' if cur == k else ''}>{e(v.label)}</option>" for k, v in PROVIDERS.items())
             + "</select></label>"
-            f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{blank}'></label>"
-            f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{blank}'></label>"
+            f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'></label>"
+            f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{e(de)}'></label>"
             + suggestions("models", p.models) + suggestions("efforts", p.efforts))
 
 
@@ -714,12 +731,14 @@ def project_settings_form(pid, own, action="/project-settings"):
     """The choices a project can make for itself; blank keeps the global one."""
     opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
-    remote = "" if "remote" not in own else ("on" if own["remote"] else "off")
+    g = registry()["settings"]
+    remote = "on" if own.get("remote", g["remote"]) else "off"
+    names = {"ask": "ask each time", "edits": "accept edits", "all": "allow everything", "plan": "plan only"}
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
-            f"<label>Permissions {opt('permissions', [('', 'global'), ('ask', 'ask each time'), ('edits', 'accept edits'), ('all', 'allow everything'), ('plan', 'plan only')], own.get('permissions', ''))}</label>"
+            f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
             # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
-            f"<label>Remote Control {opt('remote', [('', 'global'), ('on', 'on'), ('off', 'off')], remote)}</label>"
+            f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
             f"<button>Save</button></form>")
 
 

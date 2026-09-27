@@ -5,7 +5,9 @@ CLI joins by adding an entry to PROVIDERS, and the board, settings and forms off
 PROVIDER: for an agent adding another CLI (Codex or any other). Everything outside this file that still
 assumes Claude Code is marked with a `PROVIDER:` comment; `grep -rn "PROVIDER:" .` lists them, each saying
 what it assumes and what a second provider needs there. What a provider supplies here:
-  label, models, efforts   shown in the add/create forms and settings (suggestions; any value can be typed)
+  label, models, efforts   shown in the add/create forms and settings (suggestions; any value can be typed);
+                           models as (id, name) pairs
+  model_name(value)        a model ID or alias as the model's own name, for showing "Default (Opus 5.5)"
   command(label, s)        the shell command that starts its interactive agent with the settings in `s`:
                            provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off).
                            Map each to the CLI's own flags, and ignore any it has no equivalent for.
@@ -14,6 +16,8 @@ what it assumes and what a second provider needs there. What a provider supplies
                            session start (`--session`) and before each turn the person or the board types.
                            Without a hook system, the protocol can ask the agent to run it itself, weaker.
   wired(root)              whether wire() has been done (the doctor asks)
+  own_defaults()           the model and effort the CLI uses when colony names none, or None where it
+                           decides itself; the forms show them as "Default (...)"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
   choose(screen, text)     the keys that pick the on-screen option matching `text` (a trust question, a
@@ -28,7 +32,11 @@ from pathlib import Path
 
 class ClaudeCode:
     label = "Claude Code"
-    models = ["fable", "opus", "sonnet", "haiku"]          # aliases for the latest of each; full names work too
+    # Exact models by full ID, so a project keeps the model it was given; an alias ("opus") moves to whatever
+    # is newest. PROVIDER: Claude Code's current models; add new ones here as they ship.
+    models = [("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5", "Sonnet 5"),
+              ("claude-haiku-4-5-20251001", "Haiku 4.5")]
+    aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
     efforts = ["low", "medium", "high", "xhigh", "max"]
     # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
     # SessionStart gives the backlog at start; UserPromptSubmit gives what is new before every turn.
@@ -69,6 +77,21 @@ class ClaudeCode:
             if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
                 entries.append({"hooks": [{"type": "command", "command": command}]})
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    def model_name(self, value):
+        """The model a value means, by name: an ID or alias; anything else as typed."""
+        return dict(self.models).get(value) or self.aliases.get(str(value).lower()) or value
+
+    def own_defaults(self):
+        """What Claude Code uses when colony names nothing: its own settings file, where the person may have
+        pinned a model or effort. None where it's left to Claude Code, which picks by plan and version and
+        records the choice nowhere stable."""
+        path = Path.home() / ".claude" / "settings.json"
+        try:
+            s = json.loads(path.read_text())
+        except (OSError, ValueError):
+            s = {}
+        return {"model": s.get("model") or None, "effort": s.get("effortLevel") or None}
 
     def wired(self, root):
         claude_md = root / "CLAUDE.md"
