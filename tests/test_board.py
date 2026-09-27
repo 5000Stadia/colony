@@ -278,8 +278,8 @@ class GlanceTest(BoardBase):
             [s] = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/status").read())["projects"]
             self.assertEqual(s["state"], "working")
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
-            self.assertIn("id='peek-0'", page)
-            self.assertIn("second line", page)
+            self.assertNotIn("class='peek'", page, "the console is a tap away; no preview on the page")
+            self.assertIn("second line", " ".join(s["lines"]), "the status poll still reads the screen")
         finally:
             httpd.shutdown()
             httpd.server_close()

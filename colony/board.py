@@ -546,10 +546,6 @@ async function poll() {
       if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
       const badge = document.getElementById('badge-' + i);
       if (badge) { badge.hidden = !s.waiting; badge.textContent = s.waiting; }
-      const peek = document.getElementById('peek-' + i);
-      if (peek) { peek.hidden = s.state === 'off';
-        document.getElementById('peek-state-' + i).textContent = s.state;
-        document.getElementById('peek-lines-' + i).textContent = s.lines.join('\\n'); }
     });
   } catch (e) {}
 }
@@ -591,10 +587,6 @@ def render(reg, pid, view="overview"):
                 f"<p class='muted'>Applies when its console next starts.</p></div></details>")
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{settings}</div>{tabs(pid, view)}"
                f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
-    snap = console.snapshot(root)
-    out.append(f"<a class='peek' id='peek-{pid}' href='/?p={pid}&view=console'{' hidden' if snap['state'] == 'off' else ''}>"
-               f"<span class='peek-head'>Console · <b id='peek-state-{pid}'>{e(snap['state'])}</b> · open →</span>"
-               f"<pre id='peek-lines-{pid}'>{e(chr(10).join(snap['lines']))}</pre></a>")
     out.append(pinned_section(pid, root))
     # waiting on you: the same as this project's part of Needs you
     waiting = waiting_on(pid, root, f"/?p={pid}", label=False)
@@ -1451,9 +1443,6 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
 .sdot.working { background:var(--accent); border-color:var(--accent); animation:pulse 1.2s ease-in-out infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag) } .sdot.idle { border-color:var(--accent) }
 @keyframes pulse { 50% { opacity:.35 } }
-.peek { display:block; margin:0 0 16px; padding:10px 14px; border-radius:10px; background:#16171a; color:#d7d4ce; text-decoration:none }
-.peek[hidden] { display:none } .peek-head { font-size:12px; color:#9a9791 } .peek-head b { color:#7fb5a2 }
-.peek pre { margin:6px 0 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; max-height:9em; overflow:hidden }
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
