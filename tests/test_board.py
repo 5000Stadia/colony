@@ -94,6 +94,22 @@ class BoardTest(BoardBase):
         self.assertIn("Your notes, not yet acted on (1)", page)
         self.assertIn("an item later dropped from the plan", page.split("no longer on the roadmap")[1])
 
+    def test_a_project_joining_with_work_of_its_own_is_asked_to_bring_its_plan_over_once(self):
+        old = Path(self.tmp.name) / "ledgerbook"
+        (old / "design").mkdir(parents=True)
+        (old / "design" / "plan.md").write_text("v2: invoices, then reports\n")
+        board.track(old)
+        self.assertFalse((old / "ROADMAP.md").exists(), "no empty placeholder beside the project's own plan")
+        [n] = board.notes(old)
+        self.assertIn("bring the roadmap on board", n["text"])
+        board.track(old)
+        self.assertEqual(len(board.notes(old)), 1, "asked once, however often it is added")
+        fresh = Path(self.tmp.name) / "fresh"
+        fresh.mkdir()
+        board.track(fresh)
+        self.assertTrue((fresh / "ROADMAP.md").exists())
+        self.assertEqual(board.notes(fresh), [], "a new project has nothing to bring over")
+
     def test_notes_reach_the_agent_when_they_are_relevant(self):
         board.track(self.root)
         board.add_note(self.root, {"commit": "abc1234"}, "the log format is wrong")

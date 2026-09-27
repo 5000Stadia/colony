@@ -46,6 +46,19 @@ person follows and steers them all from one board, and the projects can write to
   quicker. Mail from the colony arrives by itself; answer a question with `colony reply ID "..."`.
 """
 
+# Left once, as the person, for a project that joins with work of its own: the notes deliver it on the agent's
+# next turn (the watcher starts or wakes the session), and its reply shows on the board.
+JOIN = """I've just added this project to my colony: the set of projects I follow and steer from one board, where \
+I leave notes and answer your gates, and where the projects can message each other. The new section of \
+CLAUDE.md, "This project is part of a colony", says how it works.
+
+Please bring the roadmap on board. Read how this project already plans its work (its plan and spec \
+documents, notes, open work and recent history) and write ROADMAP.md in the colony format: milestones as \
+`## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done and `[~]` for in progress. Include what's \
+done, what's under way, and features we've discussed but not built, as unchecked items under a later \
+milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
+documents stay where they are. Then show me the milestones before treating them as settled."""
+
 SKELETON = """# Roadmap
 
 What we're making, in the person's words.
@@ -346,11 +359,18 @@ def track(path, register=True):
     """Put a project on the board: its roadmap, its .board folder, and its provider's wiring (for Claude Code,
     the colony protocol in CLAUDE.md and the delivery hooks) — added to whatever the project already has."""
     root = Path(path).expanduser().resolve()      # the folder chosen is the root, whatever repository holds it
+    ours = {".git", ".board", ".claude", "CLAUDE.md", "ROADMAP.md"}
+    # Work of its own: any file colony didn't put there, or commits in its own repository (not an enclosing one).
+    joining = any(p.name not in ours for p in root.iterdir()) or \
+        ((root / ".git").exists() and bool(git(root, "rev-parse", "--verify", "-q", "HEAD").strip()))
     if not (root / ".git").exists():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".board").mkdir(exist_ok=True)
-    if not (root / "ROADMAP.md").exists():
+    if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
+    has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
+    if joining and not has_plan and not any(n["text"] == JOIN for n in notes(root)):
+        add_note(root, None, JOIN)
     from . import providers
     providers.of(root).wire(root, PROTOCOL)
     reg = registry()
