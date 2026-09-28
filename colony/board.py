@@ -699,7 +699,15 @@ def render(reg, pid, view="overview"):
                 f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
-    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{settings}</div>{tabs(pid, view)}"
+    others = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(plist) if i != pid)
+    # messaging another project sits on the title's line too, where a phone reaches it (its console is full screen)
+    message = (f"<details class='psettings'><summary>Message a project</summary><div class='panel'>"
+               f"<form class='options' method='post' action='/message'><input type='hidden' name='p' value='{pid}'>"
+               f"<label>To <select name='to'>{others}</select></label>"
+               f"<label class='stack'>What should {e(root.name)}'s agent message them about?"
+               f"<textarea name='text' placeholder='It writes the message itself, with its own context'></textarea></label>"
+               f"<button>Have {e(root.name)} send it</button></form></div></details>") if others else ""
+    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
                f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
@@ -1904,7 +1912,7 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .msgbox select, .options select { font:inherit; padding:4px 6px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .psettings summary { cursor:pointer; color:var(--accent); list-style:none; font-size:14px }
 .psettings summary::-webkit-details-marker { display:none } header.project { position:relative }
-.titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings, .titlerow .exitlink { margin-left:auto }
+.titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings, .titlerow .exitlink { margin-left:auto } .titlerow .psettings + .psettings { margin-left:0 }
 .exitlink { font-size:14px; text-decoration:none; white-space:nowrap }
 .segs { display:flex; gap:4px; margin:6px 0 12px; padding:3px; border-radius:10px; background:var(--sunk); width:fit-content; max-width:100% }
 .seg { background:transparent; color:var(--muted); padding:6px 12px; border-radius:8px } .seg.on { background:var(--card); color:var(--ink); font-weight:600 }
