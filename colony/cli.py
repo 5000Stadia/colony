@@ -556,8 +556,9 @@ def cmd_notes(a):
         # Printed for the provider to put in the agent's context: Claude Code's hooks do (providers.py wire()).
         from . import mail, console, providers
         payload = _hook_input()
-        if os.environ.get("COLONY_CONSOLE") == console.session_name(root):     # the board's console, not another session here
-            console.remember(root, *providers.of(root).conversation(payload))
+        seen = getattr(providers.of(root), "conversation", None)
+        if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here
+            console.remember(root, *seen(payload))
         prompt = str(payload.get("prompt") or "")
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves

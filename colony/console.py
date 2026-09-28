@@ -43,7 +43,10 @@ def command(label, root=None):
         return COMMAND.format(name=shlex.quote(label))
     from . import board, providers
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
-    return providers.of(root).command(label, s, resume=last_conversation(root) if root else None)
+    # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
+    # take resume= in command(); one that doesn't simply starts fresh after a restart.
+    resume = last_conversation(root) if root else None
+    return providers.of(root).command(label, s, **({"resume": resume} if resume else {}))
 
 
 def _conversations():
