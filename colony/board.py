@@ -120,7 +120,7 @@ def registry():
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
-DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
+DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask"}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
@@ -133,6 +133,7 @@ SETTING_HELP = {
     "remote": "new consoles start with Remote Control, reachable from the Claude app",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
+    "trust": "a console's question whether to trust its folder is answered yes: you put the project on the board",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
     "model": "model for new project sessions (blank: the provider's default)",
@@ -146,7 +147,7 @@ def set_setting(key, value):
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
-    elif key in ("remote", "monitor", "lan", "messaging"):
+    elif key in ("remote", "monitor", "lan", "messaging", "trust"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
@@ -1699,6 +1700,8 @@ def settings_page(reg):
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
                f"<span class='muted'>(one inbox per project)</span></label>"
+               f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Trust each project's folder "
+               f"<span class='muted'>(a console's trust question is answered yes)</span></label>"
                f"<label>Permissions for new sessions <select name='permissions'>"
                + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
@@ -1905,6 +1908,7 @@ class Handler(BaseHTTPRequestHandler):
             set_setting("monitor", form.get("monitor", "off"))
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
+            set_setting("trust", form.get("trust", "off"))
             if form.get("permissions"):
                 set_setting("permissions", form["permissions"])
             if form.get("provider"):

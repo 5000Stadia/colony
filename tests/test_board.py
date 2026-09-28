@@ -541,6 +541,31 @@ class MonitorTest(BoardBase):
         self.assertIn("asked you: Which format", sent[0])
         self.assertNotIn("finished a turn", sent[0])
 
+    def test_a_folder_trust_question_is_answered_yes_unless_the_person_turns_it_off(self):
+        claude, codex = providers.get("claude"), providers.get("codex")
+        cl = ("Quick safety check: Is this a project you created or one you trust?\n\n ❯ 1. Yes, I trust this folder\n"
+              "   2. No, exit\n\n Enter to confirm · Esc to cancel")
+        cx = ("  Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n  Press enter to continue")
+        self.assertEqual(providers.trusting(claude, cl), ["Enter"])
+        self.assertEqual(providers.trusting(codex, cx), ["Enter"])
+        self.assertEqual(providers.trusting(codex, cx.replace("› 1. Yes", "  1. Yes").replace("  2. No", "› 2. No")), ["Up", "Enter"],
+                         "yes, wherever the highlight is: never No")
+        self.assertIsNone(providers.trusting(claude, "Do you want to make this edit?\n ❯ 1. Yes\n   2. No"), "only trust")
+        console.snapshot = lambda root, lines=6, name=None: {"state": "needs you", "lines": []}
+        pressed, saved = [], (console.screen, console.press)
+        console.screen = lambda name: cl                          # the project runs on Claude Code
+        console.press = lambda name, keys: pressed.append(keys)
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+        try:
+            monitor.Watcher(quiet=0).tick()
+            self.assertEqual(pressed, [["Enter"]], "on by default")
+            board.set_setting("trust", "off")
+            monitor.Watcher(quiet=0).tick()
+            self.assertEqual(pressed, [["Enter"]], "off: it waits for the person")
+        finally:
+            console.screen, console.press = saved
+        self.assertTrue(board.DEFAULT_SETTINGS["trust"])
+
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}

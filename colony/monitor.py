@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import board, console
+from . import board, console, providers
 
 def name():
     return board.scoped("board-monitor")
@@ -370,6 +370,13 @@ class Watcher:
                 continue
             board.item_times(p)                 # when each roadmap item reached its state: the Roadmap tab orders by it
             snap = console.snapshot(p, lines=4)
+            if snap["state"] == "needs you" and board.registry()["settings"]["trust"]:
+                # the person put it on the board, so they trust its folder: that question is answered for them
+                name = console.session_name(p)
+                keys = providers.trusting(providers.of(p), console.screen(name))
+                if keys:
+                    console.press(name, keys)
+                    continue
             # A project not seen before counts as off, so one already waiting (a new folder's trust question,
             # a question left while the board was down) is reported, not taken as where it always was.
             before, now = self.states.get(str(p), "off"), snap["state"]

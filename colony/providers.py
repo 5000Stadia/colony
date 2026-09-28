@@ -33,7 +33,8 @@ what it assumes and what a second provider needs there. What a provider supplies
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
-  choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it
+  choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it;
+                           with choice(), it also lets the watcher answer a folder-trust question (trusting())
   enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
   draft(screen)            what the person has half-typed in its input and not sent, from a screen captured with
                            its styles; "" if nothing, None if it can't tell. Nothing is typed into a session while
@@ -423,6 +424,17 @@ class Codex:
 
     choice = ClaudeCode.choice
     choose = ClaudeCode.choose
+
+
+def trusting(provider, screen):
+    """The keys that answer yes to a question whether to trust the project's folder, if one is on screen: the
+    option that begins "Yes", never one that exits. Claude Code asks "Yes, I trust this folder / No, exit",
+    Codex "Yes, continue / No, quit"."""
+    found = provider.choice(screen)
+    if not found or "trust" not in (" ".join(found[0]) + " " + " ".join(found[1])).lower():
+        return None
+    yes = next((o for o in found[1] if o.lower().startswith("yes")), None)
+    return provider.choose(screen, yes) if yes else None
 
 
 PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
