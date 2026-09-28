@@ -355,8 +355,9 @@ class Watcher:
                 since = time.strftime("%Y-%m-%d %H:%M", time.localtime(last[str(p)]))
                 parts.append(f"{p.name} (since {since}: {signals(p, last[str(p)])}"
                              + (f"; the person wants supports here to favour: {note}" if note else "") + ")")
+            # The brief may have changed since this session read it, so it is read afresh each time.
             console.type_into(name(), "[colony] Supports check, worked on since the last one: " + ", ".join(parts)
-                              + ". Follow 'Supports' in your brief; most checks end at step 1.")
+                              + f". Read 'Supports' in {home() / 'CLAUDE.md'} afresh and follow it, starting with the audit.")
 
     def tell(self):
         path = board.home() / "to_monitor.jsonl"

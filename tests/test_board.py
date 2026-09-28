@@ -830,6 +830,7 @@ class SupportsTest(BoardBase):
         self.assertIn("Supports check, worked on since", self.sent[0])
         self.assertIn("plants", self.sent[0])
         self.assertIn("favour: faster test runs", self.sent[0], "what the person wants it to favour goes with it")
+        self.assertIn("afresh", self.sent[0], "the brief is read as it is now, not as the session remembers it")
         self.due(49)
         saved, monitor.last_commit = monitor.last_commit, lambda root: 0       # no commit since
         try:
