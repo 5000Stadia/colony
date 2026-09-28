@@ -796,6 +796,13 @@ def cmd_supports(a):
         elif a.action == "approve":
             r = supports.approve(a.name, a.evidence)
             print(f"{r['name']}: approved by the person; it can now be suggested")
+        elif a.action == "sources":
+            print(supports.sources_text())
+        elif a.action == "source":
+            if not (a.name and a.status and a.trust):
+                raise SystemExit("colony supports source NAME WHERE --trust official|reviewed|broad|vendor (on the person's say)")
+            supports.add_source(a.name, a.status, a.trust)
+            print(f"{a.name} added to the sources as {a.trust}")
         elif a.action == "check":
             print(supports.check_now())
         else:
@@ -881,10 +888,10 @@ def main(argv=None):
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
-    p.add_argument("action", nargs="?", choices=("add", "set", "ask", "approve", "suggest", "check")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
+    p.add_argument("action", nargs="?", choices=("add", "set", "ask", "approve", "suggest", "check", "sources", "source")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
     p.add_argument("status", nargs="?"); p.add_argument("--for", dest="symptom", default=""); p.add_argument("--gives", default="")
     p.add_argument("--source", default=""); p.add_argument("--cost", default=""); p.add_argument("--remove", default="")
-    p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)
+    p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--trust"); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)
     p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
     p.set_defaults(fn=cmd_decided)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)

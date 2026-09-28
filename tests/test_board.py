@@ -932,6 +932,15 @@ class SupportsTest(BoardBase):
         supports.decide("s1", "approve")
         self.assertEqual(self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "x").returncode, 0)
 
+    def test_the_index_of_indexes_says_how_far_each_is_trusted_and_grows_on_the_persons_say(self):
+        out = self.cli("supports", "sources").stdout
+        self.assertIn("[official] Claude Code's official plugin marketplace", out)
+        self.assertIn("[broad] awesome-mcp-servers", out)
+        self.assertIn("vendor: a company's list", out)
+        self.assertNotEqual(self.cli("supports", "source", "x", "y", "--trust", "great").returncode, 0)
+        self.cli("supports", "source", "New index", "github.com/a/b", "--trust", "reviewed")
+        self.assertIn("[reviewed] New index: github.com/a/b", self.cli("supports", "sources").stdout)
+
     def test_each_project_has_its_own_period_and_note_on_the_helm_page(self):
         shop = Path(self.tmp.name) / "shop"
         shop.mkdir()

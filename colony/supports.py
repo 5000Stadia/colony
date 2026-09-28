@@ -54,6 +54,49 @@ SEED = [
 ]
 
 
+# Where the monitor looks: the index of indexes, each with how far it can be trusted. A source joins only
+# on the person's say. Whatever the tier, a find is judged at its own repository, never by the list.
+TRUST = {
+    "official": "kept by the maker of the tool it serves",
+    "reviewed": "entries are reviewed before they are listed",
+    "broad": "takes almost anything: leads only",
+    "vendor": "a company's list: it favours its own products",
+}
+SOURCES = [
+    {"name": "Claude Code's official plugin marketplace", "trust": "official",
+     "where": "claude plugin list --available --json (github.com/anthropics/claude-plugins-official)"},
+    {"name": "Anthropic's skills", "trust": "official", "where": "github.com/anthropics/skills"},
+    {"name": "MCP reference servers", "trust": "official", "where": "github.com/modelcontextprotocol/servers"},
+    {"name": "MCP registry", "trust": "official",
+     "where": "registry.modelcontextprotocol.io/v0/servers?search=WORDS (who published is verified; quality is not)"},
+    {"name": "Docker MCP catalog", "trust": "reviewed", "where": "github.com/docker/mcp-registry (Docker reviews each; the ones it builds are signed)"},
+    {"name": "awesome-claude-code", "trust": "reviewed", "where": "github.com/hesreallyhim/awesome-claude-code (hand-picked by one maintainer, best effort)"},
+    {"name": "awesome-mcp-servers", "trust": "broad", "where": "github.com/punkpeye/awesome-mcp-servers"},
+    {"name": "agent and subagent collections", "trust": "broad",
+     "where": "github.com/wshobson/agents, github.com/VoltAgent/awesome-claude-code-subagents (mostly added agents: rarely earn their place)"},
+    {"name": "Reddit, Hacker News, blogs", "trust": "broad", "where": "anywhere practitioners compare tools"},
+    {"name": "awesome-claude-skills", "trust": "vendor", "where": "github.com/ComposioHQ/awesome-claude-skills (Composio)"},
+]
+
+
+def sources():
+    path = board.home() / "sources.json"
+    return json.loads(path.read_text()) if path.exists() else SOURCES
+
+
+def add_source(name, where, trust):
+    if trust not in TRUST:
+        raise ValueError(trust)
+    rows = sources() + [{"name": name.strip(), "where": where.strip(), "trust": trust}]
+    board.home().mkdir(parents=True, exist_ok=True)
+    (board.home() / "sources.json").write_text(json.dumps(rows, indent=1))
+
+
+def sources_text():
+    return "\n".join(f"[{s['trust']}] {s['name']}: {s['where']}" for t in TRUST for s in sources() if s["trust"] == t) + \
+        "\n\n" + "\n".join(f"{t}: {why}" for t, why in TRUST.items())
+
+
 def path():
     return board.home() / "supports.json"
 
