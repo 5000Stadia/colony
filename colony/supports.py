@@ -54,8 +54,8 @@ SEED = [
 ]
 
 
-# Where the monitor looks: the index of indexes, each with how far it can be trusted. A source joins only
-# on the person's say. Whatever the tier, a find is judged at its own repository, never by the list.
+# Where the monitor looks: the index of indexes, each with how far it can be trusted. The monitor adds a
+# good one it comes across and tells the person. Whatever the tier, a find is judged at its own repository.
 TRUST = {
     "official": "kept by the maker of the tool it serves",
     "reviewed": "entries are reviewed before they are listed",

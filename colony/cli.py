@@ -800,7 +800,7 @@ def cmd_supports(a):
             print(supports.sources_text())
         elif a.action == "source":
             if not (a.name and a.status and a.trust):
-                raise SystemExit("colony supports source NAME WHERE --trust official|reviewed|broad|vendor (on the person's say)")
+                raise SystemExit("colony supports source NAME WHERE --trust official|reviewed|broad|vendor")
             supports.add_source(a.name, a.status, a.trust)
             print(f"{a.name} added to the sources as {a.trust}")
         elif a.action == "check":

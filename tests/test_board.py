@@ -945,7 +945,7 @@ class SupportsTest(BoardBase):
         self.assertIn("changed most: water.py ×3", out)
         self.assertEqual(monitor.signals(self.root, time.time() + 60), "0 commits, 0 of them fixes")
 
-    def test_the_index_of_indexes_says_how_far_each_is_trusted_and_grows_on_the_persons_say(self):
+    def test_the_index_of_indexes_says_how_far_each_is_trusted_and_grows(self):
         out = self.cli("supports", "sources").stdout
         self.assertIn("[official] Claude Code's official plugin marketplace", out)
         self.assertIn("[broad] awesome-mcp-servers", out)
