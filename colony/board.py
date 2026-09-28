@@ -1075,8 +1075,8 @@ def monitor_page(reg, view="overview"):
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form></div>"
             f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div>"
-            f"<p class='muted'>{'Board-wide, it holds the helm: it settles routine questions within each project' + chr(39) + 's direction.' if on else 'Board-wide it sleeps: it is woken only for projects whose helm it holds, and costs nothing until you talk to it.'}"
-            f" Each project can differ, on the Helm tab.</p></header>")
+            f"<p class='muted'>{'It holds the helm of every project included in it, and settles routine questions within each one' + chr(39) + 's direction.' if on else 'It sleeps: nothing wakes it but you and its scouting, and the board shows you what needs you.'}"
+            f" Which projects are included, and each one's direction, are on the Helm tab.</p></header>")
     plist = projects(reg)
     if view == "console":
         body = head + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1,
@@ -1103,18 +1103,18 @@ def monitor_page(reg, view="overview"):
                 continue
             pos, f, held = monitor.posture(p), focus(p), monitor.helm_for(p)
             opt = lambda v, label, cur: f"<option value='{v}'{' selected' if cur == v else ''}>{label}</option>"
-            cur = "default" if pos["helm"] is None else ("on" if pos["helm"] else "off")
             lines = "".join(f"<li><span class='kind'>{k}</span> {e(x)}</li>" for k in ("doing", "verify", "next") for x in f[k])
             made = "".join(f"<div class='note'><span class='who'>{e(d['at'][:16].replace('T', ' '))}</span><div>{e(d['text'])}</div></div>"
                            for d in monitor.decisions(p, 8))
             cards.append(f"<div class='card helmcard'><div class='titlerow'><h3>{e(p.name)}</h3>"
                          f"<span class='badge {'gate' if held else ''}'>{'monitor holds the helm' if held else 'helm with you'}</span></div>"
                          f"<form class='options' method='post' action='/posture'><input type='hidden' name='p' value='{pid}'>"
-                         f"<label>Helm <select name='helm'>{opt('default', 'board-wide (' + ('on' if on else 'off') + ')', cur)}"
-                         f"{opt('on', 'on for this project', cur)}{opt('off', 'off for this project', cur)}</select></label>"
+                         f"<label><input type='checkbox' name='helm' value='on'{'' if pos['helm'] is False else ' checked'}> Include in the monitor's helm "
+                         f"<span class='muted'>({'held now' if held else 'the helm is with you' if not on else 'left out'})</span></label>"
                          f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
-                         f"<label>Scout every <input name='scout' type='number' min='0' step='1' value='{pos['scout']}' class='hours'> hours "
-                         f"<span class='muted'>(if worked on since; 0: never)</span></label>"
+                         f"<label><input type='checkbox' name='scouting' value='on'{' checked' if pos['scouting'] else ''}> Scout for it every "
+                         f"<input name='scout' type='number' min='1' step='1' value='{pos['scout'] or 24}' class='hours'> hours "
+                         f"<span class='muted'>(if worked on since)</span></label>"
                          f"<label class='stack'>What scouting should favour here<textarea name='scout_note' class='short' placeholder='e.g. faster test runs; papers on forecasting; nothing that changes the stack'>{e(pos['scout_note'])}</textarea></label>"
                          f"<button>Save</button></form>"
                          f"<div class='focus'><b>Now: {e(f['milestone'] or 'no roadmap yet')}</b><ul>{lines}</ul></div>"
@@ -1725,8 +1725,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/posture":
             from . import monitor
             root = projects(reg)[int(form.get("p", "0"))]
-            monitor.set_posture(root, helm={"on": True, "off": False}.get(form.get("helm"), "default"),
-                                direction=form.get("direction", ""), scout=form.get("scout"), scout_note=form.get("scout_note", ""))
+            monitor.set_posture(root, helm=form.get("helm") == "on", direction=form.get("direction", ""), scout=form.get("scout"),
+                                scout_note=form.get("scout_note", ""), scouting=form.get("scouting") == "on")
             self.send_response(303)
             self.send_header("Location", "/monitor?view=helm")
             self.send_header("Content-Length", "0")

@@ -339,6 +339,10 @@ class MonitorTest(BoardBase):
         w.tick()
         w.tick()
         self.assertEqual(sent, [], "helm off: no wake, no tokens")
+        monitor.set_posture(self.root, helm=False)
+        monitor.helm(True)
+        w.tick()
+        self.assertEqual(sent, [], "a project left out of the helm isn't woken for, even with the helm given")
         monitor.set_posture(self.root, helm=True)
         w.tick()
         self.assertEqual(len(sent), 1)
@@ -394,11 +398,16 @@ class MonitorTest(BoardBase):
         board.track(shop)
         run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                         text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
-        self.assertIn("with the person", run("helm", "--project", "plants").stdout)
-        run("helm", "on", "--project", "plants")
+        self.assertIn("included in the helm, which is with the person", run("helm", "--project", "plants").stdout)
+        run("helm", "off", "--project", "shop")
+        self.assertIn("left out of the helm", run("helm", "--project", "shop").stdout)
+        run("helm", "on")
         run("posture", "plants", "--direction", "Approve routine permission prompts; never push.")
-        self.assertTrue(monitor.helm_for(self.root))
-        self.assertFalse(monitor.helm_for(shop), "the others keep the board-wide setting")
+        self.assertTrue(monitor.helm_for(self.root), "given the helm, it takes every project included in it")
+        self.assertFalse(monitor.helm_for(shop), "but not one left out")
+        self.assertIn("shop: helm off (left out of the helm)", run("posture").stdout)
+        run("posture", "shop", "--scouting", "off")
+        self.assertIn("scouting: off", run("posture", "shop").stdout)
         posture = run("posture").stdout
         self.assertIn("plants: helm on", posture)
         self.assertIn("never push", posture)
@@ -838,7 +847,12 @@ class SupportsTest(BoardBase):
         finally:
             monitor.last_commit = saved
         self.assertEqual(len(self.sent), 1, "nothing worked on since: the check costs nothing")
-        monitor.set_posture(self.root, scout="0")
+        monitor.set_posture(self.root, scouting=False)
+        self.due(49)
+        self.commit("work while scouting is off")
+        w.tick()
+        self.assertEqual(len(self.sent), 1, "scouting off for the project: nothing")
+        monitor.set_posture(self.root, scout="0", scouting=True)
         supports.check_now()
         self.commit("more work")
         w.tick()
@@ -1033,6 +1047,50 @@ class DirectionTest(BoardBase):
         monitor.set_direction(None)
         self.assertNotIn("Never touch the payments module", (monitor.home() / "CLAUDE.md").read_text())
         self.assertFalse((board.home() / "direction.md").exists(), "back to colony's, which improves with colony")
+
+
+class ConsoleSurvivalTest(BoardBase):
+    def test_a_console_carries_on_when_the_kernel_kills_one_of_its_processes_for_memory(self):
+        import shutil
+        if not shutil.which("systemd-run") or not console.contained("x").startswith("systemd-run"):
+            self.skipTest("no user systemd here")
+        board.track(self.root)
+        name = console.ensure(self.root)
+        pane = subprocess.run(["tmux", "display-message", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True).stdout.strip()
+        scope = None
+        for _ in range(25):                           # the console's own processes, down from its pane
+            tree, todo = [], [pane]
+            while todo:
+                q = todo.pop()
+                tree.append(q)
+                todo += subprocess.run(["pgrep", "-P", q], capture_output=True, text=True).stdout.split()
+            units = [Path(f"/proc/{q}/cgroup").read_text().strip().rsplit("/", 1)[-1] for q in tree if Path(f"/proc/{q}/cgroup").exists()]
+            scope = next((u for u in units if u.startswith("run-")), None)
+            if scope:
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(scope, "the console runs in its own scope")
+        policy = subprocess.run(["systemctl", "--user", "show", scope, "-p", "OOMPolicy"], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(policy, "OOMPolicy=continue", "one process killed for memory doesn't stop the session")
+
+    def test_a_console_that_died_comes_back_to_its_conversation_and_only_the_boards_own_is_remembered(self):
+        board.track(self.root)
+        transcript = Path(self.tmp.name) / "t.jsonl"
+        transcript.write_text("{}")
+        payload = json.dumps({"session_id": "abc-123", "transcript_path": str(transcript)})
+        env = dict(os.environ, PYTHONPATH=str(ROOT))
+        subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver"], cwd=self.root, input=payload, text=True, env=env, capture_output=True)
+        self.assertIsNone(console.last_conversation(self.root), "a session the person opened here themselves is not the console's")
+        env["COLONY_CONSOLE"] = console.session_name(self.root)
+        subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver"], cwd=self.root, input=payload, text=True, env=env, capture_output=True)
+        self.assertEqual(console.last_conversation(self.root), "abc-123")
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertIn("claude --resume abc-123", console.command("plants", self.root))
+            transcript.unlink()
+            self.assertNotIn("--resume", console.command("plants", self.root), "a conversation that is gone starts fresh")
+        finally:
+            console.COMMAND = saved
 
 
 class PinTest(BoardBase):

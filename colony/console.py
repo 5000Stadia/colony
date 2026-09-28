@@ -15,6 +15,7 @@ import re
 import secrets
 import select
 import shlex
+import shutil
 import struct
 import subprocess
 import termios
@@ -36,12 +37,48 @@ COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the pr
 
 
 def command(label, root=None):
-    """How the project's provider starts its agent, with the project's settings (falling back to the global ones)."""
+    """How the project's provider starts its agent, with the project's settings (falling back to the global ones),
+    back in the conversation it was last in, if it had one."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
     from . import board, providers
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
-    return providers.of(root).command(label, s)
+    return providers.of(root).command(label, s, resume=last_conversation(root) if root else None)
+
+
+def _conversations():
+    from . import board
+    return board.home() / "conversations.json"     # this machine's, so kept with the board, not in the project
+
+
+def remember(root, conversation, transcript):
+    """The conversation a console is in, recorded by its hooks, so a console that died comes back to it."""
+    if conversation and transcript:
+        path = _conversations()
+        rows = json.loads(path.read_text()) if path.exists() else {}
+        rows[str(Path(root))] = {"conversation": conversation, "transcript": transcript}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows, indent=1))
+
+
+def last_conversation(root):
+    path = _conversations()
+    c = (json.loads(path.read_text()) if path.exists() else {}).get(str(Path(root)))
+    return c["conversation"] if c and Path(c["transcript"]).exists() else None
+
+
+def contained(cmd):
+    """Run a console in its own systemd scope that carries on when the kernel kills one of its processes for
+    memory: by default systemd stops the whole unit, which once took a project's session down with the one
+    browser a test had started. Where systemd isn't there, the command runs as it is."""
+    global _SCOPE
+    if _SCOPE is None:
+        _SCOPE = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "true"], capture_output=True).returncode == 0 \
+            if shutil.which("systemd-run") else False
+    return f"systemd-run --user --scope --quiet -p OOMPolicy=continue -- sh -c {shlex.quote(cmd)}" if _SCOPE else cmd
+
+
+_SCOPE = None
 
 
 def session_name(root):
@@ -58,8 +95,9 @@ def ensure(root, name=None, label=None):
     """Start the session if it is not running: the provider's CLI, in the project, as its settings say."""
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
-        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50",
-                        command(label or Path(root).name, None if label else root)],
+        # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50", "-e", f"COLONY_CONSOLE={name}",
+                        contained(command(label or Path(root).name, None if label else root))],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
     return name

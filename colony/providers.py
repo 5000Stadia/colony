@@ -54,10 +54,11 @@ class ClaudeCode:
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
              "Stop": "colony turn"}
 
-    def command(self, label, s):
-        """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort."""
+    def command(self, label, s, resume=None):
+        """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort;
+        with resume, back in that conversation."""
         from .board import PERMISSIONS
-        parts = ["claude"]
+        parts = ["claude"] + (["--resume", shlex.quote(resume)] if resume else [])
         if PERMISSIONS.get(s.get("permissions") or "ask"):
             parts += ["--permission-mode", PERMISSIONS[s["permissions"]]]
         if s.get("remote"):
@@ -89,6 +90,10 @@ class ClaudeCode:
             if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
                 entries.append({"hooks": [{"type": "command", "command": command}]})
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    def conversation(self, payload):
+        """Which conversation a hook ran in, and where it is kept: for a console that must be restarted."""
+        return payload.get("session_id"), payload.get("transcript_path")
 
     def model_name(self, value):
         """The model a value means, by name: an ID or alias; anything else as typed."""

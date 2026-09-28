@@ -554,8 +554,11 @@ def cmd_notes(a):
         return 0                                  # not on the board: the hooks stay silent
     if a.deliver:
         # Printed for the provider to put in the agent's context: Claude Code's hooks do (providers.py wire()).
-        from . import mail
-        prompt = str(_hook_input().get("prompt") or "")
+        from . import mail, console, providers
+        payload = _hook_input()
+        if os.environ.get("COLONY_CONSOLE") == console.session_name(root):     # the board's console, not another session here
+            console.remember(root, *providers.of(root).conversation(payload))
+        prompt = str(payload.get("prompt") or "")
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves
         fresh, still = board.deliver(root, session=a.session)
@@ -729,7 +732,9 @@ def cmd_helm(a):
         root = _project(a.project)
         if a.state:
             monitor.set_posture(root, helm=a.state == "on")
-        print(f"{a.project}: " + ("the monitor holds the helm" if monitor.helm_for(root) else "the helm is with the person"))
+        included = monitor.posture(root)["helm"] is not False
+        print(f"{a.project}: " + ("the monitor holds the helm" if monitor.helm_for(root) else
+                                  "included in the helm, which is with the person" if included else "left out of the helm"))
         return 0
     if a.state:
         monitor.helm(a.state == "on")
@@ -740,13 +745,14 @@ def cmd_helm(a):
 def cmd_posture(a):
     """The monitor's stance toward each project: helm, the person's direction, the current focus."""
     from . import board, monitor
-    if a.name and (a.direction is not None or a.scout is not None or a.favour is not None):
-        monitor.set_posture(_project(a.name), direction=a.direction, scout=a.scout, scout_note=a.favour)
+    if a.name and (a.direction is not None or a.scout is not None or a.favour is not None or a.scouting):
+        monitor.set_posture(_project(a.name), direction=a.direction, scout=a.scout, scout_note=a.favour,
+                            scouting=None if not a.scouting else a.scouting == "on")
     for p in [_project(a.name)] if a.name else board.projects():
         f, pos = board.focus(p), monitor.posture(p)
-        print(f"{p.name}: helm {'on' if monitor.helm_for(p) else 'off'}{'' if pos['helm'] is not None else ' (board-wide)'}")
+        print(f"{p.name}: helm {'on' if monitor.helm_for(p) else 'off'}{' (left out of the helm)' if pos['helm'] is False else ''}")
         print(f"  direction: {pos['direction'] or '(none given)'}")
-        print(f"  supports: " + (f"checked every {pos['scout']} hours if worked on" if pos["scout"] else "never checked")
+        print(f"  scouting: " + (f"every {pos['scout']} hours if worked on" if pos["scout"] and pos["scouting"] else "off")
               + (f"; favour: {pos['scout_note']}" if pos["scout_note"] else ""))
         print(f"  focus: {f['milestone'] or '(no roadmap)'}")
         for label in ("doing", "verify", "next"):
@@ -890,7 +896,8 @@ def main(argv=None):
     p = sub.add_parser("posture", help="the monitor's stance toward each project: helm, direction, focus")
     p.add_argument("name", nargs="?"); p.add_argument("--direction")
     p.add_argument("--scout", help="every how many hours to look for supports here (0: never)")
-    p.add_argument("--favour", help="what supports here should favour"); p.set_defaults(fn=cmd_posture)
+    p.add_argument("--favour", help="what scouting here should favour")
+    p.add_argument("--scouting", choices=("on", "off"), help="scout for this project at all"); p.set_defaults(fn=cmd_posture)
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)

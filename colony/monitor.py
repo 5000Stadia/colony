@@ -46,8 +46,9 @@ project also has its own session they can talk to directly.
 - **Check before you report.** After acting on a project, look (`colony choose` prints the result; else
   `colony peek NAME`) and tell the person what actually happened, not what you meant to happen.
 - **The helm, project by project.** `colony posture` shows, for each project, whether you hold its
-  helm, the person's standing direction for it, and its current focus from its roadmap. The person
-  says "take the helm (for X)" or "hand it back" and you run `colony helm on|off [--project X]`; a
+  helm, the person's direction for it, and its current focus from its roadmap. When the person gives you
+  the helm or takes it back, run `colony helm on|off`: you hold the helm of every project included in it.
+  To include or leave out one project, `colony helm on|off --project X`. A
   direction they give you for a project goes in with `colony posture X --direction "..."`. Where the
   helm is off, relay and ask; decide nothing. Where it's on, answer routine questions yourself within
   that project's direction, record each with `colony decided X "what and why"`, and tell the person.
@@ -257,11 +258,13 @@ def posture(root=None):
 
 # scout: every how many hours the monitor looks for supports the project could use (0 never);
 # scout_note: what the person wants those supports to favour there.
-POSTURE = {"helm": None, "direction": "", "scout": 24, "scout_note": ""}
+# helm: whether the project is included when the person gives the monitor the helm (False: left out);
+# scouting: whether the monitor scouts for it at all.
+POSTURE = {"helm": None, "direction": "", "scout": 24, "scout_note": "", "scouting": True}
 
 
-def set_posture(root, helm=None, direction=None, scout=None, scout_note=None):
-    """Change the stance toward one project; helm "default" returns it to the board-wide setting."""
+def set_posture(root, helm=None, direction=None, scout=None, scout_note=None, scouting=None):
+    """Change the stance toward one project: whether it is included in the helm, its direction, its scouting."""
     path = board.home() / "posture.json"
     allp = posture()
     p = dict(POSTURE, **allp.get(str(root), {}))
@@ -273,6 +276,8 @@ def set_posture(root, helm=None, direction=None, scout=None, scout_note=None):
         p["scout"] = max(0, int(float(scout)))
     if scout_note is not None:
         p["scout_note"] = scout_note.strip()
+    if scouting is not None:
+        p["scouting"] = bool(scouting)
     allp[str(root)] = p
     board.home().mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(allp, indent=1))
@@ -280,8 +285,8 @@ def set_posture(root, helm=None, direction=None, scout=None, scout_note=None):
 
 
 def helm_for(root):
-    p = posture(root)
-    return helm() if p["helm"] is None else p["helm"]
+    """The person gives the monitor the helm once, for every project that is included in it."""
+    return helm() and posture(root)["helm"] is not False
 
 
 def decided(root, text):
@@ -400,7 +405,7 @@ class Watcher:
         last = json.loads(path.read_text()) if path.exists() else {}
         due, clock = [], dict(last)
         for p in board.projects():
-            hours = posture(p)["scout"]
+            hours = posture(p)["scout"] if posture(p)["scouting"] else 0
             if not p.exists() or not hours:
                 continue
             if str(p) not in last:            # its clock starts the first time it is seen
