@@ -1095,6 +1095,21 @@ class ConsoleSurvivalTest(BoardBase):
             console.COMMAND = saved
 
 
+class SelfHostTest(BoardBase):
+    def test_when_colony_is_on_its_own_board_the_monitor_reports_to_it_and_changes_nothing(self):
+        monitor.brief()
+        self.assertIn("Fix bugs yourself", (monitor.home() / "CLAUDE.md").read_text())
+        reg = board.registry()
+        reg["projects"] = [str(ROOT)]                 # colony's own source, tracked by path only
+        board.save_registry(reg)
+        monitor.rebrief()
+        self.assertIn("read 'The board is yours to keep healthy'", (board.home() / "to_monitor.jsonl").read_text(), "it is told")
+        brief = (monitor.home() / "CLAUDE.md").read_text()
+        self.assertNotIn("Fix bugs yourself", brief)
+        self.assertIn(f"Colony's source is itself a project on this board, `{ROOT.name}`", brief)
+        self.assertIn(f"colony tell {ROOT.name}", brief)
+
+
 class PinTest(BoardBase):
     def test_pins_from_either_side_opened_edited_and_told_to_the_agent_as_it_matters(self):
         board.track(self.root)

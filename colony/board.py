@@ -464,6 +464,8 @@ def track(path, register=True):
     if register and not inside_a_root and str(root) not in reg["projects"]:
         reg["projects"].append(str(root))
         save_registry(reg)
+    from . import monitor
+    monitor.rebrief()                                 # colony's own source joining the board changes the monitor's part
     return root
 
 
@@ -477,6 +479,8 @@ def remove_project(root):
     elif str(root) not in reg["hidden"]:
         reg["hidden"].append(str(root))                # inside a project folder: kept off the board by name
     save_registry(reg)
+    from . import monitor
+    monitor.rebrief()
 
 
 def show_project(root):

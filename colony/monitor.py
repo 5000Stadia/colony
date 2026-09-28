@@ -152,14 +152,7 @@ Its source is `{source}` (a git repository; its `GUIDE.md` is how work is done t
 - The person comes first: engine work happens only when no project needs them.
 - When something seems off, or the person reports a problem, run `colony doctor` (add `--tests` to run
   the suite). It names each problem and what to do.
-- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_colony tests.test_board` in
-  the source, then `colony restart` (project consoles and you keep running). Commit each fix locally
-  with a clear message; ask the person before pushing it anywhere.
-- Keep what you build provider-agnostic: files in .board/, the `colony` command, text typed into a
-  session. Where something can only work with Claude Code, put it behind colony/providers.py or mark it
-  with a `PROVIDER:` comment saying what another provider would need there.
-- Improvements are the person's call: propose them with the reason and what they would cost, and build
-  one only once they agree. Try it against the plain setup first; add nothing that doesn't earn its place.
+{upkeep}
 """
 
 DEFAULT_DIRECTION = """## Standing direction, for every project
@@ -229,10 +222,42 @@ def set_direction(text=None):
     queue("The person changed your standing direction for every project. Read it afresh in CLAUDE.md.")
 
 
+UPKEEP_SELF = """- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_colony tests.test_board` in
+  the source, then `colony restart` (project consoles and you keep running). Commit each fix locally
+  with a clear message; ask the person before pushing it anywhere.
+- Keep what you build provider-agnostic: files in .board/, the `colony` command, text typed into a
+  session. Where something can only work with Claude Code, put it behind colony/providers.py or mark it
+  with a `PROVIDER:` comment saying what another provider would need there.
+- Improvements are the person's call: propose them with the reason and what they would cost, and build
+  one only once they agree. Try it against the plain setup first; add nothing that doesn't earn its place."""
+
+# When colony's own source is a project on the board, its agent is the one that builds colony: two hands in the
+# same code conflict, so the monitor finds and reports and changes nothing there.
+UPKEEP_REPORT = """- Colony's source is itself a project on this board, `{name}`, and its agent is the one that builds
+  colony. Change nothing in the source yourself, even a one-line fix: diagnose with `colony doctor`, then
+  report what you found, with what shows it, with `colony tell {name} "..."`. Check it was handled.
+- Improvements you see are the person's call: bring them to the person, not to `{name}`."""
+
+
+def rebrief():
+    """Rewrite the brief when the board changes; if the monitor's part in keeping colony changed, tell it."""
+    path = home() / "CLAUDE.md"
+    if not path.exists():
+        return
+    before = path.read_text()
+    brief()
+    if ("Fix bugs yourself" in before) != ("Fix bugs yourself" in path.read_text()):
+        queue("Your part in keeping colony changed with the board: read 'The board is yours to keep healthy' in "
+              f"{path} afresh.")
+
+
 def brief():
     home().mkdir(parents=True, exist_ok=True)
-    (home() / "CLAUDE.md").write_text(ROLE.replace("{source}", str(Path(__file__).resolve().parent.parent))
-                                      .replace("{direction}", direction().strip()))
+    source = Path(__file__).resolve().parent.parent
+    own = next((p for p in board.projects() if p.resolve() == source), None)
+    upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
+    (home() / "CLAUDE.md").write_text(ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip())
+                                      .replace("{upkeep}", upkeep))
 
 
 HELM_ON_NOTE = ("You hold the helm: settle routine questions yourself within each project's direction (colony posture), "
