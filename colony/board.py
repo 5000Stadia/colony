@@ -2318,6 +2318,8 @@ body.copying .keys .selectall { display:block }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
 .ms[open] > summary { margin-bottom:6px } .ms > summary .msdot { align-self:center }
+/* what people and agents write can hold a long unbroken word (a flag, a URL): it breaks rather than widen a phone's page */
+.note, .need, .ready, .reply, header p, .item .body p { overflow-wrap:anywhere }
 .timer { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap } .timer.running { color:var(--accent) } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
 .legend { font-size:13px; color:var(--muted); margin-bottom:10px } .mapwrap { overflow-x:auto; padding-bottom:6px }
 .map { position:relative } .map svg { position:absolute; left:0; top:0 } .map path { fill:none; stroke:var(--line); stroke-width:2 }
