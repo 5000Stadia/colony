@@ -804,12 +804,12 @@ def cmd_supports(a):
             b = supports.block(a.name, a.evidence, a.source)
             print(f"{b['name']} is blocked for good; delete anything you fetched of it")
         elif a.action == "sources":
-            print(supports.sources_text())
+            print(supports.sources_text(_project(a.project) if a.project else None))
         elif a.action == "source":
             if not (a.name and a.status and a.trust):
-                raise SystemExit("colony supports source NAME WHERE --trust official|reviewed|broad|vendor")
-            supports.add_source(a.name, a.status, a.trust)
-            print(f"{a.name} added to the sources as {a.trust}")
+                raise SystemExit("colony supports source NAME WHERE --trust official|reviewed|broad|vendor|research [--project NAME]")
+            supports.add_source(a.name, a.status, a.trust, _project(a.project) if a.project else None)
+            print(f"{a.name} added to the sources as {a.trust}" + (f", for {a.project}" if a.project else ""))
         elif a.action == "check":
             print(supports.check_now())
         else:

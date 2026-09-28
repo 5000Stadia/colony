@@ -1,6 +1,7 @@
-"""Supports: tools a project's agent can be offered when its work calls for one, as a coach, physio or
-water carrier serves a player. The monitor keeps this list; project agents never read it, so it adds
-nothing to their instructions.
+"""Scouting finds: what others already know that a project's agent can be offered when its work calls for
+it, as a coach, physio or water carrier serves a player. A find is a tool, or a reference (a project, a
+paper, a method). The monitor keeps this list; project agents never read it, so it adds nothing to their
+instructions.
 
 A support is offered for a need the work has shown, never installed by default, and trusted in steps:
   candidate  found for a need with evidence; conceptually likely to help, not yet shown
@@ -61,6 +62,7 @@ TRUST = {
     "reviewed": "entries are reviewed before they are listed",
     "broad": "takes almost anything: leads only",
     "vendor": "a company's list: it favours its own products",
+    "research": "papers: judge the work, whether it has been used or reproduced; a preprint isn't peer-reviewed",
 }
 SOURCES = [
     {"name": "Claude Code's official plugin marketplace", "trust": "official",
@@ -75,6 +77,10 @@ SOURCES = [
     {"name": "agent and subagent collections", "trust": "broad",
      "where": "github.com/wshobson/agents, github.com/VoltAgent/awesome-claude-code-subagents (mostly added agents: rarely earn their place)"},
     {"name": "Reddit, Hacker News, blogs", "trust": "broad", "where": "anywhere practitioners compare tools"},
+    {"name": "arXiv", "trust": "research", "where": "arxiv.org (search: export.arxiv.org/api/query?search_query=all:WORDS)"},
+    {"name": "Semantic Scholar", "trust": "research", "where": "api.semanticscholar.org/graph/v1/paper/search?query=WORDS (citations show what was built on it)"},
+    {"name": "Hugging Face Papers", "trust": "research", "where": "huggingface.co/papers (papers with their code; succeeded Papers with Code)"},
+    {"name": "Google Scholar", "trust": "research", "where": "scholar.google.com"},
     {"name": "awesome-claude-skills", "trust": "vendor", "where": "github.com/ComposioHQ/awesome-claude-skills (Composio)"},
 ]
 
@@ -84,16 +90,19 @@ def sources():
     return json.loads(path.read_text()) if path.exists() else SOURCES
 
 
-def add_source(name, where, trust):
+def add_source(name, where, trust, project=None):
+    """A general source, or with a project, that project's own bookmark (a field's journal index, say)."""
     if trust not in TRUST:
         raise ValueError(trust)
-    rows = sources() + [{"name": name.strip(), "where": where.strip(), "trust": trust}]
+    rows = sources() + [{"name": name.strip(), "where": where.strip(), "trust": trust, **({"project": str(project)} if project else {})}]
     board.home().mkdir(parents=True, exist_ok=True)
     (board.home() / "sources.json").write_text(json.dumps(rows, indent=1))
 
 
-def sources_text():
-    return "\n".join(f"[{s['trust']}] {s['name']}: {s['where']}" for t in TRUST for s in sources() if s["trust"] == t) + \
+def sources_text(project=None):
+    shown = [s for s in sources() if not s.get("project") or project and s["project"] == str(project)]
+    return "\n".join(f"[{s['trust']}] {s['name']}: {s['where']}" + (f"  ({Path(s['project']).name}'s own)" if s.get("project") else "")
+                     for t in TRUST for s in shown if s["trust"] == t) + \
         "\n\n" + "\n".join(f"{t}: {why}" for t, why in TRUST.items())
 
 

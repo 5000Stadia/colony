@@ -1113,9 +1113,9 @@ def monitor_page(reg, view="overview"):
                          f"<label>Helm <select name='helm'>{opt('default', 'board-wide (' + ('on' if on else 'off') + ')', cur)}"
                          f"{opt('on', 'on for this project', cur)}{opt('off', 'off for this project', cur)}</select></label>"
                          f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
-                         f"<label>Look for supports every <input name='scout' type='number' min='0' step='1' value='{pos['scout']}' class='hours'> hours "
+                         f"<label>Scout every <input name='scout' type='number' min='0' step='1' value='{pos['scout']}' class='hours'> hours "
                          f"<span class='muted'>(if worked on since; 0: never)</span></label>"
-                         f"<label class='stack'>What supports should favour here<textarea name='scout_note' class='short' placeholder='e.g. faster test runs; nothing that changes the stack'>{e(pos['scout_note'])}</textarea></label>"
+                         f"<label class='stack'>What scouting should favour here<textarea name='scout_note' class='short' placeholder='e.g. faster test runs; papers on forecasting; nothing that changes the stack'>{e(pos['scout_note'])}</textarea></label>"
                          f"<button>Save</button></form>"
                          f"<div class='focus'><b>Now: {e(f['milestone'] or 'no roadmap yet')}</b><ul>{lines}</ul></div>"
                          + (f"<details><summary>What it decided here</summary>{made}</details>" if made else "") + "</div>")
@@ -1381,7 +1381,7 @@ def support_rows():
     for r in supports.asking():
         a = r["asking"]
         approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
-        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a support the monitor found</span></div>"
+        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the monitor brought</span></div>"
                     f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
                     f"<div class='asktext'>{e(a['text'])}</div>"
                     f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"

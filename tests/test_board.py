@@ -827,7 +827,7 @@ class SupportsTest(BoardBase):
         self.due(49)
         w.tick()
         self.assertEqual(len(self.sent), 1)
-        self.assertIn("Supports check, worked on since", self.sent[0])
+        self.assertIn("Scouting check, worked on since", self.sent[0])
         self.assertIn("plants", self.sent[0])
         self.assertIn("favour: faster test runs", self.sent[0], "what the person wants it to favour goes with it")
         self.assertIn("afresh", self.sent[0], "the brief is read as it is now, not as the session remembers it")
@@ -915,7 +915,7 @@ class SupportsTest(BoardBase):
         self.cli("supports", "ask", "s1", "--project", "plants",
                  "--text", "plants' agent opened 40 files to find one caller; a language server answers that directly. Test it?")
         html = board.needs_you(board.registry())
-        self.assertIn("a support the monitor found", html)
+        self.assertIn("a find the monitor brought", html)
         self.assertIn("opened 40 files", html)
         self.assertIn("value='test'", html)
         self.assertNotIn("value='approve'", html, "a candidate tool can be tested or dropped, not suggested")
@@ -979,6 +979,12 @@ class SupportsTest(BoardBase):
         self.assertNotEqual(self.cli("supports", "source", "x", "y", "--trust", "great").returncode, 0)
         self.cli("supports", "source", "New index", "github.com/a/b", "--trust", "reviewed")
         self.assertIn("[reviewed] New index: github.com/a/b", self.cli("supports", "sources").stdout)
+        self.assertIn("[research] arXiv", out)
+        self.cli("supports", "source", "Botany journals", "jstor.org/botany", "--trust", "research", "--project", "plants")
+        mine = self.cli("supports", "sources", "--project", "plants").stdout
+        self.assertIn("Botany journals", mine, "plants' own bookmark")
+        self.assertIn("(plants's own)", mine)
+        self.assertNotIn("Botany journals", self.cli("supports", "sources").stdout, "not in anyone else's")
 
     def test_each_project_has_its_own_period_and_note_on_the_helm_page(self):
         shop = Path(self.tmp.name) / "shop"
