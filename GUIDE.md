@@ -36,6 +36,7 @@ Starting points from [current evidence](docs/codex-models.md), not measured colo
 ## Other agents
 - Handing isolated work to subagents is good. Any other added agent often costs 1.2–5× the tokens and must justify it; agents added only to check, remember or co-build one agent's well-specified work didn't.
 - Add agents when it's clearly the better approach for the project (genuinely parallel domains, scale beyond one context) or when a real difficulty would benefit from a specialist's focus. The gain is a clean context and a narrow brief, not more intelligence; for a problem that is simply hard, raise effort.
+- Tell each helper what it owns and what others are doing. It hands in parts as they're done and says when its work moves beyond its brief or into another's area; that informs, it doesn't wait for approval.
 - Open each subagent's prompt with a scoped name: `searcher · src/billing · this task only`. Scoped names kept agents in scope; neutral names drifted.
 - Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
 

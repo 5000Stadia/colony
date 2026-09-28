@@ -55,6 +55,11 @@ person follows and steers them all from one board, and the projects can write to
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
   chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
   lists what's pinned. Their pins, edits and comments reach you as notes.
+- Keep whoever you work alongside aware of the shape of your work. When you brief a helper (subagent), say
+  what it owns and what other agents are working on, and ask it to hand in each part as it's done and to say,
+  as it goes, when its work moves beyond that or into another's area: what it found and where. The same holds
+  between you and another project's agent working with you. It informs, it doesn't wait: carry on unless
+  redirected.
 - Your model plan says which model and effort your helpers (subagents) use for which kind of work; it is
   handed to you at every session start (`colony models` shows it, the board's Models page has the benchmark
   cards). When a model is added, a role changes, or a model keeps underperforming, propose a change to the
