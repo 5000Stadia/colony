@@ -736,12 +736,14 @@ def cmd_helm(a):
 def cmd_posture(a):
     """The monitor's stance toward each project: helm, the person's direction, the current focus."""
     from . import board, monitor
-    if a.name and a.direction is not None:
-        monitor.set_posture(_project(a.name), direction=a.direction)
+    if a.name and (a.direction is not None or a.scout is not None or a.favour is not None):
+        monitor.set_posture(_project(a.name), direction=a.direction, scout=a.scout, scout_note=a.favour)
     for p in [_project(a.name)] if a.name else board.projects():
         f, pos = board.focus(p), monitor.posture(p)
         print(f"{p.name}: helm {'on' if monitor.helm_for(p) else 'off'}{'' if pos['helm'] is not None else ' (board-wide)'}")
         print(f"  direction: {pos['direction'] or '(none given)'}")
+        print(f"  supports: " + (f"checked every {pos['scout']} hours if worked on" if pos["scout"] else "never checked")
+              + (f"; favour: {pos['scout_note']}" if pos["scout_note"] else ""))
         print(f"  focus: {f['milestone'] or '(no roadmap)'}")
         for label in ("doing", "verify", "next"):
             if f[label]:
@@ -786,6 +788,9 @@ def cmd_supports(a):
                 raise SystemExit("colony supports suggest ID --project NAME --text \"the need you saw and why this fits\"")
             r = supports.suggest(a.name, _project(a.project), a.text)
             print(f"{r['name']} suggested to {a.project}: it reaches the agent on its next turn, as a suggestion to check")
+        elif a.action == "approve":
+            r = supports.approve(a.name, a.evidence)
+            print(f"{r['name']}: approved by the person; it can now be suggested")
         elif a.action == "check":
             print(supports.check_now())
         else:
@@ -863,13 +868,15 @@ def main(argv=None):
     p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.add_argument("--project")
     p.set_defaults(fn=cmd_helm)
     p = sub.add_parser("posture", help="the monitor's stance toward each project: helm, direction, focus")
-    p.add_argument("name", nargs="?"); p.add_argument("--direction"); p.set_defaults(fn=cmd_posture)
+    p.add_argument("name", nargs="?"); p.add_argument("--direction")
+    p.add_argument("--scout", help="every how many hours to look for supports here (0: never)")
+    p.add_argument("--favour", help="what supports here should favour"); p.set_defaults(fn=cmd_posture)
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
-    p.add_argument("action", nargs="?", choices=("add", "set", "suggest", "check")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
+    p.add_argument("action", nargs="?", choices=("add", "set", "approve", "suggest", "check")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
     p.add_argument("status", nargs="?"); p.add_argument("--for", dest="symptom", default=""); p.add_argument("--gives", default="")
     p.add_argument("--source", default=""); p.add_argument("--cost", default=""); p.add_argument("--remove", default="")
     p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)

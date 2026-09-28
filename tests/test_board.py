@@ -34,7 +34,7 @@ class BoardBase(unittest.TestCase):
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
         # A test board sees no one's real project folders and, unless a test says so, posts no mail.
-        board.save_registry({"roots": [], "settings": {"messaging": False, "scout": 0}})
+        board.save_registry({"roots": [], "settings": {"messaging": False}})
         # Nor does it ever start a real agent: a console that a test starts, here or in a `colony` it runs,
         # is a stand-in, and teardown ends every session its projects left.
         self._command, console.COMMAND = console.COMMAND, "sleep 60"
@@ -813,11 +813,11 @@ class SupportsTest(BoardBase):
         super().tearDown()
 
     def due(self, hours_ago):
-        (board.home() / "scout.json").write_text(json.dumps({"at": time.time() - hours_ago * 3600}))
+        (board.home() / "scout.json").write_text(json.dumps({str(self.root): time.time() - hours_ago * 3600}))
 
     def test_the_check_comes_every_so_many_hours_and_only_for_projects_worked_on_since(self):
         from colony import supports
-        board.set_setting("scout", "48")
+        monitor.set_posture(self.root, scout="48", scout_note="faster test runs")
         w = monitor.Watcher()
         w.tick()
         self.assertEqual(self.sent, [], "the clock starts; nothing is checked at once")
@@ -827,8 +827,9 @@ class SupportsTest(BoardBase):
         self.due(49)
         w.tick()
         self.assertEqual(len(self.sent), 1)
-        self.assertIn("Supports check: worked on since", self.sent[0])
+        self.assertIn("Supports check, worked on since", self.sent[0])
         self.assertIn("plants", self.sent[0])
+        self.assertIn("favour: faster test runs", self.sent[0], "what the person wants it to favour goes with it")
         self.due(49)
         saved, monitor.last_commit = monitor.last_commit, lambda root: 0       # no commit since
         try:
@@ -836,14 +837,13 @@ class SupportsTest(BoardBase):
         finally:
             monitor.last_commit = saved
         self.assertEqual(len(self.sent), 1, "nothing worked on since: the check costs nothing")
-        board.set_setting("scout", "0")
+        monitor.set_posture(self.root, scout="0")
         supports.check_now()
         self.commit("more work")
         w.tick()
         self.assertEqual(len(self.sent), 1, "0 is never")
 
     def test_a_busy_monitor_is_checked_later_and_a_check_can_be_asked_for(self):
-        board.set_setting("scout", "24")
         monitor.snapshot = lambda: {"state": "working", "lines": []}
         w = monitor.Watcher()
         w.tick()
@@ -877,6 +877,11 @@ class SupportsTest(BoardBase):
         self.assertEqual(board.open_notes(self.root), [])
         supports.update("s1", "proven", "3 runs each on plants' own bugs: same fixes, 45% cheaper")
         r = self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "It opened 40 files to find one caller.")
+        self.assertNotEqual(r.returncode, 0, "proven, but the person hasn't talked it over and approved it")
+        self.assertIn("talk it over with the person first", r.stderr)
+        self.assertNotEqual(self.cli("supports", "approve", "s1").returncode, 0, "approval carries the person's words")
+        self.cli("supports", "approve", "s1", "--evidence", "worth it for plants, go ahead")
+        r = self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "It opened 40 files to find one caller.")
         self.assertEqual(r.returncode, 0, r.stderr)
         note = board.open_notes(self.root)[0]
         self.assertTrue(note.get("quiet"), "it waits for the agent's next turn rather than interrupting it")
@@ -894,6 +899,9 @@ class SupportsTest(BoardBase):
         self.assertNotEqual(self.cli("supports", "suggest", sid, "--project", "plants", "--text", "x").returncode, 0,
                             "not yet read: nothing to point at")
         self.cli("supports", "set", sid, "--evidence", "read src/map.py: one table drives every column")
+        self.assertNotEqual(self.cli("supports", "suggest", sid, "--project", "plants", "--text", "x").returncode, 0,
+                            "read, but not yet talked over with the person")
+        self.cli("supports", "approve", sid, "--evidence", "yes, point plants at it")
         r = self.cli("supports", "suggest", sid, "--project", "plants", "--text", "Your importer maps columns by hand.")
         self.assertEqual(r.returncode, 0, r.stderr)
         told = board.render_notes(board.open_notes(self.root), "Notes:")
@@ -901,13 +909,25 @@ class SupportsTest(BoardBase):
         self.assertIn("Adopt only what works better in your project", told)
         self.assertIn("one table drives every column", told)
 
-    def test_the_period_is_a_setting(self):
-        board.set_setting("scout", "72")
-        self.assertEqual(board.registry()["settings"]["scout"], 72)
-        self.assertIn("name='scout'", board.settings_page(board.registry()))
-        self.assertIn("value='72'", board.settings_page(board.registry()))
-        with self.assertRaises(KeyError):
-            board.set_setting("scout", "daily")
+    def test_each_project_has_its_own_period_and_note_on_the_helm_page(self):
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
+        board.track(shop)
+        self.cli("posture", "plants", "--scout", "72", "--favour", "faster test runs")
+        self.assertEqual(monitor.posture(self.root)["scout"], 72)
+        self.assertEqual(monitor.posture(shop)["scout"], 24, "the others keep the default")
+        page = board.monitor_page(board.registry(), "helm")
+        self.assertIn("value='72'", page)
+        self.assertIn("faster test runs", page)
+        self.assertIn("favour: faster test runs", self.cli("posture", "plants").stdout)
+        self.assertNotIn("name='scout'", board.settings_page(board.registry()), "it lives on the Helm page, per project")
+        monitor.set_posture(shop, scout="0")
+        self.commit("work")
+        (board.home() / "scout.json").write_text(json.dumps({str(self.root): time.time() - 73 * 3600}))
+        monitor.Watcher().tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("plants", self.sent[0])
+        self.assertNotIn("shop", self.sent[0], "0 is never")
 
 
 class PinTest(BoardBase):

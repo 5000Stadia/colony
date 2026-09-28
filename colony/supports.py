@@ -10,6 +10,9 @@ A support is offered for a need the work has shown, never installed by default, 
   rejected   failed its test, or declined; kept with the reason so it isn't proposed again
 Admission: free, runs locally, no account or login, removes cleanly.
 
+Nothing reaches a project until the monitor has talked it over with the person and they approved suggesting
+it there: the monitor deliberates with them, never decides for them.
+
 A reference is the other kind: a project elsewhere that does something this one does, better. It installs
 nothing and costs a read, so the agent that reads it is its test; it may be suggested once the monitor
 has read it and can say where the better way is.
@@ -93,6 +96,17 @@ def update(sid, status=None, evidence=None, project=None):
     return row
 
 
+def approve(sid, said):
+    """The person, having talked it over with the monitor, approved suggesting it: their words are kept."""
+    if not said.strip():
+        raise ValueError("approve needs the person's own words (--evidence)")
+    row = update(sid, evidence=f"the person approved suggesting it: {said.strip()}")
+    rows = load()
+    next(r for r in rows if r["id"] == sid)["approved"] = board.now()
+    save(rows)
+    return row
+
+
 def suggest(sid, root, text):
     """Offer a proven support to a project's agent as a suggestion it checks against its own work. Only a
     proven one: the agent is asked to try another way only on evidence, never on a hunch."""
@@ -104,6 +118,8 @@ def suggest(sid, root, text):
             raise ValueError(f"{sid}: a reference is suggested only once it has been read and its evidence says where the better way is")
     elif row["status"] != "proven":
         raise ValueError(f"{sid} is {row['status']}; only a proven tool is suggested to a project")
+    if not row.get("approved"):
+        raise ValueError(f"{sid}: talk it over with the person first; suggest it once they approve (colony supports approve)")
     lead = "A reference worth a look" if row.get("kind") == "reference" else "A support"
     tail = " Adopt only what works better in your project." if row.get("kind") == "reference" else ""
     board.add_note(root, None, f"{lead}: {row['name']} ({row['source']}): {text.strip()} Shown by: {row['evidence']}.{tail}",
@@ -123,9 +139,10 @@ def text():
 
 
 def check_now():
-    """Make the watcher's next pass run a supports check over the last period, as if it had come due."""
+    """Make every project's check come due now, over its own last period (one set to never stays never)."""
     import time
-    hours = board.registry()["settings"]["scout"] or 24
+    from . import monitor
+    clock = {str(p): time.time() - monitor.posture(p)["scout"] * 3600 for p in board.projects() if monitor.posture(p)["scout"]}
     board.home().mkdir(parents=True, exist_ok=True)
-    (board.home() / "scout.json").write_text(json.dumps({"at": time.time() - hours * 3600}))
-    return f"a supports check runs within seconds, over projects worked on in the last {hours} hours, once the monitor is idle"
+    (board.home() / "scout.json").write_text(json.dumps(clock))
+    return "a supports check runs within seconds for projects worked on in their last period, once the monitor is idle"

@@ -121,7 +121,7 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
-                    "permissions": "ask", "scout": 24}
+                    "permissions": "ask"}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -135,7 +135,6 @@ SETTING_HELP = {
     "messaging": "project agents can message each other (colony send, colony reply)",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
-    "scout": "every how many hours the monitor looks for supports that projects worked on since could use (0: never)",
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
 }
@@ -151,11 +150,6 @@ def set_setting(key, value):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
-    elif key == "scout":
-        try:
-            reg["settings"][key] = max(0, int(float(str(value).strip() or 0)))
-        except ValueError:
-            raise KeyError(key)
     elif key == "permissions":
         if value not in PERMISSIONS:
             raise KeyError(key)
@@ -1105,6 +1099,9 @@ def monitor_page(reg, view="overview"):
                          f"<label>Helm <select name='helm'>{opt('default', 'board-wide (' + ('on' if on else 'off') + ')', cur)}"
                          f"{opt('on', 'on for this project', cur)}{opt('off', 'off for this project', cur)}</select></label>"
                          f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='What it may settle here on its own, and what must come back to you'>{e(pos['direction'])}</textarea></label>"
+                         f"<label>Look for supports every <input name='scout' type='number' min='0' step='1' value='{pos['scout']}' class='hours'> hours "
+                         f"<span class='muted'>(if worked on since; 0: never)</span></label>"
+                         f"<label class='stack'>What supports should favour here<textarea name='scout_note' class='short' placeholder='e.g. faster test runs; nothing that changes the stack'>{e(pos['scout_note'])}</textarea></label>"
                          f"<button>Save</button></form>"
                          f"<div class='focus'><b>Now: {e(f['milestone'] or 'no roadmap yet')}</b><ul>{lines}</ul></div>"
                          + (f"<details><summary>What it decided here</summary>{made}</details>" if made else "") + "</div>")
@@ -1385,8 +1382,6 @@ def settings_page(reg):
                f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
                f"<span class='muted'>(reach them from the Claude app)</span></label>"
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
-               f"<label>Look for supports every <input name='scout' type='number' min='0' step='1' value='{s['scout']}' class='hours'> hours "
-               f"<span class='muted'>(only for projects worked on since; 0: never)</span></label>"
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
@@ -1589,8 +1584,6 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/options":
             set_setting("remote", form.get("remote", "off"))
             set_setting("monitor", form.get("monitor", "off"))
-            if form.get("scout", "").strip():
-                set_setting("scout", form["scout"])
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
             if form.get("permissions"):
@@ -1680,7 +1673,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             root = projects(reg)[int(form.get("p", "0"))]
             monitor.set_posture(root, helm={"on": True, "off": False}.get(form.get("helm"), "default"),
-                                direction=form.get("direction", ""))
+                                direction=form.get("direction", ""), scout=form.get("scout"), scout_note=form.get("scout_note", ""))
             self.send_response(303)
             self.send_header("Location", "/monitor?view=helm")
             self.send_header("Content-Length", "0")
@@ -1827,7 +1820,7 @@ form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit;
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
-form.options input.hours { font:inherit; width:4.5em; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+form.options textarea.short { min-height:44px } form.options input.hours { font:inherit; width:4.5em; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .msgbox { margin-left:auto } .msgbox summary { cursor:pointer; color:var(--accent); font-size:13px }
 .msgbox form { position:absolute; right:24px; z-index:10; width:420px; display:flex; flex-direction:column; gap:8px;
   padding:14px; border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) }
