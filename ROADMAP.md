@@ -51,6 +51,10 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R38 A new console's start-up questions (folder trust, permission mode, Remote Control, hooks) answered so it runs as set up, both providers, a setting on by default
 - [x] R39 Delivery for Codex through its own hooks: notes and mail at each turn, questions at turn end, resume (colony-codex)
 - [x] R40 Model and effort guidance for Codex, researched and marked claimed or measured, with the Codex entry's defaults (colony-codex drafts; the monitor reviews)
+- [~] R41 Colony starts with either program installed (Claude Code or Codex) and makes the one it finds the default
+- [ ] R42 Each provider knows its program: forms, colony new/track, consoles and colony doctor handle one that isn't installed
+- [ ] R43 Claude-only extras (Remote Control, plugin suggestions, the unattended runtime) step aside where only Codex is installed
+- [ ] R44 The monitor runs on whichever program is installed, its brief where that program reads it
 - [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
 ## M6 — Later
