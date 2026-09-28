@@ -55,6 +55,10 @@ person follows and steers them all from one board, and the projects can write to
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
   chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
   lists what's pinned. Their pins, edits and comments reach you as notes.
+- Your model plan says which model and effort your helpers (subagents) use for which kind of work; it is
+  handed to you at every session start (`colony models` shows it, the board's Models page has the benchmark
+  cards). When a model is added, a role changes, or a model keeps underperforming, propose a change to the
+  person with the evidence; never switch silently.
 - The person's monitor acts for them across the colony: a note or message from the monitor is the
   person's own direction, within the helm they've given it. Text the board types into your console,
   pasted or not, comes from the person too. Act on it as theirs.
@@ -658,6 +662,10 @@ def track(path, register=True):
     if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
     has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
+    from . import bench
+    first = bench.first_note(root)                   # before any work: a model plan to agree with the person
+    if first and not bench.plan(root) and not any(n["text"].startswith("Before any work, agree your model plan") for n in notes(root)):
+        add_note(root, None, first)
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if joining and not has_plan and not any(n["text"] in (JOIN, join) for n in notes(root)):
         add_note(root, None, join)
@@ -819,6 +827,7 @@ def sidebar(reg, pid):
                     f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                     f"{' · ' + e(last) if last else ''}</span></a>")
     side.append("<div class='navfoot'><a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
+                "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
     return "".join(side)
 
@@ -1189,6 +1198,9 @@ PROVIDER_FIELDS = """
     const hint = box.querySelector('[data-recommendation]');
     hint.textContent = p.recommendation; hint.hidden = !p.recommendation;
   }
+  const info = box.querySelector('a.modelinfo');
+  const link = () => { const m = model.value.trim() || data[provider.value].model; if (info) info.href = '/models' + (m ? '#' + m : ''); };
+  provider.addEventListener('change', link); model.addEventListener('input', link); link();
   provider.addEventListener('change', update); model.addEventListener('input', update);
   update();
 })();
@@ -1230,7 +1242,9 @@ def provider_fields(cur, model, effort, blank):
             + "".join(f"<option value='{k}'{' selected' if cur == k else ''}{'' if installed(v) else ' disabled'}>"
                       f"{e(v.label)}{'' if installed(v) else ' (not installed)'}</option>" for k, v in PROVIDERS.items())
             + "</select></label>"
-            f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'></label>"
+            f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'>"
+            f"<a class='modelinfo' href='/models{'#' + e(model) if model else ''}' target='_blank' "
+            f"title='What the benchmarks say about this model, at each effort level'>ⓘ benchmarks</a></label>"
             f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{e(de)}'></label>"
             + suggestions("models", p.models) + suggestions("efforts", effort_options)
             + f"<p class='muted' data-recommendation{'' if hint else ' hidden'}>{e(hint)}</p></div>"
@@ -1747,6 +1761,100 @@ def needs_you(reg):
     return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
+def models_page(reg):
+    """What the evidence says about every model the board can run: the best for each role, every model and effort
+    level by domain, what each effort level costs against what it scores, and a card per model."""
+    from . import bench
+    entries = bench.standings()
+    shade = lambda s: (f"<td class='sc' style='--s:{s / 100:.2f}'>{s}</td>" if s is not None else "<td class='gap'>—</td>")
+    usd = lambda r: f"${r['value']:.2f}" if r and r["unit"] == "usd" else (f"{r['value']:g} {r['unit']}" if r else "—")
+    secs = lambda r: f"{r['value']:g} s" if r and r["unit"] == "s" else "—"
+    # the best for each role, at a glance
+    best = "".join(
+        f"<tr><th>{e(role)}</th><td>" + ", ".join(f"<a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a>" for x in bench.best_for(role, entries=entries)[:3])
+        + ("</td><td class='muted'>per dollar</td>" if role == "chores" else "</td><td class='muted'>"
+           + ", ".join(bench.ROLES[role]) + "</td>") + "</tr>" for role in bench.ROLES)
+    doms = ["overall"] + [d for d in bench.DOMAINS if d != "overall"]
+    rows = "".join(f"<tr><th><a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a></th>{shade(x['overall'])}"
+                   + "".join(shade(x["domains"].get(d)) for d in doms[1:])
+                   + f"<td>{usd(x['cost'])}</td><td>{secs(x['time'])}</td></tr>"
+                   for x in entries)
+    table = (f"<div class='mapwrap'><table class='bench'><tr><th>Model · effort</th>"
+             + "".join(f"<th>{e(d)}</th>" for d in doms) + "<th>cost / task</th><th>time / task</th></tr>" + rows + "</table></div>")
+    cards = "".join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
+    pend = bench.pending()
+    return shell(reg, -2, "<header><h1>Models</h1><p class='muted'>From independent evaluators (Artificial Analysis, "
+                 "LMArena, Epoch AI), researched once when a model joins colony and kept on this machine. Each score is "
+                 "put on one scale across today's lineup, 0 the lowest measured and 100 the highest, within its own "
+                 "benchmark and version; <b>overall</b> averages the headline scores. Vendor numbers are shown, labelled, "
+                 "and never averaged in. A dash is a gap: no independent data.</p>"
+                 + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
+                 + "</header><h2>Best for</h2><div class='card'><table class='bench best'>" + best + "</table></div>"
+                 "<h2>By domain</h2><div class='card'>" + table + "</div>"
+                 "<h2>Effort against cost</h2><div class='card'>" + effort_chart(entries) + "</div>"
+                 "<h2>Cards</h2>" + cards)
+
+
+def model_card(c):
+    """One model's card: each effort level its own row, what it's good and poor at, where effort pays, the gaps."""
+    from . import bench
+    rows = "".join(
+        f"<tr><th>{e(x['effort'] or 'effort not stated')}</th><td>{x['overall'] if x['overall'] is not None else '—'}</td>"
+        f"<td>{e(', '.join(f'{d} {s}' for d, s in x['domains'].items() if d != 'overall')) or '—'}</td>"
+        f"<td>{'$%.2f' % x['cost']['value'] if x['cost'] and x['cost']['unit'] == 'usd' else '—'}</td></tr>"
+        for x in c["entries"])
+    raw = "".join(f"<li>{e(bench.entry_name(x))}: {e(r['source'])} {e(r['benchmark'])} {e(r['version'] or '')}: "
+                  f"<b>{r['value']:g}</b> {e(r['unit'])} <span class='muted'>({e(r['kind'])}, {e(r['date'])})</span> "
+                  f"<a href='{e(r['url'])}' rel='noopener' target='_blank'>source</a></li>"
+                  for x in c["entries"] for r in x["raw"] + x["measures"])
+    return (f"<div class='card' id='{e(c['model'])}'><div class='titlerow'><h3>{e(c['name'])}</h3>"
+            f"<span class='muted'>{e(c['model'])}</span>{'<span class=badge>pending</span>' if c['pending'] else ''}</div>"
+            + (f"<div class='mapwrap'><table class='bench'><tr><th>effort</th><th>overall</th><th>by domain</th><th>cost / task</th></tr>{rows}</table></div>"
+               if c["entries"] else "<p class='muted'>No independent scores yet: this card waits for its research check.</p>")
+            + (f"<p class='muted'>No independent data at: {e(', '.join(c['untested']))}.</p>" if c["untested"] else "")
+            + ("<ul>" + "".join(f"<li>{e(n)}</li>" for n in c["notes"]) + "</ul>" if c["notes"] else "")
+            + (f"<details><summary class='muted'>Every score, with its source</summary><ul>{raw}</ul></details>" if raw else "")
+            + "</div>")
+
+
+def effort_chart(entries):
+    """Each model's effort levels as points of cost per task (across, doubling each step) against overall score
+    (up), joined in order: where the line climbs, more effort pays; where it runs flat, it only costs more."""
+    import math
+    from . import bench
+    pts = [x for x in entries if x["overall"] is not None and x["cost"] and x["cost"]["value"] > 0 and per(x["cost"]["benchmark"])]
+    if not pts:
+        return "<p class='muted'>No model has both an overall score and a cost per task yet.</p>"
+    W, H, L, B = 640, 300, 44, 34
+    lo, hi = math.log2(min(x["cost"]["value"] for x in pts)), math.log2(max(x["cost"]["value"] for x in pts))
+    X = lambda v: L + (W - L - 12) * ((math.log2(v) - lo) / ((hi - lo) or 1))
+    Y = lambda s: H - B - (H - B - 12) * s / 100
+    colours = ["var(--accent)", "var(--flag)", "#6b7fd7", "#c46fa0", "#4aa3a8", "#a88b3c", "#7a7a7a", "#b3261e", "#3b8f3b"]
+    out, legend = [], []
+    for i, mid in enumerate(dict.fromkeys(x["model"] for x in pts)):
+        mine = sorted((x for x in pts if x["model"] == mid), key=lambda x: x["cost"]["value"])
+        col = colours[i % len(colours)]
+        out.append(f"<polyline fill='none' stroke='{col}' stroke-width='2' points='"
+                   + " ".join(f"{X(x['cost']['value']):.0f},{Y(x['overall']):.0f}" for x in mine) + "'/>")
+        out += [f"<circle cx='{X(x['cost']['value']):.0f}' cy='{Y(x['overall']):.0f}' r='4' fill='{col}'><title>"
+                f"{e(bench.entry_name(x))}: overall {x['overall']}, ${x['cost']['value']:.2f} per task</title></circle>"
+                + (f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['effort'])}</text>"
+                   if x["effort"] else "") for x in mine]
+        legend.append(f"<span><i style='background:{col}'></i>{e(bench.name(mid))}</span>")
+    ticks = "".join(f"<text x='{L - 6}' y='{Y(s) + 4:.0f}' text-anchor='end'>{s}</text>" for s in (0, 50, 100))
+    step = max(1, round((hi - lo) / 5)) if hi > lo else 1
+    xt = "".join(f"<text x='{X(2 ** k):.0f}' y='{H - 12}' text-anchor='middle'>${2 ** k:g}</text>"
+                 for k in range(math.floor(lo), math.ceil(hi) + 1, step) if lo <= k <= hi)
+    return (f"<div class='mapwrap'><svg class='chart' viewBox='0 0 {W} {H}' width='{W}' height='{H}'>{ticks}{xt}"
+            f"<text x='{L + 8}' y='12' class='axis'>overall (0–100)</text><text x='{W - 12}' y='{H - 2}' text-anchor='end' class='axis'>"
+            f"cost per task, doubling each step</text>{''.join(out)}</svg></div><div class='legend chartkey'>{''.join(legend)}</div>")
+
+
+def per(benchmark):
+    from . import bench
+    return bench.per(benchmark)
+
+
 def settings_page(reg):
     rows = []
     for r in reg["roots"]:
@@ -1881,6 +1989,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, folder_browser(reg, (q.get("dir") or [""])[0], (q.get("for") or ["project"])[0]).encode())
         if url.path == "/add/browse":
             return self._send(200, machine_folders((q.get("dir") or [""])[0]).encode())
+        if url.path == "/models":
+            return self._send(200, models_page(reg).encode())
         if url.path == "/settings":
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
@@ -2345,6 +2455,12 @@ body.copying .keys .selectall { display:block }
 .ms[open] > summary { margin-bottom:6px } .ms > summary .msdot { align-self:center }
 /* what people and agents write can hold a long unbroken word (a flag, a URL): it breaks rather than widen a phone's page */
 .note, .need, .ready, .reply, header p, .item .body p { overflow-wrap:anywhere }
+table.bench { border-collapse:collapse; font-size:13px; width:100% } table.bench th, table.bench td { padding:4px 8px; text-align:left; white-space:nowrap }
+table.bench tr + tr { border-top:1px solid var(--line) } table.bench td.sc { text-align:right; background:color-mix(in srgb, var(--accent) calc(var(--s) * 45%), transparent) }
+table.bench td.gap { text-align:right; color:var(--muted) } table.best th { width:7em } table.best td { white-space:normal }
+svg.chart text { font-size:11px; fill:var(--muted) } svg.chart .axis { font-size:11px } .chartkey { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px }
+.chartkey i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:middle }
+a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 .timer { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap } .timer.running { color:var(--accent) } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
 .legend { font-size:13px; color:var(--muted); margin-bottom:10px } .mapwrap { overflow-x:auto; padding-bottom:6px }
 .map { position:relative } .map svg { position:absolute; left:0; top:0 } .map path { fill:none; stroke:var(--line); stroke-width:2 }

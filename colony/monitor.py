@@ -503,7 +503,25 @@ class Watcher:
             if console.type_into(name(), "[colony] " + " | ".join(words)):
                 path.unlink()
 
+    def models(self):
+        """A model joined the lineup: its card ranks against the rest at once (standings are derived); every
+        project is told to look at its plan again, and the monitor hears which cards still wait for research."""
+        from . import bench
+        added = bench.lineup_changed()
+        if not added:
+            return
+        names = ", ".join(bench.name(m) for m in added)
+        for p in board.projects():
+            if p.exists() and bench.plan(p):
+                board.add_note(p, None, f"A model joined colony: {names}. Look at your model plan against its card "
+                                        "(colony models, the board's Models page) and propose any change to the person.")
+        waiting = [m for m in bench.pending() if m in added] or bench.pending()
+        if waiting:
+            queue(f"A model joined colony ({names}). Benchmark cards waiting for their research check: "
+                  f"{', '.join(bench.name(m) for m in waiting)}. Whoever added it records the scores (colony bench import).")
+
     def tick(self):
+        self.models()
         me = snapshot()
         if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)

@@ -704,6 +704,58 @@ class GlanceTest(BoardBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("colony needs an agent program: Claude Code", r.stdout)
 
+    def test_benchmark_cards_rank_the_lineup_and_projects_agree_a_model_plan(self):
+        from colony import bench
+        rec = lambda model, effort, value, domain="overall", source="Artificial Analysis", bench_="Intelligence Index", ver="v4", unit="points", kind="independent": dict(
+            model=model, effort=effort, source=source, kind=kind, benchmark=bench_, version=ver, domain=domain,
+            value=value, unit=unit, date="2026-09-28", url="https://example.com/x", note="")
+        rows = [rec("claude-opus-5-5", "high", 54), rec("claude-opus-5-5", "medium", 51), rec("claude-haiku-4-5-20251001", None, 20),
+                rec("claude-opus-5-5", "high", 1.82, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
+                rec("claude-opus-5-5", "medium", 1.34, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
+                rec("claude-opus-5-5", "high", 70, "coding", bench_="Terminal-Bench", ver="3.0"),
+                rec("claude-opus-5-5", "high", 60, "coding", bench_="Terminal-Bench", ver="4.0"),   # another version: its own scale
+                rec("claude-sonnet-5", "high", 30, "coding", bench_="Terminal-Bench", ver="4.0"),
+                rec("claude-sonnet-5", "high", 80, kind="vendor", source="Anthropic"),              # shown, never averaged in
+                dict(rec("claude-sonnet-5", "high", 1), url="")]                                     # no source: refused
+        added, bad = bench.add(rows)
+        self.assertEqual((added, len(bad)), (9, 1))
+        self.assertEqual(bench.add(rows[:3])[0], 0, "a record is kept once")
+        by = {(x["model"], x["effort"]): x for x in bench.standings()}
+        self.assertEqual(by[("claude-opus-5-5", "high")]["overall"], 100)
+        self.assertEqual(by[("claude-haiku-4-5-20251001", None)]["overall"], 0, "0 to 100 across the lineup")
+        self.assertEqual(by[("claude-opus-5-5", "high")]["domains"]["coding"], 100, "versions never mixed: v3 alone has no scale")
+        self.assertIsNone(by[("claude-sonnet-5", "high")]["overall"], "a vendor number isn't averaged in")
+        self.assertTrue(by[("claude-sonnet-5", "high")]["pending"])
+        self.assertEqual(by[("claude-opus-5-5", "medium")]["cost"]["value"], 1.34, "cost per task")
+        c = bench.card("claude-opus-5-5")
+        self.assertIn("xhigh", c["untested"], "an effort level with no data is a gap, not an estimate")
+        self.assertTrue(any("high over medium" in n for n in c["notes"]), "where more effort pays")
+        self.assertIn("claude-sonnet-5", bench.pending())
+        self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
+        page = board.models_page(board.registry())
+        for want in ("Best for", "By domain", "Effort against cost", "id='claude-opus-5-5'", "<polyline", "No independent data at:"):
+            self.assertIn(want, page)
+        add = board.add_project_page(board.registry(), "new", "")
+        self.assertIn("ⓘ benchmarks</a>", add, "beside the model, when adding a project")
+        self.assertIn("href='/models", add)
+        # a new project starts with a plan to agree, and keeps what was agreed across sessions
+        board.track(self.root)
+        [first] = [n for n in board.notes(self.root) if n["text"].startswith("Before any work, agree your model plan")]
+        self.assertIn("building: Opus 5.5 at high effort", first["text"])
+        self.assertIn("ask them to confirm or adjust", first["text"])
+        self.assertIn("model plan", (self.root / "CLAUDE.md").read_text(), "the protocol says how it's kept and revisited")
+        self.cli("models", "set", "building", "claude-opus-5-5", "high", "--why", "agreed with the person")
+        out = self.cli("notes", "--deliver", "--session").stdout
+        self.assertIn("Your model plan, agreed with the person", out, "handed over at every session start")
+        self.assertIn("building: Opus 5.5 (claude-opus-5-5) at high effort: agreed with the person", out)
+        self.assertEqual(bench.lineup_changed(), [], "the first look records the lineup")
+        providers.get("claude").models.append(("claude-new-6", "New 6"))
+        try:
+            monitor.Watcher(quiet=0).models()
+            self.assertTrue(any("A model joined colony: New 6" in n["text"] for n in board.notes(self.root)))
+        finally:
+            providers.get("claude").models.pop()
+
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)
         console.COMMAND = "sh -c 'for i in $(seq 1 120); do echo row $i; done; sleep 30'"

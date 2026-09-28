@@ -28,6 +28,8 @@ located signals and a project memory.
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
+    colony bench [card MODEL | import FILE | pending]   benchmark cards for the models the board can run
+    colony models [set ROLE MODEL EFFORT --why ...]     this project's model plan for its helpers
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
@@ -552,6 +554,62 @@ def cmd_unpin(a):
     return 0
 
 
+def cmd_bench(a):
+    """The benchmark cards: a summary of the lineup, one model's card, or records researched for a new model."""
+    from . import bench
+    if a.what == "import":
+        rows = [json.loads(l) for l in Path(a.arg).read_text().splitlines() if l.strip()]
+        added, bad = bench.add(rows)
+        print(f"{added} new record(s) kept; {len(rows) - added - len(bad)} already kept")
+        for line, wrong in bad:
+            print(f"line {line} skipped: {'; '.join(wrong)}", file=sys.stderr)
+        return 1 if bad else 0
+    if a.what == "pending":
+        print("\n".join(bench.pending()) or "no card waits for independent scores")
+        return 0
+    if a.what == "card":
+        c = bench.card(a.arg)
+        print(f"{c['name']} ({c['model']})" + ("  PENDING: no independent overall score yet" if c["pending"] else ""))
+        for e in c["entries"]:
+            doms = ", ".join(f"{d} {s}" for d, s in e["domains"].items() if d != "overall")
+            head = f"overall {e['overall']} ({', '.join(e['headline'])})" if e["overall"] is not None else "overall: no data"
+            cost = f"; {e['cost']['benchmark']}: {e['cost']['value']} {e['cost']['unit']}" if e["cost"] else "; cost: no data"
+            print(f"  {e['effort'] or '(effort not stated)':10} {head}; {doms or 'no domain scores'}{cost}")
+            for r in e["raw"]:
+                print(f"      {r['source']} {r['benchmark']} {r['version'] or ''}: {r['value']} {r['unit']} "
+                      f"({r['kind']}, {r['date']})")
+        if c["untested"]:
+            print(f"  no independent data at: {', '.join(c['untested'])}")
+        for n in c["notes"]:
+            print(f"  - {n}")
+        return 0
+    for e in bench.standings():
+        print(f"{bench.entry_name(e):32} overall {e['overall'] if e['overall'] is not None else '—':>3}  "
+              + ", ".join(f"{d} {s}" for d, s in e["domains"].items() if d != "overall"))
+    if bench.pending():
+        print("pending (no independent overall score yet): " + ", ".join(bench.pending()))
+    return 0
+
+
+def cmd_models(a):
+    """This project's model plan: which model and effort its helpers use for which kind of work."""
+    from . import bench, board
+    root = board.root_of()
+    if a.what == "set":
+        role, model, effort = (a.args + [None, None, None])[:3]
+        if role not in bench.ROLES or not model:
+            raise SystemExit(f"colony models set ROLE MODEL [EFFORT] --why ...; roles: {', '.join(bench.ROLES)}")
+        bench.set_plan(root, role, model, effort, a.why or "")
+        print(f"{root.name}: {role} → {model}" + (f" at {effort}" if effort else ""))
+        return 0
+    agreed, rec = bench.plan(root), bench.recommend(root)
+    for role in bench.ROLES:
+        now = agreed.get(role)
+        print(f"{role:9} " + (f"{now['model']} {now['effort'] or ''}".strip() if now else "(not agreed yet)")
+              + (f"   recommended now: {rec[role]['model']} {rec[role]['effort'] or ''}".rstrip() if role in rec else ""))
+    return 0
+
+
 def cmd_pins(a):
     from . import board, pins
     for p in pins.pins(board.root_of()):
@@ -615,11 +673,14 @@ def cmd_notes(a):
         prompt = str(payload.get("prompt") or "")
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves
+        from . import bench
+        standing = bench.plan_text(root) if a.session else ""       # the agreed model plan, every session
         fresh, still = board.deliver(root, session=a.session)
         if any(not n.get("quiet") and not n["anchor"] for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
+            standing,
             board.render_notes(fresh, "The person left notes for you on the board:"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
             mail.render(new_mail, "Mail from other projects in the colony:"),
@@ -944,6 +1005,12 @@ def main(argv=None):
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why"); p.set_defaults(fn=cmd_pin)
     p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
+    p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
+    p.add_argument("what", nargs="?", choices=("card", "import", "pending")); p.add_argument("arg", nargs="?")
+    p.set_defaults(fn=cmd_bench)
+    p = sub.add_parser("models", help="this project's model plan for its helpers")
+    p.add_argument("what", nargs="?", choices=("set",)); p.add_argument("args", nargs="*"); p.add_argument("--why")
+    p.set_defaults(fn=cmd_models)
     p = sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) record only in this provider's matching board console")
     p.set_defaults(fn=cmd_turn)
