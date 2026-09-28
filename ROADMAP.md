@@ -44,9 +44,12 @@ One board to follow and steer a person's long projects, each driven by its own a
 
 - [x] R35 Ready to publish: nothing private in the repository or its history, a README with a quick start that works from a fresh clone, then public on the person's word
 
+## M7 — Helper seats: another provider working for a project
+
+- [~] R22 A project keeps a helper seat run by another provider (Codex first), messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
+
 ## M6 — Later
 
-- [ ] R22 A second provider (Codex or another CLI) — colony/providers.py
 - [ ] R23 Unattended runs at the scale they were built for decide whether the runtime stays — README.md "Unattended runs"
 - [ ] R24 A memory runner for a very long project, built only if a seeded long history shows it helps — design/blueprint.md "Under test"
 - [ ] R25 Settle the map instruction (every builder asks `colony map` first) — design/blueprint.md "Under test"
