@@ -627,7 +627,7 @@ def cmd_tell(a):
     root = _project(a.name)
     board.add_note(root, None, a.text, author="monitor")
     name = console.ensure(root)
-    if console.snapshot(root, lines=1)["state"] == "idle":
+    if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
         console.type_into(name, "[colony] You have a note from the person on the board.")
     print(f"sent to {a.name} as a note from the person, via the monitor")
     return 0

@@ -432,8 +432,8 @@ class Watcher:
                 what = " and ".join(filter(None, [
                     "a note from the person on the board" if notes else "",
                     "mail from another project in the colony" if letters else ""]))
-                console.type_into(console.session_name(p), f"[colony] You have {what}.")
-                self.nudged |= waiting
+                if console.type_into(console.session_name(p), f"[colony] You have {what}."):
+                    self.nudged |= waiting          # else someone is typing there: tried again next time
 
     def scout(self):
         """Each project, every so many hours (its "scout" posture; 0 never): if it was worked on since its last
@@ -449,7 +449,7 @@ class Watcher:
                 clock[str(p)] = time.time()
             elif time.time() - last[str(p)] >= hours * 3600:
                 due.append(p)
-        if due and snapshot()["state"] != "idle":
+        if due and (snapshot()["state"] != "idle" or console.drafting(name())):
             due = []                           # the monitor is busy: they stay due until it is free
         active = [p for p in due if str(p) in self.worked or last_commit(p) > last[str(p)]]
         for p in due:
@@ -473,8 +473,8 @@ class Watcher:
         path = board.home() / "to_monitor.jsonl"
         if path.exists() and path.read_text().strip() and snapshot()["state"] == "idle":
             words = [json.loads(l)["text"] for l in path.read_text().splitlines() if l.strip()]
-            path.unlink()
-            console.type_into(name(), "[colony] " + " | ".join(words))
+            if console.type_into(name(), "[colony] " + " | ".join(words)):
+                path.unlink()
 
     def tick(self):
         self.mail()
@@ -484,9 +484,8 @@ class Watcher:
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             # What waited while the monitor was busy may have been answered meanwhile: only what still waits goes.
             fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
-            if fresh:
-                console.type_into(name(), "[colony] " + " | ".join(fresh) + f" ({HELM_ON_NOTE})")
-            self.pending = []
+            if not fresh or console.type_into(name(), "[colony] " + " | ".join(fresh) + f" ({HELM_ON_NOTE})"):
+                self.pending = []
 
     def run(self):
         while True:

@@ -30,6 +30,9 @@ what it assumes and what a second provider needs there. What a provider supplies
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
   choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it
+  draft(screen)            what the person has half-typed in its input and not sent, from a screen captured with
+                           its styles; "" if nothing, None if it can't tell. Nothing is typed into a session while
+                           there is one: it would land on the draft and send it.
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -185,13 +188,35 @@ class ClaudeCode:
         # A choice takes the typing box's place. While the box is there, "Do you want…" above it is the agent's
         # own prose, a question for the person to answer by typing, so only what's below the box counts.
         lines = screen.splitlines()
-        rule = lambda l: len(l.strip()) > 8 and set(l.strip()) <= set("─━")
-        box = next((i for i in range(len(lines) - 1, 0, -1)
-                    if re.match(r"^\s*❯(?!\s*\d+\.)", lines[i]) and rule(lines[i - 1])), None)
+        box = self._box(lines)
         low = "\n".join(lines[box + 1:] if box is not None else lines).lower()
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"
         return "idle"
+
+    @staticmethod
+    def _box(lines):
+        """The line its typing box starts on (`❯` just under a rule), or None while a choice has taken its place."""
+        import re
+        rule = lambda l: len(l.strip()) > 8 and set(l.strip()) <= set("─━")
+        return next((i for i in range(len(lines) - 1, 0, -1)
+                     if re.match(r"^\s*❯(?!\s*\d+\.)", lines[i]) and rule(lines[i - 1])), None)
+
+    def draft(self, screen):
+        """What is typed in its box and not yet sent, read off a screen captured with its styles (tmux -e); ""
+        when the box is empty (the greyed hint a fresh session shows there is dim, not a draft); None with no box."""
+        import re
+        plain = lambda l: re.sub(r"\x1b\[[0-9;]*m", "", l)
+        lines = screen.splitlines()
+        box = self._box([plain(l) for l in lines])
+        if box is None:
+            return None
+        out = []
+        for l in lines[box:]:
+            if out and len(plain(l).strip()) > 8 and set(plain(l).strip()) <= set("─━"):
+                break                                                    # the rule under the box
+            out.append(plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", l)))
+        return "\n".join(out).strip().lstrip("❯").strip()
 
     def activity(self, screen):
         """What the session is doing, as Claude Code shows it: its spinner line ("✻ Waiting for 4 background

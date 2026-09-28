@@ -318,6 +318,22 @@ class GlanceTest(BoardBase):
         finally:
             del claude.history_text
 
+    def test_nothing_is_typed_over_what_someone_has_half_typed(self):
+        claude = providers.get("claude")
+        rule = "─" * 40
+        box = lambda inside: f"● Done.\n{rule}\n\x1b[39m❯\u00a0{inside}\n{rule}\n  ⏵⏵ auto mode on"
+        self.assertEqual(claude.draft(box("\x1b[2mTry \"write a test for <filepath>\"\x1b[0m")), "", "a fresh session's hint")
+        self.assertEqual(claude.draft(box("")), "")
+        self.assertEqual(claude.draft(box("If we can have an elegant way")), "If we can have an elegant way")
+        self.assertIsNone(claude.draft("Do you want to make this edit?\n❯ 1. Yes\n  2. No"), "no box, no draft")
+        board.track(self.root)
+        console.COMMAND = "sh -c 'printf \"" + rule + "\\n❯ half written\\n" + rule + "\\n\"; sleep 30'"
+        name = console.ensure(self.root)
+        time.sleep(1)
+        self.assertTrue(console.drafting(name))
+        self.assertFalse(console.type_into(name, "[colony] You have a note from the person on the board."))
+        self.assertNotIn("You have a note", console.screen(name), "nothing typed onto the draft")
+
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)
         console.COMMAND = "sh -c 'echo first line; echo second line; echo esc to interrupt; sleep 30'"
@@ -357,7 +373,7 @@ class MonitorTest(BoardBase):
         screens = iter(["working", "working", "needs you", "needs you", "working", "idle", "idle"])
         console.snapshot = lambda root, lines=6, name=None: {"state": next(screens), "lines": ["last line"]}
         sent = []
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -373,7 +389,7 @@ class MonitorTest(BoardBase):
                       ("working", False), ("idle", False), ("idle", False)])
         console.snapshot = lambda root, lines=6, name=None: dict(zip(("state", "scrolled"), next(reads)), lines=[])
         sent = []
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -387,7 +403,7 @@ class MonitorTest(BoardBase):
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: busy
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -401,7 +417,7 @@ class MonitorTest(BoardBase):
     def test_a_question_the_person_already_wrote_back_to_is_not_announced_and_their_note_answers_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         board.add_note(self.root, None, "Yes, CSV.", author="monitor")     # `colony tell`, while the turn ran
@@ -424,7 +440,7 @@ class MonitorTest(BoardBase):
     def test_where_it_doesnt_hold_the_helm_the_monitor_sleeps_and_handed_it_hears_whats_waiting(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         board.record_ask(self.root, "t1", "Which format do you want?")
         w = monitor.Watcher(quiet=0)
@@ -443,7 +459,7 @@ class MonitorTest(BoardBase):
     def test_events_wait_until_the_monitor_is_free_and_a_new_gate_wakes_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: busy
         w = monitor.Watcher(quiet=0)
         w.tick()
@@ -460,7 +476,7 @@ class MonitorTest(BoardBase):
     def test_each_thing_waiting_is_announced_once_even_across_a_restart_and_every_view_counts_it_alike(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text)
+        console.type_into = lambda name, text: sent.append(text) or True
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
         board.record_ask(self.root, "t1", "Which format do you want?")
@@ -523,7 +539,7 @@ class MonitorTest(BoardBase):
         board.track(self.root)
         typed = []
         saved = (console.type_into, console.ensure, console.snapshot)
-        console.type_into = lambda name, text: typed.append(text)
+        console.type_into = lambda name, text: typed.append(text) or True
         console.ensure = lambda root, name=None, label=None: "s"
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         try:
@@ -733,7 +749,7 @@ class MessagingTest(BoardBase):
         board.track(other)
         typed = []
         saved = (console.type_into, console.ensure)
-        console.type_into = lambda name, text: typed.append((name, text))
+        console.type_into = lambda name, text: typed.append((name, text)) or True
         console.ensure = lambda root, name=None, label=None: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -764,8 +780,8 @@ class MessagingTest(BoardBase):
         board.record_ask(self.root, "t1", "Which format do you want?")
         typed, pasted = [], []
         saved = (console.type_into, console.paste_into, console.ensure)
-        console.type_into = lambda name, text: typed.append(text)
-        console.paste_into = lambda name, text: pasted.append((name, text))
+        console.type_into = lambda name, text: typed.append(text) or True
+        console.paste_into = lambda name, text: pasted.append((name, text)) or True
         console.ensure = lambda root, name=None, label=None: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -857,7 +873,7 @@ class MailWakeTest(BoardBase):
         self.saved = (console.snapshot, console.type_into, console.ensure, monitor.snapshot)
         self.typed, self.started, self.state = [], [], {"state": "idle"}
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}
-        console.type_into = lambda name, text: self.typed.append(text)
+        console.type_into = lambda name, text: self.typed.append(text) or True
         console.ensure = lambda root, name=None, label=None: self.started.append(root)
         monitor.snapshot = lambda: {"state": "working", "lines": []}
 
@@ -908,7 +924,7 @@ class NeedsYouTest(BoardBase):
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": ["done."]}
         console.screen = lambda name: self.CHOICE
         console.press = lambda name, keys: self.pressed.append(keys)
-        console.type_into = lambda name, text: self.typed.append(text)
+        console.type_into = lambda name, text: self.typed.append(text) or True
 
     def tearDown(self):
         console.snapshot, console.screen, console.press, console.type_into = self.saved
@@ -957,7 +973,7 @@ class SupportsTest(BoardBase):
         self.saved = (console.snapshot, console.type_into, monitor.snapshot)
         self.sent = []
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
-        console.type_into = lambda name, text: self.sent.append(text)
+        console.type_into = lambda name, text: self.sent.append(text) or True
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
 
     def tearDown(self):
@@ -1327,7 +1343,7 @@ class ClearTest(BoardBase):
         typed = []
         console.snapshot = lambda root, lines=6, name=None: {"state": state["state"], "lines": ["x"]}
         console.screen = lambda name: NeedsYouTest.CHOICE
-        console.type_into = lambda name, text: typed.append(text)
+        console.type_into = lambda name, text: typed.append(text) or True
         console.ensure = lambda root, name=None, label=None: None
         try:
             (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))

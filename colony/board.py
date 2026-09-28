@@ -688,6 +688,15 @@ def tabs(pid, view):
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
+def held(who, back):
+    """What the person sees when what they sent was not typed: someone's draft was in the way."""
+    return (f"<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+            f"<style>body{{font:15px system-ui;margin:24px;max-width:36em;line-height:1.5}}</style>"
+            f"<p>Not sent: {e(who)} has something half-typed in its console, and your message would have landed on it "
+            f"and sent it. Send or clear it there, then send this again.</p>"
+            f"<p><a href='javascript:history.back()'>Back to what you wrote</a> · <a href='{e(back)}'>Back to the board</a></p>")
+
+
 def message_form(pid, plist, cls):
     """Message: by default into the project's own console, as the person would type it there; or to another
     project, written by this project's agent. A file can go with it; either way its path goes in the message."""
@@ -1732,8 +1741,8 @@ class Handler(BaseHTTPRequestHandler):
             if form.get("p") == "monitor":
                 from . import monitor
                 dst = projects(reg)[int(form.get("to", "0"))]
-                if text:
-                    console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}")
+                if text and not console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}"):
+                    return self._send(409, held("the monitor", "/monitor").encode())
                 where = "/monitor?view=console"
             else:
                 from . import mail
@@ -1744,11 +1753,12 @@ class Handler(BaseHTTPRequestHandler):
                     files.append(str(dst / pins.save_upload(dst, *upload)))
                 if files:
                     text = "\n".join(f"Attached: {f}" for f in files) + (f"\n\n{text}" if text else "")
+                sent = not text or (console.paste_into(console.ensure(src), text) if dst == src
+                                    else console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text)))
+                if not sent:
+                    return self._send(409, held(src.name, f"/?p={form.get('p', '0')}").encode())
                 if text and dst == src:
-                    console.paste_into(console.ensure(src), text)
                     answer_asks(src, "in the console")
-                elif text:
-                    console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text))
                 if text:                                   # the project's Messages keep what was sent
                     append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text,
                                                    "to": "console" if dst == src else dst.name})
@@ -1913,7 +1923,8 @@ class Handler(BaseHTTPRequestHandler):
                 add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.")
                 append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
-            console.type_into(console.session_name(root), text)
+            if not console.type_into(console.session_name(root), text):
+                return self._send(409, held(root.name, form.get("back", "/")).encode())
             answer_asks(root, "from the board")
         elif path == "/console/stop":
             console.stop(root)
