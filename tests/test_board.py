@@ -766,6 +766,7 @@ class GlanceTest(BoardBase):
         self.assertIn("it doesn't wait: carry on unless redirected", (self.root / "CLAUDE.md").read_text(),
                       "helpers keep their assigner aware of the shape of their work")
         self.assertIn("talk at hand-offs", (self.root / "CLAUDE.md").read_text(), "paired projects: roles, not running updates")
+        self.assertIn("say\n  what it owns, where it ends", (self.root / "CLAUDE.md").read_text(), "an unsized job gets an end, or finding one comes first")
         self.cli("models", "set", "building", "claude-opus-5-5", "high", "--why", "agreed with the person")
         out = self.cli("notes", "--deliver", "--session").stdout
         self.assertIn("Your model plan, agreed with the person", out, "handed over at every session start")
