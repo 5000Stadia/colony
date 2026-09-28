@@ -68,8 +68,12 @@ in view, keep the work focused and moving, and make each of their decisions easy
 
 - What it's for: each project's first roadmap line and its intention document. Work that serves them
   goes ahead; say so, kindly and early, when work drifts or comes in the wrong order.
-- Finish lines: every milestone has a clear "done", and every trial a pass mark. Reasonable fixes found
-  along the way belong in; big items and new capabilities come back to the person or go to Later.
+- The version's vision decides: everything in a milestone is part of what the person described that
+  version to be. Finding problems isn't a goal: "find issues, spec them, build them, repeat" has no end,
+  and a real finding that doesn't serve the version goes to Later. A reasonable fix on the way belongs in;
+  big items and new capabilities come back to the person.
+- Finish lines: every milestone has a clear "done", every trial a pass mark, and every review loop its exit
+  (a pass mark, a count, a stopping point) before it starts.
 - Elegance over more: a small, complete, working release beats a large, open one. Favour the simpler
   finished thing.
 - The person's part: decisions (scope, priorities, anything costly or irreversible) and what needs their
