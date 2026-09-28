@@ -326,7 +326,7 @@ class ClaudeCode:
 
 class Codex:
     """OpenAI's Codex CLI: AGENTS.md and lifecycle hooks (Codex 0.154).
-    Project hooks need a trusted project and review in /hooks before Codex runs them.
+    Hooks travel with the console command and need review in /hooks before Codex runs them.
     See https://developers.openai.com/codex/hooks for the payload and output contracts."""
     label = "Codex"
     aliases = {}
@@ -364,7 +364,7 @@ class Codex:
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
     DELIVERY = ("\n- Colony's Codex hooks deliver notes and mail at session start and before each prompt, and record "
-                "questions when a turn ends. They need a trusted project and review in `/hooks`. If hooks have not "
+                "questions when a turn ends. The board's launch command supplies them; review them in `/hooks`. If hooks have not "
                 "delivered notes at session start or when a `[colony]` line arrives, run "
                 "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
                 "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
@@ -382,13 +382,17 @@ class Codex:
             parts += ["-m", shlex.quote(s["model"])]
         if s.get("effort"):
             parts += ["-c", shlex.quote(f"model_reasoning_effort={s['effort']}")]
+        # Codex 0.154 discovers project hook files in the main checkout even when cwd is a linked worktree.
+        # Session flags work for both fresh and resumed consoles, without editing another checkout or user config.
+        for event, command in self.hooks.items():
+            value = f'hooks.{event}=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]'
+            parts += ["-c", shlex.quote(value)]
         if resume:
             parts += ["resume", shlex.quote(resume)]
         return " ".join(parts)
 
     def wire(self, root, protocol):
-        """The colony protocol in AGENTS.md, where Codex reads a project's instructions (an older block brought
-        up to date in place), with how to fetch notes and mail."""
+        """Install instructions and retire our old file hooks; launch flags now supply them in every checkout."""
         path = root / "AGENTS.md"
         have = path.read_text() if path.exists() else ""
         block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY
@@ -400,31 +404,30 @@ class Codex:
         else:
             path.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
         settings = root / ".codex" / "hooks.json"
-        settings.parent.mkdir(exist_ok=True)
-        cfg = json.loads(settings.read_text()) if settings.exists() else {}
-        for event, command in self.hooks.items():
-            entries = cfg.setdefault("hooks", {}).setdefault(event, [])
-            for entry in entries:
-                for hook in entry.get("hooks", []):
-                    if hook.get("type") == "command" and hook.get("command") == self.legacy_hooks[event]:
-                        hook["command"] = command   # replace old delivery; leaving it would bypass the guard
-            if not any(h.get("type") == "command" and h.get("command") == command
-                       and not h.get("async") and e.get("matcher", "") in ("", "*")
-                       for e in entries for h in e.get("hooks", [])):
-                entries.append({"hooks": [{"type": "command", "command": command}]})
-        settings.write_text(json.dumps(cfg, indent=2) + "\n")
+        if settings.exists():
+            cfg = json.loads(settings.read_text())
+            for event, entries in cfg.get("hooks", {}).items():
+                if event not in self.hooks:
+                    continue
+                for entry in entries:
+                    entry["hooks"] = [h for h in entry.get("hooks", []) if not self._owned_hook(event, h)]
+                cfg["hooks"][event] = [entry for entry in entries if entry.get("hooks")]
+            settings.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    def _owned_hook(self, event, hook):
+        return (hook.get("type") == "command"
+                and hook.get("command") in (self.hooks.get(event), self.legacy_hooks.get(event)))
 
     def wired(self, root):
         path = root / "AGENTS.md"
+        settings = root / ".codex" / "hooks.json"
         try:
-            hooks = json.loads((root / ".codex" / "hooks.json").read_text()).get("hooks", {})
+            hooks = json.loads(settings.read_text()).get("hooks", {}) if settings.exists() else {}
         except (OSError, ValueError):
             return False
         return ("## This project is part of a colony" in (path.read_text() if path.exists() else "")
-                and all(any(h.get("type") == "command" and h.get("command") == command
-                            and not h.get("async") and e.get("matcher", "") in ("", "*")
-                            for e in hooks.get(event, []) for h in e.get("hooks", []))
-                        for event, command in self.hooks.items()))
+                and not any(self._owned_hook(event, h) for event in self.hooks
+                            for entry in hooks.get(event, []) for h in entry.get("hooks", [])))
 
     def model_name(self, value):
         return dict(self.models).get(value, value)
