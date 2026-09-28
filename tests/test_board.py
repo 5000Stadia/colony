@@ -727,10 +727,10 @@ class MessagingTest(BoardBase):
         try:
             port = httpd.server_address[1]
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=console").read().decode()
-            self.assertIn("What should this agent message them about?", page)
+            self.assertIn("<option value='self'>plants, in its console</option>", page, "by default, its own console")
             self.assertIn("data-k='down'", page, "a phone can answer an on-screen choice")
             self.assertIn("down: '\\x1b[B'", page)
-            self.assertIn(">shop</option>", page)
+            self.assertIn(">shop, written by plants's agent</option>", page)
             data = urllib.parse.urlencode({"p": 0, "to": 1, "text": "which CSV columns do you export?"}).encode()
             urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/message", data=data))
             [(name, text)] = typed
@@ -739,6 +739,52 @@ class MessagingTest(BoardBase):
             self.assertIn("colony send shop --ask", text)
         finally:
             console.type_into, console.ensure = saved
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_a_message_goes_into_the_projects_own_console_as_written_with_its_files(self):
+        other = Path(self.tmp.name) / "shop"
+        other.mkdir()
+        board.track(self.root)
+        board.track(other)
+        (self.root / "notes.txt").write_text("x")
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        typed, pasted = [], []
+        saved = (console.type_into, console.paste_into, console.ensure)
+        console.type_into = lambda name, text: typed.append(text)
+        console.paste_into = lambda name, text: pasted.append((name, text))
+        console.ensure = lambda root, name=None, label=None: console.session_name(root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        def send(**fields):
+            boundary, parts = "xyz", ""
+            for k, v in fields.items():
+                if k == "file":
+                    parts += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{v[0]}\"\r\n"
+                              f"Content-Type: text/plain\r\n\r\n{v[1]}\r\n")
+                else:
+                    parts += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/message",
+                                   data=(parts + f"--{boundary}--\r\n").encode(),
+                                   headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}))
+        try:
+            page = urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/?p=0").read().decode()
+            self.assertIn("type='file' name='file'", page, "upload from the device")
+            self.assertIn("Browse…", page, "or browse the project")
+            send(p=0, to="self", text="CSV.\r\nWith a header row.", path="notes.txt", file=("log.txt", "LOG"))
+            [(name, text)] = pasted
+            self.assertEqual(name, console.session_name(self.root))
+            self.assertEqual(text, f"Attached: {(self.root / 'notes.txt').resolve()}\nAttached: {self.root / '.board/uploads/log.txt'}"
+                             "\n\nCSV.\nWith a header row.", "lines kept, as written, with both files")
+            self.assertEqual((self.root / ".board/uploads/log.txt").read_text(), "LOG")
+            self.assertEqual(board.asks(self.root), [], "the person answered in its console")
+            self.assertEqual(typed, [])
+            send(p=0, to=1, text="Send me your export", file=("spec.md", "SPEC"))
+            self.assertEqual((other / ".board/uploads/spec.md").read_text(), "SPEC", "kept where shop can read it")
+            self.assertIn(f"Attached: {other / '.board/uploads/spec.md'}", typed[0])
+            self.assertIn("colony send shop", typed[0], "plants's agent writes it")
+        finally:
+            console.type_into, console.paste_into, console.ensure = saved
             httpd.shutdown()
             httpd.server_close()
 
