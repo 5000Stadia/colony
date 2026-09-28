@@ -924,6 +924,55 @@ class SettingsTest(BoardBase):
 
 
 class ProjectSettingsTest(BoardBase):
+    def test_codex_suggestions_follow_catalog_without_changing_defaults(self):
+        from unittest.mock import patch
+        codex = providers.get("codex")
+        folder = Path(self.tmp.name) / "codex-config"
+        folder.mkdir()
+        with patch.dict(os.environ, {"CODEX_HOME": str(folder)}):
+            baseline = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
+            self.assertEqual([m[0] for m in codex.models], baseline)
+            self.assertEqual(codex.own_defaults(), {"model": None, "effort": None})
+            catalog = folder / "models_cache.json"
+            catalog.write_text(json.dumps({"models": [{"slug": "gpt-6-sol", "visibility": "list"},
+                                                       {"slug": "gpt-6-luna", "visibility": "hide"}]}))
+            self.assertEqual([m[0] for m in codex.models], baseline + ["gpt-6-sol"])
+            catalog.write_text(json.dumps({"models": [{"slug": "gpt-6-luna", "visibility": "list"}]}))
+            self.assertEqual([m[0] for m in codex.models], baseline + ["gpt-6-luna"])
+            catalog.write_text("partially written")
+            self.assertEqual([m[0] for m in codex.models], baseline)
+            (folder / "config.toml").write_text('model = "gpt-6-astra"\nmodel_reasoning_effort = "high"\n')
+            self.assertEqual(codex.own_defaults(), {"model": "gpt-6-astra", "effort": "high"})
+            self.assertNotIn("-m", codex.command("plants", {}), "no recommendation becomes a command default")
+            self.assertEqual(codex.model_name("gpt-6-astra"), "GPT-6 Astra")
+
+    def test_codex_forms_suggest_without_selecting_and_filter_efforts(self):
+        import html
+        from unittest.mock import patch
+        codex = providers.get("codex")
+        with patch.object(codex, "own_defaults", return_value={"model": None, "effort": None}):
+            page = board.provider_fields("codex", "", "", "global")
+            self.assertIn("Suggested for a new Codex project: GPT-5.6 Sol, medium effort.", page)
+            self.assertIn("name='model' list='models' value=''", page)
+            self.assertIn("name='effort' list='efforts' value=''", page)
+            data = json.loads(html.unescape(re.search("data-providers='([^']*)'", page)[1]))
+            self.assertIn(["ultra", "Ultra — delegates to subagents"], data["codex"]["efforts"])
+            for model in ("gpt-5.6-luna", "gpt-6-luna", "gpt-5.5"):
+                options = board.provider_fields("codex", model, "", "global").split("<datalist id='efforts'>")[1].split("</datalist>")[0]
+                self.assertNotIn("ultra", options)
+                if model == "gpt-5.5":
+                    self.assertNotIn("max", options)
+            with patch.object(codex, "own_defaults", return_value={"model": "gpt-6-luna", "effort": "high"}):
+                page = board.provider_fields("codex", "", "", "the provider's default")
+                options = page.split("<datalist id='efforts'>")[1].split("</datalist>")[0]
+                self.assertNotIn("ultra", options, "blank model uses the configured model's efforts")
+                self.assertIn("name='model' list='models' value=''", page)
+            board.set_setting("provider", "codex")
+            page = board.add_project_page(board.registry())
+            self.assertIn("Suggested for a new Codex project", page)
+            self.assertEqual(board.registry()["settings"]["model"], "")
+            self.assertEqual(board.registry()["settings"]["effort"], "")
+
     def test_a_project_chooses_for_itself_and_falls_back_to_the_global_settings(self):
         board.track(self.root)
         saved, console.COMMAND = console.COMMAND, None

@@ -24,6 +24,15 @@ These are defaults from measured runs, not rules. Where you see a better way, ta
 
 - If the person wants to follow and steer the project without being in the conversation, put it on the board (`colony track`): one page for all their projects, with gates for their decisions and notes that reach you when they're relevant.
 
+## Codex
+Starting points from [current evidence](docs/codex-models.md), not measured colony results.
+
+- Start ordinary building on GPT-5.6 Sol at medium; reserve Astra for hard decisions and failures. Judge cost by accepted work, including retries and corrections.
+- Plan substantial work at high effort, then build at medium. Try Luna low or medium for clear chores; raise effort when they need reasoning across files.
+- Review consequential changes with Sol high; try Astra medium or high for defects across components or when a cheaper review misses something.
+- Start Astra at low and raise effort for a concrete difficulty. Reserve xhigh or max for hard problems; Ultra also delegates work to subagents.
+- For a painter seat, start the directing agent at Sol medium, agree visual references, and iterate against them. Its effort is separate from image quality; the person's eye decides done.
+
 ## Other agents
 - Handing isolated work to subagents is good. Any other added agent often costs 1.2–5× the tokens and must justify it; agents added only to check, remember or co-build one agent's well-specified work didn't.
 - Add agents when it's clearly the better approach for the project (genuinely parallel domains, scale beyond one context) or when a real difficulty would benefit from a specialist's focus. The gain is a clean context and a narrow brief, not more intelligence; for a problem that is simply hard, raise effort.
@@ -56,4 +65,3 @@ Reach for these when the symptom appears.
 
 ## Safety
 - Deny outward commands in Claude Code settings: `git push`, `gh`, publishing, `ssh`. The denial holds even with permissions bypassed. It is a floor, not a sandbox.
-
