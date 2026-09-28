@@ -355,15 +355,19 @@ class Codex:
     instructions = "AGENTS.md"
     enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
     scrolled_marker = ""
-    hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
-             "Stop": "colony turn && printf '{}\\n'"}  # Stop requires JSON, not colony's plain-text output
+    legacy_hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
+                    "Stop": "colony turn && printf '{}\\n'"}
+    hooks = {"SessionStart": "colony notes --deliver --session --console codex",
+             "UserPromptSubmit": "colony notes --deliver --console codex",
+             "Stop": "colony turn --console codex && printf '{}\\n'"}  # Stop requires JSON output
     # colony's permission choices, in Codex's terms
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
     DELIVERY = ("\n- Colony's Codex hooks deliver notes and mail at session start and before each prompt, and record "
                 "questions when a turn ends. They need a trusted project and review in `/hooks`. If hooks have not "
-                "delivered notes at session start or when a `[colony]` line arrives, run `colony notes --deliver` "
-                "and act on what it prints.\n")
+                "delivered notes at session start or when a `[colony]` line arrives, run "
+                "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
+                "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
 
     def command(self, label, s, resume=None):
         """The person's own `codex`: inline, so its console keeps scrollback, without the update question at
@@ -400,6 +404,10 @@ class Codex:
         cfg = json.loads(settings.read_text()) if settings.exists() else {}
         for event, command in self.hooks.items():
             entries = cfg.setdefault("hooks", {}).setdefault(event, [])
+            for entry in entries:
+                for hook in entry.get("hooks", []):
+                    if hook.get("type") == "command" and hook.get("command") == self.legacy_hooks[event]:
+                        hook["command"] = command   # replace old delivery; leaving it would bypass the guard
             if not any(h.get("type") == "command" and h.get("command") == command
                        and not h.get("async") and e.get("matcher", "") in ("", "*")
                        for e in entries for h in e.get("hooks", [])):
