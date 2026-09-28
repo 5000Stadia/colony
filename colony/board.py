@@ -1610,9 +1610,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             pid = int((q.get("p") or ["0"])[0])
             root, name = (monitor.home(), monitor.name()) if pid == -1 else (plist[pid], console.session_name(plist[pid]))
-            text = providers.of(root).history_text(root) or subprocess.run(
-                ["tmux", "capture-pane", "-p", "-J", "-S", "-3000", "-t", name], capture_output=True, text=True
-            ).stdout.rstrip() or "(nothing yet)"
+            text = providers.of(root).history_text(root) or console.history(name).rstrip() or "(nothing yet)"
             body = text.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")

@@ -125,6 +125,12 @@ def screen(name):
     return subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
 
 
+def history(name):
+    """The session's screen with the scrollback above it, wrapped lines joined: what a narrow window (a phone
+    attached) has broken across rows reads as one line again."""
+    return subprocess.run(["tmux", "capture-pane", "-p", "-J", "-S", "-", "-t", name], capture_output=True, text=True).stdout
+
+
 def stop(root):
     subprocess.run(["tmux", "kill-session", "-t", session_name(root)], capture_output=True)
 
@@ -135,16 +141,19 @@ BORDER = re.compile(r"^[\s│|╭╮╰╯─━┃┏┓┗┛]+|[\s│|╭╮�
 
 
 def snapshot(root, lines=6, name=None):
+    """Its state, read off the screen as it is now, and its last lines: from the scrollback too when more are
+    asked for than the screen holds."""
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
         return {"state": "off", "lines": []}
-    screen = subprocess.run(["tmux", "capture-pane", "-p", "-t", name], capture_output=True, text=True).stdout
-    shown = [BORDER.sub("", l) for l in screen.splitlines()]
-    shown = [l for l in shown if l.strip()]
+    now = screen(name)
+    shown = [l for l in (BORDER.sub("", l) for l in now.splitlines()) if l.strip()]
+    if lines > len(shown):
+        shown = [l for l in (BORDER.sub("", l) for l in history(name).splitlines()) if l.strip()]
     from . import providers
     p = providers.of(root)
-    return {"state": p.classify(screen), "lines": shown[-lines:],
-            "activity": p.activity(screen) if hasattr(p, "activity") else {"line": None, "agents": []}}
+    return {"state": p.classify(now), "lines": shown[-lines:],
+            "activity": p.activity(now) if hasattr(p, "activity") else {"line": None, "agents": []}}
 
 
 # ---------------------------------------------------------------- a minimal WebSocket (RFC 6455)

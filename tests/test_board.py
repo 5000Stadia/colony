@@ -279,6 +279,14 @@ class GlanceTest(BoardBase):
         self.assertEqual(act["agents"][1]["detail"], "7m 0s · ↓ 138.2k tokens")
         self.assertEqual(claude.classify("* Waiting for 4 background agents to finish\n❯ "), "working", "its agents are at work")
 
+    def test_peek_reads_back_past_the_screen(self):
+        board.track(self.root)
+        console.COMMAND = "sh -c 'for i in $(seq 1 120); do echo row $i; done; sleep 30'"
+        console.ensure(self.root)
+        time.sleep(1)
+        self.assertEqual(console.snapshot(self.root, lines=100)["lines"][0], "row 21", "from the scrollback")
+        self.assertEqual(console.snapshot(self.root, lines=2)["lines"], ["row 119", "row 120"])
+
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)
         console.COMMAND = "sh -c 'echo first line; echo second line; echo esc to interrupt; sleep 30'"
