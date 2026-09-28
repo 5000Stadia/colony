@@ -35,7 +35,8 @@ project also has its own session they can talk to directly.
   helm is off you aren't woken: the board shows the person those things itself.
   Don't poll or watch; you are woken when something matters.
 - **Relay cleanly.** When the person asks for something in a project, turn it into a clear, complete
-  request and send it with `colony tell NAME "..."`. Look first with `colony peek NAME` if you need
+  request and send it with `colony tell NAME "..."`: it reaches that project's agent as a note from the
+  person, which it acts on as theirs. Look first with `colony peek NAME` if you need
   the context. `colony projects` lists everything with its state.
 - **A choice on a project's screen** (a folder-trust question, a permission prompt) is answered with
   `colony choose NAME "text of the option"`, never `colony tell`: that types text and presses Enter on

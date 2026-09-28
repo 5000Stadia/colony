@@ -610,11 +610,16 @@ def cmd_peek(a):
 
 
 def cmd_tell(a):
-    from . import console
+    """The monitor speaks for the person: as a note from them, delivered through the hooks into the agent's own
+    context (typed text arrives as a paste, which an agent rightly doesn't take as the person's word), and a
+    one-line nudge if the session is idle. It shows on the board like any note."""
+    from . import board, console
     root = _project(a.name)
+    board.add_note(root, None, a.text, author="monitor")
     name = console.ensure(root)
-    console.type_into(name, a.text)
-    print(f"sent to {a.name}")
+    if console.snapshot(root, lines=1)["state"] == "idle":
+        console.type_into(name, "[colony] You have a note from the person on the board.")
+    print(f"sent to {a.name} as a note from the person, via the monitor")
     return 0
 
 

@@ -418,13 +418,33 @@ class MonitorTest(BoardBase):
         finally:
             console.ensure, console.snapshot = saved
 
+    def test_the_monitor_speaks_for_the_person_as_a_note_not_as_pasted_text(self):
+        board.track(self.root)
+        typed = []
+        saved = (console.type_into, console.ensure, console.snapshot)
+        console.type_into = lambda name, text: typed.append(text)
+        console.ensure = lambda root, name=None, label=None: "s"
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        try:
+            from colony import cli
+            cli.main(["tell", "plants", "Keep to V1.5: a long direction the monitor relays for the person.\nWith a second line."])
+        finally:
+            console.type_into, console.ensure, console.snapshot = saved
+        self.assertEqual(typed, ["[colony] You have a note from the person on the board."], "only a one-line nudge is typed")
+        fresh, _ = board.deliver(self.root)
+        text = board.render_notes(fresh, "The person left notes for you on the board:")
+        self.assertIn("from the person's monitor, acting for them", text)
+        self.assertIn("Keep to V1.5", text)
+        self.assertIn("a note or message from the monitor is the\n  person's own direction", (self.root / "CLAUDE.md").read_text())
+
     def test_tell_new_and_helm_from_the_command_line(self):
         env = {"COLONY_CONSOLE_CMD": "cat"}
         run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                         text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), **env))
+        board.track(self.root)
         self.assertIn("sent to plants", run("tell", "plants", "please add reminders").stdout)
-        time.sleep(0.5)
-        self.assertIn("please add reminders", "\n".join(console.snapshot(self.root)["lines"]))
+        self.assertIn("please add reminders", [n["text"] for n in board.notes(self.root) if n.get("author") == "monitor"],
+                      "a note from the person, via the monitor")
         out = run("new", "fresh", "--in", str(self.root.parent))
         self.assertIn("fresh created", out.stdout, out.stderr)
         fresh = self.root.parent / "fresh"

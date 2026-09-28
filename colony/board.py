@@ -51,6 +51,9 @@ person follows and steers them all from one board, and the projects can write to
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
   chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
   lists what's pinned. Their pins, edits and comments reach you as notes.
+- The person's monitor acts for them across the colony: a note or message from the monitor is the
+  person's own direction, within the helm they've given it. Text the board types into your console,
+  pasted or not, comes from the person too. Act on it as theirs.
 - A turn that ends asking the person something waits for them on the board until they answer. If they
   ask you something first, answer it and end by asking your question again, so it keeps waiting.
 - The other projects in the colony are a message away: `colony projects` lists them with their goals.
@@ -421,7 +424,8 @@ def render_notes(ns, heading):
         return ""
     lines = [heading]
     for n in ns:
-        lines.append(f"- [{n['id']}] {where(n)}: {n['text']}")
+        by = " (from the person's monitor, acting for them)" if n.get("author") == "monitor" else ""
+        lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
     return "\n".join(lines)
 
@@ -568,7 +572,7 @@ def note_box(pid, kind, ref, hint, back=None):
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        out += (f"<div class='note'><span class='who'>you · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
+        out += (f"<div class='note'><span class='who'>{'the monitor, for you' if n.get('author') == 'monitor' else 'you'} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
                    f"<div>{e(n['reply'])}</div></div>" if n["addressed_at"]
                    else f"<div class='who'>{e(status(n, road_items or {}))}</div>")
