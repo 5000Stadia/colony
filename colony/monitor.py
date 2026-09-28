@@ -389,6 +389,8 @@ class Watcher:
             if not helm_for(p):
                 continue
             kind = WAKE.get((before, now))
+            if kind and any(time.time() - board.epoch(a["at"]) < 120 for a in board.asks(p)):
+                kind = None                          # it ended asking something: the question, announced, says so
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
                 out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:])))
@@ -484,7 +486,10 @@ class Watcher:
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             # What waited while the monitor was busy may have been answered meanwhile: only what still waits goes.
-            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
+            fresh = [(p, key, text) for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
+            # A turn that ended asking something is told once, as the question: its "finished a turn" goes.
+            asked = {p for p, key, _ in fresh if key and key.startswith("ask:")}
+            fresh = [text for p, key, text in fresh if key or p not in asked]
             if not fresh or console.type_into(name(), "[colony] " + " | ".join(fresh) + f" ({HELM_ON_NOTE})"):
                 self.pending = []
 

@@ -455,6 +455,22 @@ class MonitorTest(BoardBase):
         self.assertEqual(len(sent), 1)
         self.assertIn("plants finished a turn", sent[0])
 
+    def test_a_turn_that_ends_asking_something_is_told_once_as_the_question(self):
+        reads = iter(["working", "idle", "idle", "idle"])
+        console.snapshot = lambda root, lines=6, name=None: {"state": next(reads), "lines": []}
+        sent = []
+        console.type_into = lambda name, text: sent.append(text) or True
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        monitor.helm(True)
+        w = monitor.Watcher(quiet=0)
+        w.tick()
+        board.record_ask(self.root, "t1", "Which format do you want?")      # the turn ends asking
+        for _ in range(3):
+            w.tick()
+        self.assertEqual(len(sent), 1)
+        self.assertIn("asked you: Which format", sent[0])
+        self.assertNotIn("finished a turn", sent[0])
+
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}

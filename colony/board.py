@@ -271,6 +271,12 @@ def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def epoch(stamp):
+    """A board time ("...Z") as seconds."""
+    import calendar
+    return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+
+
 def roadmap(root, text=None):
     """The roadmap as the agent keeps it: the goal line, milestones and their items."""
     if text is None:
