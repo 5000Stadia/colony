@@ -57,6 +57,14 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R44 The monitor runs on whichever program is installed, its brief where that program reads it
 - [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
+## M8 — Models chosen from evidence
+
+- [~] R45 Benchmark records and a card per model and effort level: two or three respected overall scores (Artificial Analysis, LMArena, Epoch AI) put on one scale and averaged, cost and time per task, gaps shown as gaps; kept on this machine
+- [~] R46 Today's lineup researched and recorded, once (Claude models by colony, Codex models by colony-codex)
+- [ ] R47 A Models page on the board: the cards, a domain comparison, an effort-vs-cost curve per model, best for each role; an ⓘ beside each model when adding a project
+- [ ] R48 Each project's model plan: which model and effort its helpers use for which work, recommended at its start and agreed with the person, kept in .board and handed over at every session start, revisited when a model is added
+- [ ] R49 Adding a model to colony includes its research check; colony notices a new model, builds its card, reranks, and tells each project
+
 ## M6 — Later
 
 - [ ] R23 Unattended runs at the scale they were built for decide whether the runtime stays — README.md "Unattended runs"
