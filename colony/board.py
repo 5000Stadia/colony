@@ -767,9 +767,19 @@ def render(reg, pid, view="overview"):
             branched = any(it["after"] != ([order[i - 1]] if i else []) for i, it in enumerate(its.values()))
             out.append(f"<details class='mapbox'{' open' if branched else ''}><summary>Map of the roadmap"
                        f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
-            for m in road["milestones"]:
+            # a finished milestone loads folded; those finished before the first unfinished one fold into one
+            finished = lambda m: m["items"] and all(i["state"] == "done" for i in m["items"])
+            lead = next((k for k, m in enumerate(road["milestones"]) if not finished(m)), len(road["milestones"]))
+            lead = lead if lead >= 2 else 0
+            if lead:
+                ms_ = road["milestones"][:lead]
+                out.append(f"<details class='card ms done-group'><summary><h3>Completed</h3><span class='muted'>"
+                           f"{e(ms_[0]['id'])}–{e(ms_[-1]['id'])} · {sum(len(m['items']) for m in ms_)} items</span></summary>")
+            for k, m in enumerate(road["milestones"]):
+                if lead and k == lead:
+                    out.append("</details>")
                 done_m = sum(1 for i in m["items"] if i["state"] == "done")
-                out.append(f"<details class='card ms' open><summary><h3>{e(m['id'])} — {e(m['title'])}</h3>"
+                out.append(f"<details class='{'ms' if k < lead else 'card ms'}'{'' if finished(m) else ' open'}><summary><h3>{e(m['id'])} — {e(m['title'])}</h3>"
                            f"<span class='muted'>{done_m} of {len(m['items'])} done</span></summary>")
                 for it in m["items"]:
                     i = order.index(it["id"])
@@ -788,6 +798,8 @@ def render(reg, pid, view="overview"):
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
                         + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
+                out.append("</details>")
+            if lead == len(road["milestones"]):
                 out.append("</details>")
         else:
             out.append("<div class='card muted'>No roadmap yet: the agent keeps it in ROADMAP.md.</div>")
@@ -2063,7 +2075,7 @@ body.copying .keys .selectall { display:block }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
-.ms[open] > summary { margin-bottom:6px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
+.ms[open] > summary { margin-bottom:6px } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
 .legend { font-size:13px; color:var(--muted); margin-bottom:10px } .mapwrap { overflow-x:auto; padding-bottom:6px }
 .map { position:relative } .map svg { position:absolute; left:0; top:0 } .map path { fill:none; stroke:var(--line); stroke-width:2 }
 .node { position:absolute; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:6px 10px;

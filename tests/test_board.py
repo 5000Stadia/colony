@@ -177,6 +177,19 @@ class BoardTest(BoardBase):
             self.assertIn(part, plan)
         self.assertNotIn("Since you were last here", plan)
 
+    def test_finished_milestones_load_folded_and_those_before_the_first_unfinished_fold_together(self):
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("## M1 — v1: it works for me", "## M0 — setup\n\n- [x] R0 repo\n\n## M1 — v1: it works for me")
+                                              .replace("- [~] R2", "- [x] R2").replace("- [ ] R3", "- [x] R3")
+                                              + "\n## M2 — v2\n\n- [ ] R4 sharing\n\n## M3 — v3\n\n- [x] R5 export\n")
+        page = board.render(board.registry(), 0, "roadmap")
+        group = page[page.index("done-group"):page.index("M2 — v2")]
+        self.assertIn("M0–M1 · 4 items", group)
+        self.assertIn("<details class='ms'><summary><h3>M0 — setup", group, "folded, inside the group")
+        self.assertIn("<details class='card ms done-group'>", page, "the group itself loads folded")
+        self.assertIn("<details class='card ms' open><summary><h3>M2 — v2", page)
+        self.assertIn("<details class='card ms'><summary><h3>M3 — v3", page, "finished after an unfinished one: folded, alone")
+
     def test_the_board_answers_only_itself(self):
         board.track(self.root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
