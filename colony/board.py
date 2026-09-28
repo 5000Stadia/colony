@@ -854,7 +854,7 @@ def render(reg, pid, view="overview"):
                    f"{waiting_html(pid, root)}</div>"
                    f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('waiting'), '/needs?p={pid}',"
                    " (w) => { document.getElementById('wcount').textContent = w.querySelectorAll('.need').length; });</script>")
-        # since you were last here: one timeline, newest first; "I'm caught up" rides down the list as you read,
+        # since you were last here: one timeline, newest first; Clear rides down the list as you read,
         # and stays within it
         s = since(root, reg["seen"].get(str(root)))
         out.append("<h2>Since you were last here</h2><div class='card since'>")
@@ -868,7 +868,7 @@ def render(reg, pid, view="overview"):
         events += [(stamp(t), f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>") for h, t, subj in s["commits"][:15]]
         lines = [html_ for _, html_ in sorted(events, key=lambda ev: ev[0] or "", reverse=True)]
         caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
-                     f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
+                     f"<input type='hidden' name='head' value='{e(s['head'])}'><button title='Seen all of this: the list starts again from here'>Clear</button></form>")
         out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
         out.append("</div>")
     return shell(reg, pid, "".join(out))
@@ -2057,7 +2057,7 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
 .since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
   pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
-.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:128px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:80px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
