@@ -236,14 +236,72 @@ def save_registry(reg):
 
 # ---------------------------------------------------------------- a project's files
 
+def workdir(root):
+    """Where a project's agent works: its own folder, or the folder it shares with the project that owns it."""
+    path = Path(root) / ".board" / "settings.json"
+    try:
+        shared = json.loads(path.read_text()).get("workdir")
+    except (OSError, ValueError):
+        shared = None
+    return Path(shared) if shared else Path(root)
+
+
+def sharing(path, name, chosen):
+    """A second project in a folder that has its own: it has a name, its own .board and plan in colony's home,
+    and works in that folder. Its instructions go in the file its provider reads, so it runs on a provider that
+    reads a different file from each project already working there."""
+    from . import providers
+    work = Path(path).expanduser().resolve()
+    if not work.is_dir():
+        raise ValueError(f"no folder {path}")
+    root = home() / "agents" / name
+    if any(p.name == name for p in projects()):
+        raise ValueError(f"a project named {name} is already on the board")
+    mine = providers.get(chosen.get("provider") or registry()["settings"]["provider"])
+    for p in projects():
+        if workdir(p).resolve() == work and providers.of(p).instructions == mine.instructions:
+            raise ValueError(f"{p.name} already works in {work} and reads {mine.instructions}; "
+                             "a second project there needs a provider that reads another file")
+    (root / ".board").mkdir(parents=True, exist_ok=True)
+    project_settings(root, chosen)
+    settings = root / ".board" / "settings.json"
+    settings.write_text(json.dumps(dict(json.loads(settings.read_text()), workdir=str(work)), indent=2) + "\n")
+    return track(root)
+
+
+def protocol(root):
+    """The colony protocol as a project's agent reads it; for one sharing another project's folder, it says
+    whose folder it is and where its own plan lives."""
+    root = Path(root)
+    work = workdir(root)
+    if work == root:
+        return PROTOCOL
+    owner = next((p.name for p in projects() if p != root and workdir(p).resolve() == work.resolve()), None)
+    whose = f"**{owner}**, whose project it is" if owner else "the project that owns it"
+    head = "## This project is part of a colony\n"
+    return PROTOCOL.replace(head, head + (
+        f"\nYou are **{root.name}**, a second agent working in this folder beside {whose}. Its files, its\n"
+        f"ROADMAP.md and its plan are theirs: change them only as they ask"
+        + (f", and work with them through `colony send {owner}` and `colony reply`" if owner else "") + ".\n"
+    ), 1).replace("The plan is `ROADMAP.md`", f"Your own plan is `{root / 'ROADMAP.md'}`")
+
+
 def git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True).stdout
 
 
 def root_of(path="."):
-    """The project a command runs in: the nearest folder upward that is on the board (it has a .board).
-    Not git's top level: a project can live inside another repository, like colony's own projects/."""
+    """The project a command runs in: the one whose console it runs in (a second project sharing a folder is
+    told apart this way), else the nearest folder upward that is on the board (it has a .board). Not git's
+    top level: a project can live inside another repository, like colony's own projects/."""
     here = Path(path).resolve()
+    mine = os.environ.get("COLONY_PROJECT")
+    if mine and (Path(mine) / ".board").is_dir():
+        try:
+            here.relative_to(workdir(mine).resolve())
+            return Path(mine)
+        except ValueError:
+            pass                                      # run elsewhere: the folder decides
     for d in (here, *here.parents):
         if (d / ".board").is_dir():
             return d
@@ -569,11 +627,12 @@ def track(path, register=True):
     """Put a project on the board: its roadmap, its .board folder, and its provider's wiring (for Claude Code,
     the colony protocol in CLAUDE.md and the delivery hooks) — added to whatever the project already has."""
     root = Path(path).expanduser().resolve()      # the folder chosen is the root, whatever repository holds it
+    shared = workdir(root) != root                # a second project in another's folder: no repository of its own
     ours = {".git", ".board", ".claude", "CLAUDE.md", "ROADMAP.md"}
     # Work of its own: any file colony didn't put there, or commits in its own repository (not an enclosing one).
-    joining = any(p.name not in ours for p in root.iterdir()) or \
-        ((root / ".git").exists() and bool(git(root, "rev-parse", "--verify", "-q", "HEAD").strip()))
-    if not (root / ".git").exists():
+    joining = not shared and (any(p.name not in ours for p in root.iterdir()) or
+                              ((root / ".git").exists() and bool(git(root, "rev-parse", "--verify", "-q", "HEAD").strip())))
+    if not shared and not (root / ".git").exists():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".board").mkdir(exist_ok=True)
     if not joining and not (root / "ROADMAP.md").exists():
@@ -582,7 +641,7 @@ def track(path, register=True):
     if joining and not has_plan and not any(n["text"] == JOIN for n in notes(root)):
         add_note(root, None, JOIN)
     from . import providers
-    providers.of(root).wire(root, PROTOCOL)
+    providers.of(root).wire(workdir(root), protocol(root))
     reg = registry()
     inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
     if register and not inside_a_root and str(root) not in reg["projects"]:
@@ -848,7 +907,7 @@ def render(reg, pid, view="overview"):
         root = plist[pid]
         message = message_form(pid, plist, "msgbox")
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
-                     + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
+                     + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
     root = plist[pid]
     road, gs = roadmap(root), gates(root)

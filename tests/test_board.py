@@ -391,6 +391,38 @@ class GlanceTest(BoardBase):
         self.assertTrue(providers.of(self.root).wired(self.root))
         self.assertIn("(colony knows: claude, codex)", board.SETTING_HELP["provider"])
 
+    def test_two_projects_share_one_folder_each_its_own(self):
+        board.track(self.root)
+        board.set_setting("messaging", "on")
+        r = self.cli("track", ".", "--name", "plants-codex", "--provider", "codex")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        twin = board.home() / "agents" / "plants-codex"
+        self.assertEqual(sorted(p.name for p in board.projects()), ["plants", "plants-codex"])
+        self.assertEqual(board.workdir(twin), self.root.resolve())
+        self.assertEqual(board.project_settings(twin)[0]["provider"], "codex")
+        agents = (self.root / "AGENTS.md").read_text()
+        self.assertIn("You are **plants-codex**, a second agent working in this folder beside **plants**", agents)
+        self.assertIn(f"Your own plan is `{twin / 'ROADMAP.md'}`", agents, "never the folder's own roadmap")
+        self.assertNotIn("plants-codex", (self.root / "CLAUDE.md").read_text(), "the folder's own agent reads its own")
+        self.assertNotEqual(console.session_name(twin), console.session_name(self.root))
+        # A command in its console acts as it; the same command in a plain shell in the folder acts as plants.
+        as_twin = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True,
+                                            env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=str(twin)))
+        as_twin("send", "plants", "Which sprites do you need first?", "--ask")
+        [m] = mail.inbox(self.root)
+        self.assertEqual((m["from"], m["to"]), ("plants-codex", "plants"))
+        board.add_note(twin, None, "Introduce yourself to plants.")
+        self.assertIn("Introduce yourself", as_twin("notes", "--deliver").stdout)
+        self.assertEqual(board.notes(self.root), [], "its notes are its own")
+        r = self.cli("track", ".", "--name", "plants-two", "--provider", "claude")
+        self.assertNotEqual(r.returncode, 0, "a second Claude would read the same CLAUDE.md")
+        self.assertIn("reads CLAUDE.md", r.stderr)
+        console.ensure(twin)
+        here = subprocess.run(["tmux", "display", "-p", "-t", console.session_name(twin), "#{pane_current_path}"],
+                              capture_output=True, text=True).stdout.strip()
+        self.assertEqual(Path(here).resolve(), self.root.resolve(), "its console works in the shared folder")
+        console.stop(twin)
+
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)
         console.COMMAND = "sh -c 'for i in $(seq 1 120); do echo row $i; done; sleep 30'"

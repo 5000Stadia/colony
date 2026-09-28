@@ -298,6 +298,13 @@ def cmd_track(a):
         print(f"colony: no folder {a.path}", file=sys.stderr)
         return 2
     chosen = {k: getattr(a, k) for k in board.PROJECT_KEYS if getattr(a, k, None)}
+    if a.name and a.name != Path(a.path).expanduser().resolve().name:   # a second project in this folder
+        try:
+            root = board.sharing(a.path, a.name, chosen)
+        except (ValueError, KeyError) as err:
+            raise SystemExit(f"colony: {err}")
+        print(f"{root.name} is on the board, working in {board.workdir(root)}. Open it with: colony board")
+        return 0
     if chosen:
         try:
             board.project_settings(Path(a.path).expanduser().resolve(), chosen)   # before wiring: the provider wires
@@ -466,7 +473,7 @@ def cmd_doctor(a):
         if not p.exists():
             problems.append(f"{p}: the folder is gone; remove it from {board.home() / 'board.json'}")
             continue
-        if not providers.of(p).wired(p):
+        if not providers.of(p).wired(board.workdir(p)):
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
@@ -859,6 +866,7 @@ def main(argv=None):
     p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("track"); p.add_argument("path", nargs="?", default=".")
+    p.add_argument("--name", help="a second project in a folder that has its own, under this name")
     for k in ("provider", "model", "effort", "permissions"):
         p.add_argument(f"--{k}", help="for this project (default: the global setting)")
     p.set_defaults(fn=cmd_track)

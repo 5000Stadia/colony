@@ -16,6 +16,8 @@ what it assumes and what a second provider needs there. What a provider supplies
                            session start (`--session`) and before each turn the person or the board types.
                            Without a hook system, the protocol can ask the agent to run it itself, weaker.
   wired(root)              whether wire() has been done (the doctor asks)
+  instructions             the file in a project's folder it reads instructions from; two projects sharing a
+                           folder must read different ones
   own_defaults()           the model and effort the CLI uses when colony names none, or None where it
                            decides itself; the forms show them as "Default (...)"
   history_text(root)       the session's conversation as plain text, for Select on a phone (or None)
@@ -53,6 +55,7 @@ class ClaudeCode:
     aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
     efforts = ["low", "medium", "high", "xhigh", "max"]
     mark = "❯"                                  # how it marks the highlighted option of a choice
+    instructions = "CLAUDE.md"                  # the file it reads a project's instructions from
     # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
     # SessionStart gives the backlog at start; UserPromptSubmit gives what is new before every turn.
     # Stop runs when a turn ends: `colony turn` records the turn if it asks the person something.
@@ -139,7 +142,8 @@ class ClaudeCode:
         import re
         from datetime import datetime
         stamp = lambda e: datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
-        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(Path(root).resolve()))
+        from .board import workdir
+        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
         total = 0.0
         for f in folder.glob("*.jsonl"):
             at, ms, opened, last = self._turns.get(f, (0, 0, None, None))
@@ -179,7 +183,8 @@ class ClaudeCode:
         so the terminal keeps no history of its own. PROVIDER: reads the newest transcript Claude Code keeps
         for this folder; None if there is none (the board then shows the screen)."""
         import re
-        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(Path(root).resolve()))
+        from .board import workdir
+        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
         files = sorted(folder.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
         if not files:
             return None
@@ -327,6 +332,7 @@ class Codex:
     aliases = {}
     efforts = ["minimal", "low", "medium", "high"]
     mark = "›"
+    instructions = "AGENTS.md"
     enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
     scrolled_marker = ""
     hooks = {}

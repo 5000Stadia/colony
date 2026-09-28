@@ -100,7 +100,10 @@ def ensure(root, name=None, label=None):
     name = name or session_name(root)
     if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
         # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
-        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(root), "-x", "200", "-y", "50", "-e", f"COLONY_CONSOLE={name}",
+        from . import board
+        # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
+                        "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
                         contained(command(label or Path(root).name, None if label else root))],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
