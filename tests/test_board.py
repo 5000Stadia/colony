@@ -909,6 +909,29 @@ class SupportsTest(BoardBase):
         self.assertIn("Adopt only what works better in your project", told)
         self.assertIn("one table drives every column", told)
 
+    def test_what_the_monitor_brings_waits_in_needs_you_and_the_answer_reaches_it(self):
+        from colony import supports
+        self.cli("supports", "ask", "s1", "--project", "plants",
+                 "--text", "plants' agent opened 40 files to find one caller; a language server answers that directly. Test it?")
+        html = board.needs_you(board.registry())
+        self.assertIn("a support the monitor found", html)
+        self.assertIn("opened 40 files", html)
+        self.assertIn("value='test'", html)
+        self.assertNotIn("value='approve'", html, "a candidate tool can be tested or dropped, not suggested")
+        self.assertIn("Talk it over with the monitor", html)
+        supports.decide("s1", "test", "only on the importer bugs")
+        self.assertEqual(supports.asking(), [], "answered: it leaves Needs you")
+        self.assertIn("[testing]", supports.text())
+        monitor.Watcher().tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("decided on support s1", self.sent[0])
+        self.assertIn("test it. Their words: only on the importer bugs", self.sent[0])
+        supports.update("s1", "proven", "3 runs: same fixes, 45% cheaper")
+        supports.ask("s1", self.root, "It passed. Suggest it to plants?")
+        self.assertIn("value='approve'", board.needs_you(board.registry()), "proven: now it can be approved")
+        supports.decide("s1", "approve")
+        self.assertEqual(self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "x").returncode, 0)
+
     def test_each_project_has_its_own_period_and_note_on_the_helm_page(self):
         shop = Path(self.tmp.name) / "shop"
         shop.mkdir()

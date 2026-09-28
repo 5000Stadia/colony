@@ -124,8 +124,10 @@ when its work calls for one. Most help costs more than it gives, so a support ea
    to the person next like anything else, for the agent to take only what works better in its project.
 3. **Deliberate with the person.** Before anything reaches a project, talk it over with them as the
    monitor: the need you saw, the candidate, what it would really change, what it costs, and your honest
-   read of its value, doubts included. They decide: drop it, test it, or (a reference, or a tool already
-   proven) approve suggesting it. Nothing is installed on the way to a test.
+   read of its value, doubts included. Put it in their Needs you with `colony supports ask ID --project
+   NAME --text "..."` (that, plainly and briefly); they answer there or talk it over with you, and their
+   answer reaches you as a `[colony]` message. They decide: drop it, test it, or (a reference, or a tool
+   already proven) approve suggesting it. Nothing is installed on the way to a test.
 4. **Test.** On their yes (`colony supports set ID testing`), compare it against the project without it,
    on the project's own kind of work, in a copy where nothing reaches the real one. Fix the pass mark
    before running; repeat runs enough to see past run-to-run noise (the same setup's cost has drifted by a
@@ -349,8 +351,16 @@ class Watcher:
             console.type_into(name(), "[colony] Supports check, worked on since the last one: " + ", ".join(parts)
                               + ". Follow 'Supports' in your brief; most checks end at step 1.")
 
+    def tell(self):
+        path = board.home() / "to_monitor.jsonl"
+        if path.exists() and path.read_text().strip() and snapshot()["state"] == "idle":
+            words = [json.loads(l)["text"] for l in path.read_text().splitlines() if l.strip()]
+            path.unlink()
+            console.type_into(name(), "[colony] " + " | ".join(words))
+
     def tick(self):
         self.mail()
+        self.tell()
         self.scout()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
@@ -365,6 +375,14 @@ class Watcher:
             except Exception:
                 pass
             time.sleep(self.interval)
+
+
+def queue(text):
+    """A word for the monitor from the board (the person's answer on a support, say): it reaches the monitor
+    the next time it is idle, and waits across a board restart."""
+    board.home().mkdir(parents=True, exist_ok=True)
+    with open(board.home() / "to_monitor.jsonl", "a") as fh:
+        fh.write(json.dumps({"at": board.now(), "text": text}) + "\n")
 
 
 def last_commit(root):

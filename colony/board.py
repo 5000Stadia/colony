@@ -1359,9 +1359,29 @@ def waiting_html(pid, root):
     return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
+def support_rows():
+    """Supports the monitor has brought the person: its question, and Test it / Approve suggesting it / Drop,
+    or talk it over in its console. The answer goes back to the monitor."""
+    from . import supports
+    rows = []
+    for r in supports.asking():
+        a = r["asking"]
+        approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
+        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a support the monitor found</span></div>"
+                    f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
+                    f"<div class='asktext'>{e(a['text'])}</div>"
+                    f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"
+                    f"{approve}<button name='verdict' value='test' class='{'quiet' if approve else ''}'>Test it</button>"
+                    f"<input name='text' placeholder='anything to tell the monitor'>"
+                    f"<button class='quiet' name='verdict' value='drop'>Drop</button></form>"
+                    f"<a href='/monitor?view=console'>Talk it over with the monitor →</a></div>")
+    return rows
+
+
 def needs_you(reg):
-    """Needs you: what every project is waiting on the person for, in one place."""
-    rows = [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
+    """Needs you: what every project is waiting on the person for, in one place, and the supports the
+    monitor has brought them."""
+    rows = support_rows() + [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
     return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
@@ -1666,6 +1686,17 @@ class Handler(BaseHTTPRequestHandler):
                 save_registry(reg)
             self.send_response(303)
             self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/support":
+            from . import supports
+            try:
+                supports.decide(form.get("id", ""), form.get("verdict", ""), form.get("text", ""))
+            except (KeyError, ValueError):
+                pass                                   # answered already, or not a choice it offers
+            self.send_response(303)
+            self.send_header("Location", "/monitor")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

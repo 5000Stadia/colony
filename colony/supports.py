@@ -21,6 +21,7 @@ PROVIDER: the seeds are Claude Code plugins; a project run by another provider n
 equivalent, and the monitor looks for it the same way.
 """
 import json
+from pathlib import Path
 
 from . import board
 
@@ -105,6 +106,49 @@ def approve(sid, said):
     next(r for r in rows if r["id"] == sid)["approved"] = board.now()
     save(rows)
     return row
+
+
+def ask(sid, root, text):
+    """Put a support in front of the person, in their Needs you, for a project: the monitor's plain question."""
+    rows = load()
+    row = next((r for r in rows if r["id"] == sid), None)
+    if row is None:
+        raise KeyError(sid)
+    row["asking"] = {"project": str(root), "text": text.strip(), "at": board.now()}
+    save(rows)
+    return row
+
+
+def asking():
+    return [r for r in load() if r.get("asking")]
+
+
+def suggestible(row):
+    return (row["status"] == "proven" or row.get("kind") == "reference" and row["evidence"]) and row["status"] != "rejected"
+
+
+def decide(sid, verdict, words=""):
+    """The person's answer from their Needs you: test it, approve suggesting it, or drop it. The monitor hears."""
+    from . import monitor
+    row = next((r for r in load() if r["id"] == sid), None)
+    if row is None or not row.get("asking"):
+        raise KeyError(sid)
+    said = words.strip()
+    if verdict == "test":
+        update(sid, "testing", "the person said test it" + (f": {said}" if said else ""))
+    elif verdict == "approve":
+        if not suggestible(row):
+            raise ValueError(f"{sid} isn't proven")
+        approve(sid, said or "approved on the board")
+    elif verdict == "drop":
+        update(sid, "rejected", "the person dropped it" + (f": {said}" if said else ""))
+    else:
+        raise ValueError(verdict)
+    rows = load()
+    project = Path(next(r for r in rows if r["id"] == sid).pop("asking")["project"]).name
+    save(rows)
+    what = {"test": "test it", "approve": "approved suggesting it", "drop": "drop it"}[verdict]
+    monitor.queue(f"The person decided on support {sid} ({row['name']}) for {project}: {what}." + (f" Their words: {said}" if said else ""))
 
 
 def suggest(sid, root, text):

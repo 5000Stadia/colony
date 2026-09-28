@@ -788,6 +788,11 @@ def cmd_supports(a):
                 raise SystemExit("colony supports suggest ID --project NAME --text \"the need you saw and why this fits\"")
             r = supports.suggest(a.name, _project(a.project), a.text)
             print(f"{r['name']} suggested to {a.project}: it reaches the agent on its next turn, as a suggestion to check")
+        elif a.action == "ask":
+            if not (a.project and a.text):
+                raise SystemExit("colony supports ask ID --project NAME --text \"the need, the candidate, its value and cost, plainly\"")
+            r = supports.ask(a.name, _project(a.project), a.text)
+            print(f"{r['name']} for {a.project} is in the person's Needs you; their answer will reach you")
         elif a.action == "approve":
             r = supports.approve(a.name, a.evidence)
             print(f"{r['name']}: approved by the person; it can now be suggested")
@@ -876,7 +881,7 @@ def main(argv=None):
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
-    p.add_argument("action", nargs="?", choices=("add", "set", "approve", "suggest", "check")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
+    p.add_argument("action", nargs="?", choices=("add", "set", "ask", "approve", "suggest", "check")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
     p.add_argument("status", nargs="?"); p.add_argument("--for", dest="symptom", default=""); p.add_argument("--gives", default="")
     p.add_argument("--source", default=""); p.add_argument("--cost", default=""); p.add_argument("--remove", default="")
     p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)
