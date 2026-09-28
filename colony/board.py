@@ -328,11 +328,13 @@ def moved(seen, its, t):
         if was and was["state"] == it["state"]:
             out[iid] = was
             continue
-        new = {"state": it["state"], "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)), "worked": (was or {}).get("worked", 0)}
+        new = {"state": it["state"], "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)), "at": t,
+               "worked": (was or {}).get("worked", 0), **({"first": was["first"]} if was and was.get("first") else {})}
         if was and was.get("started"):
             new["worked"] += t - was["started"]                   # it left doing: the timer holds
         if it["state"] == "doing":
             new["started"] = t
+            new.setdefault("first", t)                            # when it was first taken up
         out[iid] = new
     return out
 
@@ -356,15 +358,25 @@ def took(secs):
     return "<1m" if m < 1 else f"{m}m" if m < 60 else f"{m // 60}h {m % 60}m" if m < 1440 else f"{m // 1440}d {m // 60 % 24}h"
 
 
-def timer(recs):
-    """Time spent in progress over some items, counting on in the page while any is still running."""
-    base = sum(r.get("worked", 0) for r in recs)
-    starts = [r["started"] for r in recs if r.get("started")]
-    if not base and not starts:
+def timer(rec):
+    """An item's time in progress, counting on in the page while it runs."""
+    base, start = rec.get("worked", 0), rec.get("started")
+    if not base and not start:
         return ""
-    shown = took(base + sum(time.time() - s for s in starts))
-    return (f"<span class='timer{' running' if starts else ''}' data-base='{base:.0f}' "
-            f"data-starts='{','.join(f'{s:.0f}' for s in starts)}'>{shown}</span>")
+    return (f"<span class='timer{' running' if start else ''}' data-base='{base:.0f}' data-starts='{f'{start:.0f}' if start else ''}'>"
+            f"{took(base + (time.time() - start if start else 0))}</span>")
+
+
+def elapsed(recs, finished):
+    """A milestone's time on the calendar: from when its first item was taken up to now, or, once finished, to
+    when its last item was done. Builders at work side by side count once."""
+    firsts = [r["first"] for r in recs if r.get("first")]
+    if not firsts:
+        return ""
+    if finished:
+        return f"<span class='timer'>{took(max(r.get('at', 0) for r in recs) - min(firsts))}</span>"
+    return (f"<span class='timer running' data-base='0' data-starts='{min(firsts):.0f}'>"
+            f"{took(time.time() - min(firsts))}</span>")
 
 
 # The roadmap's timers count on while the page is open.
@@ -871,12 +883,12 @@ def render(reg, pid, view="overview"):
                 if done_ms and k == len(open_ms):
                     out.append(f"<details class='card ms done-group'><summary><h3>Completed</h3><span class='muted'>"
                                f"{len(done_ms)} milestone{'s' * (len(done_ms) > 1)} · {sum(len(m['items']) for m in done_ms)} items "
-                               f"{timer([times.get(i['id'], {}) for m in done_ms for i in m['items']])}</span></summary>")
+                               f"{elapsed([times.get(i['id'], {}) for m in done_ms for i in m['items']], True)}</span></summary>")
                 dot = (f"<span class='sdot msdot {live}' data-p='{pid}' title='In progress; its agent is {e(live.replace('-', ' '))}'></span>"
                        if started(m) is not None else "")
                 done_m = sum(1 for i in m["items"] if i["state"] == "done")
                 out.append(f"<details class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])} — {e(m['title'])}</h3>"
-                           f"<span class='muted'>{done_m}/{len(m['items'])} {timer([times.get(i['id'], {}) for i in m['items']])}</span></summary>")
+                           f"<span class='muted'>{done_m}/{len(m['items'])} {elapsed([times.get(i['id'], {}) for i in m['items']], finished(m))}</span></summary>")
                 doing = sorted((i for i in m["items"] if i["state"] == "doing"), key=when, reverse=True)
                 done_i = sorted((i for i in m["items"] if i["state"] == "done"), key=when, reverse=True)
                 for it in doing + [i for i in m["items"] if i["state"] not in ("doing", "done")] + done_i:
@@ -891,7 +903,7 @@ def render(reg, pid, view="overview"):
                         + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
-                        + (f" {timer([times[it['id']]])}" if it["id"] in times else "")
+                        + (f" {timer(times[it['id']])}" if it["id"] in times else "")
                         + f"</summary><div class='body'><p>{e(it['desc'] or 'No description yet.')}</p>"
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
                         + thread(ns, its)

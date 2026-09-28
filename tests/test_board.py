@@ -200,7 +200,7 @@ class BoardTest(BoardBase):
         self.assertEqual(re.findall(r"<b>(R\d)</b>", m1), ["R3", "R2", "R1"], "in progress, to come, then the latest done first")
         m2 = page[page.index("<h3>M2 — v2"):page.index("<h3>M1")]
         self.assertEqual(re.findall(r"<b>(R\d)</b>", m2), ["R5", "R4"], "what started last goes to the top")
-        self.assertIn("<span class='muted'>2/3 <span class='timer running'", m1, "done of all, then the time spent, counting on")
+        self.assertIn("<span class='muted'>2/3 <span class='timer running'", m1, "done of all, then the time since it began, counting on")
         self.assertIn("<b>R2</b> water log <span class='timer' data-base='", m1, "done: its time holds")
         self.assertNotIn("<b>R1</b> add plants <span class='timer", m1, "done before the board looked: no time to show")
         self.assertIn("<script>", page[page.index("Completed"):], "timers count on in the page")
@@ -217,7 +217,10 @@ class BoardTest(BoardBase):
         self.assertGreaterEqual(times["R3"]["worked"], 2, "from its commits: started, then done")
         self.assertNotIn("started", times["R3"])
         self.assertEqual(times["R2"]["worked"], 0, "under way before the history begins: no time to know")
-        self.assertIn("timer", board.render(board.registry(), 0, "roadmap"))
+        self.assertEqual(times["R3"]["first"], times["R3"]["at"] - times["R3"]["worked"])
+        page = board.render(board.registry(), 0, "roadmap")
+        self.assertIn(f"<span class='muted'>2/3 <span class='timer running' data-base='0' data-starts='{times['R3']['first']:.0f}'>", page,
+                      "a milestone's heading: the calendar since its first item was taken up, not the items' sum")
 
     def test_the_board_answers_only_itself(self):
         board.track(self.root)
