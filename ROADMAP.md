@@ -38,7 +38,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R31 Nothing is typed onto what the person has half-typed in a console
 - [x] R32 The roadmap folds and orders itself by the work: the latest started first, finished last in Completed, a live dot on what's in progress, each item's time in progress, and each heading's elapsed time
 - [x] R33 Not yet takes an item off the person's list until the agent says it's ready again
-- [?] R34 The overview line reads Roadmap: #/# · Active: the agent's time at work, all told
+- [x] R34 The overview line reads Roadmap: #/# · Active: the agent's time at work, all told
 
 ## M5 — Later
 
