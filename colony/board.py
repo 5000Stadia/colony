@@ -688,6 +688,39 @@ def tabs(pid, view):
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
+def message_form(pid, plist, cls):
+    """Message: by default into the project's own console, as the person would type it there; or to another
+    project, written by this project's agent. A file can go with it; either way its path goes in the message."""
+    root = plist[pid]
+    to = f"<option value='self'>{e(root.name)}, in its console</option>" + "".join(
+        f"<option value='{i}'>{e(p.name)}, written by {e(root.name)}'s agent</option>" for i, p in enumerate(plist) if i != pid)
+    form = (f"<form class='options' method='post' action='/message' enctype='multipart/form-data'>"
+            f"<input type='hidden' name='p' value='{pid}'><label>To <select name='to'>{to}</select></label>"
+            f"<label class='stack'>Message<textarea name='text' placeholder='Type or paste; it arrives as written'></textarea></label>"
+            f"<label class='stack'>Upload a file from this device <input type='file' name='file'></label>"
+            f"<label class='stack'>Or attach a file in {e(root.name)}<div class='chosen'><input name='path' placeholder='No file chosen' readonly>"
+            f"<button type='button' class='quiet browsebtn'>Browse…</button></div></label><div class='browse' hidden></div>"
+            f"<button>Send</button></form>"
+            # browsing the project happens in place, as when pinning: folders open, a file fills the choice
+            f"""<script>(() => {{
+const form = document.currentScript.parentElement.querySelector('form') || document.currentScript.closest('form');
+const box = form.querySelector('.browse'), pick = form.querySelector('input[name=path]');
+const open_ = async (dir) => {{
+  const r = await fetch('/pins/browse?p={pid}&dir=' + encodeURIComponent(dir), {{cache: 'no-store'}});
+  box.innerHTML = await r.text(); box.hidden = false;
+}};
+form.querySelector('.browsebtn').addEventListener('click', () => box.hidden ? open_('') : (box.hidden = true));
+box.addEventListener('click', (ev) => {{
+  const b = ev.target.closest('button'); if (!b) return;
+  ev.preventDefault();
+  if (b.dataset.dir !== undefined) return open_(b.dataset.dir);
+  pick.value = b.dataset.file; box.hidden = true;
+}});
+}})();</script>""")
+    return (f"<details class='{cls}'><summary>Message</summary>"
+            + (f"<div class='panel'>{form}</div>" if cls == "psettings" else form) + "</details>")
+
+
 def render(reg, pid, view="overview"):
     plist = projects(reg)
     out = []
@@ -695,13 +728,7 @@ def render(reg, pid, view="overview"):
         return shell(reg, pid, "")
     if view == "console":
         root = plist[pid]
-        others = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(plist) if i != pid)
-        message = (f"<details class='msgbox'><summary>Message another project in the colony</summary>"
-                   f"<form method='post' action='/message'><input type='hidden' name='p' value='{pid}'>"
-                   f"<label>To <select name='to'>{others}</select></label>"
-                   f"<label class='grow'>What should this agent message them about?"
-                   f"<textarea name='text' placeholder='{e(root.name)}’s agent writes the message itself, with its own context'></textarea></label>"
-                   f"<button>Have {e(root.name)} send it</button></form></details>") if others else ""
+        message = message_form(pid, plist, "msgbox")
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
                      + console.PAGE.format(label=e(providers.of(root).label), path=e(root), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
@@ -719,14 +746,8 @@ def render(reg, pid, view="overview"):
                 f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
-    others = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(plist) if i != pid)
-    # messaging another project sits on the title's line too, where a phone reaches it (its console is full screen)
-    message = (f"<details class='psettings'><summary>Message a project</summary><div class='panel'>"
-               f"<form class='options' method='post' action='/message'><input type='hidden' name='p' value='{pid}'>"
-               f"<label>To <select name='to'>{others}</select></label>"
-               f"<label class='stack'>What should {e(root.name)}'s agent message them about?"
-               f"<textarea name='text' placeholder='It writes the message itself, with its own context'></textarea></label>"
-               f"<button>Have {e(root.name)} send it</button></form></div></details>") if others else ""
+    # Message sits on the title's line too, where a phone reaches it (its console is full screen)
+    message = message_form(pid, plist, "psettings")
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
                f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
@@ -1527,13 +1548,10 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         console.bridge(self.connection, root, name, label)
 
-    def _upload(self):
-        """An uploaded file to pin: multipart form, the whole body read (up to the upload limit)."""
+    def _multipart(self):
+        """A multipart form, the whole body read (up to the upload limit): its fields, and its file if any."""
         import email.parser, email.policy
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > pins.UPLOAD_LIMIT + 64 * 1024:
-            return self._send(413, b"that file is too large to pin (25 MB at most)")
-        raw = self.rfile.read(length)
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
         msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(
             b"Content-Type: " + self.headers.get("Content-Type", "").encode() + b"\r\n\r\n" + raw)
         fields, upload = {}, None
@@ -1542,7 +1560,12 @@ class Handler(BaseHTTPRequestHandler):
             if part.get_filename():
                 upload = (part.get_filename(), part.get_payload(decode=True) or b"")
             elif name:
-                fields[name] = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+                fields[name] = (part.get_payload(decode=True) or b"").decode("utf-8", "replace").replace("\r\n", "\n")
+        return fields, upload
+
+    def _upload(self):
+        """An uploaded file to pin."""
+        fields, upload = self._multipart()
         pid = int(fields.get("p", "0"))
         root = projects(registry())[pid]
         if upload and upload[1]:
@@ -1663,10 +1686,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._from_this_page():
             return self._send(403, b"not from this page")
+        if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:
+            return self._send(413, b"that file is too large (25 MB at most)")
         if urllib.parse.urlparse(self.path).path == "/pin/upload":
             return self._upload()
-        length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
-        form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
+        if self.headers.get("Content-Type", "").startswith("multipart/form-data"):
+            form, upload = self._multipart()       # Message, with a file or a long paste
+        else:
+            upload = None
+            length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
+            form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
         if path == "/options":
@@ -1688,17 +1717,27 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/message":
-            dst = projects(reg)[int(form.get("to", "0"))]
             text = form.get("text", "").strip()
             if form.get("p") == "monitor":
                 from . import monitor
+                dst = projects(reg)[int(form.get("to", "0"))]
                 if text:
                     console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}")
                 where = "/monitor?view=console"
             else:
                 from . import mail
-                if text:
-                    console.type_into(console.ensure(projects(reg)[int(form.get("p", "0"))]), mail.instruction(mail.address(dst), text))
+                src = projects(reg)[int(form.get("p", "0"))]
+                dst = src if form.get("to", "self") == "self" else projects(reg)[int(form["to"])]
+                files = [str(f) for f in [pins.inside(src, form["path"]) if form.get("path") else None] if f and f.is_file()]
+                if upload and upload[1]:                   # kept where the project it's for can read it
+                    files.append(str(dst / pins.save_upload(dst, *upload)))
+                if files:
+                    text = "\n".join(f"Attached: {f}" for f in files) + (f"\n\n{text}" if text else "")
+                if text and dst == src:
+                    console.paste_into(console.ensure(src), text)
+                    answer_asks(src, "in the console")
+                elif text:
+                    console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text))
                 where = f"/?p={form.get('p', '0')}&view=console"
             self.send_response(303)
             self.send_header("Location", where)

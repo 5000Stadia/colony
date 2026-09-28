@@ -19,6 +19,7 @@ import shutil
 import struct
 import subprocess
 import termios
+import time
 from pathlib import Path
 
 def token():
@@ -112,6 +113,18 @@ def type_into(name, text):
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
     subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
+    subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
+
+
+def paste_into(name, text):
+    """Send the person's own message, as if they had pasted it into the session and pressed Enter: lines and
+    all, in one piece (a bracketed paste where the program asks for one, as Claude Code does)."""
+    if "\n" not in text:
+        return type_into(name, text)
+    buf = f"colony-{secrets.token_hex(4)}"
+    subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
+    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
+    time.sleep(0.3)                                   # the paste lands before its Enter
     subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
 
 
