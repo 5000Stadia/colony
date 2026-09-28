@@ -783,6 +783,11 @@ class MessagingTest(BoardBase):
             self.assertEqual((other / ".board/uploads/spec.md").read_text(), "SPEC", "kept where shop can read it")
             self.assertIn(f"Attached: {other / '.board/uploads/spec.md'}", typed[0])
             self.assertIn("colony send shop", typed[0], "plants's agent writes it")
+            page = urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/?p=0&view=roadmap").read().decode()
+            self.assertIn("<h2>Messages</h2>", page, "the record is with the plan's, on the Roadmap tab")
+            self.assertNotIn("<h2>Messages</h2>", board.render(board.registry(), 0, ""), "the overview is what's new")
+            self.assertNotIn(">Leave note<", page.split("<h2>Messages</h2>")[1], "one place to write: Message, at the top")
+            self.assertLess(page.index("to shop, written by its agent"), page.index("into its console"), "newest first")
         finally:
             console.type_into, console.paste_into, console.ensure = saved
             httpd.shutdown()

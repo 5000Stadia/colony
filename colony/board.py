@@ -802,6 +802,14 @@ def render(reg, pid, view="overview"):
             out.append(f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
                        + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
                        + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"/?p={pid}&view=roadmap") + "</details>")
+        # what the person has said to the project as a whole, newest first: sent with Message at the top
+        whole = [(n["at"], thread([n], items(road))) for n in all_notes if not n["anchor"]]
+        whole += [(m["at"], f"<div class='note'><span class='who'>you · {e(m['at'][:10])} · "
+                            f"{'into its console' if m['to'] == 'console' else 'to ' + e(m['to']) + ', written by its agent'}</span>"
+                            f"<div>{e(m['text'])}</div></div>") for m in read(root, "messages.jsonl")]
+        out.append("</div><h2>Messages</h2><div class='card'>"
+                   + ("".join(h for _, _, h in sorted(((at, i, h) for i, (at, h) in enumerate(whole)), reverse=True))
+                      or "<p class='muted'>Nothing yet. Message, at the top, sends to its console or to another project.</p>"))
         from . import mail
         ms = mail.messages(root)[-15:]
         if ms:
@@ -842,15 +850,6 @@ def render(reg, pid, view="overview"):
                      f"<input type='hidden' name='head' value='{e(s['head'])}'><button>I'm caught up</button></form>")
         out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
         out.append("</div>")
-        # the box first, "Leave note" at the section's top right, then the thread, newest first
-        whole = sorted((n for n in all_notes if not n["anchor"]), key=lambda n: n["at"], reverse=True)
-        out.append(f"<h2>Note to the agent</h2><div class='card'><form class='notetop' method='post' action='/note'>"
-                   f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}'>"
-                   f"<input type='hidden' name='kind' value='project'><input type='hidden' name='ref' value=''>"
-                   f"<div class='noterow'><span class='muted'>Anything about the project as a whole. It reaches the agent on its "
-                   f"next turn, and the replies show here.</span><button>Leave note</button></div>"
-                   f"<textarea name='text' placeholder='A note for the agent'></textarea></form>"
-                   + thread(whole, items(road)) + "</div>")
     return shell(reg, pid, "".join(out))
 
 
@@ -1738,6 +1737,9 @@ class Handler(BaseHTTPRequestHandler):
                     answer_asks(src, "in the console")
                 elif text:
                     console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text))
+                if text:                                   # the project's Messages keep what was sent
+                    append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text,
+                                                   "to": "console" if dst == src else dst.name})
                 where = f"/?p={form.get('p', '0')}&view=console"
             self.send_response(303)
             self.send_header("Location", where)
@@ -2013,8 +2015,7 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .helmform { margin-left:auto } .titlerow .psettings + .helmform { margin-left:0 } .helmcard .titlerow .badge { margin-left:auto } .helmcard label.stack { flex-direction:column; align-items:stretch }
 .helmcard textarea { width:100%; min-height:56px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .focus ul { margin:6px 0 0; padding-left:0; list-style:none } .focus li .kind { display:inline-block; min-width:52px; font-size:12px; color:var(--muted) }
-.mstatus .who { margin:10px 0 -6px } .notetop .noterow { display:flex; align-items:flex-start; gap:12px } .notetop .noterow button { margin-left:auto; flex:none }
-.notetop textarea { width:100%; min-height:64px; margin:8px 0 4px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.mstatus .who { margin:10px 0 -6px }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
 .pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
