@@ -196,6 +196,20 @@ in view, keep the work focused and moving, and make each of their decisions easy
 """
 
 
+def unwrapped(text):
+    """One line per paragraph or bullet, so it reads cleanly in the board's text box and wraps to any width."""
+    out = []
+    for line in text.splitlines():
+        if out and out[-1].strip() and line.strip() and not line.lstrip().startswith(("- ", "#")):
+            out[-1] = out[-1].rstrip() + " " + line.strip()
+        else:
+            out.append(line.rstrip())
+    return "\n".join(out)
+
+
+DEFAULT_DIRECTION = unwrapped(DEFAULT_DIRECTION)
+
+
 def direction():
     """The standing direction: the person's version if they changed it, else colony's."""
     path = board.home() / "direction.md"
