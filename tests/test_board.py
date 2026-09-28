@@ -218,6 +218,10 @@ class BoardTest(BoardBase):
         self.assertNotIn("started", times["R3"])
         self.assertEqual(times["R2"]["worked"], 0, "under way before the history begins: no time to know")
         self.assertEqual(times["R3"]["first"], times["R3"]["at"] - times["R3"]["worked"])
+        every = json.loads((board.home() / "items.json").read_text())
+        every[str(self.root)] = {i: {"state": r["state"], "since": ""} for i, r in times.items()}   # an older board's record
+        (board.home() / "items.json").write_text(json.dumps(every))
+        self.assertIn("first", board.item_times(self.root)["R3"], "an older record is read again from the history")
         page = board.render(board.registry(), 0, "roadmap")
         self.assertIn(f"<span class='muted'>2/3 <span class='timer running' data-base='0' data-starts='{times['R3']['first']:.0f}'>", page,
                       "a milestone's heading: the calendar since its first item was taken up, not the items' sum")

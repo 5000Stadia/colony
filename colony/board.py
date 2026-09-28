@@ -310,6 +310,8 @@ def item_times(root):
     except (OSError, ValueError):
         every = {}
     seen = every.get(str(root))
+    if seen and any("at" not in r for r in seen.values()):
+        seen = None                                  # kept before items knew when they moved: read the history again
     out = moved(seen if seen is not None else history_times(root), items(roadmap(root)), time.time())
     if out != seen:
         every[str(root)] = out
@@ -348,7 +350,7 @@ def history_times(root):
         its = items(roadmap(root, git(root, "show", f"{h}:ROADMAP.md")))
         recs = moved(recs, its, int(t))
         if k == 0:
-            recs = {i: {"state": r["state"], "since": "", "worked": 0} for i, r in recs.items()}
+            recs = {i: {"state": r["state"], "since": "", "at": 0, "worked": 0} for i, r in recs.items()}
     return recs
 
 
