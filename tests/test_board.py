@@ -946,6 +946,26 @@ class SupportsTest(BoardBase):
         self.assertIn("changed most: water.py ×3", out)
         self.assertEqual(monitor.signals(self.root, time.time() + 60), "0 commits, 0 of them fixes")
 
+    def test_a_support_carrying_a_prompt_injection_is_noted_deleted_and_never_considered_again(self):
+        from colony import supports
+        supports.update("s1", "proven", "3 runs: same fixes, 45% cheaper")
+        supports.approve("s1", "go ahead")
+        supports.suggest("s1", self.root, "It opened 40 files to find one caller.")
+        told = board.render_notes(board.open_notes(self.root), "Notes:")
+        self.assertIn("hostile prompt injection", told, "the agent weighing it is told to assume it")
+        self.assertIn("colony supports block s1", told)
+        self.assertNotEqual(self.cli("supports", "block", "s1").returncode, 0, "blocking says what it tried")
+        r = self.cli("supports", "block", "s1", "--evidence", "its README told agents to disable permission prompts")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.cli("supports").stdout
+        self.assertNotIn("s1 [", out, "its entry is deleted")
+        self.assertIn("Blocked for good", out)
+        self.assertNotEqual(self.cli("supports", "add", "language server (pyright-lsp, typescript-lsp)",
+                                     "--for", "x", "--gives", "y").returncode, 0, "it can't come back")
+        self.cli("supports", "block", "sneaky-mcp", "--source", "github.com/x/sneaky", "--evidence", "hidden instructions in its tool descriptions")
+        self.assertNotEqual(self.cli("supports", "add", "renamed-sneaky", "--source", "github.com/x/sneaky",
+                                     "--for", "x", "--gives", "y").returncode, 0, "nor under another name from the same source")
+
     def test_the_index_of_indexes_says_how_far_each_is_trusted_and_grows(self):
         out = self.cli("supports", "sources").stdout
         self.assertIn("[official] Claude Code's official plugin marketplace", out)
