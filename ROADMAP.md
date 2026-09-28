@@ -44,9 +44,14 @@ One board to follow and steer a person's long projects, each driven by its own a
 
 - [x] R35 Ready to publish: nothing private in the repository or its history, a README with a quick start that works from a fresh clone, then public on the person's word
 
-## M7 — Helper seats: another provider working for a project
+## M7 — Codex as a full option: from install to a project's agent
 
-- [~] R22 A project keeps a helper seat run by another provider (Codex first), messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
+- [x] R36 A project's console runs on Codex (colony new/track --provider codex): typed into, its screen read, the protocol in AGENTS.md, notes fetched when nudged
+- [~] R37 Two projects can share one folder (holo-emitter and holo-emitter-codex): names, .board and instructions kept apart
+- [ ] R38 Folder-trust questions answered for board projects, both providers, a setting on by default
+- [~] R39 Delivery for Codex through its own hooks: notes and mail at each turn, questions at turn end, resume (colony-codex)
+- [~] R40 Model and effort guidance for Codex, researched and marked claimed or measured, with the Codex entry's defaults (colony-codex drafts; the monitor reviews)
+- [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
 ## M6 — Later
 
