@@ -149,6 +149,33 @@ class BoardTest(BoardBase):
         self.assertEqual(self.cli("notes", "--deliver", "--session").stdout, "")
         self.assertEqual(board.notes(self.root)[0]["reply"], "kept it to one screen")
 
+    def test_session_delivery_keeps_fresh_notes_and_mail_out_of_the_backlog(self):
+        board.track(self.root)
+        old = board.add_note(self.root, None, "Earlier note")
+        self.cli("notes", "--deliver")
+        new = board.add_note(self.root, None, "Fresh note")
+        for mid, text in (("old-mail", "Earlier question?"), ("new-mail", "Fresh question?")):
+            board.append(self.root, mail.FILE, {"type": "message", "id": mid, "at": board.now(),
+                         "from": "other", "to": self.root.name, "text": text, "ask": True, "re": None})
+        board.append(self.root, mail.FILE, {"type": "delivered", "of": "old-mail", "at": board.now()})
+        out = self.cli("notes", "--deliver", "--session").stdout
+        for identity in (old["id"], new["id"], "old-mail", "new-mail"):
+            self.assertEqual(out.count("[" + identity + "]"), 1, out)
+        fresh_notes, backlog = out.split("Still open from earlier", 1)
+        self.assertIn("Fresh note", fresh_notes)
+        self.assertNotIn("Earlier note", fresh_notes)
+        self.assertIn("Earlier note", backlog)
+        self.assertNotIn("Fresh note", backlog)
+        fresh_mail, unanswered = out.split("Questions from the colony you haven't answered yet:", 1)
+        self.assertIn("Fresh question?", fresh_mail)
+        self.assertNotIn("Earlier question?", fresh_mail)
+        self.assertIn("Earlier question?", unanswered)
+        self.assertNotIn("Fresh question?", unanswered)
+        self.assertEqual(self.cli("notes", "--deliver").stdout, "")
+        repeated = self.cli("notes", "--deliver", "--session").stdout
+        for identity in (old["id"], new["id"], "old-mail", "new-mail"):
+            self.assertEqual(repeated.count("[" + identity + "]"), 1, "unresolved items still return once next session")
+
     def test_a_gate_waits_on_the_person_and_its_answer_reaches_the_agent(self):
         board.track(self.root)
         self.cli("gate", "Delete the old data format?", "--item", "R2", "--why", "migration drops history")

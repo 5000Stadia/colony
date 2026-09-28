@@ -583,9 +583,9 @@ def deliver(root, session=False):
     marked as handed; at the start of a session also the ones handed but not yet acted on, so nothing
     sits unanswered however the agent works."""
     fresh = [n for n in open_notes(root) if not n["delivered_at"]]
+    still = [n for n in open_notes(root) if n["delivered_at"]] if session else []
     for n in fresh:
         append(root, "notes.jsonl", {"type": "delivered", "of": n["id"], "at": now()})
-    still = [n for n in open_notes(root) if n["delivered_at"]] if session else []
     return fresh, still
 
 
