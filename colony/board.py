@@ -37,11 +37,14 @@ person follows and steers them all from one board, and the projects can write to
 - The plan is `ROADMAP.md`: milestones as `## M1 — name`, items as `- [ ] R1 text` (`[~]` in progress,
   `[?]` built and waiting for the person's own eye, `[x]` done). Keep it current as you work, and commit
   each finished piece with a clear message. A milestone holds only what serves its purpose as the person
-  described it; what you find along the way that doesn't goes under Later. What you can check yourself
-  (tests, the spec's definition of done, a review), check, and mark done. Use `[?]` only for what needs
-  the person's judgement: how it looks, feels or reads, or whether it's what they wanted. Then tell them
-  in plain words what's ready and how to see it: `colony ready R4 "what's ready" --check "how to
-  check"`. They approve it or say what's wrong, and it reaches you as a note.
+  described it; what you find along the way that doesn't goes under Later. Finish what you take on: a
+  piece is done when it does what it was meant to do, so resolve what stands in the way, however many
+  turns it takes. Don't go looking for faults where nothing suggests one, or re-examine a sound choice
+  without cause. What you can check yourself (tests, the spec's definition of done, a review), check,
+  and mark done. Use `[?]` only for what needs the person's judgement: how it looks, feels or reads, or
+  whether it's what they wanted. Then tell them in plain words what's ready and how to see it: `colony
+  ready R4 "what's ready" --check "how to check"`. They approve it or say what's wrong, and it reaches
+  you as a note.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
   `colony noted ID "what you did"`. `colony notes` lists any still open.
