@@ -1470,7 +1470,9 @@ class ReadyTest(BoardBase):
         try:
             post(p=0, item="R2", verdict="not-yet", text="the dates are in the wrong format")
             self.assertIn("Not yet, on R2: the dates", board.notes(self.root)[-1]["text"])
-            self.assertEqual(len(board.moments(self.root)), 1, "not yet: still waiting")
+            self.assertEqual(board.moments(self.root), [], "not yet: back with the agent, off the list at once")
+            run("ready", "R2", "The dates read as you asked.")
+            self.assertEqual(len(board.moments(self.root)), 1, "ready again: back on the list")
             post(p=0, item="R2", text="")
             self.assertIn("The person approved R2", board.notes(self.root)[-1]["text"])
             self.assertEqual(board.moments(self.root), [], "approved: it's off the list at once")

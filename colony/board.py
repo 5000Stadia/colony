@@ -470,7 +470,10 @@ def ready_notes(root):
 
 
 def mark_ready(root, item, what, check=""):
+    """The agent says an item is ready for the person's OK: it is back on their list, if they had sent it back."""
     append(root, "ready.jsonl", {"type": "ready", "item": item, "at": now(), "what": what.strip(), "check": check.strip()})
+    if "verify:" + item in dismissed(root):
+        append(root, "dismissed.jsonl", {"type": "restored", "key": "verify:" + item, "at": now()})
 
 
 def plain(text):
@@ -2019,12 +2022,13 @@ class Handler(BaseHTTPRequestHandler):
                 clear_waiting(root, key)
         elif path == "/approve" and form.get("item"):
             iid = form["item"]
+            # either way it leaves the person's list now: "not yet" is back with the agent until it says ready again
             if form.get("verdict") == "not-yet":
-                if text:
-                    add_note(root, {"item": iid}, f"Not yet, on {iid}: {text}")
+                add_note(root, {"item": iid}, f"Not yet, on {iid}" + (f": {text}" if text else ".")
+                         + " When it's ready again, say so with colony ready.")
             else:
                 add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.")
-                append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
+            append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
             if not console.type_into(console.session_name(root), text):
                 return self._send(409, held(root.name, form.get("back", "/")).encode())
