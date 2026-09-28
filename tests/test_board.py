@@ -222,6 +222,25 @@ class BoardTest(BoardBase):
         self.assertIn(f"<span class='muted'>2/3 <span class='timer running' data-base='0' data-starts='{times['R3']['first']:.0f}'>", page,
                       "a milestone's heading: the calendar since its first item was taken up, not the items' sum")
 
+    def test_the_overview_says_how_long_its_agent_has_been_at_work(self):
+        board.track(self.root)
+        home = Path(self.tmp.name) / "userhome"
+        folder = home / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(self.root.resolve()))
+        folder.mkdir(parents=True)
+        turn = lambda ms: json.dumps({"type": "system", "subtype": "turn_duration", "durationMs": ms}) + "\n"
+        (folder / "s.jsonl").write_text(turn(3_600_000) + json.dumps({"type": "user"}) + "\n" + turn(120_000))
+        saved = os.environ["HOME"]
+        os.environ["HOME"] = str(home)
+        try:
+            page = board.render(board.registry(), 0, "")
+            self.assertIn("Roadmap: 1/3 · Active: 1h 2m", page, "turns only; waiting for the person doesn't count")
+            with (folder / "s.jsonl").open("a") as fh:
+                fh.write(turn(86_400_000) + '{"type": "sys')      # a line still being written waits
+            self.assertIn("Active: 1d 1h 2m", board.render(board.registry(), 0, ""))
+        finally:
+            os.environ["HOME"] = saved
+        self.assertEqual([board.span(x) for x in (59, 720, 7800, 90061)], ["0m", "12m", "2h 10m", "1d 1h 1m"])
+
     def test_the_board_answers_only_itself(self):
         board.track(self.root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)

@@ -19,6 +19,8 @@ what it assumes and what a second provider needs there. What a provider supplies
   own_defaults()           the model and effort the CLI uses when colony names none, or None where it
                            decides itself; the forms show them as "Default (...)"
   history_text(root)       the session's conversation as plain text, for Select on a phone (or None)
+  active_seconds(root)     how long its agent has spent at work in the project, all told: turns only, not the
+                           time it sat waiting for the person (None if it can't tell)
   activity(screen)         what it's doing now, off its screen: {"line": the current activity or None,
                            "agents": [{"name", "detail", "current"}]}, shown as the project's status
   scrolled_marker          text on screen while the view is scrolled up from the latest ("" if none); the
@@ -126,6 +128,36 @@ class ClaudeCode:
                     prose.append(text)
                     key = e.get("uuid") or key
         return key, "\n\n".join(prose)
+
+    def active_seconds(self, root):
+        """Time at work in this folder, all told: Claude Code closes each turn with its length (turn_duration) in
+        the transcript. Transcripts only grow, so each is read on from where the last look stopped.
+        PROVIDER: reads Claude Code's own transcripts."""
+        import re
+        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(Path(root).resolve()))
+        total = 0.0
+        for f in folder.glob("*.jsonl"):
+            at, ms = self._turns.get(f, (0, 0))
+            size = f.stat().st_size
+            if size < at:
+                at, ms = 0, 0                                    # rewritten: read it afresh
+            if size > at:
+                with f.open("rb") as fh:
+                    fh.seek(at)
+                    chunk = fh.read()
+                whole = chunk[:chunk.rfind(b"\n") + 1]               # a line still being written waits
+                for line in whole.splitlines():
+                    if b'"turn_duration"' in line:
+                        try:
+                            ms += json.loads(line).get("durationMs", 0)
+                        except ValueError:
+                            pass
+                at += len(whole)
+                self._turns[f] = (at, ms)
+            total += ms
+        return total / 1000
+
+    _turns = {}                                                  # transcript -> (bytes read, ms counted)
 
     def history_text(self, root, limit=200_000):
         """The session's conversation as plain text, for reading and copying on a phone: the person's

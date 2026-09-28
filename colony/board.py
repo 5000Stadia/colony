@@ -358,6 +358,12 @@ def took(secs):
     return "<1m" if m < 1 else f"{m}m" if m < 60 else f"{m // 60}h {m % 60}m" if m < 1440 else f"{m // 1440}d {m // 60 % 24}h"
 
 
+def span(secs):
+    """A long total, to the minute: 6d 15h 27m, 3h 5m, 12m."""
+    m = int(secs // 60)
+    return " ".join(f"{n}{u}" for n, u in ((m // 1440, "d"), (m // 60 % 24, "h"), (m % 60, "m")) if n) or "0m"
+
+
 def timer(rec):
     """An item's time in progress, counting on in the page while it runs."""
     base, start = rec.get("worked", 0), rec.get("started")
@@ -852,8 +858,11 @@ def render(reg, pid, view="overview"):
                 f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
     # Message sits on the title's line too, where a phone reaches it (its console is full screen)
     message = message_form(pid, plist, "psettings")
+    # time its agent has spent at work, all told: turns only, never the time it sat waiting
+    secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
+    active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
-               f"<p>{e(road['goal'])}</p><p class='muted'>{done} of {total} roadmap items done</p></header>")
+               f"<p>{e(road['goal'])}</p><p class='muted'>Roadmap: {done}/{total}{active}</p></header>")
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
         its_now = items(road)
