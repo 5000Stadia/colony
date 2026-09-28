@@ -152,7 +152,8 @@ def snapshot(root, lines=6, name=None):
         shown = [l for l in (BORDER.sub("", l) for l in history(name).splitlines()) if l.strip()]
     from . import providers
     p = providers.of(root)
-    return {"state": p.classify(now), "lines": shown[-lines:],
+    marker = getattr(p, "scrolled_marker", "")
+    return {"state": p.classify(now), "lines": shown[-lines:], "scrolled": bool(marker and marker in now),
             "activity": p.activity(now) if hasattr(p, "activity") else {"line": None, "agents": []}}
 
 

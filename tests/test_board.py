@@ -278,6 +278,12 @@ class GlanceTest(BoardBase):
         self.assertEqual([(a["name"], a["current"]) for a in act["agents"]], [("main", True), ("general-purpose", False)])
         self.assertEqual(act["agents"][1]["detail"], "7m 0s · ↓ 138.2k tokens")
         self.assertEqual(claude.classify("* Waiting for 4 background agents to finish\n❯ "), "working", "its agents are at work")
+        rule = "─" * 48
+        asked = f"  Do you want sales orders written up as a spec row?\n\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on · …\n  ● main"
+        self.assertEqual(claude.classify(asked), "idle", "its own question above the typing box is for the person to type to")
+        dialog = f"{rule}\n Edit file\n Do you want to make this edit to a.py?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel"
+        self.assertEqual(claude.classify(f"❯ fix the bug\n\n● Editing.\n{dialog}"), "needs you",
+                         "a choice takes the box's place; a past prompt above doesn't hide it")
 
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)
@@ -323,19 +329,35 @@ class MonitorTest(BoardBase):
         super().tearDown()
 
     def test_the_monitor_wakes_only_when_a_project_needs_the_person_or_finishes(self):
-        screens = iter(["working", "working", "needs you", "needs you", "working", "idle"])
+        screens = iter(["working", "working", "needs you", "needs you", "working", "idle", "idle"])
         console.snapshot = lambda root, lines=6, name=None: {"state": next(screens), "lines": ["last line"]}
         sent = []
         console.type_into = lambda name, text: sent.append(text)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
-        for _ in range(6):
+        for _ in range(7):
             w.tick()
         self.assertEqual(len(sent), 2, "busy work wakes nothing; needs-you and finished each wake it once")
         self.assertIn("plants needs you", sent[0])
         self.assertIn("plants finished a turn", sent[1])
         self.assertIn("You hold the helm", sent[0])
+
+    def test_a_session_stops_working_only_when_its_screen_says_so_twice_at_the_latest(self):
+        reads = iter([("working", False), ("idle", False), ("working", False), ("idle", True), ("idle", True),
+                      ("working", False), ("idle", False), ("idle", False)])
+        console.snapshot = lambda root, lines=6, name=None: dict(zip(("state", "scrolled"), next(reads)), lines=[])
+        sent = []
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        monitor.helm(True)
+        w = monitor.Watcher(quiet=0)
+        for _ in range(7):
+            w.tick()
+        self.assertEqual(sent, [], "a read that missed the spinner, or a screen scrolled up, ends no turn")
+        w.tick()
+        self.assertEqual(len(sent), 1)
+        self.assertIn("plants finished a turn", sent[0])
 
     def test_where_it_doesnt_hold_the_helm_the_monitor_sleeps_and_handed_it_hears_whats_waiting(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}

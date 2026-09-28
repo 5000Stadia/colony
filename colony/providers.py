@@ -182,6 +182,13 @@ class ClaudeCode:
         if "esc to interrupt" in low or re.search(r"^\s*[✻✶✳✢✽·*+] \S[^\n]*?…", screen, re.M) \
                 or re.search(r"waiting for \d+ background", low):     # its background agents are still at work
             return "working"
+        # A choice takes the typing box's place. While the box is there, "Do you want…" above it is the agent's
+        # own prose, a question for the person to answer by typing, so only what's below the box counts.
+        lines = screen.splitlines()
+        rule = lambda l: len(l.strip()) > 8 and set(l.strip()) <= set("─━")
+        box = next((i for i in range(len(lines) - 1, 0, -1)
+                    if re.match(r"^\s*❯(?!\s*\d+\.)", lines[i]) and rule(lines[i - 1])), None)
+        low = "\n".join(lines[box + 1:] if box is not None else lines).lower()
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"
         return "idle"

@@ -358,6 +358,7 @@ class Watcher:
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
+        self.settling = {}                       # a stop seen once, not yet confirmed
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -371,6 +372,14 @@ class Watcher:
             # A project not seen before counts as off, so one already waiting (a new folder's trust question,
             # a question left while the board was down) is reported, not taken as where it always was.
             before, now = self.states.get(str(p), "off"), snap["state"]
+            if before == "working" and now != "working":
+                # Scrolled up from the latest, a screen hides the spinner, and a read mid-redraw can miss it: a
+                # session has stopped working only when its screen is at the latest and says so twice running.
+                if snap.get("scrolled") or self.settling.get(str(p)) != now:
+                    self.settling[str(p)] = None if snap.get("scrolled") else now
+                    now = before
+            else:
+                self.settling.pop(str(p), None)
             self.states[str(p)] = now
             if now == "working":
                 self.worked.add(str(p))
