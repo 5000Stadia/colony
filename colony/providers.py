@@ -131,33 +131,45 @@ class ClaudeCode:
 
     def active_seconds(self, root):
         """Time at work in this folder, all told: Claude Code closes each turn with its length (turn_duration) in
-        the transcript. Transcripts only grow, so each is read on from where the last look stopped.
-        PROVIDER: reads Claude Code's own transcripts."""
+        the transcript; a turn still open counts from its prompt to the latest thing written in it. Transcripts
+        only grow, so each is read on from where the last look stopped. PROVIDER: reads Claude Code's own
+        transcripts."""
         import re
+        from datetime import datetime
+        stamp = lambda e: datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
         folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(Path(root).resolve()))
         total = 0.0
         for f in folder.glob("*.jsonl"):
-            at, ms = self._turns.get(f, (0, 0))
+            at, ms, opened, last = self._turns.get(f, (0, 0, None, None))
             size = f.stat().st_size
             if size < at:
-                at, ms = 0, 0                                    # rewritten: read it afresh
+                at, ms, opened, last = 0, 0, None, None           # rewritten: read it afresh
             if size > at:
                 with f.open("rb") as fh:
                     fh.seek(at)
                     chunk = fh.read()
                 whole = chunk[:chunk.rfind(b"\n") + 1]               # a line still being written waits
                 for line in whole.splitlines():
-                    if b'"turn_duration"' in line:
-                        try:
-                            ms += json.loads(line).get("durationMs", 0)
-                        except ValueError:
-                            pass
+                    try:
+                        if b'"turn_duration"' in line:
+                            ms, opened = ms + json.loads(line).get("durationMs", 0), None
+                        elif opened is None and re.search(rb'"type":\s*"user"', line):
+                            opened = stamp(json.loads(line))          # a turn begins
+                        if opened is not None and b'"timestamp"' in line:
+                            last = line                               # parsed once, below
+                    except (ValueError, KeyError):
+                        pass
+                if isinstance(last, bytes):
+                    try:
+                        last = stamp(json.loads(last))
+                    except (ValueError, KeyError):
+                        last = None
                 at += len(whole)
-                self._turns[f] = (at, ms)
-            total += ms
-        return total / 1000
+                self._turns[f] = (at, ms, opened, last)
+            total += ms / 1000 + (max(0, last - opened) if opened and last else 0)
+        return total
 
-    _turns = {}                                                  # transcript -> (bytes read, ms counted)
+    _turns = {}                                   # transcript -> (bytes read, ms of turns ended, open turn's start, its latest)
 
     def history_text(self, root, limit=200_000):
         """The session's conversation as plain text, for reading and copying on a phone: the person's

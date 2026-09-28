@@ -241,6 +241,10 @@ class BoardTest(BoardBase):
             with (folder / "s.jsonl").open("a") as fh:
                 fh.write(turn(86_400_000) + '{"type": "sys')      # a line still being written waits
             self.assertIn("Active: 1d 1h 2m", board.render(board.registry(), 0, ""))
+            with (folder / "s.jsonl").open("a") as fh:                # the line completes; a turn opens and runs on
+                fh.write('tem"}\n' + json.dumps({"type": "user", "timestamp": "2026-09-28T10:00:00.000Z"}) + "\n"
+                         + json.dumps({"type": "assistant", "timestamp": "2026-09-28T10:30:00.000Z"}) + "\n")
+            self.assertIn("Active: 1d 1h 32m", board.render(board.registry(), 0, ""), "the turn under way counts to its latest step")
         finally:
             os.environ["HOME"] = saved
         self.assertEqual([board.span(x) for x in (59, 720, 7800, 90061)], ["0m", "12m", "2h 10m", "1d 1h 1m"])
