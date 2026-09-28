@@ -36,7 +36,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R21 Message: one place to write, at the top: into the project's own console by default or to another project, with a file uploaded or browsed; what was said is kept on the Roadmap tab
 - [x] R30 Finished milestones load folded, and those before the first unfinished one fold into Completed
 - [x] R31 Nothing is typed onto what the person has half-typed in a console
-- [?] R32 The roadmap folds and orders itself by the work: the latest started first, finished last in Completed, a live dot on what's in progress, each item's time in progress, and each heading's elapsed time
+- [x] R32 The roadmap folds and orders itself by the work: the latest started first, finished last in Completed, a live dot on what's in progress, each item's time in progress, and each heading's elapsed time
 - [x] R33 Not yet takes an item off the person's list until the agent says it's ready again
 - [?] R34 The overview line reads Roadmap: #/# · Active: the agent's time at work, all told
 
