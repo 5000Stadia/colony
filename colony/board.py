@@ -1141,32 +1141,75 @@ def default_label(value, fallback="Claude Code picks"):
     return f"Default ({value})" if value else f"Default ({fallback})"
 
 
+PROVIDER_FIELDS = """
+(() => {
+  const box = document.currentScript.previousElementSibling, data = JSON.parse(box.dataset.providers);
+  const provider = box.querySelector('[name=provider]'), model = box.querySelector('[name=model]');
+  const effort = box.querySelector('[name=effort]'), lists = box.querySelectorAll('datalist');
+  const id = window.colonyProviderFields = (window.colonyProviderFields || 0) + 1;
+  lists.forEach((list, i) => list.id = 'provider-options-' + id + '-' + i);
+  model.setAttribute('list', lists[0].id); effort.setAttribute('list', lists[1].id);
+  function options(list, values) {
+    list.replaceChildren(...values.map(v => {
+      const option = document.createElement('option');
+      option.value = Array.isArray(v) ? v[0] : v;
+      option.textContent = Array.isArray(v) ? v[1] : '';
+      return option;
+    }));
+  }
+  function update() {
+    const p = data[provider.value], effective = model.value.trim() || p.model;
+    options(lists[0], p.models);
+    options(lists[1], p.efforts_for[effective] || p.efforts);
+    model.placeholder = p.model_placeholder; effort.placeholder = p.effort_placeholder;
+    const hint = box.querySelector('[data-recommendation]');
+    hint.textContent = p.recommendation; hint.hidden = !p.recommendation;
+  }
+  provider.addEventListener('change', update); model.addEventListener('input', update);
+  update();
+})();
+"""
+
+
 def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
     with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
     will use; the global form leaves them blank to mean the provider's own, and says what that is."""
-    # PROVIDER: the model and effort suggestions are those of the provider shown first, fixed when the page is
-    # drawn. With two providers, swap the datalists when the select changes (a few lines of script), and let
-    # permissions and Remote Control say when the chosen provider has no equivalent.
     from .providers import PROVIDERS, get
     g = registry()["settings"]
-    p = get(cur or g["provider"])
+    cur = cur or g["provider"]
+    p = get(cur)
     own = p.own_defaults()
     in_project = blank == "global"
     if in_project:              # a project's form starts filled with what it will actually use
         cur = cur or g["provider"]
         model = model or g["model"] or own["model"] or ""
         effort = effort or g["effort"] or own["effort"] or ""
-        dm, de = "Claude Code picks", "Claude Code picks"
+        dm = de = f"{p.label} picks"
     else:                       # the global form: blank leaves it to the provider, and says what that is
-        dm = default_label(p.model_name(own["model"]) if own["model"] else None)
-        de = default_label(own["effort"])
-    return (f"<label>Provider <select name='provider'>"
+        dm = default_label(p.model_name(own["model"]) if own["model"] else None, f"{p.label} picks")
+        de = default_label(own["effort"], f"{p.label} picks")
+    data = {}
+    for key, provider in PROVIDERS.items():
+        defaults = provider.own_defaults()
+        data[key] = {"models": provider.models, "efforts": provider.efforts,
+                     "efforts_for": getattr(provider, "efforts_for", {}),
+                     "model": (g["model"] if in_project else "") or defaults["model"] or "",
+                     "model_placeholder": default_label(provider.model_name(defaults["model"]), f"{provider.label} picks"),
+                     "effort_placeholder": default_label(defaults["effort"], f"{provider.label} picks"),
+                     "recommendation": getattr(provider, "recommendation", "")}
+    effective = model or data[cur]["model"]
+    effort_options = data[cur]["efforts_for"].get(effective, p.efforts)
+    hint = data[cur]["recommendation"]
+    return (f"<div class='provider-fields' data-providers='{e(json.dumps(data))}'>"
+            f"<label>Provider <select name='provider'>"
             + "".join(f"<option value='{k}'{' selected' if cur == k else ''}>{e(v.label)}</option>" for k, v in PROVIDERS.items())
             + "</select></label>"
             f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'></label>"
             f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{e(de)}'></label>"
-            + suggestions("models", p.models) + suggestions("efforts", p.efforts))
+            + suggestions("models", p.models) + suggestions("efforts", effort_options)
+            + f"<p class='muted' data-recommendation{'' if hint else ' hidden'}>{e(hint)}</p></div>"
+            + f"<script>{PROVIDER_FIELDS}</script>")
 
 
 def project_settings_form(pid, own, action="/project-settings"):
@@ -2183,6 +2226,7 @@ ul.folders .path { display:block; overflow-wrap:anywhere } .folderacts { display
 form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
+.provider-fields { display:contents }
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
 form.options textarea.short { min-height:44px }

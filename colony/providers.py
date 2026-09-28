@@ -329,9 +329,28 @@ class Codex:
     Project hooks need a trusted project and review in /hooks before Codex runs them.
     See https://developers.openai.com/codex/hooks for the payload and output contracts."""
     label = "Codex"
-    models = []                                 # whatever `codex -m` takes; the person's config names its own
     aliases = {}
-    efforts = ["minimal", "low", "medium", "high"]
+    efforts = ["low", "medium", "high", "xhigh", "max", ("ultra", "Ultra — delegates to subagents")]
+    efforts_for = {"gpt-5.5": efforts[:4], "gpt-5.6-luna": efforts[:5], "gpt-6-luna": efforts[:5]}
+    recommendation = "Suggested for a new Codex project: GPT-5.6 Sol, medium effort. Reserve Astra for hard decisions and failures."
+
+    @staticmethod
+    def config_home():
+        import os
+        return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+    @property
+    def models(self):
+        """Stable suggestions plus the new generation only once this installation advertises it."""
+        models = [("gpt-6-astra", "GPT-6 Astra"), ("gpt-5.6-sol", "GPT-5.6 Sol"),
+                  ("gpt-5.6-terra", "GPT-5.6 Terra"), ("gpt-5.6-luna", "GPT-5.6 Luna")]
+        try:
+            catalog = json.loads((self.config_home() / "models_cache.json").read_text())
+            visible = {m.get("slug") for m in catalog.get("models", []) if m.get("visibility") == "list"}
+        except (OSError, ValueError, AttributeError, TypeError):
+            visible = set()
+        return models + [(slug, label) for slug, label in (("gpt-6-sol", "GPT-6 Sol"), ("gpt-6-luna", "GPT-6 Luna"))
+                         if slug in visible]
     mark = "›"
     instructions = "AGENTS.md"
     enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
@@ -400,13 +419,13 @@ class Codex:
                         for event, command in self.hooks.items()))
 
     def model_name(self, value):
-        return value
+        return dict(self.models).get(value, value)
 
     def own_defaults(self):
         """The model and effort in the person's ~/.codex/config.toml, if it names them."""
         try:
             import tomllib
-            cfg = tomllib.loads((Path.home() / ".codex" / "config.toml").read_text())
+            cfg = tomllib.loads((self.config_home() / "config.toml").read_text())
         except (ImportError, OSError, ValueError):
             cfg = {}
         return {"model": cfg.get("model") or None, "effort": cfg.get("model_reasoning_effort") or None}
