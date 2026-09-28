@@ -763,7 +763,7 @@ class GlanceTest(BoardBase):
         self.assertIn("building: Opus 5.5 at high effort", first["text"])
         self.assertIn("ask them to confirm or adjust", first["text"])
         self.assertIn("model plan", (self.root / "CLAUDE.md").read_text(), "the protocol says how it's kept and revisited")
-        self.assertIn("It informs, it doesn't wait: carry on unless", (self.root / "CLAUDE.md").read_text(),
+        self.assertIn("it doesn't wait: carry on unless redirected", (self.root / "CLAUDE.md").read_text(),
                       "helpers keep their assigner aware of the shape of their work")
         self.assertIn("talk at hand-offs", (self.root / "CLAUDE.md").read_text(), "paired projects: roles, not running updates")
         self.cli("models", "set", "building", "claude-opus-5-5", "high", "--why", "agreed with the person")
