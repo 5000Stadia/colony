@@ -727,6 +727,12 @@ class GlanceTest(BoardBase):
         self.assertIsNone(by[("claude-sonnet-5", "high")]["overall"], "a vendor number isn't averaged in")
         self.assertTrue(by[("claude-sonnet-5", "high")]["pending"])
         self.assertEqual(by[("claude-opus-5-5", "medium")]["cost"]["value"], 1.34, "cost per task")
+        bench.add([rec("claude-haiku-4-5-20251001", None, 0.10, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
+                   rec("claude-sonnet-5", "high", 0.01, "cost", bench_="Coding Agent Index Cost per Task", unit="usd")])
+        by = {(x["model"], x["effort"]): x for x in bench.standings()}
+        self.assertIsNone(by[("claude-sonnet-5", "high")]["cost"], "another benchmark's cost is never compared")
+        self.assertEqual(bench.best_for("chores")[0]["model"], "claude-haiku-4-5-20251001",
+                         "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 54/$1.82)")
         c = bench.card("claude-opus-5-5")
         self.assertIn("xhigh", c["untested"], "an effort level with no data is a gap, not an estimate")
         self.assertTrue(any("high over medium" in n for n in c["notes"]), "where more effort pays")

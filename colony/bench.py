@@ -26,6 +26,8 @@ DOMAINS = ("overall", "coding", "agentic", "reasoning", "math", "long-context", 
 MEASURES = ("cost", "latency")                 # recorded as the source states them, never converted
 KEYS = ("model", "effort", "source", "kind", "benchmark", "version", "domain", "value", "unit", "date", "url", "note")
 # The work a project hands its helpers, and the domains that speak to it. Chores also weigh cost.
+NEAR = 5                                    # points of a role's score that more effort must add to be worth it
+INDEX = "intelligence index"                # the overall benchmark whose cost and time per task price every entry
 ROLES = {"planning": ("reasoning", "overall"), "building": ("coding", "agentic"),
          "review": ("coding", "reasoning"), "chores": ("overall",)}
 
@@ -118,10 +120,14 @@ def standings(rows=None):
         e["overall"] = round(sum(s for s, _ in head) / len(head)) if head else None
         e["headline"] = sorted({src for _, src in head})
         e["sources"] = sorted({src for v in e["scaled"].values() for _, src in v})
-        per_task = lambda dom: sorted((r for r in e["measures"] if r["domain"] == dom and r["kind"] == "independent"),
-                                      key=lambda r: not per(r["benchmark"]))            # per task first, as asked
-        e["cost"] = (per_task("cost") or [None])[0]
-        e["time"] = (per_task("latency") or [None])[0]
+        # cost and time per task, of the benchmark the overall score rests on, so every entry is priced alike;
+        # other costs (another benchmark's, a whole run's) stay in the record list, never compared
+        index = lambda dom: [r for r in e["measures"] if r["domain"] == dom and r["kind"] == "independent"
+                             and per(r["benchmark"]) and INDEX in r["benchmark"].lower()]
+        e["cost"] = (index("cost") or [None])[0]
+        e["time"] = (index("latency") or [None])[0]
+        e["index"] = next((r["value"] for r in e["raw"] if r["domain"] == "overall" and r["kind"] == "independent"
+                           and INDEX in r["benchmark"].lower() and r["source"] == "Artificial Analysis"), None)
         e["pending"] = not any(r["domain"] in ("overall", "preference") and r["kind"] == "independent" for r in e["raw"])
     return sorted(entries.values(), key=lambda e: (e["overall"] is None, -(e["overall"] or 0)))
 
@@ -133,16 +139,15 @@ def per(benchmark):
 
 
 def role_score(e, role):
-    """How an entry serves a role: the mean of that role's domains it has scores for (chores: per dollar)."""
-    have = [e["domains"][d] for d in ROLES[role] if d in e["domains"]]
-    if not have:
-        return None
-    score = sum(have) / len(have)
+    """How an entry serves a role: the mean of that role's domains it has scores for. Chores are value: the
+    Intelligence Index's own points per dollar a task costs (not the 0-100 scale, whose lowest entry is 0
+    however cheap it is)."""
     if role == "chores":
-        if not e["cost"] or not e["cost"]["value"]:
+        if e.get("index") is None or not e["cost"] or not e["cost"]["value"]:
             return None
-        return score / e["cost"]["value"]
-    return score
+        return e["index"] / e["cost"]["value"]
+    have = [e["domains"][d] for d in ROLES[role] if d in e["domains"]]
+    return sum(have) / len(have) if have else None
 
 
 def best_for(role, provider=None, entries=None):
@@ -234,11 +239,23 @@ def recommend(root):
     out = {}
     for role in ROLES:
         ranked = best_for(role, provider=key, entries=entries)
-        if ranked:
-            e = ranked[0]
-            why = (f"best {'value' if role == 'chores' else 'score'} for {role} among {providers.of(root).label} models "
-                   f"({', '.join(f'{d} {e['domains'][d]}' for d in ROLES[role] if d in e['domains'])}; 0-100 across the lineup)")
-            out[role] = {"model": e["model"], "effort": e["effort"], "why": why}
+        ranked = [x for x in ranked if x["effort"]] or ranked      # one that names an effort can be acted on
+        if not ranked:
+            continue
+        top, e = ranked[0], ranked[0]
+        if role != "chores":
+            # more effort pays only while it scores clearly more: the cheapest entry within NEAR of the best
+            near = [x for x in ranked if role_score(x, role) >= role_score(top, role) - NEAR and x["cost"]]
+            e = min(near, key=lambda x: x["cost"]["value"]) if near else top
+        if role == "chores":
+            why = (f"most Intelligence Index points per dollar among {providers.of(root).label} models "
+                   f"({e['index']:g} points at ${e['cost']['value']:.2f} a task)")
+        else:
+            why = (f"{role} score {role_score(e, role):.0f} of 100 across the lineup"
+                   + (f", within {NEAR} of the best ({entry_name(top)}, {role_score(top, role):.0f}) at "
+                      f"${e['cost']['value']:.2f} a task against ${top['cost']['value']:.2f}"
+                      if e is not top and top["cost"] else ""))
+        out[role] = {"model": e["model"], "effort": e["effort"], "why": why}
     return out
 
 

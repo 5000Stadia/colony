@@ -60,7 +60,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 ## M8 — Models chosen from evidence
 
 - [x] R45 Benchmark records and a card per model and effort level: two or three respected overall scores (Artificial Analysis, LMArena, Epoch AI) put on one scale and averaged, cost and time per task, gaps shown as gaps; kept on this machine
-- [~] R46 Today's lineup researched and recorded, once (Claude models by colony, Codex models by colony-codex)
+- [x] R46 Today's lineup researched and recorded, once (Claude models by colony, Codex models by colony-codex)
 - [?] R47 A Models page on the board: the cards, a domain comparison, an effort-vs-cost curve per model, best for each role; an ⓘ beside each model when adding a project
 - [x] R48 Each project's model plan: which model and effort its helpers use for which work, recommended at its start and agreed with the person, kept in .board and handed over at every session start, revisited when a model is added
 - [x] R49 Adding a model to colony includes its research check; colony notices a new model, builds its card, reranks, and tells each project
