@@ -254,7 +254,8 @@ class ClaudeCode:
     def _box(lines):
         """The line its typing box starts on (`❯` just under a rule), or None while a choice has taken its place."""
         import re
-        rule = lambda l: len(l.strip()) > 8 and set(l.strip()) <= set("─━")
+        # a rule is a line of ─ (Claude Code may label it with the session's name: "──── Holo-emitter ─")
+        rule = lambda l: bool(re.match(r"^\s*[─━]{4,}", l)) and l.count("─") + l.count("━") >= len(l.strip()) / 2
         return next((i for i in range(len(lines) - 1, 0, -1)
                      if re.match(r"^\s*❯(?!\s*\d+\.)", lines[i]) and rule(lines[i - 1])), None)
 
@@ -269,7 +270,7 @@ class ClaudeCode:
             return None
         out = []
         for l in lines[box:]:
-            if out and len(plain(l).strip()) > 8 and set(plain(l).strip()) <= set("─━"):
+            if out and re.match(r"^\s*[─━]{4,}", plain(l)):
                 break                                                    # the rule under the box
             out.append(plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", l)))
         return "\n".join(out).strip().lstrip("❯").strip()

@@ -381,6 +381,11 @@ class GlanceTest(BoardBase):
         rule = "─" * 48
         asked = f"  Do you want sales orders written up as a spec row?\n\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on · …\n  ● main"
         self.assertEqual(claude.classify(asked), "idle", "its own question above the typing box is for the person to type to")
+        labelled = ("  Do you want that after you've judged this room, or\n  should the current room go to you?\n"
+                    "✻ Brewed for 25m 51s · done 12:20 PM\n" + "─" * 38 + " Holo-emitter ─\n❯ \n" + "─" * 53
+                    + "\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · …")
+        self.assertEqual(claude.classify(labelled), "idle", "a rule labelled with the session's name is still the box's")
+        self.assertEqual(claude.draft(labelled), "")
         dialog = f"{rule}\n Edit file\n Do you want to make this edit to a.py?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel"
         self.assertEqual(claude.classify(f"❯ fix the bug\n\n● Editing.\n{dialog}"), "needs you",
                          "a choice takes the box's place; a past prompt above doesn't hide it")
