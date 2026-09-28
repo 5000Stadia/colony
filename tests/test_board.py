@@ -1037,6 +1037,8 @@ class DirectionTest(BoardBase):
         helm = board.monitor_page(board.registry(), "helm")
         self.assertIn("href='/monitor?view=direction'", helm, "the Helm page links to it")
         self.assertIn("Empty: the standing direction alone", helm)
+        self.assertIn("Have the monitor send it", helm, "the monitor can message a project for the person")
+        self.assertIn("value='monitor'", helm)
         page = board.monitor_page(board.registry(), "direction")
         self.assertIn("colony's default", page)
         self.assertNotIn("name='reset'", page, "nothing to reset yet")

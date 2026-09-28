@@ -1077,7 +1077,15 @@ def monitor_page(reg, view="overview"):
     monitor.ensure()
     tab = lambda v, label: f"<a class='{'on' if view == v else ''}' href='/monitor?view={v}'>{label}</a>"
     on = monitor.helm()
-    head = (f"<header class='project'><div class='titlerow'><h1>monitor</h1><form method='post' action='/helm' class='helmform'>"
+    targets = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(projects(reg)))
+    # the monitor relays for the person, so what it sends a project is taken as the person's word
+    message = (f"<details class='psettings'><summary>Message a project</summary><div class='panel'>"
+               f"<form class='options' method='post' action='/message'><input type='hidden' name='p' value='monitor'>"
+               f"<label>To <select name='to'>{targets}</select></label>"
+               f"<label class='stack'>What should the monitor tell them for you?"
+               f"<textarea name='text' placeholder='It relays it as yours, in full, and checks it landed'></textarea></label>"
+               f"<button>Have the monitor send it</button></form></div></details>") if targets else ""
+    head = (f"<header class='project'><div class='titlerow'><h1>monitor</h1>{message}<form method='post' action='/helm' class='helmform'>"
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form></div>"
             f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div>"
@@ -1662,13 +1670,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/message":
-            src, dst = projects(reg)[int(form.get("p", "0"))], projects(reg)[int(form.get("to", "0"))]
+            dst = projects(reg)[int(form.get("to", "0"))]
             text = form.get("text", "").strip()
-            if text:
+            if form.get("p") == "monitor":
+                from . import monitor
+                if text:
+                    console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}")
+                where = "/monitor?view=console"
+            else:
                 from . import mail
-                console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text))
+                if text:
+                    console.type_into(console.ensure(projects(reg)[int(form.get("p", "0"))]), mail.instruction(mail.address(dst), text))
+                where = f"/?p={form.get('p', '0')}&view=console"
             self.send_response(303)
-            self.send_header("Location", f"/?p={form.get('p', '0')}&view=console")
+            self.send_header("Location", where)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -1910,7 +1925,9 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .msgbox label { display:flex; flex-direction:column; gap:4px; font-size:13px } .msgbox textarea { min-height:80px; font:inherit;
   padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .msgbox select, .options select { font:inherit; padding:4px 6px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
-.psettings summary { cursor:pointer; color:var(--accent); list-style:none; font-size:14px }
+.psettings summary { cursor:pointer; color:var(--accent); list-style:none; font-size:14px; white-space:nowrap }
+.titlerow { flex-wrap:wrap; row-gap:6px } .helmform button { white-space:nowrap }
+.psettings .panel textarea { width:100%; min-height:90px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .psettings summary::-webkit-details-marker { display:none } header.project { position:relative }
 .titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings, .titlerow .exitlink { margin-left:auto } .titlerow .psettings + .psettings { margin-left:0 }
 .exitlink { font-size:14px; text-decoration:none; white-space:nowrap }
@@ -1936,7 +1953,7 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
 .needs summary { cursor:pointer } .need { border-top:1px solid var(--line); padding:10px 0 }
-.helmform { margin-left:auto } .helmcard .titlerow .badge { margin-left:auto } .helmcard label.stack { flex-direction:column; align-items:stretch }
+.helmform { margin-left:auto } .titlerow .psettings + .helmform { margin-left:0 } .helmcard .titlerow .badge { margin-left:auto } .helmcard label.stack { flex-direction:column; align-items:stretch }
 .helmcard textarea { width:100%; min-height:56px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .focus ul { margin:6px 0 0; padding-left:0; list-style:none } .focus li .kind { display:inline-block; min-width:52px; font-size:12px; color:var(--muted) }
 .mstatus .who { margin:10px 0 -6px } .notetop .noterow { display:flex; align-items:flex-start; gap:12px } .notetop .noterow button { margin-left:auto; flex:none }
