@@ -50,6 +50,9 @@ def call(project, prompt, *, agent, row, wave, budget, session=None, resume=Fals
     """Run one agent to completion in the project root and record what it cost."""
     cfg = project.config()
     binary = os.environ.get("COLONY_CLAUDE", "claude")
+    if binary == "claude" and not __import__("shutil").which("claude"):
+        raise SystemExit("colony run needs Claude Code (https://claude.com/claude-code): the unattended runtime is "
+                         "Claude Code only. Projects on the board run on whichever agent program is installed.")
     role = agent.split("@")[0]
     role = role if role in ("builder", "door") else "specialist"
     effort = cfg.get(f"effort_{role}") or cfg["effort"]

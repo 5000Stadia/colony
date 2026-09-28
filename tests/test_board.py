@@ -1,4 +1,5 @@
 import json
+import shutil
 import re
 import os
 import subprocess
@@ -620,6 +621,58 @@ class GlanceTest(BoardBase):
         self.assertEqual(snapshot(self.root), original, "the other agent's records remain untouched")
         board.add_note(twin, None, "Explicit manual delivery")
         self.assertIn("Explicit manual delivery", hook(["notes", "--deliver"], {"COLONY_PROJECT": str(twin)}).stdout)
+
+    def test_a_machine_with_only_codex_runs_everything_on_codex(self):
+        bin_ = Path(self.tmp.name) / "bin"
+        bin_.mkdir()
+        (bin_ / "codex").write_text("#!/bin/sh\nsleep 60\n")          # codex is here, claude isn't
+        (bin_ / "codex").chmod(0o755)
+        for prog in ("git", "tmux", "sh", "sleep", "dirname"):          # what colony runs, and no claude
+            (bin_ / prog).symlink_to(shutil.which(prog))
+        saved = (os.environ["PATH"], os.environ.pop("COLONY_CONSOLE_CMD"), console.COMMAND)
+        os.environ["PATH"], console.COMMAND = str(bin_), None
+        try:
+            claude, codex = providers.get("claude"), providers.get("codex")
+            self.assertFalse(providers.installed(claude))
+            self.assertTrue(providers.installed(codex))
+            board.track(self.root)                          # on Claude Code, whose program isn't here
+            name = console.ensure(self.root)
+            self.assertFalse(console.live(self.root), "no console that would only die")
+            self.assertEqual(console.snapshot(self.root)["lines"], [providers.missing(claude)], "off, and why")
+            self.assertFalse(console.type_into(name, "hello"), "nothing typed into a console that isn't there")
+            page = board.render(board.registry(), 0, "console")
+            self.assertIn("Claude Code isn&#x27;t installed on this machine", page)
+            self.assertIn("so its console can't start", page)
+            self.assertIn("Claude Code (not installed)</option>", board.render(board.registry(), 0, ""), "the forms say so")
+            self.assertIn("Codex", board.settle_provider(), "the default moves to what is here")
+            self.assertEqual(board.registry()["settings"]["provider"], "codex")
+            self.assertIsNone(board.settle_provider(), "once")
+            env = dict(os.environ, PYTHONPATH=str(ROOT))
+            run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True, env=env)
+            r = run("new", "garden", "--provider", "claude", "--in", self.tmp.name)
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("Claude Code isn't installed on this machine", r.stderr)
+            self.assertFalse((Path(self.tmp.name) / "garden").exists(), "refused before anything was made")
+            board.project_settings(self.root, {"provider": "claude"})     # a project set to what isn't here
+            out = run("doctor").stdout
+            self.assertIn("note  Claude Code (claude) not installed", out)
+            self.assertIn("ok    Codex (codex) installed", out)
+            self.assertIn("plants: Claude Code isn't installed", out)
+            check = subprocess.run(["sh", "-c", 'command -v claude >/dev/null || command -v codex >/dev/null && echo enough'],
+                                   capture_output=True, text=True)
+            self.assertEqual(check.stdout.strip(), "enough", "start's own test: codex alone is enough")
+            self.assertIn("command -v claude >/dev/null || command -v codex >/dev/null", (ROOT / "start").read_text())
+        finally:
+            os.environ["PATH"], os.environ["COLONY_CONSOLE_CMD"], console.COMMAND = saved
+
+    def test_start_says_what_it_needs_when_neither_program_is_here(self):
+        bin_ = Path(self.tmp.name) / "bin"
+        bin_.mkdir()
+        for prog in ("tmux", "dirname"):
+            (bin_ / prog).symlink_to(shutil.which(prog))
+        r = subprocess.run(["/bin/sh", str(ROOT / "start")], capture_output=True, text=True, env={"PATH": str(bin_)})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("colony needs an agent program: Claude Code", r.stdout)
 
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)

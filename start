@@ -5,9 +5,9 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 command -v tmux >/dev/null || { echo "colony needs tmux: install it (e.g. sudo apt install tmux, brew install tmux)"; exit 1; }
-# PROVIDER: only Claude Code is checked, since it is the only provider (colony/providers.py). With another,
-# require at least one installed provider's CLI and warn about the rest, instead of requiring `claude`.
-command -v claude >/dev/null || { echo "colony needs Claude Code: https://claude.com/claude-code"; exit 1; }
+# An agent program to run projects with: Claude Code or Codex (colony/providers.py), whichever is here.
+command -v claude >/dev/null || command -v codex >/dev/null || {
+  echo "colony needs an agent program: Claude Code (https://claude.com/claude-code) or Codex (https://developers.openai.com/codex)"; exit 1; }
 if ! command -v colony >/dev/null; then
   python3 -m pip install --user -q -e "$here" 2>/dev/null || python3 -m pip install --user -q -e "$here" --break-system-packages
   export PATH="$HOME/.local/bin:$PATH"

@@ -92,15 +92,21 @@ def session_name(root):
 
 
 def live(root):
-    return subprocess.run(["tmux", "has-session", "-t", session_name(root)], capture_output=True).returncode == 0
+    return running(session_name(root))
+
+
+def running(name):
+    return subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode == 0
 
 
 def ensure(root, name=None, label=None):
     """Start the session if it is not running: the provider's CLI, in the project, as its settings say."""
     name = name or session_name(root)
-    if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
+    if not running(name):
+        from . import board, providers
+        if not COMMAND and not providers.installed(providers.of(None if label else root)):
+            return name                             # its program isn't here: no console that would only die
         # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
-        from . import board
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
                         "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
@@ -126,7 +132,7 @@ def drafting(name):
 def type_into(name, text):
     """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
     is theirs to send: then nothing is typed, and False says so."""
-    if drafting(name):
+    if not running(name) or drafting(name):
         return False
     # PROVIDER: this is how the board and the monitor reach an agent, and it relies on the CLI taking typed
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
@@ -140,7 +146,7 @@ def type_into(name, text):
 def paste_into(name, text):
     """Send the person's own message, as if they had pasted it into the session and pressed Enter: lines and
     all, in one piece (a bracketed paste where the program asks for one, as Claude Code does)."""
-    if "\n" not in text or drafting(name):
+    if "\n" not in text or not running(name) or drafting(name):
         return type_into(name, text)
     buf = f"colony-{secrets.token_hex(4)}"
     subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
@@ -188,8 +194,10 @@ def snapshot(root, lines=6, name=None):
     """Its state, read off the screen as it is now, and its last lines: from the scrollback too when more are
     asked for than the screen holds."""
     name = name or session_name(root)
-    if subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode != 0:
-        return {"state": "off", "lines": []}
+    if not running(name):
+        from . import providers
+        p = providers.of(root)
+        return {"state": "off", "lines": [] if providers.installed(p) else [providers.missing(p)]}
     now = screen(name)
     shown = [l for l in (BORDER.sub("", l) for l in now.splitlines()) if l.strip()]
     from . import providers

@@ -237,6 +237,20 @@ def save_registry(reg):
 
 # ---------------------------------------------------------------- a project's files
 
+def settle_provider():
+    """If the default provider's program isn't on this machine and another's is, that one becomes the default,
+    so new projects and the monitor start on something that runs. What changed, in a line, or None."""
+    from . import providers
+    now = providers.get(registry()["settings"]["provider"])
+    if providers.installed(now):
+        return None
+    here = next((k for k, p in providers.PROVIDERS.items() if providers.installed(p)), None)
+    if not here:
+        return None
+    set_setting("provider", here)
+    return f"{now.label} isn't installed here, so new projects and the monitor run on {providers.get(here).label} (colony settings provider to change it)"
+
+
 def workdir(root):
     """Where a project's agent works: its own folder, or the folder it shares with the project that owns it."""
     path = Path(root) / ".board" / "settings.json"
@@ -907,6 +921,10 @@ def render(reg, pid, view="overview"):
     if view == "console":
         root = plist[pid]
         message = message_form(pid, plist, "msgbox")
+        if not providers.installed(providers.of(root)) and not console.live(root):
+            return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>"
+                         f"<div class='card'><p>{e(providers.missing(providers.of(root)))}, so its console can't start.</p>"
+                         f"<p class='muted'>Install it, or choose another provider in this project's Settings.</p></div>")
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
                      + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
@@ -1175,7 +1193,7 @@ def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
     with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
     will use; the global form leaves them blank to mean the provider's own, and says what that is."""
-    from .providers import PROVIDERS, get
+    from .providers import PROVIDERS, get, installed
     g = registry()["settings"]
     cur = cur or g["provider"]
     p = get(cur)
@@ -1203,7 +1221,8 @@ def provider_fields(cur, model, effort, blank):
     hint = data[cur]["recommendation"]
     return (f"<div class='provider-fields' data-providers='{e(json.dumps(data))}'>"
             f"<label>Provider <select name='provider'>"
-            + "".join(f"<option value='{k}'{' selected' if cur == k else ''}>{e(v.label)}</option>" for k, v in PROVIDERS.items())
+            + "".join(f"<option value='{k}'{' selected' if cur == k else ''}{'' if installed(v) else ' disabled'}>"
+                      f"{e(v.label)}{'' if installed(v) else ' (not installed)'}</option>" for k, v in PROVIDERS.items())
             + "</select></label>"
             f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'></label>"
             f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{e(de)}'></label>"

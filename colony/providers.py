@@ -5,6 +5,8 @@ CLI joins by adding an entry to PROVIDERS, and the board, settings and forms off
 PROVIDER: for an agent adding another CLI (Codex or any other). Everything outside this file that still
 assumes Claude Code is marked with a `PROVIDER:` comment; `grep -rn "PROVIDER:" .` lists them, each saying
 what it assumes and what a second provider needs there. What a provider supplies here:
+  program, site            the program it runs and where to get it; colony checks it is installed before
+                           offering the provider, starting a console, or making it the default
   label, models, efforts   shown in the add/create forms and settings (suggestions; any value can be typed);
                            models as (id, name) pairs
   model_name(value)        a model ID or alias as the model's own name, for showing "Default (Opus 5.5)"
@@ -49,6 +51,7 @@ from pathlib import Path
 
 class ClaudeCode:
     label = "Claude Code"
+    program, site = "claude", "https://claude.com/claude-code"     # its program, and where to get it
     # Exact models by full ID, so a project keeps the model it was given; an alias ("opus") moves to whatever
     # is newest. PROVIDER: Claude Code's current models; add new ones here as they ship.
     models = [("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5", "Sonnet 5"),
@@ -329,6 +332,7 @@ class Codex:
     Hooks travel with the console command and need review in /hooks before Codex runs them.
     See https://developers.openai.com/codex/hooks for the payload and output contracts."""
     label = "Codex"
+    program, site = "codex", "https://developers.openai.com/codex"
     aliases = {}
     efforts = ["low", "medium", "high", "xhigh", "max", ("ultra", "Ultra — delegates to subagents")]
     efforts_for = {"gpt-5.5": efforts[:4], "gpt-5.6-luna": efforts[:5], "gpt-6-luna": efforts[:5]}
@@ -504,6 +508,18 @@ def starting(provider, screen, fresh=True):
 
 
 PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
+
+
+def installed(provider):
+    """Whether its program is on this machine. A stand-in console command (tests, demos) stands for every one."""
+    import os
+    import shutil
+    return bool(os.environ.get("COLONY_CONSOLE_CMD")) or shutil.which(provider.program) is not None
+
+
+def missing(provider):
+    """What to tell the person when a provider's program isn't here."""
+    return f"{provider.label} isn't installed on this machine ({provider.site})"
 DEFAULT = "claude"
 
 

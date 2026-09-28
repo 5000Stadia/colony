@@ -292,12 +292,21 @@ def cmd_field(a):
     return 0
 
 
+def _runnable(chosen):
+    """Refuse a provider whose program isn't on this machine, before anything is made or wired."""
+    from . import board, providers
+    p = providers.get(chosen.get("provider") or board.registry()["settings"]["provider"])
+    if not providers.installed(p):
+        raise SystemExit(f"colony: {providers.missing(p)}; install it, or choose another with --provider")
+
+
 def cmd_track(a):
     from . import board
     if not Path(a.path).expanduser().is_dir():
         print(f"colony: no folder {a.path}", file=sys.stderr)
         return 2
     chosen = {k: getattr(a, k) for k in board.PROJECT_KEYS if getattr(a, k, None)}
+    _runnable(chosen)
     if a.name and a.name != Path(a.path).expanduser().resolve().name:   # a second project in this folder
         try:
             root = board.sharing(a.path, a.name, chosen)
@@ -384,6 +393,9 @@ def cmd_board(a):
     """The board runs in its own tmux session, so it outlives the terminal that started it and the
     monitor can restart it; --foreground runs it here instead."""
     from . import board
+    settled = board.settle_provider()            # the default runs on a program that is here
+    if settled:
+        print(settled)
     if a.foreground:
         board.serve(a.port or 8790, lan=_lan(a), monitor=not a.no_monitor)
         return 0
@@ -419,9 +431,10 @@ def cmd_urls(a):
         print(f"From your network:    {u}")
     if not lan:
         print("From your network:    off (colony settings lan on, then colony restart)")
-    if board.registry()["settings"]["remote"]:
+    from . import providers
+    if board.registry()["settings"]["remote"] and providers.installed(providers.get("claude")):
         # PROVIDER: Remote Control and the Claude app are Claude Code's; name each provider's own way here.
-        print("From anywhere:        the Claude app, where each project's session and the monitor appear")
+        print("From anywhere:        the Claude app, where each Claude Code session appears")
     return 0
 
 
@@ -458,6 +471,12 @@ def cmd_doctor(a):
     from . import board, console, monitor, providers
     import urllib.request
     problems = []
+    here = [p for p in providers.PROVIDERS.values() if providers.installed(p)]
+    for p in providers.PROVIDERS.values():
+        print(f"{'ok  ' if p in here else 'note'}  {p.label} ({p.program}) {'installed' if p in here else 'not installed'}")
+    if not here:
+        problems.append("no agent program is installed: Claude Code (https://claude.com/claude-code) or Codex "
+                        "(https://developers.openai.com/codex)")
     saved = board.home() / "server.json"
     args = json.loads(saved.read_text()) if saved.exists() else []
     port = args[args.index("--port") + 1] if "--port" in args else "8790"
@@ -473,7 +492,10 @@ def cmd_doctor(a):
         if not p.exists():
             problems.append(f"{p}: the folder is gone; remove it from {board.home() / 'board.json'}")
             continue
-        if not providers.of(p).wired(board.workdir(p)):
+        if not providers.installed(providers.of(p)):
+            problems.append(f"{p.name}: {providers.missing(providers.of(p))}; install it, or choose another: "
+                            f"colony settings --project {p.name} provider NAME")
+        elif not providers.of(p).wired(board.workdir(p)):
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
@@ -669,8 +691,9 @@ def cmd_new(a):
     root = Path(a.within or board.registry()["new_root"]).expanduser() / a.name
     if root.exists() and any(root.iterdir()):
         raise SystemExit(f"{root} already exists and is not empty")
-    root.mkdir(parents=True, exist_ok=True)
     chosen = {k: getattr(a, k) for k in board.PROJECT_KEYS if getattr(a, k, None)}
+    _runnable(chosen)
+    root.mkdir(parents=True, exist_ok=True)
     try:
         board.project_settings(root, chosen)            # before wiring: the chosen provider does the wiring
     except KeyError as err:
