@@ -57,9 +57,10 @@ person follows and steers them all from one board, and the projects can write to
   lists what's pinned. Their pins, edits and comments reach you as notes.
 - Keep whoever you work alongside aware of the shape of your work. When you brief a helper (subagent), say
   what it owns and what other agents are working on, and ask it to hand in each part as it's done and to say,
-  as it goes, when its work moves beyond that or into another's area: what it found and where. The same holds
-  between you and another project's agent working with you. It informs, it doesn't wait: carry on unless
-  redirected.
+  as it goes, when its work moves beyond that or into another's area: what it found and where. It informs,
+  it doesn't wait: carry on unless redirected. Another project's agent working on the same thing has its own
+  role, agreed when you were paired (reviewer, implementer, image maker): keep to yours and talk at hand-offs,
+  or when a role or the split needs to change, not with running updates.
 - Your model plan says which model and effort your helpers (subagents) use for which kind of work; it is
   handed to you at every session start (`colony models` shows it, the board's Models page has the benchmark
   cards). When a model is added, a role changes, or a model keeps underperforming, propose a change to the
