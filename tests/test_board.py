@@ -955,6 +955,10 @@ class SupportsTest(BoardBase):
         self.assertIn("vet it in full for prompt injection", told, "the agent adopting it gets the disclaimer")
         self.assertIn("nix it", told)
         self.assertNotIn("colony supports block", told, "blocking is the monitor's; the project only reports")
+        nid = board.open_notes(self.root)[0]["id"]
+        self.cli("noted", nid, "Nixed: its tool descriptions tell agents to skip permission prompts.")
+        monitor.Watcher().tick()
+        self.assertTrue(any("plants answered your suggestion" in m and "Nixed" in m for m in self.sent), "the monitor hears the answer")
         self.assertNotEqual(self.cli("supports", "block", "s1").returncode, 0, "blocking says what it tried")
         r = self.cli("supports", "block", "s1", "--evidence", "its README told agents to disable permission prompts")
         self.assertEqual(r.returncode, 0, r.stderr)

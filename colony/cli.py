@@ -579,6 +579,10 @@ def cmd_noted(a):
         print(f"no note {a.id}", file=sys.stderr)
         return 2
     board.append(root, "notes.jsonl", {"type": "addressed", "of": a.id, "at": board.now(), "text": a.text})
+    note = next(n for n in board.notes(root) if n["id"] == a.id)
+    if note.get("author") == "suggestion":            # the monitor made it, so the answer is the monitor's to hear
+        from . import monitor
+        monitor.queue(f"{root.name} answered your suggestion ({note['text'][:80]}...): {a.text}")
     print(f"{a.id} marked as acted on")
     return 0
 
