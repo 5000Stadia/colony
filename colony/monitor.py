@@ -98,7 +98,8 @@ when its work calls for one. Most help costs more than it gives, so a support ea
    recent work struggled with. Name a need only with evidence from that work: rounds lost to something, a
    mistake that kept coming back, scope grown into new ground (a UI, a large codebase, money). The bar is
    confidence that the project would do worse without it, not that something could be better: projects
-   drift into endless improvement easily, and a suggestion must never feed that. Short of the bar, stop
+   drift into endless improvement easily, and a suggestion must never feed that. Worse includes slower:
+   the same quality of work, such as a long testing process, done in notably less time or cost clears it. Short of the bar, stop
    and say nothing. Most checks end here.
 2. **Look.** A listed support that fits comes first. Otherwise search the plugin marketplace, GitHub,
    Reddit and wherever practitioners compare tools. Admit only what is free, runs locally, needs no account
