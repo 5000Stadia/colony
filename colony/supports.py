@@ -160,7 +160,7 @@ def update(sid, status=None, evidence=None, project=None):
     rows = load()
     row = next((r for r in rows if r["id"] == sid), None)
     if row is None:
-        raise KeyError(sid)
+        raise KeyError(f"no support {sid}")
     if status:
         if status not in STATUSES:
             raise ValueError(status)
@@ -189,7 +189,7 @@ def ask(sid, root, text):
     rows = load()
     row = next((r for r in rows if r["id"] == sid), None)
     if row is None:
-        raise KeyError(sid)
+        raise KeyError(f"no support {sid}")
     row["asking"] = {"project": str(root), "text": text.strip(), "at": board.now()}
     save(rows)
     return row
@@ -208,7 +208,7 @@ def decide(sid, verdict, words=""):
     from . import monitor
     row = next((r for r in load() if r["id"] == sid), None)
     if row is None or not row.get("asking"):
-        raise KeyError(sid)
+        raise KeyError(f"no support {sid}")
     said = words.strip()
     if verdict == "test":
         update(sid, "testing", "the person said test it" + (f": {said}" if said else ""))
@@ -232,7 +232,7 @@ def suggest(sid, root, text):
     proven one: the agent is asked to try another way only on evidence, never on a hunch."""
     row = next((r for r in load() if r["id"] == sid), None)
     if row is None:
-        raise KeyError(sid)
+        raise KeyError(f"no support {sid}")
     if row.get("kind") == "reference":
         if not row["evidence"] or row["status"] == "rejected":
             raise ValueError(f"{sid}: a reference is suggested only once it has been read and its evidence says where the better way is")
