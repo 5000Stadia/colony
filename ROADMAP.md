@@ -33,8 +33,8 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R18 Colony as a project on its own board: its agent builds colony; the monitor reports and changes nothing — CLAUDE.md
 - [x] R19 The roadmap brought on board — ROADMAP.md
 - [x] R20 The watcher reports what is true: peek reads past the screen, no false "finished" or "needs you", no repeated questions
-- [?] R21 Message: one place to write, at the top: into the project's own console by default or to another project, with a file uploaded or browsed; what was said is kept on the Roadmap tab
-- [?] R30 Finished milestones load folded, and those before the first unfinished one fold into Completed
+- [x] R21 Message: one place to write, at the top: into the project's own console by default or to another project, with a file uploaded or browsed; what was said is kept on the Roadmap tab
+- [x] R30 Finished milestones load folded, and those before the first unfinished one fold into Completed
 
 ## M5 — Later
 
