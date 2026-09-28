@@ -774,10 +774,8 @@ def render(reg, pid, view="overview"):
         # kept current like Needs you: what the agent settles meanwhile drops out, except while being typed in
         out.append(f"<h2>Waiting on you (<span id='wcount'>{len(moments(root))}</span>)</h2><div class='card' id='waiting'>"
                    f"{waiting_html(pid, root)}</div>"
-                   "<script>setInterval(async () => { const w = document.getElementById('waiting');"
-                   " if (!w || w.contains(document.activeElement)) return;"
-                   f" const r = await fetch('/needs?p={pid}', {{cache: 'no-store'}}); if (!r.ok) return;"
-                   " w.innerHTML = await r.text(); document.getElementById('wcount').textContent = w.querySelectorAll('.need').length; }, 4000);</script>")
+                   f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('waiting'), '/needs?p={pid}',"
+                   " (w) => { document.getElementById('wcount').textContent = w.querySelectorAll('.need').length; });</script>")
         # since you were last here: one timeline, newest first; "I'm caught up" rides down the list as you read,
         # and stays within it
         s = since(root, reg["seen"].get(str(root)))
@@ -1126,9 +1124,7 @@ def monitor_page(reg, view="overview"):
     recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(d['at'][:16].replace('T', ' '))}</span>"
                      f"<div>{e(d['text'])}</div></div>" for d in monitor.decisions(None, 10))
     body = (head + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
-            "<script>setInterval(async () => { const n = document.getElementById('needs');"
-            " if (!n || n.contains(document.activeElement)) return;"
-            " const r = await fetch('/needs', {cache: 'no-store'}); if (r.ok) n.innerHTML = await r.text(); }, 4000);</script>"
+            f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
             f"<h2>Projects</h2>{statuses or '<p class=muted>No projects yet.</p>'}"
             + (f"<h2>What the monitor decided</h2><div class='card'>{recent}</div>" if recent else ""))
     return shell(reg, -1, body)
@@ -1390,6 +1386,30 @@ def support_rows():
                     f"<button class='quiet' name='verdict' value='drop'>Drop</button></form>"
                     f"<a href='/monitor?view=console'>Talk it over with the monitor →</a></div>")
     return rows
+
+
+# Keeps a list of what waits on the person current without getting in their way: it redraws only when
+# something changed, never while they type or scroll in it, and keeps where they had scrolled to.
+KEEP_CURRENT = """
+function keepCurrent(el, url, after) {
+  if (!el) return;
+  let last = el.innerHTML, touched = 0;
+  const busy = () => { touched = Date.now(); };
+  ['scroll', 'touchstart', 'touchmove', 'wheel', 'pointerdown'].forEach((t) => el.addEventListener(t, busy, {capture: true, passive: true}));
+  setInterval(async () => {
+    if (el.contains(document.activeElement) || Date.now() - touched < 5000) return;
+    const r = await fetch(url, {cache: 'no-store'}); if (!r.ok) return;
+    const html = await r.text(); if (html === last) return;
+    const kept = [...el.querySelectorAll('*')].filter((x) => x.scrollTop).map((x) => [x.className, x.textContent.slice(0, 80), x.scrollTop]);
+    el.innerHTML = last = html;
+    for (const [cls, text, top] of kept) {
+      const x = [...el.querySelectorAll('*')].find((y) => y.className === cls && y.textContent.slice(0, 80) === text);
+      if (x) x.scrollTop = top;
+    }
+    if (after) after(el);
+  }, 4000);
+}
+"""
 
 
 def needs_you(reg):
