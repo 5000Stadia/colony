@@ -368,6 +368,7 @@ class Watcher:
         for p in board.projects():
             if not p.exists():
                 continue
+            board.item_times(p)                 # when each roadmap item reached its state: the Roadmap tab orders by it
             snap = console.snapshot(p, lines=4)
             # A project not seen before counts as off, so one already waiting (a new folder's trust question,
             # a question left while the board was down) is reported, not taken as where it always was.

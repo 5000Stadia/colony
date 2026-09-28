@@ -299,6 +299,65 @@ def roadmap(root, text=None):
     return {"goal": goal, "milestones": milestones}
 
 
+def item_times(root):
+    """When each roadmap item reached the state it is in, as far as the board has seen (the watcher looks every few
+    seconds), and how long it has been in progress: its timer runs while it is doing and holds when it leaves.
+    Items first seen before anything was recorded have no time. Kept on this machine, with the board."""
+    path = home() / "items.json"
+    try:
+        every = json.loads(path.read_text())
+    except (OSError, ValueError):
+        every = {}
+    seen = every.get(str(root))
+    out, t = {}, time.time()
+    for iid, it in items(roadmap(root)).items():
+        was = (seen or {}).get(iid)
+        if was and was["state"] == it["state"]:
+            out[iid] = was
+            continue
+        new = {"state": it["state"], "since": now() if seen is not None else "", "worked": (was or {}).get("worked", 0)}
+        if was and was.get("started"):
+            new["worked"] += t - was["started"]                   # it left doing: the timer holds
+        if it["state"] == "doing" and seen is not None:
+            new["started"] = t
+        out[iid] = new
+    if out != seen:
+        every[str(root)] = out
+        home().mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(every))
+        tmp.replace(path)
+    return out
+
+
+def took(secs):
+    """A duration as the roadmap shows it: 2h 10m, 3d 4h, 12m, <1m."""
+    m = int(secs // 60)
+    return "<1m" if m < 1 else f"{m}m" if m < 60 else f"{m // 60}h {m % 60}m" if m < 1440 else f"{m // 1440}d {m // 60 % 24}h"
+
+
+def timer(recs):
+    """Time spent in progress over some items, counting on in the page while any is still running."""
+    base = sum(r.get("worked", 0) for r in recs)
+    starts = [r["started"] for r in recs if r.get("started")]
+    if not base and not starts:
+        return ""
+    shown = took(base + sum(time.time() - s for s in starts))
+    return (f"<span class='timer{' running' if starts else ''}' data-base='{base:.0f}' "
+            f"data-starts='{','.join(f'{s:.0f}' for s in starts)}'>{shown}</span>")
+
+
+# The roadmap's timers count on while the page is open.
+TICK = """
+const took = (s) => { const m = Math.floor(s / 60);
+  return m < 1 ? '<1m' : m < 60 ? m + 'm' : m < 1440 ? Math.floor(m / 60) + 'h ' + m % 60 + 'm' : Math.floor(m / 1440) + 'd ' + Math.floor(m / 60) % 24 + 'h'; };
+setInterval(() => document.querySelectorAll('.timer.running').forEach((t) => {
+  const now = Date.now() / 1000, starts = t.dataset.starts.split(',').filter(Boolean).map(Number);
+  t.textContent = took(Number(t.dataset.base) + starts.reduce((a, s) => a + now - s, 0));
+}), 20000);
+"""
+
+
 def layout(road):
     """Columns by how far along the chain an item sits, rows in the order the roadmap lists them."""
     its = items(road)
@@ -658,6 +717,7 @@ async function poll() {
     st.projects.forEach((s, i) => {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
+      document.querySelectorAll(`.msdot[data-p="${i}"]`).forEach((d) => { d.className = 'sdot msdot ' + s.state.replace(' ', '-'); });
       if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
       const status = document.getElementById('status-' + i);
       if (status) {
@@ -776,21 +836,30 @@ def render(reg, pid, view="overview"):
             branched = any(it["after"] != ([order[i - 1]] if i else []) for i, it in enumerate(its.values()))
             out.append(f"<details class='mapbox'{' open' if branched else ''}><summary>Map of the roadmap"
                        f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
-            # a finished milestone loads folded; those finished before the first unfinished one fold into one
+            # Every milestone loads folded. The one where work last started comes first, and within each, what is in
+            # progress (newest first), then what's to come, then what's done (newest first). Finished milestones
+            # fold together into Completed, last. One in progress shows whether its agent is at work right now.
+            times = item_times(root)
+            when = lambda it: times.get(it["id"], {}).get("since", "")
             finished = lambda m: m["items"] and all(i["state"] == "done" for i in m["items"])
-            lead = next((k for k, m in enumerate(road["milestones"]) if not finished(m)), len(road["milestones"]))
-            lead = lead if lead >= 2 else 0
-            if lead:
-                ms_ = road["milestones"][:lead]
-                out.append(f"<details class='card ms done-group'><summary><h3>Completed</h3><span class='muted'>"
-                           f"{e(ms_[0]['id'])}–{e(ms_[-1]['id'])} · {sum(len(m['items']) for m in ms_)} items</span></summary>")
-            for k, m in enumerate(road["milestones"]):
-                if lead and k == lead:
-                    out.append("</details>")
+            started = lambda m: max((when(i) for i in m["items"] if i["state"] == "doing"), default=None)
+            live = console.snapshot(root, lines=1)["state"].replace(" ", "-")
+            open_ms = [m for m in road["milestones"] if not finished(m)]
+            done_ms = [m for m in road["milestones"] if finished(m)]
+            open_ms.sort(key=lambda m: (started(m) is not None, started(m) or ""), reverse=True)
+            for k, m in enumerate(open_ms + done_ms):
+                if done_ms and k == len(open_ms):
+                    out.append(f"<details class='card ms done-group'><summary><h3>Completed</h3><span class='muted'>"
+                               f"{len(done_ms)} milestone{'s' * (len(done_ms) > 1)} · {sum(len(m['items']) for m in done_ms)} items "
+                               f"{timer([times.get(i['id'], {}) for m in done_ms for i in m['items']])}</span></summary>")
+                dot = (f"<span class='sdot msdot {live}' data-p='{pid}' title='In progress; its agent is {e(live.replace('-', ' '))}'></span>"
+                       if started(m) is not None else "")
                 done_m = sum(1 for i in m["items"] if i["state"] == "done")
-                out.append(f"<details class='{'ms' if k < lead else 'card ms'}'{'' if finished(m) else ' open'}><summary><h3>{e(m['id'])} — {e(m['title'])}</h3>"
-                           f"<span class='muted'>{done_m} of {len(m['items'])} done</span></summary>")
-                for it in m["items"]:
+                out.append(f"<details class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])} — {e(m['title'])}</h3>"
+                           f"<span class='muted'>{done_m}/{len(m['items'])} {timer([times.get(i['id'], {}) for i in m['items']])}</span></summary>")
+                doing = sorted((i for i in m["items"] if i["state"] == "doing"), key=when, reverse=True)
+                done_i = sorted((i for i in m["items"] if i["state"] == "done"), key=when, reverse=True)
+                for it in doing + [i for i in m["items"] if i["state"] not in ("doing", "done")] + done_i:
                     i = order.index(it["id"])
                     default = [order[i - 1]] if i else []
                     ns = by("item", it["id"])
@@ -802,14 +871,16 @@ def render(reg, pid, view="overview"):
                         + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
+                        + (f" {timer([times[it['id']]])}" if it["id"] in times else "")
                         + f"</summary><div class='body'><p>{e(it['desc'] or 'No description yet.')}</p>"
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
                         + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
                 out.append("</details>")
-            if lead == len(road["milestones"]):
+            if done_ms:
                 out.append("</details>")
+            out.append(f"<script>{TICK}</script>")
         else:
             out.append("<div class='card muted'>No roadmap yet: the agent keeps it in ROADMAP.md.</div>")
         gone = sorted({(n["anchor"] or {}).get("item") for n in all_notes} - set(items(road)) - {None})
@@ -2086,7 +2157,8 @@ body.copying .keys .selectall { display:block }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
-.ms[open] > summary { margin-bottom:6px } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
+.ms[open] > summary { margin-bottom:6px } .ms > summary .msdot { align-self:center }
+.timer { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap } .timer.running { color:var(--accent) } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
 .legend { font-size:13px; color:var(--muted); margin-bottom:10px } .mapwrap { overflow-x:auto; padding-bottom:6px }
 .map { position:relative } .map svg { position:absolute; left:0; top:0 } .map path { fill:none; stroke:var(--line); stroke-width:2 }
 .node { position:absolute; display:flex; flex-direction:column; justify-content:center; gap:2px; padding:6px 10px;

@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import subprocess
 import sys
@@ -177,18 +178,33 @@ class BoardTest(BoardBase):
             self.assertIn(part, plan)
         self.assertNotIn("Since you were last here", plan)
 
-    def test_finished_milestones_load_folded_and_those_before_the_first_unfinished_fold_together(self):
+    def test_the_roadmap_folds_puts_the_latest_work_first_and_what_is_finished_last(self):
         board.track(self.root)
-        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("## M1 — v1: it works for me", "## M0 — setup\n\n- [x] R0 repo\n\n## M1 — v1: it works for me")
-                                              .replace("- [~] R2", "- [x] R2").replace("- [ ] R3", "- [x] R3")
-                                              + "\n## M2 — v2\n\n- [ ] R4 sharing\n\n## M3 — v3\n\n- [x] R5 export\n")
+        road = """# Roadmap\n\nA tool for my plants.\n\n## M0 — setup\n\n- [x] R0 repo\n\n## M1 — v1\n\n- [x] R1 add plants
+- [ ] R2 water log\n- [ ] R3 reminders\n\n## M2 — v2\n\n- [ ] R4 sharing\n- [ ] R5 export\n"""
+        (self.root / "ROADMAP.md").write_text(road)
+        board.item_times(self.root)                                 # the first look: no times yet
+        walk = lambda old, new: (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace(old, new))
+        tick = lambda: (time.sleep(1.1), board.item_times(self.root))
+        walk("- [ ] R2", "- [~] R2"); tick()
+        walk("- [ ] R3", "- [~] R3"); tick()
+        walk("- [ ] R5", "- [~] R5"); tick()
+        walk("- [~] R2", "- [x] R2"); tick()
         page = board.render(board.registry(), 0, "roadmap")
-        group = page[page.index("done-group"):page.index("M2 — v2")]
-        self.assertIn("M0–M1 · 4 items", group)
-        self.assertIn("<details class='ms'><summary><h3>M0 — setup", group, "folded, inside the group")
-        self.assertIn("<details class='card ms done-group'>", page, "the group itself loads folded")
-        self.assertIn("<details class='card ms' open><summary><h3>M2 — v2", page)
-        self.assertIn("<details class='card ms'><summary><h3>M3 — v3", page, "finished after an unfinished one: folded, alone")
+        heads = re.findall(r"<details class='([^']*ms[^']*)'[^>]*><summary>(<span class='sdot msdot[^>]*></span>)?<h3>([^<]*)", page)
+        self.assertEqual([h[2].split(" —")[0] for h in heads], ["M2", "M1", "Completed", "M0"],
+                         "where work last started first; finished last, folded together")
+        self.assertNotIn(" open><summary><h3>M", page, "every milestone loads folded")
+        self.assertTrue(heads[0][1] and heads[1][1], "in progress: a dot that says whether its agent is at work")
+        m1 = page[page.index("<h3>M1 — v1"):page.index("Completed")]
+        self.assertEqual(re.findall(r"<b>(R\d)</b>", m1), ["R3", "R2", "R1"], "in progress, to come, then the latest done first")
+        m2 = page[page.index("<h3>M2 — v2"):page.index("<h3>M1")]
+        self.assertEqual(re.findall(r"<b>(R\d)</b>", m2), ["R5", "R4"], "what started last goes to the top")
+        self.assertIn("<span class='muted'>2/3 <span class='timer running'", m1, "done of all, then the time spent, counting on")
+        self.assertIn("<b>R2</b> water log <span class='timer' data-base='", m1, "done: its time holds")
+        self.assertNotIn("<b>R1</b> add plants <span class='timer", m1, "done before the board looked: no time to show")
+        self.assertIn("<script>", page[page.index("Completed"):], "timers count on in the page")
+        self.assertEqual([board.took(x) for x in (30, 60 * 12, 60 * 130, 86400 + 3 * 3600)], ["<1m", "12m", "2h 10m", "1d 3h"])
 
     def test_the_board_answers_only_itself(self):
         board.track(self.root)
