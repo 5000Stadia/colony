@@ -358,7 +358,7 @@ class Watcher:
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
-        self.settling = {}                       # a stop seen once, not yet confirmed
+        self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -390,14 +390,17 @@ class Watcher:
             kind = WAKE.get((before, now))
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
-                out.append(f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]))
+                out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:])))
             # Each thing the project waits on the person for is announced once, even across board restarts.
-            waiting = board.waiting_items(p, snap)
+            # A question isn't yet: the person's note on its way answers it the moment it is delivered.
+            unheard = any(not n["delivered_at"] and not n.get("quiet") for n in board.open_notes(p))
+            waiting = [w for w in board.waiting_items(p, snap) if not (w["kind"] == "ask" and unheard)]
             told = set(self.announced.get(str(p), []))
             for w in waiting:
                 if w["key"] not in told:
-                    out.append(f"{p.name} {w['summary']}")
+                    out.append((str(p), w["key"], f"{p.name} {w['summary']}"))
             now_keys = {w["key"] for w in waiting}
+            self.waiting[str(p)] = now_keys
             if now_keys != told:                      # what was answered drops out; if it comes back, it is news
                 self.announced[str(p)] = sorted(now_keys)
                 self.save_announced()
@@ -479,8 +482,10 @@ class Watcher:
         self.scout()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
-            note = HELM_ON_NOTE
-            console.type_into(name(), "[colony] " + " | ".join(self.pending) + f" ({note})")
+            # What waited while the monitor was busy may have been answered meanwhile: only what still waits goes.
+            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
+            if fresh:
+                console.type_into(name(), "[colony] " + " | ".join(fresh) + f" ({HELM_ON_NOTE})")
             self.pending = []
 
     def run(self):

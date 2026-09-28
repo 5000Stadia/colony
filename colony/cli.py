@@ -563,6 +563,8 @@ def cmd_notes(a):
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves
         fresh, still = board.deliver(root, session=a.session)
+        if any(not n.get("quiet") and not n["anchor"] for n in fresh):
+            board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
             board.render_notes(fresh, "The person left notes for you on the board:"),

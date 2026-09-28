@@ -359,6 +359,43 @@ class MonitorTest(BoardBase):
         self.assertEqual(len(sent), 1)
         self.assertIn("plants finished a turn", sent[0])
 
+    def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        sent, busy = [], {"state": "working", "lines": []}
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: busy
+        monitor.helm(True)
+        w = monitor.Watcher(quiet=0)
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        w.tick()
+        board.answer_asks(self.root, "in the console")
+        busy["state"] = "idle"
+        w.tick()
+        self.assertEqual(sent, [], "answered before the monitor was free: not news")
+
+    def test_a_question_the_person_already_wrote_back_to_is_not_announced_and_their_note_answers_it(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        sent = []
+        console.type_into = lambda name, text: sent.append(text)
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        monitor.helm(True)
+        board.add_note(self.root, None, "Yes, CSV.", author="monitor")     # `colony tell`, while the turn ran
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        w = monitor.Watcher(quiet=0)
+        w.tick()
+        self.assertFalse(any("asked you" in t for t in sent), "the answer is already on its way")
+        self.cli("notes", "--deliver")
+        self.assertEqual(board.asks(self.root), [], "delivered, the note answers the question")
+        w.tick()
+        self.assertFalse(any("asked you" in t for t in sent))
+
+    def test_a_turn_that_only_restates_an_open_gate_asks_nothing_new(self):
+        board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(),
+                     "question": "May the one-time agent token secret be shown plainly with a Copy button join V1.5?"})
+        self.assertIsNone(board.record_ask(self.root, "t1", "Trials done. One gate is waiting on you: should showing "
+                                           "the agent's one-time token plainly (plus a Copy button) join V1.5?"))
+        self.assertIsNotNone(board.record_ask(self.root, "t2", "Trials done. Do you want sales orders next?"))
+
     def test_where_it_doesnt_hold_the_helm_the_monitor_sleeps_and_handed_it_hears_whats_waiting(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []

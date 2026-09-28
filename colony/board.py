@@ -337,9 +337,25 @@ def asks(root):
     return list(out.values())
 
 
+def questions(text):
+    """The sentences in a turn that ask something."""
+    prose = re.sub(r"```.*?```|`[^`]*`|https?://\S+", " ", text, flags=re.S)
+    return [s.strip() for s in re.split(r"(?<=[.!?:])\s+|\n", prose) if re.search(r"\?[)*_\"'»]*$", s.strip())]
+
+
+def restates_gate(question, root):
+    """A question that only reminds the person of a gate already open: most of its words are the gate's."""
+    words = lambda t: {w for w in re.findall(r"[a-z0-9][a-z0-9.'-]*[a-z0-9]", t.lower()) if len(w) > 3}
+    mine = words(question)
+    return bool(mine) and any(len(mine & words(g["question"])) >= 0.6 * len(mine) for g in gates(root) if not g["answer"])
+
+
 def record_ask(root, key, text):
-    """One entry per turn: the turn's whole text. A newer question replaces an unanswered older one."""
+    """One entry per turn: the turn's whole text. A newer question replaces an unanswered older one. A turn whose
+    only questions are open gates restated asks nothing new: the gates already wait on the person."""
     if not text or not asks_question(text) or any(e.get("key") == key for e in read(root, "asks.jsonl") if key):
+        return None
+    if all(restates_gate(q, root) for q in questions(text) or [text]):
         return None
     answer_asks(root, "superseded by a later turn")
     ask = {"type": "ask", "id": "a" + secrets.token_hex(3), "at": now(), "key": key, "text": text.strip()}
