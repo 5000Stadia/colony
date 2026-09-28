@@ -386,7 +386,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(board.project_settings(self.root)[0]["provider"], "codex")
         agents = (self.root / "AGENTS.md").read_text()
         self.assertIn("## This project is part of a colony", agents, "the protocol where Codex reads it")
-        self.assertIn("colony notes --deliver", agents, "no hooks: it fetches its notes when nudged")
+        self.assertIn("colony notes --deliver", agents, "manual fallback until hooks are trusted")
         self.assertNotIn("## This project is part of a colony", (self.root / "CLAUDE.md").read_text())
         self.assertTrue(providers.of(self.root).wired(self.root))
         self.assertIn("(colony knows: claude, codex)", board.SETTING_HELP["provider"])
@@ -422,6 +422,82 @@ class GlanceTest(BoardBase):
                               capture_output=True, text=True).stdout.strip()
         self.assertEqual(Path(here).resolve(), self.root.resolve(), "its console works in the shared folder")
         console.stop(twin)
+
+    def test_codex_wiring_preserves_hooks_and_repairs_incomplete_wiring(self):
+        codex = providers.get("codex")
+        folder = self.root / ".codex"
+        folder.mkdir()
+        settings = folder / "hooks.json"
+        existing = {"matcher": "startup", "hooks": [{"type": "command", "command": "echo personal"}]}
+        settings.write_text(json.dumps({"description": "mine", "hooks": {"SessionStart": [existing]}}))
+        config = folder / "config.toml"
+        config.write_text('model = "my-model"\n')
+        codex.wire(self.root, board.PROTOCOL)
+        codex.wire(self.root, board.PROTOCOL)
+        cfg = json.loads(settings.read_text())
+        self.assertEqual(cfg["description"], "mine")
+        self.assertEqual(cfg["hooks"]["SessionStart"][0], existing)
+        self.assertEqual(len(cfg["hooks"]["SessionStart"]), 2)
+        self.assertEqual(config.read_text(), 'model = "my-model"\n')
+        self.assertTrue(codex.wired(self.root))
+        cfg["hooks"]["UserPromptSubmit"][0]["hooks"][0]["async"] = True
+        settings.write_text(json.dumps(cfg))
+        self.assertFalse(codex.wired(self.root), "delivery must finish before the prompt")
+        codex.wire(self.root, board.PROTOCOL)
+        self.assertTrue(codex.wired(self.root))
+        settings.unlink()
+        self.assertFalse(codex.wired(self.root), "AGENTS.md alone cannot deliver hooks")
+
+    def test_codex_hooks_deliver_record_questions_and_remember_resume(self):
+        import shlex
+        self.assertEqual(self.cli("track", ".", "--provider", "codex").returncode, 0)
+        codex = providers.get("codex")
+        # Stand-in CLI drives exactly the installed hook commands, with this checkout's colony on PATH.
+        bindir = Path(self.tmp.name) / "bin"
+        bindir.mkdir()
+        launcher = bindir / "colony"
+        launcher.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -m colony \"$@\"\n")
+        launcher.chmod(0o755)
+        env = dict(os.environ, PYTHONPATH=str(ROOT), PATH=str(bindir) + os.pathsep + os.environ["PATH"])
+        transcript = self.root / "session.jsonl"
+        transcript.write_text("{}\n")
+        payload = {"session_id": "codex-session", "transcript_path": str(transcript), "cwd": str(self.root)}
+        hooks = json.loads((self.root / ".codex" / "hooks.json").read_text())["hooks"]
+
+        def run(event, **extra):
+            command = hooks[event][0]["hooks"][0]["command"]
+            result = subprocess.run(command, shell=True, cwd=self.root, env=env, text=True,
+                                    input=json.dumps(dict(payload, hook_event_name=event, **extra)), capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        board.add_note(self.root, {}, "Use blue pots.")
+        self.assertIn("Use blue pots.", run("SessionStart"))
+        self.assertIsNone(console.last_conversation(self.root), "personal sessions do not replace the board console")
+        env["COLONY_CONSOLE"] = console.session_name(self.root)
+        run("SessionStart")
+        self.assertEqual(console.last_conversation(self.root), "codex-session")
+        board.add_note(self.root, {}, "Use clay pots.")
+        self.assertIn("Use clay pots.", run("UserPromptSubmit", prompt="[colony] Notes arrived"))
+        final = {"turn_id": "turn-1", "last_assistant_message": "Ready. Which pot size do you want?"}
+        self.assertEqual(json.loads(run("Stop", **final)), {})
+        run("Stop", **final)
+        self.assertEqual(len(board.asks(self.root)), 1, "a duplicate Stop cannot duplicate the question")
+        self.assertEqual(board.asks(self.root)[0]["text"], final["last_assistant_message"])
+        run("UserPromptSubmit", prompt="[colony] You have mail")
+        self.assertEqual(len(board.asks(self.root)), 1, "a board nudge is not the person's answer")
+        run("UserPromptSubmit", prompt="The large one")
+        self.assertEqual(board.asks(self.root), [])
+        run("Stop", turn_id="turn-2", last_assistant_message=None)
+        self.assertEqual(board.asks(self.root), [])
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertEqual(shlex.split(console.command("plants", self.root))[-2:], ["resume", "codex-session"])
+            transcript.unlink()
+            self.assertNotIn("resume", shlex.split(console.command("plants", self.root)))
+        finally:
+            console.COMMAND = saved
+        self.assertEqual(shlex.split(codex.command("plants", {}, resume="name with ' quotes"))[-1], "name with ' quotes")
 
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)

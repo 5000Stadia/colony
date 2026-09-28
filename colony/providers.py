@@ -325,9 +325,9 @@ class ClaudeCode:
         return (["Down"] * (hit - here) if hit > here else ["Up"] * (here - hit)) + ["Enter"]
 
 class Codex:
-    """OpenAI's Codex CLI. Basic wiring: its console runs, is typed into, and its screen is read. It reads
-    AGENTS.md; it has no hooks wired yet, so the agent fetches its notes and mail itself when the board
-    nudges it, and its turns aren't read for questions or resumed after a restart."""
+    """OpenAI's Codex CLI: AGENTS.md and lifecycle hooks (Codex 0.154).
+    Project hooks need a trusted project and review in /hooks before Codex runs them.
+    See https://developers.openai.com/codex/hooks for the payload and output contracts."""
     label = "Codex"
     models = []                                 # whatever `codex -m` takes; the person's config names its own
     aliases = {}
@@ -336,12 +336,15 @@ class Codex:
     instructions = "AGENTS.md"
     enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
     scrolled_marker = ""
-    hooks = {}
+    hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
+             "Stop": "colony turn && printf '{}\\n'"}  # Stop requires JSON, not colony's plain-text output
     # colony's permission choices, in Codex's terms
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
-    DELIVERY = ("\n- Nothing hands you colony's notes and mail by itself here. At the start of a session, and whenever a line "
-                "starting `[colony]` arrives, run `colony notes --deliver` and act on what it prints.\n")
+    DELIVERY = ("\n- Colony's Codex hooks deliver notes and mail at session start and before each prompt, and record "
+                "questions when a turn ends. They need a trusted project and review in `/hooks`. If hooks have not "
+                "delivered notes at session start or when a `[colony]` line arrives, run `colony notes --deliver` "
+                "and act on what it prints.\n")
 
     def command(self, label, s, resume=None):
         """The person's own `codex`: inline, so its console keeps scrollback, without the update question at
@@ -356,6 +359,8 @@ class Codex:
             parts += ["-m", shlex.quote(s["model"])]
         if s.get("effort"):
             parts += ["-c", shlex.quote(f"model_reasoning_effort={s['effort']}")]
+        if resume:
+            parts += ["resume", shlex.quote(resume)]
         return " ".join(parts)
 
     def wire(self, root, protocol):
@@ -371,10 +376,28 @@ class Codex:
             path.write_text(have[:start] + block + (have[end + 1:] if end != -1 else ""))
         else:
             path.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
+        settings = root / ".codex" / "hooks.json"
+        settings.parent.mkdir(exist_ok=True)
+        cfg = json.loads(settings.read_text()) if settings.exists() else {}
+        for event, command in self.hooks.items():
+            entries = cfg.setdefault("hooks", {}).setdefault(event, [])
+            if not any(h.get("type") == "command" and h.get("command") == command
+                       and not h.get("async") and e.get("matcher", "") in ("", "*")
+                       for e in entries for h in e.get("hooks", [])):
+                entries.append({"hooks": [{"type": "command", "command": command}]})
+        settings.write_text(json.dumps(cfg, indent=2) + "\n")
 
     def wired(self, root):
         path = root / "AGENTS.md"
-        return "## This project is part of a colony" in (path.read_text() if path.exists() else "")
+        try:
+            hooks = json.loads((root / ".codex" / "hooks.json").read_text()).get("hooks", {})
+        except (OSError, ValueError):
+            return False
+        return ("## This project is part of a colony" in (path.read_text() if path.exists() else "")
+                and all(any(h.get("type") == "command" and h.get("command") == command
+                            and not h.get("async") and e.get("matcher", "") in ("", "*")
+                            for e in hooks.get(event, []) for h in e.get("hooks", []))
+                        for event, command in self.hooks.items()))
 
     def model_name(self, value):
         return value
@@ -389,7 +412,11 @@ class Codex:
         return {"model": cfg.get("model") or None, "effort": cfg.get("model_reasoning_effort") or None}
 
     def turn_text(self, payload):
-        return None, ""
+        """The Stop hook supplies the final reply directly, including on sessions with no transcript."""
+        return payload.get("turn_id"), payload.get("last_assistant_message") or ""
+
+    def conversation(self, payload):
+        return payload.get("session_id"), payload.get("transcript_path")
 
     def history_text(self, root, limit=200_000):
         return None
