@@ -709,7 +709,9 @@ class GlanceTest(BoardBase):
         rec = lambda model, effort, value, domain="overall", source="Artificial Analysis", bench_="Intelligence Index", ver="v4", unit="points", kind="independent": dict(
             model=model, effort=effort, source=source, kind=kind, benchmark=bench_, version=ver, domain=domain,
             value=value, unit=unit, date="2026-09-28", url="https://example.com/x", note="")
-        rows = [rec("claude-opus-5-5", "high", 54), rec("claude-opus-5-5", "medium", 51), rec("claude-haiku-4-5-20251001", None, 20),
+        rows = [rec("claude-opus-5-5", "high", 54), rec("claude-opus-5-5", "medium", 51),
+                dict(rec("claude-haiku-4-5-20251001", None, 20), note="AA variant 'Claude 4.5 Haiku (Reasoning)'"),
+                rec("claude-fable-5-1", None, 99, source="Epoch AI", bench_="ECI", ver=None),      # no effort named
                 rec("claude-opus-5-5", "high", 1.82, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
                 rec("claude-opus-5-5", "medium", 1.34, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
                 rec("claude-opus-5-5", "high", 70, "coding", bench_="Terminal-Bench", ver="3.0"),
@@ -718,18 +720,21 @@ class GlanceTest(BoardBase):
                 rec("claude-sonnet-5", "high", 80, kind="vendor", source="Anthropic"),              # shown, never averaged in
                 dict(rec("claude-sonnet-5", "high", 1), url="")]                                     # no source: refused
         added, bad = bench.add(rows)
-        self.assertEqual((added, len(bad)), (9, 1))
+        self.assertEqual((added, len(bad)), (10, 1))
         self.assertEqual(bench.add(rows[:3])[0], 0, "a record is kept once")
-        by = {(x["model"], x["effort"]): x for x in bench.standings()}
+        by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertEqual(by[("claude-opus-5-5", "high")]["overall"], 100)
-        self.assertEqual(by[("claude-haiku-4-5-20251001", None)]["overall"], 0, "0 to 100 across the lineup")
+        self.assertEqual(by[("claude-haiku-4-5-20251001", "reasoning")]["overall"], 0, "0 to 100; a named variant is its own row")
+        self.assertFalse(by[("claude-fable-5-1", "effort not stated")]["comparable"], "no effort named: kept off the rankings")
+        self.assertIsNone(by[("claude-fable-5-1", "effort not stated")]["overall"])
         self.assertEqual(by[("claude-opus-5-5", "high")]["domains"]["coding"], 100, "versions never mixed: v3 alone has no scale")
         self.assertIsNone(by[("claude-sonnet-5", "high")]["overall"], "a vendor number isn't averaged in")
         self.assertTrue(by[("claude-sonnet-5", "high")]["pending"])
         self.assertEqual(by[("claude-opus-5-5", "medium")]["cost"]["value"], 1.34, "cost per task")
-        bench.add([rec("claude-haiku-4-5-20251001", None, 0.10, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
+        bench.add([dict(rec("claude-haiku-4-5-20251001", None, 0.10, "cost", bench_="Cost per Intelligence Index task", unit="usd"),
+                        note="AA variant 'Claude 4.5 Haiku (Reasoning)'"),
                    rec("claude-sonnet-5", "high", 0.01, "cost", bench_="Coding Agent Index Cost per Task", unit="usd")])
-        by = {(x["model"], x["effort"]): x for x in bench.standings()}
+        by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertIsNone(by[("claude-sonnet-5", "high")]["cost"], "another benchmark's cost is never compared")
         self.assertEqual(bench.best_for("chores")[0]["model"], "claude-haiku-4-5-20251001",
                          "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 54/$1.82)")
@@ -739,8 +744,11 @@ class GlanceTest(BoardBase):
         self.assertIn("claude-sonnet-5", bench.pending())
         self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
         page = board.models_page(board.registry())
-        for want in ("Best for", "By domain", "Effort against cost", "id='claude-opus-5-5'", "<polyline", "No independent data at:"):
+        for want in ("Best for", "By domain", "Effort against cost", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
+                     "isn't ranked against the rows above"):
             self.assertIn(want, page)
+        self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison or the best-for lists")
+        self.assertEqual(len(board.once([by[("claude-opus-5-5", "high")], by[("claude-opus-5-5", "medium")]])), 1, "each model once")
         add = board.add_project_page(board.registry(), "new", "")
         self.assertIn("ⓘ benchmarks</a>", add, "beside the model, when adding a project")
         self.assertIn("href='/models", add)

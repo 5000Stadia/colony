@@ -1771,14 +1771,14 @@ def models_page(reg):
     secs = lambda r: f"{r['value']:g} s" if r and r["unit"] == "s" else "—"
     # the best for each role, at a glance
     best = "".join(
-        f"<tr><th>{e(role)}</th><td>" + ", ".join(f"<a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a>" for x in bench.best_for(role, entries=entries)[:3])
+        f"<tr><th>{e(role)}</th><td>" + ", ".join(f"<a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a>" for x in once(bench.best_for(role, entries=entries))[:3])
         + ("</td><td class='muted'>per dollar</td>" if role == "chores" else "</td><td class='muted'>"
            + ", ".join(bench.ROLES[role]) + "</td>") + "</tr>" for role in bench.ROLES)
     doms = ["overall"] + [d for d in bench.DOMAINS if d != "overall"]
     rows = "".join(f"<tr><th><a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a></th>{shade(x['overall'])}"
                    + "".join(shade(x["domains"].get(d)) for d in doms[1:])
                    + f"<td>{usd(x['cost'])}</td><td>{secs(x['time'])}</td></tr>"
-                   for x in entries)
+                   for x in entries if x["comparable"])
     table = (f"<div class='mapwrap'><table class='bench'><tr><th>Model · effort</th>"
              + "".join(f"<th>{e(d)}</th>" for d in doms) + "<th>cost / task</th><th>time / task</th></tr>" + rows + "</table></div>")
     cards = "".join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
@@ -1795,14 +1795,28 @@ def models_page(reg):
                  "<h2>Cards</h2>" + cards)
 
 
+def once(ranked):
+    """Each model once, at its best entry."""
+    seen, out = set(), []
+    for x in ranked:
+        if x["model"] not in seen:
+            seen.add(x["model"])
+            out.append(x)
+    return out
+
+
 def model_card(c):
     """One model's card: each effort level its own row, what it's good and poor at, where effort pays, the gaps."""
     from . import bench
     rows = "".join(
-        f"<tr><th>{e(x['effort'] or 'effort not stated')}</th><td>{x['overall'] if x['overall'] is not None else '—'}</td>"
+        f"<tr><th>{e(x['variant'])}</th><td>{x['overall'] if x['overall'] is not None else '—'}</td>"
         f"<td>{e(', '.join(f'{d} {s}' for d, s in x['domains'].items() if d != 'overall')) or '—'}</td>"
         f"<td>{'$%.2f' % x['cost']['value'] if x['cost'] and x['cost']['unit'] == 'usd' else '—'}</td></tr>"
-        for x in c["entries"])
+        for x in c["entries"] if x["comparable"])
+    unstated = [r for x in c["entries"] if not x["comparable"] for r in x["raw"]]
+    rows += ("<tr><th>effort not stated</th><td colspan='3' class='muted'>" + e("; ".join(
+        f"{r['source']} {r['benchmark']}: {r['value']:g} {r['unit']}" for r in unstated))
+        + " (the source names no effort level, so this isn't ranked against the rows above)</td></tr>" if unstated else "")
     raw = "".join(f"<li>{e(bench.entry_name(x))}: {e(r['source'])} {e(r['benchmark'])} {e(r['version'] or '')}: "
                   f"<b>{r['value']:g}</b> {e(r['unit'])} <span class='muted'>({e(r['kind'])}, {e(r['date'])})</span> "
                   f"<a href='{e(r['url'])}' rel='noopener' target='_blank'>source</a></li>"
@@ -1822,7 +1836,7 @@ def effort_chart(entries):
     (up), joined in order: where the line climbs, more effort pays; where it runs flat, it only costs more."""
     import math
     from . import bench
-    pts = [x for x in entries if x["overall"] is not None and x["cost"] and x["cost"]["value"] > 0 and per(x["cost"]["benchmark"])]
+    pts = [x for x in entries if x["comparable"] and x["overall"] is not None and x["cost"] and x["cost"]["value"] > 0 and per(x["cost"]["benchmark"])]
     if not pts:
         return "<p class='muted'>No model has both an overall score and a cost per task yet.</p>"
     W, H, L, B = 640, 300, 44, 34
@@ -1838,8 +1852,8 @@ def effort_chart(entries):
                    + " ".join(f"{X(x['cost']['value']):.0f},{Y(x['overall']):.0f}" for x in mine) + "'/>")
         out += [f"<circle cx='{X(x['cost']['value']):.0f}' cy='{Y(x['overall']):.0f}' r='4' fill='{col}'><title>"
                 f"{e(bench.entry_name(x))}: overall {x['overall']}, ${x['cost']['value']:.2f} per task</title></circle>"
-                + (f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['effort'])}</text>"
-                   if x["effort"] else "") for x in mine]
+                + f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['variant'])}</text>"
+                for x in mine]
         legend.append(f"<span><i style='background:{col}'></i>{e(bench.name(mid))}</span>")
     ticks = "".join(f"<text x='{L - 6}' y='{Y(s) + 4:.0f}' text-anchor='end'>{s}</text>" for s in (0, 50, 100))
     step = max(1, round((hi - lo) / 5)) if hi > lo else 1

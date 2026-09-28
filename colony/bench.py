@@ -18,10 +18,12 @@ A record, one JSON object per line for `colony bench import FILE`:
    "url": where it was found, "note": anything a reader needs (the source's own name for the variant)}
 """
 import json
+import re
 from pathlib import Path
 
 from . import board
 
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DOMAINS = ("overall", "coding", "agentic", "reasoning", "math", "long-context", "instructions", "preference")
 MEASURES = ("cost", "latency")                 # recorded as the source states them, never converted
 KEYS = ("model", "effort", "source", "kind", "benchmark", "version", "domain", "value", "unit", "date", "url", "note")
@@ -86,6 +88,25 @@ def lineup():
     return out
 
 
+UNSTATED = "effort not stated"
+
+
+def variant(r):
+    """Which variant of a model a record measured: its effort level, or, where the source names none, the variant
+    it does name (non-reasoning, reasoning, a thinking budget). A record whose source states neither can't be
+    compared like with like: it stays on the model's card and out of every ranking."""
+    if r["effort"]:
+        return r["effort"]
+    note = (r.get("note") or "").lower()
+    if "non-reasoning" in note:
+        return "non-reasoning"
+    if "(reasoning)" in note:
+        return "reasoning"
+    if m := re.search(r"_(\d+k)\b", note):
+        return f"{m.group(1).upper()} thinking"
+    return UNSTATED
+
+
 def standings(rows=None):
     """Every entry (model, effort) the records know for the lineup, with its domain scores on one scale and
     its overall score, relative to the lineup. Only independent scores are scaled and averaged."""
@@ -94,25 +115,26 @@ def standings(rows=None):
     rows = [r for r in rows if r["model"] in models]
     latest = {}                                  # one value per entry and (source, benchmark, version): the newest
     for r in rows:
-        k = (r["model"], r["effort"], r["source"], r["benchmark"], r["version"], r["domain"])
+        k = (r["model"], variant(r), r["source"], r["benchmark"], r["version"], r["domain"])
         if k not in latest or r["date"] >= latest[k]["date"]:
             latest[k] = r
     groups = {}
     for (m, eff, src, bench, ver, dom), r in latest.items():
-        if r["kind"] == "independent" and dom in DOMAINS:
+        if r["kind"] == "independent" and dom in DOMAINS and eff != UNSTATED:     # only like with like is scaled
             groups.setdefault((src, bench, ver, dom), []).append(r)
     entries = {}
-    for (m, eff, *_rest) in latest:
-        entries.setdefault((m, eff), {"model": m, "effort": eff, "scaled": {}, "raw": [], "measures": []})
+    for (m, var, *_rest) in latest:
+        entries.setdefault((m, var), {"model": m, "variant": var, "effort": var if var in EFFORTS else None,
+                                      "comparable": var != UNSTATED, "scaled": {}, "raw": [], "measures": []})
     for r in latest.values():
-        e = entries[(r["model"], r["effort"])]
+        e = entries[(r["model"], variant(r))]
         (e["measures"] if r["domain"] in MEASURES else e["raw"]).append(r)
     for (src, bench, ver, dom), rs in groups.items():
         lo, hi = min(r["value"] for r in rs), max(r["value"] for r in rs)
         for r in rs:
             if hi > lo:                          # one entry alone has nothing to be ranked against
                 s = 100 * (r["value"] - lo) / (hi - lo)
-                entries[(r["model"], r["effort"])]["scaled"].setdefault(dom, []).append((s, f"{src} {bench} {ver or ''}".strip()))
+                entries[(r["model"], variant(r))]["scaled"].setdefault(dom, []).append((s, f"{src} {bench} {ver or ''}".strip()))
     for e in entries.values():
         e["domains"] = {d: round(sum(s for s, _ in v) / len(v)) for d, v in e["scaled"].items()}
         # the overall standing: every headline score it has (overall indexes, and human preference), averaged
@@ -129,7 +151,7 @@ def standings(rows=None):
         e["index"] = next((r["value"] for r in e["raw"] if r["domain"] == "overall" and r["kind"] == "independent"
                            and INDEX in r["benchmark"].lower() and r["source"] == "Artificial Analysis"), None)
         e["pending"] = not any(r["domain"] in ("overall", "preference") and r["kind"] == "independent" for r in e["raw"])
-    return sorted(entries.values(), key=lambda e: (e["overall"] is None, -(e["overall"] or 0)))
+    return sorted(entries.values(), key=lambda e: (not e["comparable"], e["overall"] is None, -(e["overall"] or 0)))
 
 
 def per(benchmark):
@@ -155,7 +177,7 @@ def best_for(role, provider=None, entries=None):
     from . import providers
     entries = standings() if entries is None else entries
     mine = {mid for key, mid, _, _ in lineup() if provider is None or key == provider}
-    scored = [(role_score(e, role), e) for e in entries if e["model"] in mine]
+    scored = [(role_score(e, role), e) for e in entries if e["model"] in mine and e["comparable"]]
     return [e for s, e in sorted(((s, e) for s, e in scored if s is not None), key=lambda x: -x[0])]
 
 
@@ -164,7 +186,7 @@ def name(model):
 
 
 def entry_name(e):
-    return f"{name(e['model'])}" + (f" · {e['effort']}" if e["effort"] else "")
+    return f"{name(e['model'])} · {e['variant']}"
 
 
 def card(model, entries=None):
@@ -176,7 +198,7 @@ def card(model, entries=None):
     measured = {e["effort"] for e in mine}
     out = {"model": model, "name": name(model), "entries": mine,
            "untested": [x for x in efforts if x not in measured],
-           "pending": not mine or all(e["pending"] for e in mine), "notes": []}
+           "pending": not any(e["comparable"] and not e["pending"] for e in mine), "notes": []}
     for e in mine:
         top = [d for d, s in e["domains"].items() if s >= 67 and d != "overall"]
         low = [d for d, s in e["domains"].items() if s <= 33 and d != "overall"]
