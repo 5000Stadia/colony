@@ -932,6 +932,19 @@ class SupportsTest(BoardBase):
         supports.decide("s1", "approve")
         self.assertEqual(self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "x").returncode, 0)
 
+    def test_the_check_carries_counts_that_point_at_weakness(self):
+        since = time.time() - 60
+        for i, (msg, f) in enumerate([("Fix watering overflow", "water.py"), ("Add reminders", "remind.py"),
+                                      ("Fix watering again: the bug came back", "water.py"), ("Revert reminder tweak", "remind.py"),
+                                      ("Polish", "water.py")]):
+            (self.root / f).write_text(str(i))
+            self.commit(msg)
+        out = monitor.signals(self.root, since)
+        self.assertIn("6 commits, 3 of them fixes", out)
+        self.assertIn("fixed again and again: water.py ×2", out)
+        self.assertIn("changed most: water.py ×3", out)
+        self.assertEqual(monitor.signals(self.root, time.time() + 60), "0 commits, 0 of them fixes")
+
     def test_the_index_of_indexes_says_how_far_each_is_trusted_and_grows_on_the_persons_say(self):
         out = self.cli("supports", "sources").stdout
         self.assertIn("[official] Claude Code's official plugin marketplace", out)
