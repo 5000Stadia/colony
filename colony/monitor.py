@@ -105,7 +105,10 @@ when its work calls for one. Most help costs more than it gives, so a support ea
 2. **Look.** A listed support that fits comes first. Otherwise look where the source can be checked:
    - Claude Code's official plugin marketplace (`claude plugin list --available --json`; `claude plugin
      details NAME` shows what one adds and its token cost);
+   - the MCP project's own servers (github.com/modelcontextprotocol/servers);
    - GitHub repositories with a license, real history and more than one regular maintainer;
+   - curated lists for leads, each traced to its own repository: hesreallyhim/awesome-claude-code
+     (reviewed), punkpeye/awesome-mcp-servers (broad, barely filtered); a vendor's list favours its own;
    - a package registry (PyPI, npm) only through its source repository;
    - Reddit, Hacker News, blogs and the like only for leads: trace each to its source repository and
      judge that, never the post.
