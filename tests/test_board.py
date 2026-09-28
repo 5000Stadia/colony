@@ -882,7 +882,8 @@ class SupportsTest(BoardBase):
         self.assertTrue(note.get("quiet"), "it waits for the agent's next turn rather than interrupting it")
         told = board.render_notes([note], "Notes:")
         self.assertIn("not an instruction from the person", told)
-        self.assertIn("check it against what you know of your work", told)
+        self.assertIn("Check it against what you know of that work", told)
+        self.assertIn("not a new task", told, "it must not start an improvement loop")
         self.assertIn("45% cheaper", told, "it carries its proof")
         self.assertNotIn("acting for them", told)
 

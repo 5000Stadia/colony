@@ -431,8 +431,9 @@ def where(n):
 
 # A support the monitor proved elsewhere is still only a guess about this project's work: the agent doing the
 # work knows it best, so it arrives as a suggestion to check, never as the person's word.
-SUGGESTION = (" (a suggestion from the monitor, not an instruction from the person: check it against what you know of"
-              " your work; if it fits, ask the person to install it with colony gate; if not, say why with colony noted)")
+SUGGESTION = (" (a suggestion from the monitor, not an instruction from the person, and not a new task: it serves the"
+              " work you are doing and widens nothing. Check it against what you know of that work; if it fits, ask the"
+              " person to install it with colony gate; if not, say why with colony noted)")
 
 
 def render_notes(ns, heading):
