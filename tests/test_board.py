@@ -665,6 +665,36 @@ class GlanceTest(BoardBase):
         finally:
             os.environ["PATH"], os.environ["COLONY_CONSOLE_CMD"], console.COMMAND = saved
 
+    def test_the_monitor_runs_on_the_default_provider_and_reads_its_brief_there(self):
+        board.set_setting("provider", "codex")
+        monitor.brief()
+        self.assertEqual(monitor.brief_path(), monitor.home() / "AGENTS.md")
+        for f in ("AGENTS.md", "CLAUDE.md"):                  # whichever program runs it reads its own
+            self.assertIn("You are `monitor", (monitor.home() / f).read_text())
+        stand_in, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertTrue(console.command("monitor").startswith("codex "), "started with the default provider's command")
+        finally:
+            console.COMMAND = stand_in
+        self.assertIn(">Codex in <code>", board.monitor_page(board.registry(), "console"), "its console says what runs it")
+        saved = (console.screen, console.press, monitor.snapshot)
+        pressed = []
+        console.screen = lambda name: "  Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n"
+        console.press = lambda name, keys: pressed.append(keys)
+        monitor.snapshot = lambda: {"state": "needs you", "lines": []}
+        try:
+            monitor.Watcher(quiet=0).tick()
+        finally:
+            console.screen, console.press, monitor.snapshot = saved
+        self.assertIn(["Enter"], pressed, "its own start-up question is answered too")
+        old = Path(self.tmp.name) / "shop"
+        (old / "src").mkdir(parents=True)
+        (old / "src" / "a.py").write_text("x = 1\n")
+        board.project_settings(old, {"provider": "codex"})
+        board.track(old)
+        [n] = board.notes(old)
+        self.assertIn("The new section of AGENTS.md", n["text"], "its join note names the file its program reads")
+
     def test_start_says_what_it_needs_when_neither_program_is_here(self):
         bin_ = Path(self.tmp.name) / "bin"
         bin_.mkdir()
@@ -1167,6 +1197,7 @@ class ProjectSettingsTest(BoardBase):
     def test_a_new_project_names_its_provider_and_model_and_another_provider_can_join(self):
         class Other:                       # what another CLI supplies to join: start, wire, read the screen
             label, models, efforts = "Other CLI", [("big-1", "Big 1")], ["deep"]
+            program, site, instructions = "other", "https://example.com/other", "AGENTS.md"
             own_defaults = lambda self: {"model": None, "effort": None}
             model_name = lambda self, v: v
             history_text = lambda self, root: None

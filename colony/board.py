@@ -237,6 +237,11 @@ def save_registry(reg):
 
 # ---------------------------------------------------------------- a project's files
 
+def providers_of(root):
+    from . import providers
+    return providers.of(root)
+
+
 def settle_provider():
     """If the default provider's program isn't on this machine and another's is, that one becomes the default,
     so new projects and the monitor start on something that runs. What changed, in a line, or None."""
@@ -653,8 +658,9 @@ def track(path, register=True):
     if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
     has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
-    if joining and not has_plan and not any(n["text"] == JOIN for n in notes(root)):
-        add_note(root, None, JOIN)
+    join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
+    if joining and not has_plan and not any(n["text"] in (JOIN, join) for n in notes(root)):
+        add_note(root, None, join)
     from . import providers
     providers.of(root).wire(workdir(root), protocol(root))
     reg = registry()
@@ -1399,8 +1405,8 @@ def monitor_page(reg, view="overview"):
             f" Which projects are included, and each one's direction, are on the Helm tab.</p></header>")
     plist = projects(reg)
     if view == "console":
-        body = head + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1,
-                                          token=console.token(), focus='true', scrolled=e(providers.get('claude').scrolled_marker))
+        body = head + console.PAGE.format(label=e(monitor.provider().label), path=e(monitor.home()), name=monitor.name(), pid=-1,
+                                          token=console.token(), focus='true', scrolled=e(monitor.provider().scrolled_marker))
         return shell(reg, -1, body, wide=True)
     if view == "direction":
         mine = (home() / "direction.md").exists()

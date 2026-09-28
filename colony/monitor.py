@@ -1,12 +1,10 @@
-"""The monitor: one Claude Code session that acts for the person across all their projects.
+"""The monitor: one agent session that acts for the person across all their projects.
 
 It is woken only for the projects whose helm it holds; elsewhere it sleeps, and costs nothing until the
 person talks to it, since the board already shows them everything that needs them.
 
-PROVIDER: the monitor is Claude Code whatever the projects use: its role is written to CLAUDE.md, it is
-reached from the Claude app, and its console is labelled so. To let another provider run it, add a
-"monitor provider" setting and have ensure() go through providers (wire the role into that CLI's
-instructions file, start it with that provider's command()).
+It runs on colony's default provider, which the board settles on one whose program is installed; its role is
+written to every provider's instructions file in its folder, so whichever runs it reads it.
 
 It never watches anything itself. A watcher in the board process reads each project's screen every few
 seconds (no tokens) and wakes the monitor only when a project changes to something the person would want
@@ -27,8 +25,8 @@ def name():
 
 ROLE = """# You are `monitor · every project on this board · until the person ends you`
 
-You act for the person across their projects. They reach you from the Claude app or the board; each
-project also has its own session they can talk to directly.
+You act for the person across their projects. They reach you from the board (and from their agent program's
+own app, where it has one); each project also has its own session they can talk to directly.
 
 - **Events wake you, only where you hold the helm.** A message starting `[colony]` means one of those
   projects changed: it finished a turn, or something now waits (a gate it opened, a choice on its
@@ -224,7 +222,7 @@ def set_direction(text=None):
     elif path.exists():
         path.unlink()
     brief()
-    queue("The person changed your standing direction for every project. Read it afresh in CLAUDE.md.")
+    queue(f"The person changed your standing direction for every project. Read it afresh in {brief_path()}.")
 
 
 UPKEEP_SELF = """- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_colony tests.test_board` in
@@ -246,7 +244,7 @@ UPKEEP_REPORT = """- Colony's source is itself a project on this board, `{name}`
 
 def rebrief():
     """Rewrite the brief when the board changes; if the monitor's part in keeping colony changed, tell it."""
-    path = home() / "CLAUDE.md"
+    path = brief_path()
     if not path.exists():
         return
     before = path.read_text()
@@ -261,8 +259,19 @@ def brief():
     source = Path(__file__).resolve().parent.parent
     own = next((p for p in board.projects() if p.resolve() == source), None)
     upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
-    (home() / "CLAUDE.md").write_text(ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip())
-                                      .replace("{upkeep}", upkeep))
+    role = ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
+    for f in {p.instructions for p in providers.PROVIDERS.values()}:     # whichever program runs it reads its own
+        (home() / f).write_text(role)
+
+
+def provider():
+    """What the monitor runs on: colony's default provider."""
+    return providers.get(board.registry()["settings"]["provider"])
+
+
+def brief_path():
+    """The monitor's brief, where its program reads it."""
+    return home() / provider().instructions
 
 
 HELM_ON_NOTE = ("You hold the helm: settle routine questions yourself within each project's direction (colony posture), "
@@ -485,7 +494,7 @@ class Watcher:
                              + (f"; the person wants scouting here to favour: {note}" if note else "") + ")")
             # The brief may have changed since this session read it, so it is read afresh each time.
             console.type_into(name(), "[colony] Scouting check, worked on since the last one: " + ", ".join(parts)
-                              + f". Read 'Scouting' in {home() / 'CLAUDE.md'} afresh and follow it, starting with the audit.")
+                              + f". Read 'Scouting' in {brief_path()} afresh and follow it, starting with the audit.")
 
     def tell(self):
         path = board.home() / "to_monitor.jsonl"
@@ -495,6 +504,11 @@ class Watcher:
                 path.unlink()
 
     def tick(self):
+        me = snapshot()
+        if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
+            keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)
+            if keys:
+                console.press(name(), keys)             # its own start-up questions, as for any project's console
         self.mail()
         self.tell()
         self.scout()
