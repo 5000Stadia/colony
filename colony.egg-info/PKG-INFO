@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: colony
-Version: 0.1.0
-Summary: Keeps one strong Claude Code agent at its best across a long project: a spine in the person's words, checks, a meter, and review only where risk is declared.
-Requires-Python: >=3.10

@@ -1,88 +1,77 @@
 # colony
 
-One page to run all your projects with Claude Code: each project's live console, its roadmap, what is
-waiting on you, and your notes to its agent, on your computer or your phone, with a monitor agent
-that can act for you across them. And [GUIDE.md](GUIDE.md): what the tests showed about running long
-projects with one strong agent.
+**One page to run all your long projects with Claude Code.** Each project gets its own agent, live in
+the browser and on your phone. You see what each one is doing, what it's waiting on you for, and how
+far along its roadmap it is, and you steer them all from one board. A monitor agent can hold the helm
+for you across them.
 
-## Quickstart
+And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects with one strong agent.
 
-    gh repo clone 5000Stadia/colony ~/colony && ~/colony/start
+## Quick start
 
-It installs what it needs, starts the board, and prints every address it answers at: this machine,
-your home network, and the Claude app for each session (`colony urls` prints them again). The monitor is the front page. Put project
-folders in `~/colony/projects`, or use **+ Add project** to pick any folder or start a new one. Global
-options are under **Settings**. `colony stop` ends it all. It needs tmux, Claude Code and Python 3.10+.
+    git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start
 
-## The board: one place to follow and steer every project
+That's it. It installs colony, starts the board and prints where to open it: on this machine, from
+your phone on the same network, and in the Claude app, where every project's session appears. You need
+[Claude Code](https://claude.com/claude-code), tmux and Python 3.10+.
 
-    colony track            in a project: put it on the board (once)
-    colony board            open the board: every tracked project in one page, each with its live console
-    colony board --lan      the same, reachable from other machines on your network
-    colony restart          reload the board after a change (consoles and the monitor keep running)
-    colony doctor           is everything up and wired? what to do if not
+Then **+ Add project**: start a new one, pick a folder you already have, or clone one from GitHub. Its
+agent starts in its own console, and the project joins the board.
 
-Projects live in folders you choose. Colony ships an empty `projects/` folder: every folder you put in
-it is a project on the board, and new projects are created there. In Settings you can add other
-folders that work the same way and pick which one new projects go into. "+ Add project" browses the
-machine to add any single folder as a project, or to create a new one wherever you are looking; that
-folder is the root its agent works in.
+`colony stop` ends everything. `~/colony/start` brings the board back, and each console returns to its
+conversation when you open it.
 
-For each project the board shows what changed since you were last there, what the agent has put in
-your hands (gates), the roadmap as a list and, when the plan branches, a map. Each item has its own
-page with its history, gates and a thread where you direct it. Notes on past work reach the agent on
-its next turn. Notes on a roadmap item reach it when it starts that item. Nothing waits unseen: a note
-whose item leaves the roadmap is delivered at once, and one delivered but not acted on is repeated at
-the next session's start.
+## What you get
 
-Each project's Console tab is its own Claude Code session, running in tmux: switch projects in the
-sidebar and each session keeps going; close the browser and it keeps going; `tmux attach -t board-…`
-reaches the same session from a terminal. The sidebar shows each session's state (working, needs you,
-idle) and its latest line; the Overview opens with a peek at the last few lines. The state is read
-off the screen ("esc to interrupt" while working, a numbered choice when asking), so a change in Claude
-Code's wording could mislabel it; the lines shown are always the real ones.
+- **Every project's live console**, in the browser and on a phone (swipe to scroll, a key row for
+  Esc/Tab/arrows, full screen). Sessions run in tmux, so closing the page stops nothing, and
+  `tmux attach -t board-…` reaches the same session from a terminal.
+- **Waiting on you:** what each project needs from you, in one list. That covers decisions it put to
+  you (gates), questions it asked, choices on its screen, and work ready for your OK (Approve / Not
+  yet). The sidebar counts them.
+- **Message**, at the top of every project: type or paste into its console as if you were there,
+  or have its agent write to another project. Attach a file from your device or the project.
+- **The roadmap**, kept by the agent in `ROADMAP.md`: milestones fold away as they finish, the
+  latest work comes first, and every item and milestone shows its time in progress. The overview reads
+  `Roadmap: 16/43 · Active: 6d 15h`, where Active counts only the time its agent was actually working.
+- **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
+- **The monitor**, one more session at the top of the sidebar. It tells you when a project needs you
+  or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
+  routine questions within the direction you set for each project, and brings back anything about scope,
+  cost or that can't be undone. It never polls: a watcher reads every screen every few seconds for
+  free and wakes it only when there is something to hear.
+- **Projects talk to each other:** `colony send NAME "…"` (`--ask` for an answer), `colony reply`,
+  and `colony projects` lists them with their goals, so an agent asks rather than guesses.
 
-Every console starts with Remote Control (`claude --remote-control <project>`), so each project, and
-the monitor, shows up in the Claude app on your phone. An idle session costs nothing.
+## How it works
 
-**The monitor** is one more session, at the top of the sidebar and in the app, that acts for you across
-projects: it tells you when one needs you or has finished, turns what you say into a clean request
-typed into that project (`colony tell`), starts new projects (`colony new`), and, when you say "take
-the helm", settles routine questions itself. It always comes back to you for planning, scope,
-milestones, and anything costly to undo or leaving your hands. It never watches: a watcher in the
-board reads each screen every few seconds, costing no tokens, and wakes the monitor only when a project
-needs you, finishes a turn, or opens a gate. Talking through the monitor roughly doubles the tokens
-of that exchange; talk to a project's own session when that matters.
+`colony track` (or Add project) puts a short protocol in the project's `CLAUDE.md` and installs Claude
+Code hooks. The agent keeps `ROADMAP.md` current, puts decisions to you with `colony gate`, marks work
+ready with `colony ready`, and records what it did with each of your notes (`colony noted`). The hooks
+hand it your notes, answers and mail at the start of each turn, so nothing relies on its memory. The
+board and the monitor reach a session by typing into its console, never over something you have
+half-typed there. The board's record of a project is in its `.board/` folder.
 
-The board runs in its own tmux session, so it needs no open terminal. The monitor also looks after the
-board itself: it runs `colony doctor` when something seems off, fixes bugs in this repository (tests,
-`colony restart`, a local commit; it asks before pushing), and proposes improvements for you to decide
-on, always after the projects' needs.
+    colony board [--lan]     start the board (--lan: for other devices on your network)
+    colony restart           reload the board after a change; consoles and the monitor keep running
+    colony doctor            is everything up and wired? what to do if not
+    colony urls              where the board answers
+    colony peek NAME [-n N]  a project's state and its last lines
+    colony tell NAME "…"     a note to a project, as yours
+    colony settings          global settings; a project's own with `colony settings --project NAME`
 
-**Projects talk to each other.** Each project gets an inbox when it is created or added; there are
-none before. `colony send NAME "..."` (`--ask` when an answer is expected) writes to another project's
-agent and `colony reply ID "..."` answers; `colony projects` lists each project with its goal, so an
-agent can tell whom to ask. Mail reaches the recipient on its next turn; if its session is idle the
-board nudges it, and if it isn't running the board starts it; `--urgent` is delivered even mid-turn.
-Next to a project's console, "Message another project" lists the others: you say what the message
-should be about and that project's agent writes and sends it with its own context. Agents also know to
-ask another project's agent rather than guess at what it exports. Nothing extra to install.
+**Settings.** Each project can have its own model, effort, permissions and Remote Control; blank keeps
+the global choice. The **provider** (the CLI that runs the agent) is Claude Code today. Another joins by
+adding an entry to `colony/providers.py`, and every place that still assumes Claude Code is marked
+`PROVIDER:` in the code.
 
-**Each project has its own settings** (provider, model, effort, permissions, Remote Control), chosen
-when it is added or created and changeable from its Overview; blank keeps the global setting. The
-provider is the CLI that runs the project's agent. Claude Code is the only one wired today; another joins
-by adding an entry to `colony/providers.py`, which says how to start it, how to wire a project for it and
-how to read its screen. The few places elsewhere that still assume Claude Code (the startup check, Remote
-Control, the monitor, the unattended runtime) are marked `PROVIDER:` in the code with what each needs.
+**Where projects live.** Any folder can be a project. Folders you put in `~/colony/projects` join the
+board by themselves, new projects are created there, and Settings adds other folders that work the same way.
 
-If the board's port is taken by another program, colony uses the next free one; `colony urls` shows where.
-
-The first time Claude Code opens in a folder it asks whether you trust it; answer once per project,
-from the board's console or the app.
-
-The agent's side is three habits written into the project's CLAUDE.md: keep `ROADMAP.md` current, gate
-what needs you (`colony gate`), and mark notes it acted on (`colony noted`). Delivery is done by Claude
-Code hooks that `colony track` installs, so it doesn't rely on the agent remembering.
+The first time Claude Code opens in a folder it asks whether you trust it: answer once, from the
+board (the choice shows as buttons) or the app. The state shown for each session (working, needs you,
+idle) is read off its screen, so a change in Claude Code's wording could mislabel it; the lines shown
+are always the real ones.
 
 ## The guide
 
@@ -123,15 +112,15 @@ scale it was built for decides whether it stays.
 
 ### Starting an unattended project — for the agent you hand this to
 
-> Tell your agent: *"Read the Quickstart in github.com/5000Stadia/colony and follow it. I want to start
-> a project."*
+> Tell your agent: *"Read 'Unattended runs' in github.com/5000Stadia/colony and follow it. I want to
+> start a project."*
 
 You are starting a long project for a person with colony. Colony is for work that outlives one
 session — many steps, built over days or weeks. If what they want fits in one sitting, or every step
 is an act in the world only they can take, tell them so and just do it with them; colony would only
 be in the way. Otherwise, follow these steps in order.
 
-1. **Install.** `gh repo clone 5000Stadia/colony ~/colony` (or `git clone`), then
+1. **Install.** `git clone https://github.com/5000Stadia/colony ~/colony`, then
    `python3 -m pip install --user -e ~/colony` — if pip refuses, add `--break-system-packages`, or
    run everything as `PYTHONPATH=~/colony python3 -m colony …`. Copy `~/colony/claude/skills/colony`
    into `~/.claude/skills/`. Check with `colony --help`.
