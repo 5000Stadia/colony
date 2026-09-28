@@ -5,3 +5,6 @@ colony.egg-info/
 # your projects live here; they are not part of colony
 projects/*
 !projects/.gitkeep
+
+# the board's record of this project, kept on this machine
+.board/
