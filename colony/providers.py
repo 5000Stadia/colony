@@ -32,6 +32,7 @@ what it assumes and what a second provider needs there. What a provider supplies
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
   choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it
+  enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
   draft(screen)            what the person has half-typed in its input and not sent, from a screen captured with
                            its styles; "" if nothing, None if it can't tell. Nothing is typed into a session while
                            there is one: it would land on the draft and send it.
@@ -51,6 +52,7 @@ class ClaudeCode:
               ("claude-haiku-4-5-20251001", "Haiku 4.5")]
     aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
     efforts = ["low", "medium", "high", "xhigh", "max"]
+    mark = "❯"                                  # how it marks the highlighted option of a choice
     # Claude Code runs these and puts what they print in the agent's context: delivery needs no memory.
     # SessionStart gives the backlog at start; UserPromptSubmit gives what is new before every turn.
     # Stop runs when a turn ends: `colony turn` records the turn if it asks the person something.
@@ -278,12 +280,16 @@ class ClaudeCode:
         """The choice on screen, if any: (question lines, options, index of the highlighted one). Claude Code
         draws a choice as a column of options, the highlighted one marked `❯`, under its question."""
         import re
-        lines = screen.splitlines()
-        cur = next((i for i, l in enumerate(lines) if re.match(r"^\s*❯ \S", l)), None)
+        lines, mark = screen.splitlines(), self.mark
+        # the choice on screen is the lowest one, and a numbered option beats an earlier prompt in the history
+        marked = [i for i, l in enumerate(lines) if re.match(rf"^\s*{mark} \S", l)]
+        cur = next((i for i in reversed(marked) if re.match(rf"^\s*{mark} \d+\.", lines[i])), marked[-1] if marked else None)
         if cur is None:
             return None
-        col = lines[cur].index("❯") + 2
-        is_option = lambda l: len(l) > col and l[col] != " " and l[:col].strip() in ("", "❯")
+        col = lines[cur].index(mark) + 2
+        numbered = re.match(r"\d+\.", lines[cur][col:])      # then only numbered lines are options
+        is_option = lambda l: (len(l) > col and l[col] != " " and l[:col].strip() in ("", mark)
+                               and (not numbered or re.match(r"\d+\.", l[col:])))
         i = cur
         while i > 0 and (is_option(lines[i - 1]) or lines[i - 1][:col + 1].strip() == ""):
             i -= 1                                                       # up to the first option
@@ -297,7 +303,7 @@ class ClaudeCode:
             return None                                                  # the input prompt, not a choice
         label = lambda l: re.sub(r"^\d+\.\s*", "", l[col:].strip())
         question = [l.strip() for l in lines[max(0, i - 8):i] if l.strip()][-4:]
-        here = next(k for k, l in enumerate(block) if l.lstrip().startswith("❯"))
+        here = next(k for k, l in enumerate(block) if l.lstrip().startswith(mark))
         return question, [label(l) for l in block], here
 
     def choose(self, screen, text):
@@ -312,7 +318,108 @@ class ClaudeCode:
             return None
         return (["Down"] * (hit - here) if hit > here else ["Up"] * (here - hit)) + ["Enter"]
 
-PROVIDERS = {"claude": ClaudeCode()}
+class Codex:
+    """OpenAI's Codex CLI. Basic wiring: its console runs, is typed into, and its screen is read. It reads
+    AGENTS.md; it has no hooks wired yet, so the agent fetches its notes and mail itself when the board
+    nudges it, and its turns aren't read for questions or resumed after a restart."""
+    label = "Codex"
+    models = []                                 # whatever `codex -m` takes; the person's config names its own
+    aliases = {}
+    efforts = ["minimal", "low", "medium", "high"]
+    mark = "›"
+    enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
+    scrolled_marker = ""
+    hooks = {}
+    # colony's permission choices, in Codex's terms
+    permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
+                   "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
+    DELIVERY = ("\n- Nothing hands you colony's notes and mail by itself here. At the start of a session, and whenever a line "
+                "starting `[colony]` arrives, run `colony notes --deliver` and act on what it prints.\n")
+
+    def command(self, label, s, resume=None):
+        """The person's own `codex`: inline, so its console keeps scrollback, without the update question at
+        start; the project's permissions, model and effort. Remote Control has no Codex equivalent here."""
+        from .board import home
+        parts = ["codex", "--no-alt-screen", "-c", "check_for_update_on_startup=false"]
+        perms = self.permissions.get(s.get("permissions") or "ask", [])
+        parts += perms
+        if "workspace-write" in perms:
+            parts += ["--add-dir", shlex.quote(str(home()))]    # colony keeps its records there: its commands must write
+        if s.get("model"):
+            parts += ["-m", shlex.quote(s["model"])]
+        if s.get("effort"):
+            parts += ["-c", shlex.quote(f"model_reasoning_effort={s['effort']}")]
+        return " ".join(parts)
+
+    def wire(self, root, protocol):
+        """The colony protocol in AGENTS.md, where Codex reads a project's instructions (an older block brought
+        up to date in place), with how to fetch notes and mail."""
+        path = root / "AGENTS.md"
+        have = path.read_text() if path.exists() else ""
+        block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY
+        marker = "## This project is part of a colony"
+        if marker in have:
+            start = have.index(marker)
+            end = have.find("\n## ", start + 5)
+            path.write_text(have[:start] + block + (have[end + 1:] if end != -1 else ""))
+        else:
+            path.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
+
+    def wired(self, root):
+        path = root / "AGENTS.md"
+        return "## This project is part of a colony" in (path.read_text() if path.exists() else "")
+
+    def model_name(self, value):
+        return value
+
+    def own_defaults(self):
+        """The model and effort in the person's ~/.codex/config.toml, if it names them."""
+        try:
+            import tomllib
+            cfg = tomllib.loads((Path.home() / ".codex" / "config.toml").read_text())
+        except (ImportError, OSError, ValueError):
+            cfg = {}
+        return {"model": cfg.get("model") or None, "effort": cfg.get("model_reasoning_effort") or None}
+
+    def turn_text(self, payload):
+        return None, ""
+
+    def history_text(self, root, limit=200_000):
+        return None
+
+    def classify(self, screen):
+        """Codex shows "• Working (3s • esc to interrupt)" while it works, and a numbered choice marked `›`
+        (a trust question, an approval) when it needs the person; otherwise it waits at its `›` prompt."""
+        import re
+        if "esc to interrupt" in screen.lower() or re.search(r"^\s*• Working \(", screen, re.M):
+            return "working"
+        if re.search(r"^\s*› \d+\. ", screen, re.M):
+            return "needs you"
+        return "idle"
+
+    def activity(self, screen):
+        import re
+        m = None
+        for m in re.finditer(r"^\s*• (Working \([^)]*\))", screen, re.M):
+            pass
+        return {"line": m.group(1) if m else None, "agents": []}
+
+    def draft(self, screen):
+        """What is typed at its prompt (the last `›` line that isn't an option) and not sent; its greyed hint in
+        an empty prompt is dim, so it isn't a draft. None with no prompt on screen."""
+        import re
+        plain = lambda l: re.sub(r"\x1b\[[0-9;]*m", "", l)
+        lines = screen.splitlines()
+        at = next((i for i in range(len(lines) - 1, -1, -1) if re.match(r"^\s*›(?!\s*\d+\.)", plain(lines[i]))), None)
+        if at is None:
+            return None
+        return plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", lines[at])).strip().lstrip("›").strip()
+
+    choice = ClaudeCode.choice
+    choose = ClaudeCode.choose
+
+
+PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
 DEFAULT = "claude"
 
 

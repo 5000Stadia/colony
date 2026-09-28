@@ -297,6 +297,12 @@ def cmd_track(a):
     if not Path(a.path).expanduser().is_dir():
         print(f"colony: no folder {a.path}", file=sys.stderr)
         return 2
+    chosen = {k: getattr(a, k) for k in board.PROJECT_KEYS if getattr(a, k, None)}
+    if chosen:
+        try:
+            board.project_settings(Path(a.path).expanduser().resolve(), chosen)   # before wiring: the provider wires
+        except KeyError as err:
+            raise SystemExit(f"no such choice for {err}: colony settings shows the options")
     root = board.track(a.path)
     print(f"{root.name} is on the board. Open it with: colony board")
     return 0
@@ -852,7 +858,10 @@ def main(argv=None):
     p = sub.add_parser("answer"); p.add_argument("kind"); p.add_argument("text"); p.add_argument("--always", action="store_true")
     p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
-    p = sub.add_parser("track"); p.add_argument("path", nargs="?", default="."); p.set_defaults(fn=cmd_track)
+    p = sub.add_parser("track"); p.add_argument("path", nargs="?", default=".")
+    for k in ("provider", "model", "effort", "permissions"):
+        p.add_argument(f"--{k}", help="for this project (default: the global setting)")
+    p.set_defaults(fn=cmd_track)
     p = sub.add_parser("board"); p.add_argument("--port", type=int)
     p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
     p.add_argument("--no-monitor", action="store_true", help="don't start the monitor session and its watcher")

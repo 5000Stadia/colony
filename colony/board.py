@@ -127,7 +127,7 @@ DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan"
 # ClaudeCode then, and keep only the keys here.
 PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
-    "provider": "which CLI runs new projects' agents (colony knows: claude)",
+    "provider": "which CLI runs new projects' agents (colony knows: claude, codex)",
     # PROVIDER: Remote Control is Claude Code's. Another provider maps "remote" to its own way of reaching a
     # session from elsewhere in its command(), or ignores it; say which in this help and in the forms.
     "remote": "new consoles start with Remote Control, reachable from the Claude app",

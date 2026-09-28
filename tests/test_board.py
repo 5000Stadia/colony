@@ -357,6 +357,40 @@ class GlanceTest(BoardBase):
         self.assertEqual(claude.classify(f"❯ fix the bug\n\n● Editing.\n{dialog}"), "needs you",
                          "a choice takes the box's place; a past prompt above doesn't hide it")
 
+    def test_codex_screens_are_read_as_codex_draws_them(self):
+        codex = providers.get("codex")
+        foot = "  gpt-6-astra medium · /home/k/Projects/plants"
+        idle = f"› Reply with just the word ok\n• ok\n\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n{foot}"
+        working = f"› Reply with just the word ok\n• Working (1s • esc to interrupt)\n› Ask Codex to do anything\n{foot}"
+        trust = ("> You are in /home/k/Projects/plants\n  Do you trust the contents of this directory?\n"
+                 "› 1. Yes, continue\n  2. No, quit\n  Press enter to continue")
+        self.assertEqual(codex.classify(idle), "idle")
+        self.assertEqual(codex.classify(working), "working")
+        self.assertEqual(codex.activity(working)["line"], "Working (1s • esc to interrupt)")
+        self.assertEqual(codex.classify(trust), "needs you")
+        self.assertEqual(codex.choice(trust)[1:], (["Yes, continue", "No, quit"], 0))
+        self.assertEqual(codex.choose(trust, "No"), ["Down", "Enter"])
+        self.assertEqual(codex.draft(idle), "", "its dim hint isn't a draft; a past prompt above isn't either")
+        self.assertEqual(codex.draft(idle.replace("\x1b[2mAsk Codex to do anything\x1b[0m", "half written")), "half written")
+        self.assertIsNone(codex.draft(trust.replace("›", " ")))
+        cmd = codex.command("plants", {"permissions": "plan", "model": "gpt-6-astra", "effort": "high"})
+        self.assertTrue(cmd.startswith("codex --no-alt-screen"), "inline, so its console keeps scrollback")
+        for part in ("-s read-only", "-m gpt-6-astra", "model_reasoning_effort=high"):
+            self.assertIn(part, cmd)
+        self.assertIn(f"--add-dir {board.home()}", codex.command("plants", {"permissions": "ask"}),
+                      "sandboxed, it may still write colony's records, so notes and mail work")
+
+    def test_a_project_can_run_on_codex(self):
+        r = self.cli("track", ".", "--provider", "codex")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(board.project_settings(self.root)[0]["provider"], "codex")
+        agents = (self.root / "AGENTS.md").read_text()
+        self.assertIn("## This project is part of a colony", agents, "the protocol where Codex reads it")
+        self.assertIn("colony notes --deliver", agents, "no hooks: it fetches its notes when nudged")
+        self.assertNotIn("## This project is part of a colony", (self.root / "CLAUDE.md").read_text())
+        self.assertTrue(providers.of(self.root).wired(self.root))
+        self.assertIn("(colony knows: claude, codex)", board.SETTING_HELP["provider"])
+
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)
         console.COMMAND = "sh -c 'for i in $(seq 1 120); do echo row $i; done; sleep 30'"

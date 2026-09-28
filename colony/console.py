@@ -107,11 +107,15 @@ def ensure(root, name=None, label=None):
     return name
 
 
+def provider(name):
+    """The provider running a session, by its name."""
+    from . import board, providers
+    return providers.of(next((p for p in board.projects() if session_name(p) == name), None))
+
+
 def drafting(name):
     """Whether someone has something half-typed in the session: anything typed now would land on it and send it."""
-    from . import board, providers
-    root = next((p for p in board.projects() if session_name(p) == name), None)
-    p = providers.of(root)
+    p = provider(name)
     styled = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", name], capture_output=True, text=True).stdout
     return bool(p.draft(styled)) if hasattr(p, "draft") else False
 
@@ -125,6 +129,7 @@ def type_into(name, text):
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
     subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
+    time.sleep(getattr(provider(name), "enter_after", 0))   # one that takes fast typing for a paste needs a beat
     subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
     return True
 
@@ -137,7 +142,7 @@ def paste_into(name, text):
     buf = f"colony-{secrets.token_hex(4)}"
     subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
     subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
-    time.sleep(0.3)                                   # the paste lands before its Enter
+    time.sleep(max(0.3, getattr(provider(name), "enter_after", 0)))    # the paste lands before its Enter
     subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
     return True
 
