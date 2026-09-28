@@ -87,8 +87,10 @@ out?**
    bar is confidence that the project would do worse without it, where worse includes the same quality
    in notably more time or cost; not that something could be better. Short of the bar, stop and say
    nothing. Most checks end here.
-2. **Look,** in one pass, wherever the answer may be:
-   - a find already listed that fits;
+2. **Look,** in one pass, wherever the answer may be. Go for it, starting from what this project has
+   already taught you:
+   - its past finds and where they came from (`colony supports --project NAME`), and a find already
+     listed that fits;
    - every index in `colony supports sources --project NAME`: the general ones and that project's own,
      each with how far it is trusted (`claude plugin details NAME` shows what a plugin adds and its
      token cost);
@@ -102,8 +104,8 @@ out?**
    smallest thing that meets the need: a layer that adds agents, loops or rules costs more than it gives
    until shown otherwise. A find sits beside the work: anything that would change what is built or how (a
    rewrite, another language, a migration) is the person's call on scope, worth raising only when the gain
-   is large next to what it costs. Record a find with `colony supports add` (`--reference` for a project,
-   paper or method), with the evidence of the need. A reference installs nothing, so it needs no trial:
+   is large next to what it costs. Record a find with `colony supports add --project NAME` (`--reference`
+   for a project, paper or method), with the evidence of the need. A reference installs nothing, so it needs no trial:
    read it yourself and record where the better way is.
 
    A good index or portal you come across that isn't listed: add it with `colony supports source NAME

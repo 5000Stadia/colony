@@ -155,13 +155,14 @@ def block(ref, evidence, source=""):
     return entry
 
 
-def add(name, symptom, gives, source="", cost="", remove="", evidence="", kind="tool"):
+def add(name, symptom, gives, source="", cost="", remove="", evidence="", kind="tool", project=None):
     if is_blocked(name, source):
         raise ValueError(f"{name} is blocked: it carried a prompt injection")
     rows = load()
     row = {"id": f"s{max([int(r['id'][1:]) for r in rows] + [0]) + 1}", "at": board.now(), "name": name.strip(),
            "source": source, "symptom": symptom, "gives": gives, "cost": cost, "remove": remove,
-           "status": "candidate", "evidence": evidence, "projects": [], "kind": kind}
+           "status": "candidate", "evidence": evidence, "projects": [], "kind": kind,
+           **({"for": str(project)} if project else {})}
     save(rows + [row])
     return row
 
@@ -260,9 +261,12 @@ def suggest(sid, root, text):
     return row
 
 
-def text():
+def text(project=None):
+    """Every find, or a project's own: what was found for it before, and where, is where to look first."""
     out = []
     for r in load():
+        if project and r.get("for") != str(project) and str(project) not in r["projects"]:
+            continue
         out.append(f"{r['id']} [{r['status']}]{' reference:' if r.get('kind') == 'reference' else ''} {r['name']} ({r['source']})\n"
                    f"    for: {r['symptom']}\n    gives: {r['gives']}\n    cost: {r['cost']}; remove: {r['remove']}"
                    + (f"\n    evidence: {r['evidence']}" if r["evidence"] else "")

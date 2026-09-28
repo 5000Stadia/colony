@@ -782,7 +782,8 @@ def cmd_supports(a):
     from . import supports
     try:
         if a.action == "add":
-            r = supports.add(a.name, a.symptom, a.gives, a.source, a.cost, a.remove, a.evidence, "reference" if a.reference else "tool")
+            r = supports.add(a.name, a.symptom, a.gives, a.source, a.cost, a.remove, a.evidence, "reference" if a.reference else "tool",
+                             _project(a.project) if a.project else None)
             print(f"{r['id']} added as a candidate")
         elif a.action == "set":
             r = supports.update(a.name, a.status, a.evidence, _project(a.project) if a.project else None)
@@ -813,7 +814,7 @@ def cmd_supports(a):
         elif a.action == "check":
             print(supports.check_now())
         else:
-            print(supports.text())
+            print(supports.text(_project(a.project) if a.project else None) or "nothing found for it yet")
     except (KeyError, ValueError) as err:
         raise SystemExit(f"{err.args[0] if err.args else err} (statuses: {', '.join(supports.STATUSES)})")
     return 0

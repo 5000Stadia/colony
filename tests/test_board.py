@@ -981,6 +981,11 @@ class SupportsTest(BoardBase):
         self.assertIn("[reviewed] New index: github.com/a/b", self.cli("supports", "sources").stdout)
         self.assertIn("[research] arXiv", out)
         self.cli("supports", "source", "Botany journals", "jstor.org/botany", "--trust", "research", "--project", "plants")
+        self.cli("supports", "add", "watering-model", "--reference", "--project", "plants", "--source", "arxiv.org/abs/1",
+                 "--for", "reminders fire at the wrong time", "--gives", "evapotranspiration-based timing")
+        found = self.cli("supports", "--project", "plants").stdout
+        self.assertIn("watering-model (arxiv.org/abs/1)", found, "what was found for it, and where")
+        self.assertNotIn("playwright", found, "not everyone's finds")
         mine = self.cli("supports", "sources", "--project", "plants").stdout
         self.assertIn("Botany journals", mine, "plants' own bookmark")
         self.assertIn("(plants's own)", mine)
