@@ -34,7 +34,7 @@ class BoardBase(unittest.TestCase):
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
         # A test board sees no one's real project folders and, unless a test says so, posts no mail.
-        board.save_registry({"roots": [], "settings": {"messaging": False}})
+        board.save_registry({"roots": [], "settings": {"messaging": False, "scout": 0}})
         # Nor does it ever start a real agent: a console that a test starts, here or in a `colony` it runs,
         # is a stand-in, and teardown ends every session its projects left.
         self._command, console.COMMAND = console.COMMAND, "sleep 60"
@@ -796,6 +796,117 @@ class NeedsYouTest(BoardBase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class SupportsTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.saved = (console.snapshot, console.type_into, monitor.snapshot)
+        self.sent = []
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        console.type_into = lambda name, text: self.sent.append(text)
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+
+    def tearDown(self):
+        console.snapshot, console.type_into, monitor.snapshot = self.saved
+        super().tearDown()
+
+    def due(self, hours_ago):
+        (board.home() / "scout.json").write_text(json.dumps({"at": time.time() - hours_ago * 3600}))
+
+    def test_the_check_comes_every_so_many_hours_and_only_for_projects_worked_on_since(self):
+        from colony import supports
+        board.set_setting("scout", "48")
+        w = monitor.Watcher()
+        w.tick()
+        self.assertEqual(self.sent, [], "the clock starts; nothing is checked at once")
+        self.due(47)
+        w.tick()
+        self.assertEqual(self.sent, [], "not yet due")
+        self.due(49)
+        w.tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Supports check: worked on since", self.sent[0])
+        self.assertIn("plants", self.sent[0])
+        self.due(49)
+        saved, monitor.last_commit = monitor.last_commit, lambda root: 0       # no commit since
+        try:
+            w.tick()
+        finally:
+            monitor.last_commit = saved
+        self.assertEqual(len(self.sent), 1, "nothing worked on since: the check costs nothing")
+        board.set_setting("scout", "0")
+        supports.check_now()
+        self.commit("more work")
+        w.tick()
+        self.assertEqual(len(self.sent), 1, "0 is never")
+
+    def test_a_busy_monitor_is_checked_later_and_a_check_can_be_asked_for(self):
+        board.set_setting("scout", "24")
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+        w = monitor.Watcher()
+        w.tick()
+        self.assertEqual(self.cli("supports", "check").returncode, 0)
+        w.tick()
+        self.assertEqual(self.sent, [], "it waits for the monitor to be free")
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        w.tick()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_supports_move_through_their_steps_with_their_evidence(self):
+        out = self.cli("supports").stdout
+        self.assertIn("[candidate] language server", out, "it starts with what our work already surfaced")
+        self.assertIn("[used] playwright", out)
+        r = self.cli("supports", "add", "tool-x", "--for", "slow builds", "--gives", "cached builds", "--evidence", "R12 took 9 rounds")
+        sid = r.stdout.split()[0]
+        self.assertIn("added as a candidate", r.stdout)
+        self.assertEqual(self.cli("supports", "set", sid, "testing").returncode, 0)
+        self.cli("supports", "set", sid, "proven", "--evidence", "3 runs each: same result, 40% cheaper", "--project", "plants")
+        out = self.cli("supports").stdout
+        self.assertIn(f"{sid} [proven] tool-x", out)
+        self.assertIn("R12 took 9 rounds", out)
+        self.assertIn("40% cheaper", out)
+        self.assertIn(str(self.root), out)
+        self.assertNotEqual(self.cli("supports", "set", sid, "adopted-by-magic").returncode, 0)
+
+    def test_only_a_proven_support_reaches_a_project_and_as_a_suggestion_to_check_not_the_persons_word(self):
+        from colony import supports
+        r = self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "It opened 40 files to find one caller.")
+        self.assertNotEqual(r.returncode, 0, "a candidate is a hunch: it never reaches the agent")
+        self.assertEqual(board.open_notes(self.root), [])
+        supports.update("s1", "proven", "3 runs each on plants' own bugs: same fixes, 45% cheaper")
+        r = self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "It opened 40 files to find one caller.")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        note = board.open_notes(self.root)[0]
+        self.assertTrue(note.get("quiet"), "it waits for the agent's next turn rather than interrupting it")
+        told = board.render_notes([note], "Notes:")
+        self.assertIn("not an instruction from the person", told)
+        self.assertIn("check it against what you know of your work", told)
+        self.assertIn("45% cheaper", told, "it carries its proof")
+        self.assertNotIn("acting for them", told)
+
+    def test_a_reference_needs_no_trial_but_must_have_been_read(self):
+        r = self.cli("supports", "add", "tidy-importer", "--reference", "--for", "a tangled CSV importer",
+                     "--gives", "a cleaner way to map columns")
+        sid = r.stdout.split()[0]
+        self.assertNotEqual(self.cli("supports", "suggest", sid, "--project", "plants", "--text", "x").returncode, 0,
+                            "not yet read: nothing to point at")
+        self.cli("supports", "set", sid, "--evidence", "read src/map.py: one table drives every column")
+        r = self.cli("supports", "suggest", sid, "--project", "plants", "--text", "Your importer maps columns by hand.")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        told = board.render_notes(board.open_notes(self.root), "Notes:")
+        self.assertIn("A reference worth a look", told)
+        self.assertIn("Adopt only what works better in your project", told)
+        self.assertIn("one table drives every column", told)
+
+    def test_the_period_is_a_setting(self):
+        board.set_setting("scout", "72")
+        self.assertEqual(board.registry()["settings"]["scout"], 72)
+        self.assertIn("name='scout'", board.settings_page(board.registry()))
+        self.assertIn("value='72'", board.settings_page(board.registry()))
+        with self.assertRaises(KeyError):
+            board.set_setting("scout", "daily")
 
 
 class PinTest(BoardBase):

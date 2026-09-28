@@ -14,6 +14,7 @@ to know: it needs input, it finished a turn, or it opened a gate. While projects
 spends nothing.
 """
 import json
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -85,6 +86,40 @@ in view, keep the work focused and moving, and make each of their decisions easy
 - Proportion: make small, reversible calls and record them; bring the rest with your recommendation.
 - Constructive: recognise good work, redirect drift without drama, keep things moving.
 - Projects take your word as the person's. Keep it that way: when you're not sure what they'd want, ask.
+
+## Supports: the sideline staff
+
+A project's agent is the player; a support (a plugin, a tool, a server) helps it play its best, offered
+when its work calls for one. Most help costs more than it gives, so a support earns trust in steps, and
+`colony supports` lists what is known and how far each has got.
+
+1. **Need first.** A `[colony] Supports check` names the projects worked on since the last one. For each,
+   look at what it has become (its intention, roadmap and recent commits; `colony peek NAME`) and what its
+   recent work struggled with. Name a need only with evidence from that work: rounds lost to something, a
+   mistake that kept coming back, scope grown into new ground (a UI, a large codebase, money). No such
+   need, stop there and say nothing. Most checks end here.
+2. **Look.** A listed support that fits comes first. Otherwise search the plugin marketplace, GitHub,
+   Reddit and wherever practitioners compare tools. Admit only what is free, runs locally, needs no account
+   or login, is maintained and removes cleanly. Prefer the smallest thing that meets the need: a layer that
+   adds agents, loops or rules costs more than it gives until shown otherwise. A support sits beside the
+   work and removes cleanly: anything that would change what is built or how (a rewrite, another language,
+   a migration) is not a support but the person's call on scope, worth raising only when the gain is large
+   next to what it costs. Record a find with `colony supports add`, with the evidence of the need.
+   A **reference** (`--reference`) is a project elsewhere that does something this one does, better. It
+   installs nothing, so it needs no trial: read it yourself, record where the better way is, and it can go
+   straight to step 5, for the agent to take only what works better in its project.
+3. **Ask to test.** Tell the person plainly: the need you saw, the candidate, what a test would cost.
+   Nothing is installed on the way to a test.
+4. **Test.** On their yes (`colony supports set ID testing`), compare it against the project without it,
+   on the project's own kind of work, in a copy where nothing reaches the real one. Fix the pass mark
+   before running; repeat runs enough to see past run-to-run noise (the same setup's cost has drifted by a
+   quarter between sessions); count cost to the same quality. Record `proven` or `rejected` with the numbers.
+5. **Suggest, gently.** Projects take your word as the person's, so a support never reaches one through
+   `colony tell`. Once proven, suggest it with `colony supports suggest ID --project NAME --text "..."`: the
+   need you saw in its work and why this fits. It arrives as your suggestion, not the person's instruction,
+   for the agent to check against what it knows of its work; it asks the person to install it if it fits,
+   or says why not, and its answer stands. Record an install with `colony supports set ID proven --project
+   NAME`; where one goes unused, suggest removing it.
 
 ## The board is yours to keep healthy
 
@@ -190,6 +225,7 @@ class Watcher:
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
+        self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
 
@@ -203,6 +239,8 @@ class Watcher:
             # a question left while the board was down) is reported, not taken as where it always was.
             before, now = self.states.get(str(p), "off"), snap["state"]
             self.states[str(p)] = now
+            if now == "working":
+                self.worked.add(str(p))
             # It sleeps where it doesn't hold the helm: the board shows the person all of this for nothing,
             # and waking it only to repeat it costs a turn. Handed the helm, it hears what's waiting there.
             if not helm_for(p):
@@ -252,8 +290,30 @@ class Watcher:
                 console.type_into(console.session_name(p), f"[colony] You have {what}.")
                 self.nudged |= waiting
 
+    def scout(self):
+        """Every so many hours (the "scout" setting; 0 never), hand the monitor the projects worked on since
+        the last check, to see whether their work now calls for a support. Idle projects cost nothing."""
+        hours = board.registry()["settings"]["scout"]
+        path = board.home() / "scout.json"
+        if not hours:
+            return
+        if not path.exists():                 # the clock starts when the setting first runs
+            path.write_text(json.dumps({"at": time.time()}))
+            return
+        last = json.loads(path.read_text())["at"]
+        if time.time() - last < hours * 3600 or snapshot()["state"] != "idle":
+            return
+        active = [p for p in board.projects() if p.exists() and (str(p) in self.worked or last_commit(p) > last)]
+        path.write_text(json.dumps({"at": time.time()}))
+        self.worked = set()
+        if active:
+            since = time.strftime("%Y-%m-%d %H:%M", time.localtime(last))
+            console.type_into(name(), f"[colony] Supports check: worked on since {since}: "
+                              + ", ".join(p.name for p in active) + ". Follow 'Supports' in your brief; most checks end at step 1.")
+
     def tick(self):
         self.mail()
+        self.scout()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             note = HELM_ON_NOTE
@@ -267,6 +327,11 @@ class Watcher:
             except Exception:
                 pass
             time.sleep(self.interval)
+
+
+def last_commit(root):
+    r = subprocess.run(["git", "-C", str(root), "log", "-1", "--format=%ct"], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
 
 
 def start():

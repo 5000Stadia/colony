@@ -772,6 +772,29 @@ def cmd_delete(a):
     return 0
 
 
+def cmd_supports(a):
+    from . import supports
+    try:
+        if a.action == "add":
+            r = supports.add(a.name, a.symptom, a.gives, a.source, a.cost, a.remove, a.evidence, "reference" if a.reference else "tool")
+            print(f"{r['id']} added as a candidate")
+        elif a.action == "set":
+            r = supports.update(a.name, a.status, a.evidence, _project(a.project) if a.project else None)
+            print(f"{r['id']} is {r['status']}")
+        elif a.action == "suggest":
+            if not (a.project and a.text):
+                raise SystemExit("colony supports suggest ID --project NAME --text \"the need you saw and why this fits\"")
+            r = supports.suggest(a.name, _project(a.project), a.text)
+            print(f"{r['name']} suggested to {a.project}: it reaches the agent on its next turn, as a suggestion to check")
+        elif a.action == "check":
+            print(supports.check_now())
+        else:
+            print(supports.text())
+    except (KeyError, ValueError) as err:
+        raise SystemExit(f"no such support or status: {err} (statuses: {', '.join(supports.STATUSES)})")
+    return 0
+
+
 def cmd_decided(a):
     from . import monitor
     monitor.decided(_project(a.name), a.text)
@@ -845,6 +868,11 @@ def main(argv=None):
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
+    p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
+    p.add_argument("action", nargs="?", choices=("add", "set", "suggest", "check")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
+    p.add_argument("status", nargs="?"); p.add_argument("--for", dest="symptom", default=""); p.add_argument("--gives", default="")
+    p.add_argument("--source", default=""); p.add_argument("--cost", default=""); p.add_argument("--remove", default="")
+    p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)
     p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
     p.set_defaults(fn=cmd_decided)
     p = sub.add_parser("map"); p.add_argument("query", nargs="*"); p.set_defaults(fn=cmd_map)

@@ -121,7 +121,7 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "model": "", "effort": "",
-                    "permissions": "ask"}
+                    "permissions": "ask", "scout": 24}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -135,6 +135,7 @@ SETTING_HELP = {
     "messaging": "project agents can message each other (colony send, colony reply)",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
+    "scout": "every how many hours the monitor looks for supports that projects worked on since could use (0: never)",
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
 }
@@ -150,6 +151,11 @@ def set_setting(key, value):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
+    elif key == "scout":
+        try:
+            reg["settings"][key] = max(0, int(float(str(value).strip() or 0)))
+        except ValueError:
+            raise KeyError(key)
     elif key == "permissions":
         if value not in PERMISSIONS:
             raise KeyError(key)
@@ -423,12 +429,18 @@ def where(n):
             else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
 
 
+# A support the monitor proved elsewhere is still only a guess about this project's work: the agent doing the
+# work knows it best, so it arrives as a suggestion to check, never as the person's word.
+SUGGESTION = (" (a suggestion from the monitor, not an instruction from the person: check it against what you know of"
+              " your work; if it fits, ask the person to install it with colony gate; if not, say why with colony noted)")
+
+
 def render_notes(ns, heading):
     if not ns:
         return ""
     lines = [heading]
     for n in ns:
-        by = " (from the person's monitor, acting for them)" if n.get("author") == "monitor" else ""
+        by = {"monitor": " (from the person's monitor, acting for them)", "suggestion": SUGGESTION}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
     return "\n".join(lines)
@@ -576,7 +588,7 @@ def note_box(pid, kind, ref, hint, back=None):
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        out += (f"<div class='note'><span class='who'>{'the monitor, for you' if n.get('author') == 'monitor' else 'you'} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
+        out += (f"<div class='note'><span class='who'>{'the monitor, for you' if n.get('author') == 'monitor' else 'the monitor suggests' if n.get('author') == 'suggestion' else 'you'} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
                    f"<div>{e(n['reply'])}</div></div>" if n["addressed_at"]
                    else f"<div class='who'>{e(status(n, road_items or {}))}</div>")
@@ -1372,6 +1384,8 @@ def settings_page(reg):
                f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
                f"<span class='muted'>(reach them from the Claude app)</span></label>"
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
+               f"<label>Look for supports every <input name='scout' type='number' min='0' step='1' value='{s['scout']}' class='hours'> hours "
+               f"<span class='muted'>(only for projects worked on since; 0: never)</span></label>"
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
@@ -1574,6 +1588,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/options":
             set_setting("remote", form.get("remote", "off"))
             set_setting("monitor", form.get("monitor", "off"))
+            if form.get("scout", "").strip():
+                set_setting("scout", form["scout"])
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
             if form.get("permissions"):
@@ -1810,6 +1826,7 @@ form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit;
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
+form.options input.hours { font:inherit; width:4.5em; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .msgbox { margin-left:auto } .msgbox summary { cursor:pointer; color:var(--accent); font-size:13px }
 .msgbox form { position:absolute; right:24px; z-index:10; width:420px; display:flex; flex-direction:column; gap:8px;
   padding:14px; border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) }
