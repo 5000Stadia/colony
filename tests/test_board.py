@@ -472,10 +472,10 @@ class GlanceTest(BoardBase):
             return result.stdout
 
         board.add_note(self.root, {}, "Use blue pots.")
-        self.assertIn("Use blue pots.", run("SessionStart"))
+        self.assertNotIn("Use blue pots.", run("SessionStart"))
         self.assertIsNone(console.last_conversation(self.root), "personal sessions do not replace the board console")
         env["COLONY_CONSOLE"] = console.session_name(self.root)
-        run("SessionStart")
+        self.assertIn("Use blue pots.", run("SessionStart"))
         self.assertEqual(console.last_conversation(self.root), "codex-session")
         board.add_note(self.root, {}, "Use clay pots.")
         self.assertIn("Use clay pots.", run("UserPromptSubmit", prompt="[colony] Notes arrived"))
@@ -498,6 +498,68 @@ class GlanceTest(BoardBase):
         finally:
             console.COMMAND = saved
         self.assertEqual(shlex.split(codex.command("plants", {}, resume="name with ' quotes"))[-1], "name with ' quotes")
+
+    def test_codex_replaces_unguarded_hooks_without_removing_personal_hooks(self):
+        codex = providers.get("codex")
+        codex.wire(self.root, board.PROTOCOL)
+        path = self.root / ".codex" / "hooks.json"
+        cfg = json.loads(path.read_text())
+        for event, command in codex.legacy_hooks.items():
+            cfg["hooks"][event][0]["hooks"][0]["command"] = command
+            cfg["hooks"][event][0]["hooks"].append({"type": "command", "command": "echo personal"})
+        path.write_text(json.dumps(cfg))
+        self.assertFalse(codex.wired(self.root))
+        codex.wire(self.root, board.PROTOCOL)
+        codex.wire(self.root, board.PROTOCOL)
+        cfg = json.loads(path.read_text())
+        for event, command in codex.hooks.items():
+            self.assertEqual([h["command"] for e in cfg["hooks"][event] for h in e["hooks"]],
+                             [command, "echo personal"])
+        self.assertTrue(codex.wired(self.root))
+
+    def test_codex_hooks_in_shared_folder_only_act_for_matching_board_console(self):
+        board.track(self.root)
+        self.assertEqual(self.cli("track", ".", "--name", "plants-codex", "--provider", "codex").returncode, 0)
+        twin = board.home() / "agents" / "plants-codex"
+        for root in (self.root, twin):
+            board.add_note(root, None, "Private note for " + root.name)
+            board.record_ask(root, "earlier", "Which pot do you want?")
+            board.append(root, mail.FILE, {"type": "message", "id": "mail-" + root.name, "at": board.now(),
+                         "from": "other", "to": root.name, "text": "Private mail for " + root.name,
+                         "ask": False, "re": None, "urgent": False})
+        snapshot = lambda root: {f.name: f.read_bytes() for f in (root / ".board").iterdir() if f.is_file()}
+        original, twin_original = snapshot(self.root), snapshot(twin)
+        env = {k: v for k, v in os.environ.items() if k not in ("COLONY_PROJECT", "COLONY_CONSOLE")}
+
+        def hook(command, markers, **payload):
+            return subprocess.run([sys.executable, "-m", "colony", *command], cwd=self.root,
+                                  env=dict(env, PYTHONPATH=str(ROOT), **markers), input=json.dumps(payload),
+                                  text=True, capture_output=True)
+
+        delivery = ["notes", "--deliver", "--console", "codex"]
+        for markers in ({}, {"COLONY_CONSOLE": console.session_name(self.root)},
+                        {"COLONY_PROJECT": str(twin)},
+                        {"COLONY_PROJECT": str(twin), "COLONY_CONSOLE": console.session_name(self.root)}):
+            result = hook(delivery, markers, prompt="A personal session's prompt")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Colony hook skipped", result.stdout)
+            self.assertNotIn("Private", result.stdout)
+            result = hook(["turn", "--console", "codex"], markers,
+                          turn_id="foreign", last_assistant_message="Foreign question?")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "", "Stop's JSON acknowledgment is supplied by the hook command")
+            self.assertEqual(snapshot(self.root), original)
+            self.assertEqual(snapshot(twin), twin_original, "skipped hooks do not consume notes/mail or change questions")
+        markers = {"COLONY_PROJECT": str(twin), "COLONY_CONSOLE": console.session_name(twin)}
+        result = hook(delivery, markers, prompt="The large pot")
+        self.assertIn("Private note for plants-codex", result.stdout)
+        self.assertIn("Private mail for plants-codex", result.stdout)
+        self.assertEqual(board.asks(twin), [])
+        hook(["turn", "--console", "codex"], markers, turn_id="own", last_assistant_message="What color?")
+        self.assertEqual(board.asks(twin)[0]["text"], "What color?")
+        self.assertEqual(snapshot(self.root), original, "the other agent's records remain untouched")
+        board.add_note(twin, None, "Explicit manual delivery")
+        self.assertIn("Explicit manual delivery", hook(["notes", "--deliver"], {"COLONY_PROJECT": str(twin)}).stdout)
 
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)

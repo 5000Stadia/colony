@@ -549,10 +549,25 @@ def _hook_input():
         return {}
 
 
+def _console_hook_allowed(root, provider):
+    """Optional hook scope: a project's board console running the expected provider, never cwd alone."""
+    from . import console, providers
+    return (not provider or (os.environ.get("COLONY_CONSOLE") == console.session_name(root)
+                            and providers.PROVIDERS.get(provider) is providers.of(root)))
+
+
+HOOK_SCOPE_MESSAGE = ("Colony hook skipped outside the matching project's board console. Use that console for "
+                      "automatic delivery. For manual delivery, explicitly choose the intended project with "
+                      "COLONY_PROJECT=/absolute/project/path colony notes --deliver; do not infer it from a shared folder.")
+
+
 def cmd_turn(a):
     """The provider's end-of-turn hook: if the turn asked the person something, it waits on them."""
     from . import board, providers
     root = board.root_of()
+    if not _console_hook_allowed(root, a.console):
+        print(HOOK_SCOPE_MESSAGE, file=sys.stderr)
+        return 0
     if not (root / ".board").exists():
         return 0
     key, text = providers.of(root).turn_text(_hook_input())
@@ -563,6 +578,9 @@ def cmd_turn(a):
 def cmd_notes(a):
     from . import board
     root = board.root_of()
+    if not _console_hook_allowed(root, a.console):
+        print(HOOK_SCOPE_MESSAGE)
+        return 0
     if not (root / ".board").exists():
         return 0                                  # not on the board: the hooks stay silent
     if a.deliver:
@@ -885,6 +903,7 @@ def main(argv=None):
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.set_defaults(fn=cmd_gate)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
+    p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
@@ -902,7 +921,9 @@ def main(argv=None):
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why"); p.set_defaults(fn=cmd_pin)
     p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
-    sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something").set_defaults(fn=cmd_turn)
+    p = sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something")
+    p.add_argument("--console", metavar="PROVIDER", help="(hook) record only in this provider's matching board console")
+    p.set_defaults(fn=cmd_turn)
     p = sub.add_parser("choose"); p.add_argument("name"); p.add_argument("option"); p.set_defaults(fn=cmd_choose)
     p = sub.add_parser("new"); p.add_argument("name"); p.add_argument("--in", dest="within")
     for k in ("provider", "model", "effort", "permissions"):
