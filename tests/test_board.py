@@ -622,11 +622,16 @@ class MonitorTest(BoardBase):
         cl = ("Quick safety check: Is this a project you created or one you trust?\n\n ❯ 1. Yes, I trust this folder\n"
               "   2. No, exit\n\n Enter to confirm · Esc to cancel")
         cx = ("  Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n  Press enter to continue")
-        self.assertEqual(providers.trusting(claude, cl), ["Enter"])
-        self.assertEqual(providers.trusting(codex, cx), ["Enter"])
-        self.assertEqual(providers.trusting(codex, cx.replace("› 1. Yes", "  1. Yes").replace("  2. No", "› 2. No")), ["Up", "Enter"],
+        self.assertEqual(providers.starting(claude, cl), ["Enter"])
+        self.assertEqual(providers.starting(codex, cx), ["Enter"])
+        self.assertEqual(providers.starting(codex, cx.replace("› 1. Yes", "  1. Yes").replace("  2. No", "› 2. No")), ["Up", "Enter"],
                          "yes, wherever the highlight is: never No")
-        self.assertIsNone(providers.trusting(claude, "Do you want to make this edit?\n ❯ 1. Yes\n   2. No"), "only trust")
+        self.assertIsNone(providers.starting(claude, "Do you want to make this edit?\n ❯ 1. Yes\n   2. No"), "never a mid-work prompt")
+        bypass = ("WARNING: Claude Code running in Bypass Permissions mode\n\n ❯ 1. No, exit\n   2. Yes, I accept\n")
+        self.assertEqual(providers.starting(claude, bypass), ["Down", "Enter"], "its permission mode, as set up: never exit")
+        self.assertIsNone(providers.starting(claude, bypass, fresh=False), "only as it starts")
+        self.assertEqual(providers.starting(claude, cl, fresh=False), ["Enter"], "its folder's trust, whenever asked")
+        self.assertIn("Start-up prompts", monitor.DEFAULT_DIRECTION, "in the monitor's standing direction")
         console.snapshot = lambda root, lines=6, name=None: {"state": "needs you", "lines": []}
         pressed, saved = [], (console.screen, console.press)
         console.screen = lambda name: cl                          # the project runs on Claude Code

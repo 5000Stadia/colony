@@ -133,7 +133,7 @@ SETTING_HELP = {
     "remote": "new consoles start with Remote Control, reachable from the Claude app",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
-    "trust": "a console's question whether to trust its folder is answered yes: you put the project on the board",
+    "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
     "model": "model for new project sessions (blank: the provider's default)",
@@ -1700,8 +1700,8 @@ def settings_page(reg):
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
                f"<span class='muted'>(one inbox per project)</span></label>"
-               f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Trust each project's folder "
-               f"<span class='muted'>(a console's trust question is answered yes)</span></label>"
+               f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Answer a new console's start-up questions "
+               f"<span class='muted'>(folder trust, permission mode, Remote Control, hooks: so it runs as set up)</span></label>"
                f"<label>Permissions for new sessions <select name='permissions'>"
                + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])

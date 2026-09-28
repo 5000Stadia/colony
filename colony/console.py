@@ -166,6 +166,15 @@ def history(name):
     return subprocess.run(["tmux", "capture-pane", "-p", "-J", "-S", "-", "-t", name], capture_output=True, text=True).stdout
 
 
+def age(name):
+    """Seconds since a session started (a large number if it isn't running)."""
+    r = subprocess.run(["tmux", "display", "-p", "-t", name, "#{session_created}"], capture_output=True, text=True)
+    try:
+        return time.time() - int(r.stdout.strip())
+    except ValueError:
+        return float("inf")
+
+
 def stop(root):
     subprocess.run(["tmux", "kill-session", "-t", session_name(root)], capture_output=True)
 

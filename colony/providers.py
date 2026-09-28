@@ -34,7 +34,7 @@ what it assumes and what a second provider needs there. What a provider supplies
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
   choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it;
-                           with choice(), it also lets the watcher answer a folder-trust question (trusting())
+                           with choice(), it also lets the watcher answer a session's start-up questions (starting())
   enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
   draft(screen)            what the person has half-typed in its input and not sent, from a screen captured with
                            its styles; "" if nothing, None if it can't tell. Nothing is typed into a session while
@@ -453,14 +453,23 @@ class Codex:
     choose = ClaudeCode.choose
 
 
-def trusting(provider, screen):
-    """The keys that answer yes to a question whether to trust the project's folder, if one is on screen: the
-    option that begins "Yes", never one that exits. Claude Code asks "Yes, I trust this folder / No, exit",
-    Codex "Yes, continue / No, quit"."""
+# The questions a session asks as it starts, before any work: trusting its folder, confirming the permission
+# mode it was started with, Remote Control, its hooks. Mid-work prompts (run this command?) are not these.
+STARTUP = ("trust", "bypass permissions", "remote control", "hook", "approval mode", "full access")
+
+
+def starting(provider, screen, fresh=True):
+    """The keys that answer a start-up question on screen so the session runs as it was set up: the option that
+    begins with yes (or accept, allow, enable, continue, trust), never one that exits. Its folder's trust is
+    answered whenever it's asked; the others only while the session is fresh (just started)."""
+    import re
     found = provider.choice(screen)
-    if not found or "trust" not in (" ".join(found[0]) + " " + " ".join(found[1])).lower():
+    if not found:
         return None
-    yes = next((o for o in found[1] if o.lower().startswith("yes")), None)
+    about = (" ".join(found[0]) + " " + " ".join(found[1])).lower()
+    if not ("trust" in about or (fresh and any(k in about for k in STARTUP))):
+        return None
+    yes = next((o for o in found[1] if re.match(r"(yes|accept|allow|enable|continue|trust)\b", o.lower())), None)
     return provider.choose(screen, yes) if yes else None
 
 

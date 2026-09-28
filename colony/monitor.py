@@ -187,6 +187,11 @@ in view, keep the work focused and moving, and make each of their decisions easy
 - Proportion: make small, reversible calls and record them; bring the rest with your recommendation.
 - Constructive: recognise good work, redirect drift without drama, keep things moving.
 - Projects take your word as the person's. Keep it that way: when you're not sure what they'd want, ask.
+- Start-up prompts: when a project's session starts and asks to trust its folder, confirm the permission
+  mode it was started with, enable Remote Control or approve its hooks, accept with the option that lets it
+  run as it was set up; the board's watcher does this itself, so answer one only if it is still waiting.
+  Unless the person has turned trust off (`colony settings trust`). Prompts mid-work, to run something
+  specific, follow the helm and the project's direction.
 """
 
 
@@ -346,6 +351,8 @@ def snapshot():
 
 # ---------------------------------------------------------------- the watcher (no tokens)
 
+STARTUP_WINDOW = 300            # seconds after a console starts in which its questions count as start-up ones
+
 # A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
 WAKE = {("working", "idle"): "finished a turn"}
 
@@ -371,9 +378,10 @@ class Watcher:
             board.item_times(p)                 # when each roadmap item reached its state: the Roadmap tab orders by it
             snap = console.snapshot(p, lines=4)
             if snap["state"] == "needs you" and board.registry()["settings"]["trust"]:
-                # the person put it on the board, so they trust its folder: that question is answered for them
+                # the person put it on the board as it is set up: a new session's start-up questions (its folder's
+                # trust, its permission mode, Remote Control, hooks) are answered so it runs that way
                 name = console.session_name(p)
-                keys = providers.trusting(providers.of(p), console.screen(name))
+                keys = providers.starting(providers.of(p), console.screen(name), fresh=console.age(name) < STARTUP_WINDOW)
                 if keys:
                     console.press(name, keys)
                     continue
