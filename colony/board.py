@@ -300,27 +300,17 @@ def roadmap(root, text=None):
 
 
 def item_times(root):
-    """When each roadmap item reached the state it is in, as far as the board has seen (the watcher looks every few
-    seconds), and how long it has been in progress: its timer runs while it is doing and holds when it leaves.
-    Items first seen before anything was recorded have no time. Kept on this machine, with the board."""
+    """When each roadmap item reached the state it is in, and how long it has been in progress: its timer runs
+    while it is doing and holds when it leaves. The first time a project is seen, its roadmap's history in git
+    says when each item moved; from then on the watcher notes each move, looking every few seconds. Kept on this
+    machine, with the board."""
     path = home() / "items.json"
     try:
         every = json.loads(path.read_text())
     except (OSError, ValueError):
         every = {}
     seen = every.get(str(root))
-    out, t = {}, time.time()
-    for iid, it in items(roadmap(root)).items():
-        was = (seen or {}).get(iid)
-        if was and was["state"] == it["state"]:
-            out[iid] = was
-            continue
-        new = {"state": it["state"], "since": now() if seen is not None else "", "worked": (was or {}).get("worked", 0)}
-        if was and was.get("started"):
-            new["worked"] += t - was["started"]                   # it left doing: the timer holds
-        if it["state"] == "doing" and seen is not None:
-            new["started"] = t
-        out[iid] = new
+    out = moved(seen if seen is not None else history_times(root), items(roadmap(root)), time.time())
     if out != seen:
         every[str(root)] = out
         home().mkdir(parents=True, exist_ok=True)
@@ -328,6 +318,36 @@ def item_times(root):
         tmp.write_text(json.dumps(every))
         tmp.replace(path)
     return out
+
+
+def moved(seen, its, t):
+    """The items' records after a look at time t: an item in a new state since then starts or stops its timer."""
+    out = {}
+    for iid, it in its.items():
+        was = seen.get(iid)
+        if was and was["state"] == it["state"]:
+            out[iid] = was
+            continue
+        new = {"state": it["state"], "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)), "worked": (was or {}).get("worked", 0)}
+        if was and was.get("started"):
+            new["worked"] += t - was["started"]                   # it left doing: the timer holds
+        if it["state"] == "doing":
+            new["started"] = t
+        out[iid] = new
+    return out
+
+
+def history_times(root):
+    """The items' records as the roadmap's committed versions tell them, oldest first; an item already under way
+    or done in the first version has no time."""
+    log = git(root, "log", "--reverse", "--format=%H %ct", "--", "ROADMAP.md").split()
+    recs = {}
+    for k, (h, t) in enumerate(zip(log[::2], log[1::2])):
+        its = items(roadmap(root, git(root, "show", f"{h}:ROADMAP.md")))
+        recs = moved(recs, its, int(t))
+        if k == 0:
+            recs = {i: {"state": r["state"], "since": "", "worked": 0} for i, r in recs.items()}
+    return recs
 
 
 def took(secs):

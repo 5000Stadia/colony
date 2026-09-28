@@ -206,6 +206,19 @@ class BoardTest(BoardBase):
         self.assertIn("<script>", page[page.index("Completed"):], "timers count on in the page")
         self.assertEqual([board.took(x) for x in (30, 60 * 12, 60 * 130, 86400 + 3 * 3600)], ["<1m", "12m", "2h 10m", "1d 3h"])
 
+    def test_timers_start_from_the_roadmaps_own_history(self):
+        board.track(self.root)                                      # R2 already under way in the first version
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3", "- [~] R3"))
+        self.commit("R3 started")
+        time.sleep(2.1)
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3", "- [x] R3"))
+        self.commit("R3 done")
+        times = board.item_times(self.root)
+        self.assertGreaterEqual(times["R3"]["worked"], 2, "from its commits: started, then done")
+        self.assertNotIn("started", times["R3"])
+        self.assertEqual(times["R2"]["worked"], 0, "under way before the history begins: no time to know")
+        self.assertIn("timer", board.render(board.registry(), 0, "roadmap"))
+
     def test_the_board_answers_only_itself(self):
         board.track(self.root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
