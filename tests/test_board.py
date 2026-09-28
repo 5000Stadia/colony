@@ -939,6 +939,13 @@ class AskTest(BoardBase):
         self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
 
 
+class MilestoneTest(BoardBase):
+    def test_a_milestone_between_two_others_is_its_own(self):
+        road = board.roadmap(None, "# R\n\nGoal.\n\n## M3 — V1\n\n- [x] R1 a\n\n## M3.5 — V1.5: finished\n\n- [~] R2 b\n\n## M4 — Later\n\n- [ ] R3 c\n")
+        self.assertEqual([m["id"] for m in road["milestones"]], ["M3", "M3.5", "M4"])
+        self.assertEqual(board.items(road)["R2"]["milestone"], "M3.5")
+
+
 class ReadyTest(BoardBase):
     def test_what_is_ready_reads_as_a_plain_request_and_approving_tells_the_agent(self):
         board.track(self.root)

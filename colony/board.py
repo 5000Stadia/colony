@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import console, pins, providers
 
-MILESTONE = re.compile(r"^##\s+(M\d+)\s*[—–-]+\s*(.+?)\s*$")
+MILESTONE = re.compile(r"^##\s+(M\d+(?:\.\d+)?)\s*[—–-]+\s*(.+?)\s*$")      # M3, and M3.5 between M3 and M4
 ITEM = re.compile(r"^\s*-\s*\[( |x|X|~|\?)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
 STATE = {" ": "todo", "~": "doing", "?": "verify", "x": "done", "X": "done"}
 LABEL = {"todo": "todo", "doing": "doing", "verify": "to verify", "done": "done"}
