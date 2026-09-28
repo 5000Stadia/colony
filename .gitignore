@@ -8,3 +8,6 @@ projects/*
 
 # the board's record of this project, kept on this machine
 .board/
+
+# the design notes, kept on this machine
+design/

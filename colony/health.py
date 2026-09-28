@@ -1,8 +1,8 @@
 """Health: what the records show about how the work is going, for the person at each checkpoint.
 
 Nothing here acts on its own. Every trigger that did was tested and removed: name-sharing and rising
-reading fired on most healthy projects (garden/harness/replay_*.py), memory switched on after breaks
-cost 1.7-2x without helping (garden/results/SEEDED.md). What remains is counted, costs no tokens, and
+reading fired on most healthy projects when real histories were replayed, memory switched on after
+breaks cost 1.7-2x without helping on a seeded project. What remains is counted, costs no tokens, and
 is put to the person.
 """
 import statistics

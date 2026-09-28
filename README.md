@@ -77,13 +77,13 @@ are always the real ones.
 
 [GUIDE.md](GUIDE.md) is what the tests showed about running a long project with one strong agent:
 horizon first, effort, one agent over many, the project as its own memory, when review pays, naming
-subagents, and how to test a change before adopting it. The evidence is in `design/claims.md` and the
-lab's results.
+subagents, and how to test a change before adopting it. It rests on the lab's results, which are not
+published.
 
 ## What we measured, and on what
 
 Every number in this README was measured on **Claude Opus 5.5** in Claude Code, in September 2026, on
-software tasks with pre-registered tests, replicates and a blind judge (`design/claims.md`). A
+software tasks with pre-registered tests, replicates and a blind judge. A
 different model changes the numbers, not the questions. These are the three to answer for it:
 
 1. **Where is the value knee for building to a clear spec?** For Opus 5.5 it is medium. Low → medium
@@ -99,7 +99,7 @@ different model changes the numbers, not the questions. These are the three to a
    gain. A fresh agent per row at medium was the best value up to fourteen rows. We did not test xhigh
    or max; the published evaluations found diminishing returns there.
 
-Sources: `design/claims.md` and the lab's results; [CodeRabbit's Opus 5.5
+Sources: the lab's results (not published); [CodeRabbit's Opus 5.5
 review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 [Anthropic's Opus 5.5 page](https://www.anthropic.com/claude-opus-5-5).
 
@@ -107,7 +107,7 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 Colony also has a runtime that drives a project's plan row by row with a fresh agent per row, checks
 between rows, review where the person declared risk, and a cost ledger. At fourteen steps one plain
-Claude Code session matched it on quality at lower cost (`garden/results/SESSION.md`); a test at the
+Claude Code session matched it on quality at lower cost; a test at the
 scale it was built for decides whether it stays.
 
 ### Starting an unattended project — for the agent you hand this to
@@ -175,8 +175,7 @@ be in the way. Otherwise, follow these steps in order.
 The core — one builder per row at medium effort, checks, the meter, review only where declared — was
 measured against a single fresh agent across seven pre-registered pilots and five focused tests. The
 mechanisms around it were each tested, and those that did not earn their place were removed or
-made the person's call. `design/claims.md` holds
-each part's evidence and its status.
+made the person's call.
 
 - **One builder per row, at medium effort.** The best value on every task tested, up to a fourteen-row
   project that lost its context at every row. Low → medium effort was the largest single gain found
@@ -210,6 +209,6 @@ each part's evidence and its status.
 
 ## More
 
-`design/intention.md` is what colony is for; `design/blueprint.md` how it works and why;
-`design/claims.md` every part as a claim with its evidence; `design/sources.md` where the ideas came
-from. Tests: `python3 -m unittest discover -s tests`.
+Tests: `python3 -m unittest tests.test_colony tests.test_board` (they start no real agent).
+
+MIT licensed: see [LICENSE](LICENSE).
