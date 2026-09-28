@@ -868,7 +868,7 @@ def render(reg, pid, view="overview"):
         events += [(stamp(t), f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>") for h, t, subj in s["commits"][:15]]
         lines = [html_ for _, html_ in sorted(events, key=lambda ev: ev[0] or "", reverse=True)]
         caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
-                     f"<input type='hidden' name='head' value='{e(s['head'])}'><button title='Seen all of this: the list starts again from here'>Clear</button></form>")
+                     f"<input type='hidden' name='head' value='{e(s['head'])}'><button title='Seen all of this: nothing new until something changes'>Clear</button></form>")
         out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
         out.append("</div>")
     return shell(reg, pid, "".join(out))

@@ -117,13 +117,13 @@ class BoardTest(BoardBase):
         self.commit("second")
         page = board.render(board.registry(), 0, "")
         self.assertLess(page.index("Waiting on you"), page.index("Since you were last here"))
-        self.assertEqual(page.count("list starts again from here"), 1, "one button, riding down the list")
+        self.assertEqual(page.count("nothing new until something changes"), 1, "one button, riding down the list")
         since = page[page.index("Since you were last here"):]
         self.assertLess(since.index("second"), since.index("start"), "newest first")
         board.save_registry(dict(board.registry(), seen={str(self.root): {"at": board.now(), "head": self.git("rev-parse", "HEAD").strip()}}))
         page = board.render(board.registry(), 0, "")
         self.assertIn("Nothing has changed.", page)
-        self.assertNotIn("list starts again from here", page, "no list, no button")
+        self.assertNotIn("nothing new until something changes", page, "no list, no button")
 
     def test_notes_reach_the_agent_when_they_are_relevant(self):
         board.track(self.root)
