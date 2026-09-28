@@ -437,16 +437,32 @@ class GlanceTest(BoardBase):
         cfg = json.loads(settings.read_text())
         self.assertEqual(cfg["description"], "mine")
         self.assertEqual(cfg["hooks"]["SessionStart"][0], existing)
-        self.assertEqual(len(cfg["hooks"]["SessionStart"]), 2)
+        self.assertEqual(len(cfg["hooks"]["SessionStart"]), 1)
         self.assertEqual(config.read_text(), 'model = "my-model"\n')
         self.assertTrue(codex.wired(self.root))
-        cfg["hooks"]["UserPromptSubmit"][0]["hooks"][0]["async"] = True
+        cfg["hooks"]["UserPromptSubmit"] = [{"hooks": [{"type": "command", "command": codex.hooks["UserPromptSubmit"]}]}]
         settings.write_text(json.dumps(cfg))
-        self.assertFalse(codex.wired(self.root), "delivery must finish before the prompt")
+        self.assertFalse(codex.wired(self.root), "old file hooks must be removed to avoid duplicate delivery")
         codex.wire(self.root, board.PROTOCOL)
         self.assertTrue(codex.wired(self.root))
         settings.unlink()
-        self.assertFalse(codex.wired(self.root), "AGENTS.md alone cannot deliver hooks")
+        self.assertTrue(codex.wired(self.root), "launch flags provide the hooks without a project hooks file")
+
+    def codex_launch_hooks(self, resume=None):
+        import shlex, tomllib
+        args = shlex.split(providers.get("codex").command("plants", {}, resume=resume))
+        hooks = {}
+        for i, arg in enumerate(args[:-1]):
+            if arg == "-c" and args[i + 1].startswith("hooks."):
+                hooks.update(tomllib.loads(args[i + 1])["hooks"])
+        return hooks
+
+    def test_codex_fresh_and_resumed_commands_supply_guarded_synchronous_hooks(self):
+        for resume in (None, "saved-conversation"):
+            hooks = self.codex_launch_hooks(resume)
+            self.assertEqual(set(hooks), {"SessionStart", "UserPromptSubmit", "Stop"})
+            for event, groups in hooks.items():
+                self.assertEqual(groups, [{"hooks": [{"type": "command", "command": providers.get("codex").hooks[event]}]}])
 
     def test_codex_hooks_deliver_record_questions_and_remember_resume(self):
         import shlex
@@ -462,7 +478,7 @@ class GlanceTest(BoardBase):
         transcript = self.root / "session.jsonl"
         transcript.write_text("{}\n")
         payload = {"session_id": "codex-session", "transcript_path": str(transcript), "cwd": str(self.root)}
-        hooks = json.loads((self.root / ".codex" / "hooks.json").read_text())["hooks"]
+        hooks = self.codex_launch_hooks()
 
         def run(event, **extra):
             command = hooks[event][0]["hooks"][0]["command"]
@@ -499,14 +515,16 @@ class GlanceTest(BoardBase):
             console.COMMAND = saved
         self.assertEqual(shlex.split(codex.command("plants", {}, resume="name with ' quotes"))[-1], "name with ' quotes")
 
-    def test_codex_replaces_unguarded_hooks_without_removing_personal_hooks(self):
+    def test_codex_retires_file_hooks_without_removing_personal_hooks(self):
         codex = providers.get("codex")
         codex.wire(self.root, board.PROTOCOL)
         path = self.root / ".codex" / "hooks.json"
-        cfg = json.loads(path.read_text())
+        path.parent.mkdir(exist_ok=True)
+        cfg = {"hooks": {}}
         for event, command in codex.legacy_hooks.items():
-            cfg["hooks"][event][0]["hooks"][0]["command"] = command
-            cfg["hooks"][event][0]["hooks"].append({"type": "command", "command": "echo personal"})
+            cfg["hooks"][event] = [{"hooks": [{"type": "command", "command": command},
+                                               {"type": "command", "command": codex.hooks[event]},
+                                               {"type": "command", "command": "echo personal"}]}]
         path.write_text(json.dumps(cfg))
         self.assertFalse(codex.wired(self.root))
         codex.wire(self.root, board.PROTOCOL)
@@ -514,8 +532,23 @@ class GlanceTest(BoardBase):
         cfg = json.loads(path.read_text())
         for event, command in codex.hooks.items():
             self.assertEqual([h["command"] for e in cfg["hooks"][event] for h in e["hooks"]],
-                             [command, "echo personal"])
+                             ["echo personal"])
         self.assertTrue(codex.wired(self.root))
+
+    def test_codex_worktree_wiring_does_not_write_the_main_checkout(self):
+        codex = providers.get("codex")
+        main_hooks = self.root / ".codex" / "hooks.json"
+        main_hooks.parent.mkdir()
+        main_hooks.write_text('{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo personal"}]}]}}')
+        before = main_hooks.read_bytes()
+        worktree = Path(self.tmp.name) / "linked"
+        self.git("worktree", "add", "-b", "linked", str(worktree))
+        self.assertTrue((worktree / ".git").is_file())
+        codex.wire(worktree, board.PROTOCOL)
+        self.assertTrue(codex.wired(worktree))
+        self.assertFalse((worktree / ".codex" / "hooks.json").exists(), "launch configuration does not need a file hook")
+        self.assertEqual(main_hooks.read_bytes(), before)
+        self.assertEqual(set(self.codex_launch_hooks()), {"SessionStart", "UserPromptSubmit", "Stop"})
 
     def test_codex_hooks_in_shared_folder_only_act_for_matching_board_console(self):
         board.track(self.root)
