@@ -42,7 +42,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 
 ## M5 — Public: anyone can start with it
 
-- [~] R35 Ready to publish: nothing private in the repository or its history, a README with a quick start that works from a fresh clone, then public on the person's word
+- [x] R35 Ready to publish: nothing private in the repository or its history, a README with a quick start that works from a fresh clone, then public on the person's word
 
 ## M6 — Later
 
