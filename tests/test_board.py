@@ -1001,6 +1001,29 @@ class SupportsTest(BoardBase):
         self.assertNotIn("shop", self.sent[0], "0 is never")
 
 
+class DirectionTest(BoardBase):
+    def test_the_standing_direction_is_colonys_until_the_person_changes_it_and_the_monitor_rereads_it(self):
+        board.track(self.root)
+        monitor.brief()
+        brief = (monitor.home() / "CLAUDE.md").read_text()
+        self.assertIn("## Standing direction, for every project", brief)
+        self.assertIn("Always come back to the person", brief)
+        self.assertNotIn("{direction}", brief)
+        helm = board.monitor_page(board.registry(), "helm")
+        self.assertIn("href='/monitor?view=direction'", helm, "the Helm page links to it")
+        self.assertIn("Empty: the standing direction alone", helm)
+        page = board.monitor_page(board.registry(), "direction")
+        self.assertIn("colony's default", page)
+        self.assertNotIn("name='reset'", page, "nothing to reset yet")
+        monitor.set_direction(monitor.DEFAULT_DIRECTION + "\n- Never touch the payments module without asking.")
+        self.assertIn("Never touch the payments module", (monitor.home() / "CLAUDE.md").read_text())
+        self.assertIn("Read it afresh", (board.home() / "to_monitor.jsonl").read_text(), "the monitor is told")
+        self.assertIn("name='reset'", board.monitor_page(board.registry(), "direction"))
+        monitor.set_direction(None)
+        self.assertNotIn("Never touch the payments module", (monitor.home() / "CLAUDE.md").read_text())
+        self.assertFalse((board.home() / "direction.md").exists(), "back to colony's, which improves with colony")
+
+
 class PinTest(BoardBase):
     def test_pins_from_either_side_opened_edited_and_told_to_the_agent_as_it_matters(self):
         board.track(self.root)

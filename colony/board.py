@@ -1082,8 +1082,22 @@ def monitor_page(reg, view="overview"):
         body = head + console.PAGE.format(label="Claude Code", path=e(monitor.home()), name=monitor.name(), pid=-1,
                                           token=console.token(), focus='true', scrolled=e(providers.get('claude').scrolled_marker))
         return shell(reg, -1, body, wide=True)
+    if view == "direction":
+        mine = (home() / "direction.md").exists()
+        body = head + (f"<div class='card'><h3>Standing direction, for every project</h3>"
+                       f"<p class='muted'>How the monitor steers all your projects: what it settles, what always comes back to you, "
+                       f"how it holds a project to its vision. Each project's own direction, on the Helm tab, adds to this. "
+                       f"{'This is your version.' if mine else 'This is colony' + chr(39) + 's default.'}</p>"
+                       f"<form class='options' method='post' action='/direction'><textarea name='text' class='direction'>{e(monitor.direction())}</textarea>"
+                       f"<div class='choices'><button>Save</button>"
+                       + ("<button class='quiet' name='reset' value='1'>Back to colony's default</button>" if mine else "")
+                       + "</div></form><p><a href='/monitor?view=helm'>← Helm</a></p></div>")
+        return shell(reg, -1, body)
     if view == "helm":
-        cards = []
+        cards = [f"<div class='card'><div class='titlerow'><h3>Every project</h3>"
+                 f"<a href='/monitor?view=direction'>Standing direction →</a></div>"
+                 f"<p class='muted'>What the monitor settles, what always comes back to you, and how it steers, for all projects"
+                 f"{' (your version)' if (home() / 'direction.md').exists() else ''}. Each project below adds its own.</p></div>"]
         for pid, p in enumerate(plist):
             if not p.exists():
                 continue
@@ -1098,14 +1112,14 @@ def monitor_page(reg, view="overview"):
                          f"<form class='options' method='post' action='/posture'><input type='hidden' name='p' value='{pid}'>"
                          f"<label>Helm <select name='helm'>{opt('default', 'board-wide (' + ('on' if on else 'off') + ')', cur)}"
                          f"{opt('on', 'on for this project', cur)}{opt('off', 'off for this project', cur)}</select></label>"
-                         f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='What it may settle here on its own, and what must come back to you'>{e(pos['direction'])}</textarea></label>"
+                         f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
                          f"<label>Look for supports every <input name='scout' type='number' min='0' step='1' value='{pos['scout']}' class='hours'> hours "
                          f"<span class='muted'>(if worked on since; 0: never)</span></label>"
                          f"<label class='stack'>What supports should favour here<textarea name='scout_note' class='short' placeholder='e.g. faster test runs; nothing that changes the stack'>{e(pos['scout_note'])}</textarea></label>"
                          f"<button>Save</button></form>"
                          f"<div class='focus'><b>Now: {e(f['milestone'] or 'no roadmap yet')}</b><ul>{lines}</ul></div>"
                          + (f"<details><summary>What it decided here</summary>{made}</details>" if made else "") + "</div>")
-        body = head + ("".join(cards) or "<p class='muted'>No projects yet.</p>")
+        body = head + ("".join(cards) if len(cards) > 1 else cards[0] + "<p class='muted'>No projects yet.</p>")
         return shell(reg, -1, body)
     statuses = "".join(f"<div class='mstatus'><div class='who'>{e(p.name)}</div>{status_card(pid, console.snapshot(p))}</div>"
                        for pid, p in enumerate(plist) if p.exists())
@@ -1700,6 +1714,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/direction":
+            from . import monitor
+            monitor.set_direction(None if form.get("reset") else form.get("text", ""))
+            self.send_response(303)
+            self.send_header("Location", "/monitor?view=direction")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/posture":
             from . import monitor
             root = projects(reg)[int(form.get("p", "0"))]
@@ -1851,7 +1873,9 @@ form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit;
 form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
-form.options textarea.short { min-height:44px } form.options input.hours { font:inherit; width:4.5em; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+form.options textarea.short { min-height:44px }
+textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; line-height:1.45; padding:10px; border-radius:8px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink) } form.options input.hours { font:inherit; width:4.5em; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .msgbox { margin-left:auto } .msgbox summary { cursor:pointer; color:var(--accent); font-size:13px }
 .msgbox form { position:absolute; right:24px; z-index:10; width:420px; display:flex; flex-direction:column; gap:8px;
   padding:14px; border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) }
