@@ -148,10 +148,15 @@ def snapshot(root, lines=6, name=None):
         return {"state": "off", "lines": []}
     now = screen(name)
     shown = [l for l in (BORDER.sub("", l) for l in now.splitlines()) if l.strip()]
-    if lines > len(shown):
-        shown = [l for l in (BORDER.sub("", l) for l in history(name).splitlines()) if l.strip()]
     from . import providers
     p = providers.of(root)
+    if lines > len(shown):
+        # A CLI drawing in the alternate screen (Claude Code does) leaves tmux no scrollback: then its own
+        # record of the conversation is what lies above the screen.
+        more = [l for l in (BORDER.sub("", l) for l in history(name).splitlines()) if l.strip()]
+        if len(more) <= len(shown) and hasattr(p, "history_text"):
+            more = [l for l in (p.history_text(root) or "").splitlines() if l.strip()] + shown
+        shown = more
     marker = getattr(p, "scrolled_marker", "")
     return {"state": p.classify(now), "lines": shown[-lines:], "scrolled": bool(marker and marker in now),
             "activity": p.activity(now) if hasattr(p, "activity") else {"line": None, "agents": []}}

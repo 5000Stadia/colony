@@ -293,6 +293,18 @@ class GlanceTest(BoardBase):
         self.assertEqual(console.snapshot(self.root, lines=100)["lines"][0], "row 21", "from the scrollback")
         self.assertEqual(console.snapshot(self.root, lines=2)["lines"], ["row 119", "row 120"])
 
+    def test_peek_reads_back_the_conversation_where_the_screen_keeps_no_scrollback(self):
+        board.track(self.root)
+        console.COMMAND = "sh -c 'printf \"\\033[?1049h\"; echo on screen; sleep 30'"     # the alternate screen
+        claude = providers.get("claude")
+        claude.history_text = lambda root: "❯ earlier question\n\nearlier answer"
+        try:
+            console.ensure(self.root)
+            time.sleep(1)
+            self.assertEqual(console.snapshot(self.root, lines=50)["lines"], ["❯ earlier question", "earlier answer", "on screen"])
+        finally:
+            del claude.history_text
+
     def test_a_running_session_shows_its_last_lines_and_the_board_serves_them(self):
         board.track(self.root)
         console.COMMAND = "sh -c 'echo first line; echo second line; echo esc to interrupt; sleep 30'"
