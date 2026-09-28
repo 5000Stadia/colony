@@ -89,9 +89,9 @@ def deliver(root, session=False):
     """Mail the agent has not been handed, marked as handed; at a session's start also the questions it
     has not answered yet, so nothing waits unseen."""
     fresh = [m for m in inbox(root) if not m["delivered_at"]]
+    still = [m for m in unanswered(root) if m["delivered_at"]] if session else []
     for m in fresh:
         board.append(root, FILE, {"type": "delivered", "of": m["id"], "at": board.now()})
-    still = [m for m in unanswered(root) if m["delivered_at"]] if session else []
     return fresh, still
 
 
