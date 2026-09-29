@@ -391,7 +391,6 @@ class Codex:
     aliases = {}
     efforts = ["low", "medium", "high", "xhigh", "max", ("ultra", "Ultra — delegates to subagents")]
     efforts_for = {"gpt-5.5": efforts[:4], "gpt-5.6-luna": efforts[:5], "gpt-6-luna": efforts[:5]}
-    recommendation = "Suggested for a new Codex project: GPT-5.6 Sol, medium effort. Reserve Astra for hard decisions and failures."
 
     @staticmethod
     def config_home():

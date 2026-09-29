@@ -1,3 +1,4 @@
+import html
 import json
 import shutil
 import re
@@ -861,6 +862,8 @@ class GlanceTest(BoardBase):
         self.assertEqual(len(board.once([by[("claude-opus-5-5", "high")], by[("claude-opus-5-5", "medium")]])), 1, "each model once")
         add = board.add_project_page(board.registry(), "new", "")
         self.assertIn("ⓘ benchmarks</a>", add, "beside the model, when adding a project")
+        self.assertIn("From the benchmark cards (Artificial Analysis): planning, Opus 5.5 at high", html.unescape(add),
+                      "the form shows the cards' recommendation, framed as theirs, the same the agent gets")
         self.assertIn("href='/models", add)
         # a new project starts with a plan to agree, and keeps what was agreed across sessions
         board.track(self.root)
@@ -1346,7 +1349,7 @@ class ProjectSettingsTest(BoardBase):
         codex = providers.get("codex")
         with patch.object(codex, "own_defaults", return_value={"model": None, "effort": None}):
             page = board.provider_fields("codex", "", "", "global")
-            self.assertIn("Suggested for a new Codex project: GPT-5.6 Sol, medium effort.", page)
+            self.assertNotIn("Suggested for a new Codex project", page, "no fixed suggestion: the cards frame it")
             self.assertIn("name='model' list='models' value=''", page)
             self.assertIn("name='effort' list='efforts' value=''", page)
             data = json.loads(html.unescape(re.search("data-providers='([^']*)'", page)[1]))
@@ -1363,7 +1366,7 @@ class ProjectSettingsTest(BoardBase):
                 self.assertIn("name='model' list='models' value=''", page)
             board.set_setting("provider", "codex")
             page = board.add_project_page(board.registry())
-            self.assertIn("Suggested for a new Codex project", page)
+            self.assertNotIn("Suggested for a new Codex project", page, "no fixed suggestion")
             self.assertEqual(board.registry()["settings"]["model"], "")
             self.assertEqual(board.registry()["settings"]["effort"], "")
 

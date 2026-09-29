@@ -69,7 +69,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [~] R52 Artificial Analysis as the single source: fetched with the person's free key when the lineup changes, the cards derived from it, attribution shown
 - [x] R53 Settings: connect or reconnect the Artificial Analysis key, with step-by-step instructions beside it
 - [ ] R54 First-time setup: the monitor's first conversation walks the person through agent programs, the key, defaults and options
-- [ ] R55 Choosing models: the form's suggestion is the cards', framed as theirs, the same an agent sees; no fixed suggestion
+- [x] R55 Choosing models: the form's suggestion is the cards', framed as theirs, the same an agent sees; no fixed suggestion
 
 
 ## M6 — Later

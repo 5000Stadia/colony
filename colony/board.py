@@ -1222,6 +1222,11 @@ PROVIDER_FIELDS = """
 """
 
 
+def bench_framing(key):
+    from . import bench
+    return bench.framing(key)
+
+
 def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
     with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
@@ -1249,7 +1254,7 @@ def provider_fields(cur, model, effort, blank):
                      "model": (g["model"] if in_project else "") or defaults["model"] or "",
                      "model_placeholder": default_label(provider.model_name(defaults["model"]), f"{provider.label} picks"),
                      "effort_placeholder": default_label(defaults["effort"], f"{provider.label} picks"),
-                     "recommendation": getattr(provider, "recommendation", "")}
+                     "recommendation": bench_framing(key) if usable(provider) else ""}
     effective = model or data[cur]["model"]
     effort_options = data[cur]["efforts_for"].get(effective) or (efforts_of(p, effective) if effective else p.efforts)
     hint = data[cur]["recommendation"]

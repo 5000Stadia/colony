@@ -280,7 +280,13 @@ def set_plan(root, role, model, effort, why=""):
 def recommend(root):
     """For each role, the best entry among the models the project's own program can run, with why."""
     from . import providers
-    key = next((k for k, p in providers.PROVIDERS.items() if p is providers.of(root)), None)
+    return recommend_for(providers.key(providers.of(root)))
+
+
+def recommend_for(key):
+    """For each role, the best entry among one provider's models, with why: what a new project's agent is
+    told, and what the add-project form shows, so the two never differ."""
+    from . import providers
     entries = standings()
     out = {}
     for role in ROLES:
@@ -295,7 +301,7 @@ def recommend(root):
             # the cheapest model, then its lowest effort: fewer tokens a task
             e = min(near, key=lambda x: (x["cost"]["value"], EFFORT_ORDER.get(x["effort"], 0))) if near else top
         if role == "chores":
-            why = (f"most Intelligence Index points per dollar among {providers.of(root).label} models "
+            why = (f"most Intelligence Index points per dollar among {providers.get(key).label} models "
                    f"({e['index']:g} points at ${e['cost']['value']:.2f} {'per 1M tokens' if pricing(e['cost']) else 'a task'}"
                    + ("; the lowest effort, for the fewest tokens" if pricing(e["cost"]) else "") + ")")
         else:
@@ -490,3 +496,13 @@ def ready_to_announce():
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(sorted(told | set(ready))))
     return new
+
+
+def framing(key):
+    """The cards' recommendation for a provider, framed as theirs, in a line: for the add-project form."""
+    rec = recommend_for(key)
+    if not rec:
+        return ""
+    return ("From the benchmark cards (Artificial Analysis): " + "; ".join(
+        f"{role}, {name(r['model'])}" + (f" at {r['effort']}" if r["effort"] else "") for role, r in rec.items())
+        + ". Your agent proposes a plan from them before any work.")
