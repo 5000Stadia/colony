@@ -1954,7 +1954,9 @@ def settings_page(reg):
               "<p class='muted'>The Models page's scores come from Artificial Analysis "
               "(<a href='https://artificialanalysis.ai/' target='_blank' rel='noopener'>artificialanalysis.ai</a>): free for "
               "personal use, with attribution, up to 1,000 requests a day.</p>")
-    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
+    rerun = ("<form method='post' action='/setup' class='caughtup' style='position:static;height:auto;margin:0'>"
+             "<button class='quiet'>Run first-time setup again</button></form>")
+    body = (f"<header><div class='titlerow'><h1>Settings</h1>{rerun}</div></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
             f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
@@ -2151,6 +2153,14 @@ class Handler(BaseHTTPRequestHandler):
             form = {k: v[0] for k, v in urllib.parse.parse_qs(body_text).items()}
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path == "/setup":
+            from . import monitor
+            monitor.setup()
+            self.send_response(303)
+            self.send_header("Location", "/monitor")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/aa-key":
             from . import bench
             if form.get("do") == "remove":

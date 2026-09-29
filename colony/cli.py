@@ -28,6 +28,7 @@ located signals and a project memory.
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
+    colony setup                    the monitor walks you through first-time setup (again)
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
                                     fetch pulls Artificial Analysis' data; key reads the key from stdin
     colony models [set ROLE MODEL EFFORT --why ...]     this project's model plan for its helpers
@@ -396,8 +397,12 @@ def _launch(args):
 def cmd_board(a):
     """The board runs in its own tmux session, so it outlives the terminal that started it and the
     monitor can restart it; --foreground runs it here instead."""
-    from . import board
+    from . import board, monitor
+    fresh = not (board.home() / "board.json").exists() and not (board.home() / "setup-asked").exists()
     settled = board.settle_provider()            # the default runs on a program that is here
+    if fresh and not a.no_monitor:
+        board.home().mkdir(parents=True, exist_ok=True)
+        monitor.setup()                          # a new install: the monitor walks the person through setup
     if settled:
         print(settled)
     if a.foreground:
@@ -629,6 +634,14 @@ def cmd_models(a):
         now = agreed.get(role)
         print(f"{role:9} " + (f"{now['model']} {now['effort'] or ''}".strip() if now else "(not agreed yet)")
               + (f"   recommended now: {rec[role]['model']} {rec[role]['effort'] or ''}".rstrip() if role in rec else ""))
+    return 0
+
+
+def cmd_setup(a):
+    """Ask the monitor to walk the person through first-time setup again."""
+    from . import monitor
+    monitor.setup()
+    print("the monitor will walk you through setup when it's next free (the board's monitor page)")
     return 0
 
 
@@ -1029,6 +1042,7 @@ def main(argv=None):
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why"); p.set_defaults(fn=cmd_pin)
     p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
+    sub.add_parser("setup", help="the monitor walks you through first-time setup").set_defaults(fn=cmd_setup)
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)

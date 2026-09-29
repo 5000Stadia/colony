@@ -806,6 +806,16 @@ class GlanceTest(BoardBase):
                            env=dict(os.environ, PYTHONPATH=str(ROOT)))
         self.assertIn("removed", r.stdout)
 
+    def test_a_new_install_is_walked_through_setup_by_the_monitor(self):
+        self.assertIn("First-time setup", monitor.ROLE)
+        for step in ("Agent programs", "artificialanalysis.ai/login", "never into the conversation", "Where new projects go", "The helm"):
+            self.assertIn(step, monitor.ROLE)
+        monitor.setup()
+        queued = (board.home() / "to_monitor.jsonl").read_text()
+        self.assertIn("First-time setup: walk the person through it now", queued)
+        self.assertIn("Run first-time setup again", board.settings_page(board.registry()))
+        self.assertIn("walk you through setup", self.cli("setup").stdout)
+
     def test_start_says_what_it_needs_when_neither_program_is_here(self):
         bin_ = Path(self.tmp.name) / "bin"
         bin_.mkdir()

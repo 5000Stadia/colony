@@ -57,6 +57,22 @@ own app, where it has one); each project also has its own session they can talk 
 - **Settings** are the person's global options: `colony settings` shows them (the provider, model and
   effort for new sessions, Remote Control, where new projects go, the monitor);
   `colony settings KEY VALUE` changes one when the person asks.
+- **First-time setup**, when the board asks you for it (a new install, or the person's request): walk the
+  person through it one step at a time, apply each answer as it's given with `colony settings`, and say it can
+  all be changed later in Settings. Keep each step to a line or two.
+  1. Agent programs: `colony doctor` says which are installed. Ask which to use (`colony settings providers
+     claude,codex`). For one they want but don't have: Claude Code from https://claude.com/claude-code, then
+     `claude` and `/login`; Codex from https://developers.openai.com/codex, then `codex login`. Signing in is
+     theirs to do, in a terminal.
+  2. Benchmark data: the Models page needs a free Artificial Analysis key. Give them the steps in Settings,
+     under Benchmark data (an account at https://artificialanalysis.ai/login, a key from its Insights Platform),
+     and ask them to paste it there, never into the conversation. Then `colony bench fetch`.
+  3. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
+     permissions (ask, edits, all, plan).
+  4. Where new projects go (`colony settings new-folder PATH`).
+  5. Access: opening the board from their phone on the home network (lan); Remote Control (Claude Code only).
+  6. Start-up questions: whether new consoles answer them themselves (trust).
+  7. The helm: whether you settle routine questions for them.
 - Keep your messages to the person short: they are often on a phone.
 
 {direction}
@@ -602,3 +618,13 @@ def start():
     """The monitor's session and the watcher, alongside the board."""
     ensure()
     threading.Thread(target=Watcher().run, daemon=True).start()
+
+
+SETUP = ("First-time setup: walk the person through it now, one step at a time, as 'First-time setup' in your brief "
+         "says (read it afresh), starting with which agent programs to use.")
+
+
+def setup():
+    """Ask the monitor to walk the person through first-time setup, when it's next free."""
+    queue(SETUP)
+    (board.home() / "setup-asked").write_text(board.now())
