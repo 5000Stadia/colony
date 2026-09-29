@@ -72,6 +72,13 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R55 Choosing models: the form's suggestion is the cards', framed as theirs, the same an agent sees; no fixed suggestion
 
 
+## M9 — Auto mode: the cheapest model that reliably does the work, the strongest at the moments that need it
+
+- [ ] R56 The consultation: at a planning, design or costly-to-undo moment (or when work struggles), the agent writes its approach in brief and asks the strongest model what it would do differently, specifically; takes concrete points and carries on, hands over only uncharted work — design/auto-mode.md
+- [ ] R57 Each consultation logged with what it changed and whether that held, per project
+- [ ] R58 Auto mode proposes model and effort changes to the person from what the record shows, never silently — design/auto-mode.md
+- [ ] R59 Each project's actual usage (tokens, time) shown beside its plan, so the person sees what their wallet is carrying
+
 ## M6 — Later
 
 - [ ] R23 Unattended runs at the scale they were built for decide whether the runtime stays — README.md "Unattended runs"
