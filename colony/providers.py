@@ -109,12 +109,31 @@ class ClaudeCode:
     def version(self):
         return _run([self.program, "--version"])
 
+    def catalog(self):
+        """The model menu Claude Code keeps for this account (~/.claude/cache/model-catalog/*-cc.json), refreshed
+        by Claude Code itself: each model with its effort levels. Its main section only; older models it keeps
+        under "more models" are left out. None if there's no such file or it can't be read. PROVIDER: Claude
+        Code's own cache, undocumented; discover() falls back to asking when it isn't there."""
+        files = sorted((Path.home() / ".claude" / "cache" / "model-catalog").glob("*-cc.json"),
+                       key=lambda f: f.stat().st_mtime, reverse=True)
+        for f in files:
+            try:
+                models = json.loads(f.read_text())["catalog"]["config"]["models"]
+                return [(m["id"], m.get("name") or _label(m["id"]),
+                         [o["id"] for o in ((m.get("thinking") or {}).get("effort_options") or [])])
+                        for m in models if m.get("section", "main") == "main" and m.get("id")]
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return None
+
     def discover(self, run=None):
-        """The models this installation can run, confirmed: Claude Code has no command that lists them, so it
-        is asked once for the IDs it knows, the ones colony knows are added, and each is started with a trivial
-        request whose report names the model that answered. Only those confirmed are kept. A few tiny calls."""
+        """The models this account can run: Claude Code's own model menu when it's there (free, exact). Otherwise
+        it's asked once for the IDs it knows, the ones colony knows are added, and each is started with a trivial
+        request whose report names the model that answered; only those confirmed are kept (a few tiny calls)."""
         import re
         import tempfile
+        if run is None and (menu := self.catalog()):
+            return menu
         run = run or _run
         here = tempfile.mkdtemp(prefix="colony-models-")      # no project's settings or hooks
         base = [self.program, "-p", "--setting-sources", ""]
@@ -375,6 +394,9 @@ class Codex:
     def version(self):
         return _run([self.program, "--version"])
 
+    def catalog(self):
+        return self.discover()
+
     def discover(self, run=None):
         """The models this account can run, from Codex's own catalog of them, with each one's effort levels;
         what it keeps hidden (internal models) is left out. Nothing is called."""
@@ -599,19 +621,22 @@ def _discovered():
         return {}
 
 
-def discover(force=False, run=None):
-    """Find the models each ticked, installed provider can run, and keep them with the program's version: a
-    provider is looked at again when its program updates (that's when models come and go), or when forced.
-    Returns the providers that were looked at."""
+def discover(force=False, run=None, calls=True):
+    """Find the models each ticked, installed provider can run and keep them. calls=False reads only what each
+    program keeps on disk (the daily check: no tokens); a provider whose list isn't on disk is then left as it
+    was. Returns the providers that were looked at."""
     from . import board
     have, looked = _discovered(), []
     for k, p in PROVIDERS.items():
         if not usable(p) or not hasattr(p, "discover"):
             continue
         ver = p.version() if run is None else "test"
-        if not force and have.get(k, {}).get("version") == ver:
-            continue
-        found = p.discover(run) if run else p.discover()
+        if run is None and not calls:
+            found = p.catalog() if hasattr(p, "catalog") else p.discover()
+            if not found:
+                continue
+        else:
+            found = p.discover(run) if run else p.discover()
         if found or k not in have:
             have[k] = {"version": ver, "at": board.now(), "models": found}
         looked.append(k)

@@ -506,26 +506,29 @@ class Watcher:
                 path.unlink()
 
     def models(self):
-        """A model joined the lineup: its card ranks against the rest at once (standings are derived); every
-        project is told to look at its plan again, and the monitor hears which cards still wait for research."""
-        from . import bench
-        if time.time() - self.discovered > 3600:       # a program that updated may bring or drop models: look hourly
-            self.discovered = time.time()
-            threading.Thread(target=lambda: providers.discover(), daemon=True).start()
-        added = bench.lineup_changed()
-        if not added:
+        """Once a day (and at start), with no tokens: read each program's own list of its models; while any model
+        has no Artificial Analysis data yet, ask Artificial Analysis once; and act on a model only when its data
+        has come: its card fills, and projects with a model plan and the monitor hear of it."""
+        if time.time() - self.discovered < 86400:
             return
-        if bench.aa_key():                              # new models are the one reason to fetch again
-            threading.Thread(target=bench.refresh, daemon=True).start()
-        names = ", ".join(bench.name(m) for m in added)
+        self.discovered = time.time()
+        threading.Thread(target=self.models_daily, daemon=True).start()
+
+    def models_daily(self):
+        from . import bench
+        providers.discover(calls=False)                  # files each program keeps: nothing is called
+        bench.lineup_changed()
+        if bench.aa_key() and bench.pending():
+            bench.refresh()                             # one request, only while a model waits for its data
+        ready = bench.ready_to_announce()
+        if not ready:
+            return
+        names = ", ".join(bench.name(m) for m in ready)
         for p in board.projects():
             if p.exists() and bench.plan(p):
-                board.add_note(p, None, f"A model joined colony: {names}. Look at your model plan against its card "
-                                        "(colony models, the board's Models page) and propose any change to the person.")
-        waiting = [m for m in bench.pending() if m in added]
-        if waiting:
-            queue(f"A model joined the lineup ({names}). Cards waiting for Artificial Analysis data: "
-                  f"{', '.join(bench.name(m) for m in waiting)}; they fill when it has them and the key is connected (Settings).")
+                board.add_note(p, None, f"A model joined colony, with its benchmarks: {names}. Look at your model plan "
+                                        "against its card (colony models, the board's Models page) and propose any change to the person.")
+        queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page.")
 
     def tick(self):
         self.models()

@@ -738,6 +738,20 @@ class GlanceTest(BoardBase):
             model = cmd[cmd.index("--model") + 1]
             real = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"}
             return json.dumps({"modelUsage": {model: {}}}) if model in real else "There's an issue with the selected model"
+        home = Path(self.tmp.name) / "userhome"
+        menu = home / ".claude" / "cache" / "model-catalog"
+        menu.mkdir(parents=True)
+        (menu / "acct-cc.json").write_text(json.dumps({"catalog": {"config": {"models": [
+            {"id": "claude-opus-5-5", "name": "Opus 5.5", "section": "main",
+             "thinking": {"effort_options": [{"id": "low"}, {"id": "medium"}, {"id": "high"}]}},
+            {"id": "claude-haiku-4-5-20251001", "name": "Haiku 4.5", "section": "main"},
+            {"id": "claude-opus-4-6", "name": "Opus 4.6", "section": "overflow"}]}}}))
+        saved_home, os.environ["HOME"] = os.environ["HOME"], str(home)
+        try:
+            self.assertEqual(providers.get("claude").discover(), [("claude-opus-5-5", "Opus 5.5", ["low", "medium", "high"]),
+                             ("claude-haiku-4-5-20251001", "Haiku 4.5", [])], "its own menu, main section, no calls")
+        finally:
+            os.environ["HOME"] = saved_home
         found = providers.get("claude").discover(run)
         ids = [m for m, _, _ in found]
         self.assertEqual(ids, ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"],
@@ -862,12 +876,21 @@ class GlanceTest(BoardBase):
         out = self.cli("notes", "--deliver", "--session").stdout
         self.assertIn("Your model plan, agreed with the person", out, "handed over at every session start")
         self.assertIn("building: Opus 5.5 (claude-opus-5-5) at high effort: agreed with the person", out)
-        self.assertEqual(bench.lineup_changed(), [], "the first look records the lineup")
+        self.assertEqual(bench.ready_to_announce(), [], "the first look takes what's there as known")
         providers.get("claude").models.append(("claude-new-6", "New 6"))
+        from unittest.mock import patch
+        stop = patch.object(providers, "discover", lambda **kw: [])    # this machine's real menus stay out of it
+        stop.start()
         try:
-            monitor.Watcher(quiet=0).models()
-            self.assertTrue(any("A model joined colony: New 6" in n["text"] for n in board.notes(self.root)))
+            monitor.Watcher(quiet=0).models_daily()
+            self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no data yet: nothing to act on")
+            bench.add([rec("claude-new-6", "high", 58)])                     # Artificial Analysis now has it
+            monitor.Watcher(quiet=0).models_daily()
+            self.assertTrue(any("A model joined colony, with its benchmarks: New 6" in n["text"] for n in board.notes(self.root)))
+            monitor.Watcher(quiet=0).models_daily()
+            self.assertEqual(sum("New 6" in n["text"] for n in board.notes(self.root)), 1, "announced once")
         finally:
+            stop.stop()
             providers.get("claude").models.pop()
 
     def test_peek_reads_back_past_the_screen(self):

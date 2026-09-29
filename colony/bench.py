@@ -452,3 +452,19 @@ def refresh(opener=None):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(out, indent=1))
     return out
+
+
+def ready_to_announce():
+    """Models in the lineup whose data has come and that haven't been announced: each is announced once. The
+    first time the board looks, what's there is taken as known, not as news."""
+    p = board.home() / "bench" / "announced.json"
+    try:
+        told = set(json.loads(p.read_text()))
+        first = False
+    except (OSError, ValueError):
+        told, first = set(), True
+    ready = [mid for _, mid, _, _ in lineup() if not card(mid)["pending"]]
+    new = [] if first else [m for m in ready if m not in told]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(sorted(told | set(ready))))
+    return new
