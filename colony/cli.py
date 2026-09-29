@@ -298,8 +298,9 @@ def _runnable(chosen):
     """Refuse a provider whose program isn't on this machine, before anything is made or wired."""
     from . import board, providers
     p = providers.get(chosen.get("provider") or board.registry()["settings"]["provider"])
-    if not providers.installed(p):
-        raise SystemExit(f"colony: {providers.missing(p)}; install it, or choose another with --provider")
+    if not providers.usable(p):
+        raise SystemExit(f"colony: {providers.unusable(p)}; choose another with --provider"
+                         + ("" if providers.installed(p) else ", or install it"))
 
 
 def cmd_track(a):
@@ -475,7 +476,8 @@ def cmd_doctor(a):
     problems = []
     here = [p for p in providers.PROVIDERS.values() if providers.installed(p)]
     for p in providers.PROVIDERS.values():
-        print(f"{'ok  ' if p in here else 'note'}  {p.label} ({p.program}) {'installed' if p in here else 'not installed'}")
+        print(f"{'ok  ' if p in here else 'note'}  {p.label} ({p.program}) {'installed' if p in here else 'not installed'}"
+              + ("" if providers.enabled(p) else "; off in colony's Settings"))
     if not here:
         problems.append("no agent program is installed: Claude Code (https://claude.com/claude-code) or Codex "
                         "(https://developers.openai.com/codex)")
@@ -782,8 +784,10 @@ def cmd_settings(a):
         except KeyError:
             raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.DEFAULT_SETTINGS)}, new-folder")
     reg = board.registry()
+    from . import providers
     for k, v in reg["settings"].items():
-        shown = ("on" if v else "off") if isinstance(v, bool) else (v or "(the provider's default)")
+        shown = ("on" if v else "off") if isinstance(v, bool) else (", ".join(v or providers.PROVIDERS) if k == "providers"
+                                                                   else v or "(the provider's default)")
         print(f"{k:10} {shown:28} {board.SETTING_HELP[k]}")
     print(f"{'new-folder':10} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':10} {', '.join(reg['roots']) or '(none)'}")

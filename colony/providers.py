@@ -522,6 +522,27 @@ def installed(provider):
 def missing(provider):
     """What to tell the person when a provider's program isn't here."""
     return f"{provider.label} isn't installed on this machine ({provider.site})"
+
+
+def key(provider):
+    return next(k for k, p in PROVIDERS.items() if p is provider)
+
+
+def enabled(provider):
+    """Whether the person has it on in Settings (all are, until they turn one off)."""
+    from . import board
+    on = board.registry()["settings"].get("providers")
+    return on is None or key(provider) in on
+
+
+def usable(provider):
+    """On in Settings and installed: what colony offers for new projects and its default."""
+    return enabled(provider) and installed(provider)
+
+
+def unusable(provider):
+    """Why a provider can't be chosen, in a line."""
+    return missing(provider) if not installed(provider) else f"{provider.label} is off in colony's Settings"
 DEFAULT = "claude"
 
 

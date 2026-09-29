@@ -700,6 +700,35 @@ class GlanceTest(BoardBase):
         [n] = board.notes(old)
         self.assertIn("The new section of AGENTS.md", n["text"], "its join note names the file its program reads")
 
+    def test_the_person_ticks_which_agent_programs_colony_uses(self):
+        board.track(self.root)
+        board.project_settings(self.root, {"provider": "codex"})       # a project already on Codex
+        board.set_setting("provider", "codex")
+        board.set_setting("providers", "claude")                        # Codex off
+        s = board.registry()["settings"]
+        self.assertEqual((s["providers"], s["provider"]), (["claude"], "claude"), "the default moves to one that's on")
+        self.assertFalse(providers.usable(providers.get("codex")))
+        self.assertIn("Codex (off in Settings)</option>", board.add_project_page(board.registry(), "new", ""))
+        r = self.cli("new", "garden", "--provider", "codex", "--in", self.tmp.name)
+        self.assertIn("Codex is off in colony's Settings", r.stderr)
+        page = board.settings_page(board.registry())
+        self.assertIn("<h2>Agent programs</h2>", page)
+        self.assertIn("name='on' value='claude' checked", page)
+        self.assertIn("off, but 1 project still run on it (plants)", page, "unticking breaks nothing that runs")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            post = lambda data: urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{httpd.server_address[1]}/providers", data=data.encode()))
+            post("")
+            self.assertEqual(board.registry()["settings"]["providers"], ["claude"], "none ticked: at least one stays on")
+            post("on=claude&on=codex")
+            self.assertIsNone(board.registry()["settings"]["providers"], "all on again")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        self.assertIn("providers", self.cli("settings").stdout)
+
     def test_start_says_what_it_needs_when_neither_program_is_here(self):
         bin_ = Path(self.tmp.name) / "bin"
         bin_.mkdir()

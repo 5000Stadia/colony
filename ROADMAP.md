@@ -55,6 +55,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R42 Each provider knows its program: forms, colony new/track, consoles and colony doctor handle one that isn't installed
 - [x] R43 Claude-only extras (Remote Control, plugin suggestions, the unattended runtime) step aside where only Codex is installed
 - [x] R44 The monitor runs on whichever program is installed, its brief where that program reads it
+- [x] R50 Settings: the person ticks which agent programs colony uses; one that's off isn't offered or the default, and projects already on it keep running
 - [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
 ## M8 — Models chosen from evidence

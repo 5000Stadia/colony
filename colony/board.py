@@ -130,13 +130,14 @@ def registry():
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
-DEFAULT_SETTINGS = {"provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
+DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask"}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
 PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
+    "providers": "the agent programs colony uses: claude, codex (comma-separated; all by default)",
     "provider": "which CLI runs new projects' agents (colony knows: claude, codex)",
     # PROVIDER: Remote Control is Claude Code's. Another provider maps "remote" to its own way of reaching a
     # session from elsewhere in its command(), or ignores it; say which in this help and in the forms.
@@ -170,6 +171,14 @@ def set_setting(key, value):
         if value not in PROVIDERS:
             raise KeyError(key)
         reg["settings"][key] = value
+    elif key == "providers":
+        from .providers import PROVIDERS
+        on = [k.strip() for k in str(value).split(",") if k.strip()]
+        if not on or any(k not in PROVIDERS for k in on):
+            raise KeyError(key)                  # at least one, and only ones colony knows
+        reg["settings"][key] = None if set(on) == set(PROVIDERS) else on
+        if reg["settings"]["provider"] not in on:
+            reg["settings"]["provider"] = on[0]  # the default is always one that's on
     else:
         raise KeyError(key)
     save_registry(reg)
@@ -257,13 +266,13 @@ def settle_provider():
     so new projects and the monitor start on something that runs. What changed, in a line, or None."""
     from . import providers
     now = providers.get(registry()["settings"]["provider"])
-    if providers.installed(now):
+    if providers.usable(now):
         return None
-    here = next((k for k, p in providers.PROVIDERS.items() if providers.installed(p)), None)
+    here = next((k for k, p in providers.PROVIDERS.items() if providers.usable(p)), None)
     if not here:
         return None
     set_setting("provider", here)
-    return f"{now.label} isn't installed here, so new projects and the monitor run on {providers.get(here).label} (colony settings provider to change it)"
+    return f"{providers.unusable(now)}, so new projects and the monitor run on {providers.get(here).label} (colony settings provider to change it)"
 
 
 def workdir(root):
@@ -1217,7 +1226,7 @@ def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
     with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
     will use; the global form leaves them blank to mean the provider's own, and says what that is."""
-    from .providers import PROVIDERS, get, installed
+    from .providers import PROVIDERS, get, installed, usable
     g = registry()["settings"]
     cur = cur or g["provider"]
     p = get(cur)
@@ -1245,8 +1254,9 @@ def provider_fields(cur, model, effort, blank):
     hint = data[cur]["recommendation"]
     return (f"<div class='provider-fields' data-providers='{e(json.dumps(data))}'>"
             f"<label>Provider <select name='provider'>"
-            + "".join(f"<option value='{k}'{' selected' if cur == k else ''}{'' if installed(v) else ' disabled'}>"
-                      f"{e(v.label)}{'' if installed(v) else ' (not installed)'}</option>" for k, v in PROVIDERS.items())
+            + "".join(f"<option value='{k}'{' selected' if cur == k else ''}{'' if usable(v) else ' disabled'}>"
+                      f"{e(v.label)}{'' if usable(v) else ' (not installed)' if not installed(v) else ' (off in Settings)'}</option>"
+                      for k, v in PROVIDERS.items())
             + "</select></label>"
             f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'>"
             f"<a class='modelinfo' href='/models{'#' + e(model) if model else ''}' target='_blank' "
@@ -1887,6 +1897,18 @@ def settings_page(reg):
                      f"<button class='quiet'>Remove from board</button></form></div></li>" for p in reg["projects"])
     s = reg["settings"]
     check = lambda k: " checked" if s[k] else ""
+    from . import providers as pv
+    def program(k, p):
+        using = [x.name for x in projects(reg) if x.exists() and pv.of(x) is p]
+        state = ("installed" if pv.installed(p) else f"not installed: <a href='{e(p.site)}' target='_blank' rel='noopener'>get it</a>")
+        also = (f"; off, but {len(using)} project{'s' * (len(using) != 1)} still run on it ({e(', '.join(using))})"
+                if using and not pv.enabled(p) else f"; {len(using)} project{'s' * (len(using) != 1)}" if using else "")
+        return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
+                f"<span class='muted'>({state}{also})</span></label>")
+    programs = (f"<form method='post' action='/providers' class='options'>"
+                + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
+                + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
+                  "you untick keep running. At least one stays on.</p><button>Save</button></form>")
     options = (f"<form method='post' action='/options' class='options'>"
                # PROVIDER: Remote Control and the Claude app are Claude Code's; see SETTING_HELP["remote"].
                f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
@@ -1907,7 +1929,7 @@ def settings_page(reg):
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
-    body = (f"<header><h1>Settings</h1></header><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
@@ -2093,14 +2115,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(413, b"that file is too large (25 MB at most)")
         if urllib.parse.urlparse(self.path).path == "/pin/upload":
             return self._upload()
+        body_text = ""
         if self.headers.get("Content-Type", "").startswith("multipart/form-data"):
             form, upload = self._multipart()       # Message, with a file or a long paste
         else:
             upload = None
             length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
-            form = {k: v[0] for k, v in urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace")).items()}
+            body_text = self.rfile.read(length).decode("utf-8", "replace")
+            form = {k: v[0] for k, v in urllib.parse.parse_qs(body_text).items()}
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path == "/providers":
+            on = urllib.parse.parse_qs(body_text).get("on", []) if body_text else []
+            try:
+                set_setting("providers", ",".join(on))
+            except KeyError:
+                pass                                      # none ticked: at least one stays on, so nothing changes
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/options":
             set_setting("remote", form.get("remote", "off"))
             set_setting("monitor", form.get("monitor", "off"))
