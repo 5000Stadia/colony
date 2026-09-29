@@ -51,6 +51,13 @@ from pathlib import Path
 
 class ClaudeCode:
     label = "Claude Code"
+
+    @staticmethod
+    def config_home():
+        """Where Claude Code keeps its files: CLAUDE_CONFIG_DIR if set, else .claude in the home folder (on Linux,
+        macOS and Windows alike)."""
+        import os
+        return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     program, site = "claude", "https://claude.com/claude-code"     # its program, and where to get it
     # Exact models by full ID, so a project keeps the model it was given; an alias ("opus") moves to whatever
     # is newest. The models colony offers are discovered (discover()); these are the ones it knows by name, and
@@ -114,7 +121,7 @@ class ClaudeCode:
         by Claude Code itself: each model with its effort levels. Its main section only; older models it keeps
         under "more models" are left out. None if there's no such file or it can't be read. PROVIDER: Claude
         Code's own cache, undocumented; discover() falls back to asking when it isn't there."""
-        files = sorted((Path.home() / ".claude" / "cache" / "model-catalog").glob("*-cc.json"),
+        files = sorted((self.config_home() / "cache" / "model-catalog").glob("*-cc.json"),
                        key=lambda f: f.stat().st_mtime, reverse=True)
         for f in files:
             try:
@@ -194,7 +201,7 @@ class ClaudeCode:
         from datetime import datetime
         stamp = lambda e: datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
         from .board import workdir
-        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
+        folder = self.config_home() / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
         total = 0.0
         for f in folder.glob("*.jsonl"):
             at, ms, opened, last = self._turns.get(f, (0, 0, None, None))
@@ -235,7 +242,7 @@ class ClaudeCode:
         for this folder; None if there is none (the board then shows the screen)."""
         import re
         from .board import workdir
-        folder = Path.home() / ".claude" / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
+        folder = self.config_home() / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
         files = sorted(folder.glob("*.jsonl"), key=lambda f: f.stat().st_mtime)
         if not files:
             return None
@@ -264,7 +271,7 @@ class ClaudeCode:
         """What Claude Code uses when colony names nothing: its own settings file, where the person may have
         pinned a model or effort. None where it's left to Claude Code, which picks by plan and version and
         records the choice nowhere stable."""
-        path = Path.home() / ".claude" / "settings.json"
+        path = self.config_home() / "settings.json"
         try:
             s = json.loads(path.read_text())
         except (OSError, ValueError):

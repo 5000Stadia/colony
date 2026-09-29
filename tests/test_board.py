@@ -854,7 +854,7 @@ class GlanceTest(BoardBase):
         self.assertIn("claude-sonnet-5", bench.pending())
         self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
         page = board.models_page(board.registry())
-        for want in ("Best for", "By domain", "Effort against cost", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
+        for want in ("Best for", "By domain", "Score against price", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
                      "isn't ranked against the rows above"):
             self.assertIn(want, page)
         self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison or the best-for lists")

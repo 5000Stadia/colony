@@ -1785,6 +1785,7 @@ def models_page(reg):
     entries = bench.standings()
     shade = lambda s: (f"<td class='sc' style='--s:{s / 100:.2f}'>{s}</td>" if s is not None else "<td class='gap'>—</td>")
     usd = lambda r: f"${r['value']:.2f}" if r and r["unit"] == "usd" else (f"{r['value']:g} {r['unit']}" if r else "—")
+    cost_head = next((bench.cost_label(x["cost"]) for x in entries if x["cost"]), "price per 1M tokens")
     secs = lambda r: f"{r['value']:g} s" if r and r["unit"] == "s" else "—"
     # the best for each role, at a glance
     best = "".join(
@@ -1797,7 +1798,7 @@ def models_page(reg):
                    + f"<td>{usd(x['cost'])}</td><td>{secs(x['time'])}</td></tr>"
                    for x in entries if x["comparable"])
     table = (f"<div class='mapwrap'><table class='bench'><tr><th>Model · effort</th>"
-             + "".join(f"<th>{e(d)}</th>" for d in doms) + "<th>cost / task</th><th>time / task</th></tr>" + rows + "</table></div>")
+             + "".join(f"<th>{e(d)}</th>" for d in doms) + f"<th>{e(cost_head)}</th><th>time</th></tr>" + rows + "</table></div>")
     cards = "".join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     pend = bench.pending()
     return shell(reg, -2, "<header><h1>Models</h1><p class='muted'>From independent evaluators (Artificial Analysis, "
@@ -1808,7 +1809,7 @@ def models_page(reg):
                  + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
                  + "</header><h2>Best for</h2><div class='card'><table class='bench best'>" + best + "</table></div>"
                  "<h2>By domain</h2><div class='card'>" + table + "</div>"
-                 "<h2>Effort against cost</h2><div class='card'>" + effort_chart(entries) + "</div>"
+                 "<h2>Score against price</h2><div class='card'>" + effort_chart(entries) + "</div>"
                  "<h2>Cards</h2>" + cards)
 
 
@@ -1828,7 +1829,7 @@ def model_card(c):
     rows = "".join(
         f"<tr><th>{e(x['variant'])}</th><td>{x['overall'] if x['overall'] is not None else '—'}</td>"
         f"<td>{e(', '.join(f'{d} {s}' for d, s in x['domains'].items() if d != 'overall')) or '—'}</td>"
-        f"<td>{'$%.2f' % x['cost']['value'] if x['cost'] and x['cost']['unit'] == 'usd' else '—'}</td></tr>"
+        f"<td>{('$%.2f' % x['cost']['value'] + (' / 1M tokens' if bench.pricing(x['cost']) else ' / task')) if x['cost'] and x['cost']['unit'] == 'usd' else '—'}</td></tr>"
         for x in c["entries"] if x["comparable"])
     unstated = [r for x in c["entries"] if not x["comparable"] for r in x["raw"]]
     rows += ("<tr><th>effort not stated</th><td colspan='3' class='muted'>" + e("; ".join(
@@ -1840,7 +1841,7 @@ def model_card(c):
                   for x in c["entries"] for r in x["raw"] + x["measures"])
     return (f"<div class='card' id='{e(c['model'])}'><div class='titlerow'><h3>{e(c['name'])}</h3>"
             f"<span class='muted'>{e(c['model'])}</span>{'<span class=badge>pending</span>' if c['pending'] else ''}</div>"
-            + (f"<div class='mapwrap'><table class='bench'><tr><th>effort</th><th>overall</th><th>by domain</th><th>cost / task</th></tr>{rows}</table></div>"
+            + (f"<div class='mapwrap'><table class='bench'><tr><th>effort</th><th>overall</th><th>by domain</th><th>cost</th></tr>{rows}</table></div>"
                if c["entries"] else "<p class='muted'>No independent scores yet: this card waits for its research check.</p>")
             + (f"<p class='muted'>No independent data at: {e(', '.join(c['untested']))}.</p>" if c["untested"] else "")
             + ("<ul>" + "".join(f"<li>{e(n)}</li>" for n in c["notes"]) + "</ul>" if c["notes"] else "")
@@ -1853,7 +1854,7 @@ def effort_chart(entries):
     (up), joined in order: where the line climbs, more effort pays; where it runs flat, it only costs more."""
     import math
     from . import bench
-    pts = [x for x in entries if x["comparable"] and x["overall"] is not None and x["cost"] and x["cost"]["value"] > 0 and per(x["cost"]["benchmark"])]
+    pts = [x for x in entries if x["comparable"] and x["overall"] is not None and x["cost"] and x["cost"]["value"] > 0]
     if not pts:
         return "<p class='muted'>No model has both an overall score and a cost per task yet.</p>"
     W, H, L, B = 640, 300, 44, 34
@@ -1868,7 +1869,7 @@ def effort_chart(entries):
         out.append(f"<polyline fill='none' stroke='{col}' stroke-width='2' points='"
                    + " ".join(f"{X(x['cost']['value']):.0f},{Y(x['overall']):.0f}" for x in mine) + "'/>")
         out += [f"<circle cx='{X(x['cost']['value']):.0f}' cy='{Y(x['overall']):.0f}' r='4' fill='{col}'><title>"
-                f"{e(bench.entry_name(x))}: overall {x['overall']}, ${x['cost']['value']:.2f} per task</title></circle>"
+                f"{e(bench.entry_name(x))}: overall {x['overall']}, ${x['cost']['value']:.2f} {bench.cost_label(x['cost'])}</title></circle>"
                 + f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['variant'])}</text>"
                 for x in mine]
         legend.append(f"<span><i style='background:{col}'></i>{e(bench.name(mid))}</span>")
@@ -1878,7 +1879,9 @@ def effort_chart(entries):
                  for k in range(math.floor(lo), math.ceil(hi) + 1, step) if lo <= k <= hi)
     return (f"<div class='mapwrap'><svg class='chart' viewBox='0 0 {W} {H}' width='{W}' height='{H}'>{ticks}{xt}"
             f"<text x='{L + 8}' y='12' class='axis'>overall (0–100)</text><text x='{W - 12}' y='{H - 2}' text-anchor='end' class='axis'>"
-            f"cost per task, doubling each step</text>{''.join(out)}</svg></div><div class='legend chartkey'>{''.join(legend)}</div>")
+            f"{bench.cost_label(pts[0]['cost'])}, doubling each step</text>{''.join(out)}</svg></div><div class='legend chartkey'>{''.join(legend)}</div>"
+            + ("<p class='muted'>A model's effort levels share its price per token, so they stack at one price: "
+               "higher effort spends more tokens a task, which this data doesn't give.</p>" if bench.pricing(pts[0]["cost"]) else ""))
 
 
 def per(benchmark):

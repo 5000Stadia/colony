@@ -151,12 +151,25 @@ def standings(rows=None):
         # other costs (another benchmark's, a whole run's) stay in the record list, never compared
         index = lambda dom: [r for r in e["measures"] if r["domain"] == dom and r["kind"] == "independent"
                              and per(r["benchmark"]) and INDEX in r["benchmark"].lower()]
-        e["cost"] = (index("cost") or [None])[0]
+        price = [r for r in e["measures"] if r["domain"] == "cost" and r["kind"] == "independent" and pricing(r)]
+        e["cost"] = (price or index("cost") or [None])[0]      # price per 1M tokens; else an older per-task cost
         e["time"] = (index("latency") or [None])[0]
         e["index"] = next((r["value"] for r in e["raw"] if r["domain"] == "overall" and r["kind"] == "independent"
                            and INDEX in r["benchmark"].lower() and r["source"] == "Artificial Analysis"), None)
         e["pending"] = not any(r["domain"] in ("overall", "preference") and r["kind"] == "independent" for r in e["raw"])
     return sorted(entries.values(), key=lambda e: (not e["comparable"], e["overall"] is None, -(e["overall"] or 0)))
+
+
+def pricing(r):
+    """Whether a cost is a price per million tokens (the same for every effort level of a model)."""
+    return "per 1m tokens" in r["benchmark"].lower()
+
+
+def cost_label(r):
+    return "price per 1M tokens" if r and pricing(r) else "cost per task"
+
+
+EFFORT_ORDER = {x: i for i, x in enumerate(EFFORTS)}
 
 
 def per(benchmark):
@@ -172,7 +185,9 @@ def role_score(e, role):
     if role == "chores":
         if e.get("index") is None or not e["cost"] or not e["cost"]["value"]:
             return None
-        return e["index"] / e["cost"]["value"]
+        value = e["index"] / e["cost"]["value"]
+        # a price per token is the same at every effort: among them, the lowest effort spends the fewest tokens
+        return value - (EFFORT_ORDER.get(e["effort"], 0) * 1e-6 if pricing(e["cost"]) else 0)
     have = [e["domains"][d] for d in ROLES[role] if d in e["domains"]]
     return sum(have) / len(have) if have else None
 
@@ -211,13 +226,17 @@ def card(model, entries=None):
             out["notes"].append(f"{entry_name(e)}: strong in {', '.join(top)} for this lineup")
         if low:
             out["notes"].append(f"{entry_name(e)}: weak in {', '.join(low)} for this lineup")
-    ranked = sorted((e for e in mine if e["overall"] is not None and e["cost"]), key=lambda e: e["cost"]["value"])
+    ranked = sorted((e for e in mine if e["overall"] is not None and e["effort"]), key=lambda e: EFFORT_ORDER.get(e["effort"], 0))
     for a, b in zip(ranked, ranked[1:]):
-        gain, times = b["overall"] - a["overall"], b["cost"]["value"] / a["cost"]["value"] if a["cost"]["value"] else None
-        if times:
-            verdict = "pays" if gain >= 10 else "costs more for little" if gain < 3 else "pays a little"
-            out["notes"].append(f"{b['effort'] or 'this'} over {a['effort'] or 'that'}: {gain:+d} points for "
-                                f"{times:.1f}× the cost: {verdict}")
+        gain = b["overall"] - a["overall"]
+        verdict = "pays" if gain >= 10 else "little gain" if gain < 3 else "pays a little"
+        if b["cost"] and a["cost"] and not pricing(b["cost"]) and a["cost"]["value"]:
+            times = b["cost"]["value"] / a["cost"]["value"]
+            out["notes"].append(f"{b['effort']} over {a['effort']}: {gain:+d} points for {times:.1f}× the cost: "
+                                + ("costs more for little" if gain < 3 else verdict))
+        else:
+            out["notes"].append(f"{b['effort']} over {a['effort']}: {gain:+d} points, at the same price per token "
+                                f"but more tokens a task: {verdict}")
     for role in ROLES:
         ranks = best_for(role, entries=entries)
         for e in mine:
@@ -273,14 +292,17 @@ def recommend(root):
         if role != "chores":
             # more effort pays only while it scores clearly more: the cheapest entry within NEAR of the best
             near = [x for x in ranked if role_score(x, role) >= role_score(top, role) - NEAR and x["cost"]]
-            e = min(near, key=lambda x: x["cost"]["value"]) if near else top
+            # the cheapest model, then its lowest effort: fewer tokens a task
+            e = min(near, key=lambda x: (x["cost"]["value"], EFFORT_ORDER.get(x["effort"], 0))) if near else top
         if role == "chores":
             why = (f"most Intelligence Index points per dollar among {providers.of(root).label} models "
-                   f"({e['index']:g} points at ${e['cost']['value']:.2f} a task)")
+                   f"({e['index']:g} points at ${e['cost']['value']:.2f} {'per 1M tokens' if pricing(e['cost']) else 'a task'}"
+                   + ("; the lowest effort, for the fewest tokens" if pricing(e["cost"]) else "") + ")")
         else:
             why = (f"{role} score {role_score(e, role):.0f} of 100 across the lineup"
-                   + (f", within {NEAR} of the best ({entry_name(top)}, {role_score(top, role):.0f}) at "
-                      f"${e['cost']['value']:.2f} a task against ${top['cost']['value']:.2f}"
+                   + (f", within {NEAR} of the best ({entry_name(top)}, {role_score(top, role):.0f})"
+                      + (f" at a lower effort: fewer tokens a task" if e["model"] == top["model"] else
+                         f" at ${e['cost']['value']:.2f} against ${top['cost']['value']:.2f} {cost_label(e['cost'])}")
                       if e is not top and top["cost"] else ""))
         out[role] = {"model": e["model"], "effort": e["effort"], "why": why}
     return out
