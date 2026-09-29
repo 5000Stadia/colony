@@ -752,6 +752,45 @@ class GlanceTest(BoardBase):
         self.assertIn("claude-sonnet-5-5", page)
         self.assertNotIn("<option value='claude-fable-5-1'>", page, "not confirmed here: not offered")
 
+    def test_artificial_analysis_is_the_one_source_matched_by_name_whatever_its_spelling(self):
+        from colony import bench
+        entry = lambda slug, name, ii, price=5.0: {"id": slug, "slug": slug, "name": name, "model_creator": {"slug": "x"},
+            "evaluations": {"artificial_analysis_intelligence_index": ii, "gpqa": 0.8, "new_benchmark": 1},
+            "pricing": {"price_1m_blended_3_to_1": price}, "median_output_tokens_per_second": 60.0,
+            "median_time_to_first_token_seconds": 2.5}
+        data = [entry("claude-opus-5-5-high", "Claude Opus 5.5 (high)", 56), entry("claude-opus-5-5-low", "Claude Opus 5.5 (low)", 42),
+                entry("claude-4-5-haiku-reasoning", "Claude 4.5 Haiku (Reasoning)", 20, 1.0),
+                entry("claude-sonnet-5-5-high", "Claude Sonnet 5.5 (high)", 50),      # not claude-sonnet-5's
+                entry("some-other-model", "Other", 70)]
+        class Reply:
+            def __init__(self, body): self.body = body
+            def read(self): return self.body
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        seen = []
+        opener = lambda req, timeout: (seen.append(req.headers), Reply(json.dumps({"status": 200, "data": data}).encode()))[1]
+        self.assertIn("no Artificial Analysis key", bench.refresh(opener)["error"])
+        bench.set_key("  secret-key \n")
+        self.assertEqual(oct(bench.key_path().stat().st_mode & 0o777), "0o600", "readable by the person alone")
+        out = bench.refresh(opener)
+        self.assertIsNone(out["error"])
+        self.assertEqual(seen[-1].get("X-api-key"), "secret-key")
+        self.assertIn("claude-haiku-4-5-20251001", out["matched"], "Claude 4.5 Haiku is claude-haiku-4-5, any order")
+        self.assertNotIn("claude-sonnet-5", out["matched"], "a spare version number: another model")
+        self.assertIn("new_benchmark", out["unknown_fields"], "a field we don't know is listed, not guessed at")
+        self.assertEqual(out["unmatched"], 2, "theirs that match no model here: counted, not forced")
+        by = {(e["model"], e["variant"]): e for e in bench.standings()}
+        self.assertEqual(by[("claude-opus-5-5", "high")]["overall"], 100)
+        self.assertIn(("claude-haiku-4-5-20251001", "reasoning"), by, "a variant named by the source")
+        self.assertEqual({r["source"] for e in by.values() for r in e["raw"]}, {bench.API_SOURCE}, "one source")
+        self.assertIn("Connected", board.settings_page(board.registry()))
+        self.assertIn("https://artificialanalysis.ai/login", board.settings_page(board.registry()), "the steps, with links")
+        err = lambda req, timeout: (_ for _ in ()).throw(urllib.error.HTTPError(req.full_url, 401, "no", {}, None))
+        self.assertIn("reconnect it in Settings", bench.refresh(err)["error"])
+        r = subprocess.run([sys.executable, "-m", "colony", "bench", "key"], input="", capture_output=True, text=True,
+                           env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertIn("removed", r.stdout)
+
     def test_start_says_what_it_needs_when_neither_program_is_here(self):
         bin_ = Path(self.tmp.name) / "bin"
         bin_.mkdir()

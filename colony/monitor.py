@@ -515,6 +515,8 @@ class Watcher:
         added = bench.lineup_changed()
         if not added:
             return
+        if bench.aa_key():                              # new models are the one reason to fetch again
+            threading.Thread(target=bench.refresh, daemon=True).start()
         names = ", ".join(bench.name(m) for m in added)
         for p in board.projects():
             if p.exists() and bench.plan(p):

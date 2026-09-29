@@ -28,7 +28,8 @@ located signals and a project memory.
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
-    colony bench [card MODEL | discover | import FILE | pending]   benchmark cards; discover asks each program its models
+    colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
+                                    fetch pulls Artificial Analysis' data; key reads the key from stdin
     colony models [set ROLE MODEL EFFORT --why ...]     this project's model plan for its helpers
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
@@ -566,6 +567,18 @@ def cmd_bench(a):
         for line, wrong in bad:
             print(f"line {line} skipped: {'; '.join(wrong)}", file=sys.stderr)
         return 1 if bad else 0
+    if a.what == "key":                     # from stdin, so it never sits in shell history
+        bench.set_key(sys.stdin.read())
+        print("Artificial Analysis key " + ("saved" if bench.aa_key() else "removed"))
+        return 0
+    if a.what == "fetch":
+        out = bench.refresh()
+        if out["error"]:
+            print(f"colony: {out['error']}", file=sys.stderr)
+            return 1
+        print(f"{out['models']} models from Artificial Analysis; {out['added']} new record(s); matched: "
+              f"{', '.join(out['matched']) or 'none'}" + (f"; not in their data: {', '.join(out['missing'])}" if out["missing"] else ""))
+        return 0
     if a.what == "discover":
         from . import providers
         looked = providers.discover(force=True)
@@ -1017,7 +1030,7 @@ def main(argv=None):
     p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
-    p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover")); p.add_argument("arg", nargs="?")
+    p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
     p = sub.add_parser("models", help="this project's model plan for its helpers")
     p.add_argument("what", nargs="?", choices=("set",)); p.add_argument("args", nargs="*"); p.add_argument("--why")

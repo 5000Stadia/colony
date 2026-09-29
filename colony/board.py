@@ -1930,7 +1930,24 @@ def settings_page(reg):
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
-    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+    from . import bench
+    st = bench.status()
+    steps = "".join(f"<li>{e(t)}" + (f" <a href='{e(url)}' target='_blank' rel='noopener'>{e(url)}</a>" if url else "") + "</li>"
+                    for t, url in bench.AA_STEPS)
+    keybox = (f"<p>{'Connected' if st['connected'] else 'Not connected'}"
+              + (f"; data last fetched {e(st['at'][:16].replace('T', ' '))} UTC ({st.get('models', 0)} models)" if st.get("at") else "")
+              + (f". <span class='muted'>{e(st['error'])}</span>" if st.get("error") else "") + "</p>"
+              f"<ol class='steps'>{steps}</ol>"
+              f"<form method='post' action='/aa-key' class='options'><label>API key <input type='password' name='key' "
+              f"autocomplete='off' placeholder='{'Paste a new key to replace the one connected' if st['connected'] else 'Paste your key'}'></label>"
+              f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
+              + ("<button name='do' value='fetch' class='quiet'>Fetch now</button><button name='do' value='remove' class='quiet'>Remove key</button>"
+                 if st["connected"] else "") + "</div></form>"
+              "<p class='muted'>The Models page's scores come from Artificial Analysis "
+              "(<a href='https://artificialanalysis.ai/' target='_blank' rel='noopener'>artificialanalysis.ai</a>): free for "
+              "personal use, with attribution, up to 1,000 requests a day.</p>")
+    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
+            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
@@ -2126,6 +2143,19 @@ class Handler(BaseHTTPRequestHandler):
             form = {k: v[0] for k, v in urllib.parse.parse_qs(body_text).items()}
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path == "/aa-key":
+            from . import bench
+            if form.get("do") == "remove":
+                bench.set_key("")
+            elif form.get("do") == "save" and form.get("key", "").strip():
+                bench.set_key(form["key"])
+            if form.get("do") in ("save", "fetch") and bench.aa_key():
+                bench.refresh()                           # check the key by using it: fetch, keep, say what came
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/providers":
             on = urllib.parse.parse_qs(body_text).get("on", []) if body_text else []
             try:
@@ -2516,6 +2546,7 @@ table.bench tr + tr { border-top:1px solid var(--line) } table.bench td.sc { tex
 table.bench td.gap { text-align:right; color:var(--muted) } table.best th { width:7em } table.best td { white-space:normal }
 svg.chart text { font-size:11px; fill:var(--muted) } svg.chart .axis { font-size:11px } .chartkey { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px }
 .chartkey i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:middle }
+ol.steps { margin:6px 0 10px; padding-left:20px } ol.steps li { margin:3px 0 }
 a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 .timer { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap } .timer.running { color:var(--accent) } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
 .legend { font-size:13px; color:var(--muted); margin-bottom:10px } .mapwrap { overflow-x:auto; padding-bottom:6px }

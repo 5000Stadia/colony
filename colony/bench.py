@@ -105,6 +105,8 @@ def variant(r):
         return "reasoning"
     if m := re.search(r"_(\d+k)\b", note):
         return f"{m.group(1).upper()} thinking"
+    if m := re.search(r"; variant ([a-z-]+)$", note):
+        return m.group(1)
     return UNSTATED
 
 
@@ -114,6 +116,8 @@ def standings(rows=None):
     rows = records() if rows is None else rows
     models = {mid for _, mid, _, _ in lineup()}
     rows = [r for r in rows if r["model"] in models]
+    if any(r["source"] == API_SOURCE for r in rows):      # one source: once it has spoken, it alone is ranked
+        rows = [r for r in rows if r["source"] == API_SOURCE]
     latest = {}                                  # one value per entry and (source, benchmark, version): the newest
     for r in rows:
         k = (r["model"], variant(r), r["source"], r["benchmark"], r["version"], r["domain"])
@@ -305,3 +309,146 @@ def first_note(root):
             f"recommend:\n{lines}\nPresent this, say briefly what each choice trades (quality, cost, speed), and ask "
             "them to confirm or adjust. Record what they agree with `colony models set ROLE MODEL EFFORT --why "
             "\"...\"`; it is handed to you at every session start from then on.")
+
+
+# ---------------------------------------------------------------- Artificial Analysis, the one source
+
+AA_URL = "https://artificialanalysis.ai/api/v2/data/llms/models"
+AA_STEPS = [("Create a free account at Artificial Analysis", "https://artificialanalysis.ai/login"),
+            ("In its Insights Platform, generate an API key (the free API: intelligence, speed and pricing data)", None),
+            ("Paste the key below and save it; colony keeps it on this machine only", None),
+            ("Check it: colony makes one call and says how many models it sees", None)]
+
+
+def key_path():
+    return board.home() / "bench" / "aa-key"
+
+
+def aa_key():
+    try:
+        return key_path().read_text().strip() or None
+    except OSError:
+        return None
+
+
+def set_key(key):
+    """Keep the person's Artificial Analysis key on this machine, readable by them alone; empty removes it."""
+    p = key_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not key.strip():
+        p.unlink(missing_ok=True)
+        return
+    p.write_text(key.strip() + "\n")
+    p.chmod(0o600)
+
+
+def aa_get(key=None, opener=None):
+    """Artificial Analysis' model data, with the key (theirs asks us to cache it, so callers keep what comes back).
+    Returns (models, None) or ([], why it failed)."""
+    import urllib.error
+    import urllib.request
+    key = key or aa_key()
+    if not key:
+        return [], "no Artificial Analysis key is connected (Settings)"
+    req = urllib.request.Request(AA_URL, headers={"x-api-key": key, "User-Agent": "colony"})
+    try:
+        with (opener or urllib.request.urlopen)(req, timeout=30) as r:
+            return json.loads(r.read().decode()).get("data") or [], None
+    except urllib.error.HTTPError as err:
+        return [], {401: "the key was refused (401): reconnect it in Settings", 429: "over the daily limit (429): try tomorrow"}.get(
+            err.code, f"Artificial Analysis answered {err.code}")
+    except (OSError, ValueError) as err:
+        return [], f"couldn't reach Artificial Analysis ({err.__class__.__name__})"
+
+
+def status():
+    """Whether the key is connected and when data last came."""
+    p = board.home() / "bench" / "fetched.json"
+    try:
+        last = json.loads(p.read_text())
+    except (OSError, ValueError):
+        last = {}
+    return {"connected": bool(aa_key()), **last}
+
+
+API_SOURCE = "Artificial Analysis (API)"
+# What each field of theirs speaks to; one we don't know is left out and listed, never guessed at.
+AA_FIELDS = {"artificial_analysis_intelligence_index": ("overall", "Intelligence Index", "points"),
+             "artificial_analysis_coding_index": ("coding", "Coding Index", "points"),
+             "artificial_analysis_math_index": ("math", "Math Index", "points"),
+             "gpqa": ("reasoning", "GPQA Diamond", "fraction"), "hle": ("reasoning", "Humanity's Last Exam", "fraction"),
+             "mmlu_pro": ("reasoning", "MMLU-Pro", "fraction"), "livecodebench": ("coding", "LiveCodeBench", "fraction"),
+             "scicode": ("coding", "SciCode", "fraction"), "math_500": ("math", "MATH-500", "fraction"),
+             "aime": ("math", "AIME", "fraction")}
+
+
+def pieces(name):
+    """A model's name as its pieces, however it's written: GPT-5.6 Sol, gpt_5_6_sol and gpt-5-6-sol are the same;
+    a date suffix (20251001) isn't part of the name."""
+    return [p for p in re.split(r"[^a-z0-9]+", name.lower()) if p and not re.fullmatch(r"\d{8}", p)]
+
+
+def match(model, entry):
+    """The variant of this model an Artificial Analysis entry measured ("" for the model as it is), or None if
+    it's another model. Every piece of the model's ID must be in the entry's slug or name, in any order (Claude
+    4.5 Haiku is claude-haiku-4-5), and what's left must be words (an effort level, reasoning or not), never a
+    number (so claude-sonnet-5 isn't claude-sonnet-5-5)."""
+    from collections import Counter
+    mine = Counter(pieces(model))
+    for label in (entry.get("slug") or "", entry.get("name") or ""):
+        theirs = Counter(pieces(label))
+        if not mine or mine - theirs:
+            continue
+        left = list((theirs - mine).elements())
+        if any(p.isdigit() for p in left):
+            continue
+        return "-".join(p for p in left if p not in ("claude", "gpt", "openai", "anthropic"))
+    return None
+
+
+def records_from(data, lineup_models, date):
+    """Artificial Analysis' entries as records for the models in the lineup; which of theirs matched nothing."""
+    rows, matched, unmatched, unknown = [], set(), [], set()
+    for entry in data:
+        hits = [(m, v) for m in lineup_models if (v := match(m, entry)) is not None]
+        if not hits:
+            unmatched.append(entry.get("name") or entry.get("slug"))
+            continue
+        m, variant = min(hits, key=lambda h: len(h[1]))       # the most exact, if two could claim it
+        matched.add(m)
+        effort = variant if variant in EFFORTS else None
+        note = f"AA entry '{entry.get('name')}' ({entry.get('slug')})" + ("" if effort else f"; variant {variant or 'default'}")
+        base = dict(model=m, effort=effort, source=API_SOURCE, kind="independent", version=None, date=date,
+                    url="https://artificialanalysis.ai/", note=note)
+        for field, value in (entry.get("evaluations") or {}).items():
+            if value is None:
+                continue
+            if field not in AA_FIELDS:
+                unknown.add(field)
+                continue
+            dom, bench_, unit = AA_FIELDS[field]
+            rows.append(dict(base, benchmark=bench_, domain=dom, value=value, unit=unit))
+        price = (entry.get("pricing") or {}).get("price_1m_blended_3_to_1")
+        if price is not None:
+            rows.append(dict(base, benchmark="Price per 1M tokens (blended 3:1)", domain="cost", value=price, unit="usd"))
+        if entry.get("median_output_tokens_per_second") is not None:
+            rows.append(dict(base, benchmark="Output speed", domain="latency", value=entry["median_output_tokens_per_second"], unit="tokens/s"))
+        if entry.get("median_time_to_first_token_seconds") is not None:
+            rows.append(dict(base, benchmark="Time to first token", domain="latency", value=entry["median_time_to_first_token_seconds"], unit="s"))
+    return rows, sorted(matched), unmatched, sorted(unknown)
+
+
+def refresh(opener=None):
+    """Fetch Artificial Analysis' data for the lineup and keep it; say what came, what matched, what didn't."""
+    data, err = aa_get(opener=opener)
+    out = {"at": board.now(), "error": err}
+    if not err:
+        models = [mid for _, mid, _, _ in lineup()]
+        rows, matched, unmatched, unknown = records_from(data, models, board.now()[:10])
+        added, _ = add(rows)
+        out.update(models=len(data), matched=matched, missing=[m for m in models if m not in matched],
+                   unmatched=len(unmatched), unknown_fields=unknown, added=added)
+    p = board.home() / "bench" / "fetched.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(out, indent=1))
+    return out
