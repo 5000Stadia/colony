@@ -1226,7 +1226,7 @@ def provider_fields(cur, model, effort, blank):
     """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
     with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
     will use; the global form leaves them blank to mean the provider's own, and says what that is."""
-    from .providers import PROVIDERS, get, installed, usable
+    from .providers import PROVIDERS, get, installed, usable, available, efforts_of
     g = registry()["settings"]
     cur = cur or g["provider"]
     p = get(cur)
@@ -1243,14 +1243,15 @@ def provider_fields(cur, model, effort, blank):
     data = {}
     for key, provider in PROVIDERS.items():
         defaults = provider.own_defaults()
-        data[key] = {"models": provider.models, "efforts": provider.efforts,
-                     "efforts_for": getattr(provider, "efforts_for", {}),
+        offered = available(provider) if usable(provider) else []      # only what this machine can run
+        data[key] = {"models": offered, "efforts": provider.efforts,
+                     "efforts_for": {m: efforts_of(provider, m) for m, _ in offered},
                      "model": (g["model"] if in_project else "") or defaults["model"] or "",
                      "model_placeholder": default_label(provider.model_name(defaults["model"]), f"{provider.label} picks"),
                      "effort_placeholder": default_label(defaults["effort"], f"{provider.label} picks"),
                      "recommendation": getattr(provider, "recommendation", "")}
     effective = model or data[cur]["model"]
-    effort_options = data[cur]["efforts_for"].get(effective, p.efforts)
+    effort_options = data[cur]["efforts_for"].get(effective) or (efforts_of(p, effective) if effective else p.efforts)
     hint = data[cur]["recommendation"]
     return (f"<div class='provider-fields' data-providers='{e(json.dumps(data))}'>"
             f"<label>Provider <select name='provider'>"
@@ -1262,7 +1263,7 @@ def provider_fields(cur, model, effort, blank):
             f"<a class='modelinfo' href='/models{'#' + e(model) if model else ''}' target='_blank' "
             f"title='What the benchmarks say about this model, at each effort level'>ⓘ benchmarks</a></label>"
             f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{e(de)}'></label>"
-            + suggestions("models", p.models) + suggestions("efforts", effort_options)
+            + suggestions("models", data[cur]["models"]) + suggestions("efforts", effort_options)
             + f"<p class='muted' data-recommendation{'' if hint else ' hidden'}>{e(hint)}</p></div>"
             + f"<script>{PROVIDER_FIELDS}</script>")
 

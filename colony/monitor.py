@@ -12,6 +12,7 @@ to know: it needs input, it finished a turn, or it opened a gate. While projects
 spends nothing.
 """
 import json
+import os
 import re
 import subprocess
 import threading
@@ -375,6 +376,7 @@ class Watcher:
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
+        self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -507,6 +509,9 @@ class Watcher:
         """A model joined the lineup: its card ranks against the rest at once (standings are derived); every
         project is told to look at its plan again, and the monitor hears which cards still wait for research."""
         from . import bench
+        if time.time() - self.discovered > 3600:       # a program that updated may bring or drop models: look hourly
+            self.discovered = time.time()
+            threading.Thread(target=lambda: providers.discover(), daemon=True).start()
         added = bench.lineup_changed()
         if not added:
             return
@@ -515,10 +520,10 @@ class Watcher:
             if p.exists() and bench.plan(p):
                 board.add_note(p, None, f"A model joined colony: {names}. Look at your model plan against its card "
                                         "(colony models, the board's Models page) and propose any change to the person.")
-        waiting = [m for m in bench.pending() if m in added] or bench.pending()
+        waiting = [m for m in bench.pending() if m in added]
         if waiting:
-            queue(f"A model joined colony ({names}). Benchmark cards waiting for their research check: "
-                  f"{', '.join(bench.name(m) for m in waiting)}. Whoever added it records the scores (colony bench import).")
+            queue(f"A model joined the lineup ({names}). Cards waiting for Artificial Analysis data: "
+                  f"{', '.join(bench.name(m) for m in waiting)}; they fill when it has them and the key is connected (Settings).")
 
     def tick(self):
         self.models()

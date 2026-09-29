@@ -53,8 +53,8 @@ class ClaudeCode:
     label = "Claude Code"
     program, site = "claude", "https://claude.com/claude-code"     # its program, and where to get it
     # Exact models by full ID, so a project keeps the model it was given; an alias ("opus") moves to whatever
-    # is newest. PROVIDER: Claude Code's current models; add new ones here as they ship, with their research check
-    # (colony/bench.py: its scores recorded with colony bench import, or its card stays pending).
+    # is newest. The models colony offers are discovered (discover()); these are the ones it knows by name, and
+    # are confirmed with the rest.
     models = [("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5", "Sonnet 5"),
               ("claude-haiku-4-5-20251001", "Haiku 4.5")]
     aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
@@ -105,6 +105,33 @@ class ClaudeCode:
             if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
                 entries.append({"hooks": [{"type": "command", "command": command}]})
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    def version(self):
+        return _run([self.program, "--version"])
+
+    def discover(self, run=None):
+        """The models this installation can run, confirmed: Claude Code has no command that lists them, so it
+        is asked once for the IDs it knows, the ones colony knows are added, and each is started with a trivial
+        request whose report names the model that answered. Only those confirmed are kept. A few tiny calls."""
+        import re
+        import tempfile
+        run = run or _run
+        here = tempfile.mkdtemp(prefix="colony-models-")      # no project's settings or hooks
+        base = [self.program, "-p", "--setting-sources", ""]
+        said = run(base + ["List the exact model IDs that Claude Code can be started with through --model on this "
+                           "installation, one per line, nothing else."], cwd=here)
+        asked = re.findall(r"\bclaude-[a-z0-9][a-z0-9.-]*[a-z0-9]\b", said or "")
+        found = []
+        for mid in dict.fromkeys(asked + [m for m, _ in self.models]):
+            out = run(base + ["--model", mid, "--output-format", "json", "Reply with the single word: ok"], cwd=here)
+            try:
+                used = list((json.loads(out).get("modelUsage") or {}).keys())
+            except (ValueError, TypeError, AttributeError):
+                used = []
+            if any(u == mid or u.startswith(mid) for u in used):
+                found.append((mid, self.model_name(mid) if mid in dict(self.models) else _label(mid),
+                              [e for e in self.efforts]))
+        return found
 
     def conversation(self, payload):
         """Which conversation a hook ran in, and where it is kept: for a console that must be restarted."""
@@ -345,6 +372,23 @@ class Codex:
         import os
         return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
+    def version(self):
+        return _run([self.program, "--version"])
+
+    def discover(self, run=None):
+        """The models this account can run, from Codex's own catalog of them, with each one's effort levels;
+        what it keeps hidden (internal models) is left out. Nothing is called."""
+        try:
+            catalog = json.loads((self.config_home() / "models_cache.json").read_text())
+        except (OSError, ValueError):
+            return []
+        import re
+        known = dict(self.models)
+        name = lambda m: known.get(m["slug"]) or re.sub(r"-(?=[A-Za-z])", " ", m.get("display_name") or m["slug"])
+        return [(m["slug"], name(m),
+                 [x["effort"] if isinstance(x, dict) else x for x in m.get("supported_reasoning_levels") or []] or list(self.efforts))
+                for m in catalog.get("models", []) if m.get("visibility") == "list" and m.get("slug")]
+
     @property
     def models(self):
         """Stable suggestions plus the new generation only once this installation advertises it."""
@@ -510,6 +554,71 @@ def starting(provider, screen, fresh=True):
 
 
 PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
+
+
+def _run(cmd, cwd=None, timeout=120):
+    """A program's output, or "" if it fails or isn't there."""
+    import subprocess
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _label(mid):
+    """A model ID as its name: claude-sonnet-5-5 → Sonnet 5.5, claude-haiku-4-5-20251001 → Haiku 4.5."""
+    import re
+    parts = [p for p in mid.split("-")[1:] if not re.fullmatch(r"\d{8}", p)]
+    words = [p for p in parts if not p.isdigit()]
+    nums = [p for p in parts if p.isdigit()]
+    return " ".join(w.capitalize() for w in words) + (" " + ".".join(nums) if nums else "")
+
+
+def available(provider):
+    """The models colony offers for a provider: those discovered on this machine, else those it knows of."""
+    from . import board
+    found = _discovered().get(key(provider))
+    return [(m, label) for m, label, _ in found["models"]] if found and found["models"] else list(provider.models)
+
+
+def efforts_of(provider, model):
+    from . import board
+    found = _discovered().get(key(provider)) or {}
+    for m, _, efforts in found.get("models", []):
+        if m == model:
+            return efforts
+    return [e[0] if isinstance(e, tuple) else e for e in getattr(provider, "efforts_for", {}).get(model, provider.efforts)]
+
+
+def _discovered():
+    from . import board
+    path = board.home() / "bench" / "available.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def discover(force=False, run=None):
+    """Find the models each ticked, installed provider can run, and keep them with the program's version: a
+    provider is looked at again when its program updates (that's when models come and go), or when forced.
+    Returns the providers that were looked at."""
+    from . import board
+    have, looked = _discovered(), []
+    for k, p in PROVIDERS.items():
+        if not usable(p) or not hasattr(p, "discover"):
+            continue
+        ver = p.version() if run is None else "test"
+        if not force and have.get(k, {}).get("version") == ver:
+            continue
+        found = p.discover(run) if run else p.discover()
+        if found or k not in have:
+            have[k] = {"version": ver, "at": board.now(), "models": found}
+        looked.append(k)
+    path = board.home() / "bench" / "available.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(have, indent=1))
+    return looked
 
 
 def installed(provider):

@@ -28,7 +28,7 @@ located signals and a project memory.
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
-    colony bench [card MODEL | import FILE | pending]   benchmark cards for the models the board can run
+    colony bench [card MODEL | discover | import FILE | pending]   benchmark cards; discover asks each program its models
     colony models [set ROLE MODEL EFFORT --why ...]     this project's model plan for its helpers
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
@@ -566,6 +566,13 @@ def cmd_bench(a):
         for line, wrong in bad:
             print(f"line {line} skipped: {'; '.join(wrong)}", file=sys.stderr)
         return 1 if bad else 0
+    if a.what == "discover":
+        from . import providers
+        looked = providers.discover(force=True)
+        for k in looked:
+            ms = providers.available(providers.get(k))
+            print(f"{providers.get(k).label}: {', '.join(m for m, _ in ms) or 'none confirmed'}")
+        return 0
     if a.what == "pending":
         print("\n".join(bench.pending()) or "no card waits for independent scores")
         return 0
@@ -1010,7 +1017,7 @@ def main(argv=None):
     p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
-    p.add_argument("what", nargs="?", choices=("card", "import", "pending")); p.add_argument("arg", nargs="?")
+    p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
     p = sub.add_parser("models", help="this project's model plan for its helpers")
     p.add_argument("what", nargs="?", choices=("set",)); p.add_argument("args", nargs="*"); p.add_argument("--why")

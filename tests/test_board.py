@@ -729,6 +729,29 @@ class GlanceTest(BoardBase):
             httpd.server_close()
         self.assertIn("providers", self.cli("settings").stdout)
 
+    def test_each_program_is_asked_which_models_it_can_run_and_only_confirmed_ones_are_offered(self):
+        calls = []
+        def run(cmd, cwd=None):
+            calls.append(cmd)
+            if "--model" not in cmd:
+                return "claude-opus-5-5\nclaude-sonnet-5-5\nclaude-made-up-9"      # what it says it can run
+            model = cmd[cmd.index("--model") + 1]
+            real = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"}
+            return json.dumps({"modelUsage": {model: {}}}) if model in real else "There's an issue with the selected model"
+        found = providers.get("claude").discover(run)
+        ids = [m for m, _, _ in found]
+        self.assertEqual(ids, ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"],
+                         "asked, plus what colony knows, and only those a call confirms")
+        self.assertIn(("claude-sonnet-5-5", "Sonnet 5.5"), [(m, n) for m, n, _ in found], "a new one, named")
+        self.assertTrue(all("--setting-sources" in c for c in calls), "no project's settings or hooks")
+        providers.discover(force=True, run=run)
+        self.assertEqual([m for m, _ in providers.available(providers.get("claude"))], ids)
+        board.set_setting("providers", "claude")
+        self.assertEqual({k for k, _, _, _ in __import__("colony.bench").bench.lineup()}, {"claude"}, "only what's on")
+        page = board.add_project_page(board.registry(), "new", "")
+        self.assertIn("claude-sonnet-5-5", page)
+        self.assertNotIn("<option value='claude-fable-5-1'>", page, "not confirmed here: not offered")
+
     def test_start_says_what_it_needs_when_neither_program_is_here(self):
         bin_ = Path(self.tmp.name) / "bin"
         bin_.mkdir()

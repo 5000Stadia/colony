@@ -15,9 +15,9 @@ reports what it finds to you and changes nothing here; the person's improvements
 - Keep mechanisms provider-agnostic; mark what only Claude Code can do with `PROVIDER:` and route it
   through colony/providers.py.
 - `GUIDE.md` changes only on measured evidence, and by subtraction where it can.
-- Adding a model to `colony/providers.py` includes its research check: its independent scores (Artificial
-  Analysis, LMArena, Epoch AI) recorded with `colony bench import FILE`, each effort level its own record with
-  its source URL, no estimates (the format is in `colony/bench.py`). Until then its card shows pending.
+- The lineup is discovered, not written in: each provider's `discover()` says which models its program can run
+  here, and the cards come from Artificial Analysis for those. A new provider supplies `discover()` (asking its
+  program, then confirming each model with a trivial call, where it has no command that lists them).
 - Pushing to this repository's own origin (private) is routine; anything else that leaves the machine is
   the person's call.
 ## This project is part of a colony

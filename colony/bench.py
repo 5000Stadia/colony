@@ -82,9 +82,10 @@ def lineup():
     from . import providers
     out = []
     for key, p in providers.PROVIDERS.items():
-        for mid, label in p.models:
-            efforts = getattr(p, "efforts_for", {}).get(mid, p.efforts)
-            out.append((key, mid, label, [e[0] if isinstance(e, tuple) else e for e in efforts]))
+        if not providers.usable(p):
+            continue                             # only what the person has, and has on
+        for mid, label in providers.available(p):
+            out.append((key, mid, label, providers.efforts_of(p, mid)))
     return out
 
 
