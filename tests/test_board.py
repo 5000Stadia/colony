@@ -838,10 +838,11 @@ class GlanceTest(BoardBase):
                 rec("claude-opus-5-5", "high", 70, "coding", bench_="Terminal-Bench", ver="3.0"),
                 rec("claude-opus-5-5", "high", 60, "coding", bench_="Terminal-Bench", ver="4.0"),   # another version: its own scale
                 rec("claude-sonnet-5", "high", 30, "coding", bench_="Terminal-Bench", ver="4.0"),
+                rec("claude-opus-5-5", "medium", 45, "coding", bench_="Terminal-Bench", ver="4.0"),  # three: a standing
                 rec("claude-sonnet-5", "high", 80, kind="vendor", source="Anthropic"),              # shown, never averaged in
                 dict(rec("claude-sonnet-5", "high", 1), url="")]                                     # no source: refused
         added, bad = bench.add(rows)
-        self.assertEqual((added, len(bad)), (10, 1))
+        self.assertEqual((added, len(bad)), (11, 1))
         self.assertEqual(bench.add(rows[:3])[0], 0, "a record is kept once")
         by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertEqual(by[("claude-opus-5-5", "high")]["overall"], 100)
@@ -849,6 +850,7 @@ class GlanceTest(BoardBase):
         self.assertFalse(by[("claude-fable-5-1", "effort not stated")]["comparable"], "no effort named: kept off the rankings")
         self.assertIsNone(by[("claude-fable-5-1", "effort not stated")]["overall"])
         self.assertEqual(by[("claude-opus-5-5", "high")]["domains"]["coding"], 100, "versions never mixed: v3 alone has no scale")
+        self.assertNotIn("preference", by[("claude-opus-5-5", "high")]["domains"], "fewer than three measured: not a standing")
         self.assertIsNone(by[("claude-sonnet-5", "high")]["overall"], "a vendor number isn't averaged in")
         self.assertTrue(by[("claude-sonnet-5", "high")]["pending"])
         self.assertEqual(by[("claude-opus-5-5", "medium")]["cost"]["value"], 1.34, "cost per task")

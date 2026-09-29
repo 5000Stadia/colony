@@ -39,8 +39,28 @@ def path():
 
 
 def records():
+    """Researched records, and the latest Artificial Analysis snapshot read as records."""
     p = path()
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    kept = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    return kept + api_records()
+
+
+def snapshots_dir():
+    return board.home() / "bench" / "artificial-analysis"
+
+
+def api_records():
+    """The latest Artificial Analysis reply, read as records for today's lineup: derived each time from what came,
+    so a better reading of names applies to it at once."""
+    snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
+    if not snaps:
+        return []
+    try:
+        data = json.loads(snaps[-1].read_text())
+    except (OSError, ValueError):
+        return []
+    date = snaps[-1].stem[:10]
+    return records_from(data, [mid for _, mid, _, _ in lineup()], date)[0]
 
 
 def problems(r):
@@ -135,6 +155,8 @@ def standings(rows=None):
         e = entries[(r["model"], variant(r))]
         (e["measures"] if r["domain"] in MEASURES else e["raw"]).append(r)
     for (src, bench, ver, dom), rs in groups.items():
+        if len(rs) < 3:                          # "best of two" isn't a standing: shown raw, not scaled
+            continue
         lo, hi = min(r["value"] for r in rs), max(r["value"] for r in rs)
         for r in rs:
             if hi > lo:                          # one entry alone has nothing to be ranked against
@@ -155,7 +177,7 @@ def standings(rows=None):
         e["cost"] = (price or index("cost") or [None])[0]      # price per 1M tokens; else an older per-task cost
         e["time"] = (index("latency") or [None])[0]
         e["index"] = next((r["value"] for r in e["raw"] if r["domain"] == "overall" and r["kind"] == "independent"
-                           and INDEX in r["benchmark"].lower() and r["source"] == "Artificial Analysis"), None)
+                           and INDEX in r["benchmark"].lower() and r["source"].startswith("Artificial Analysis")), None)
         e["pending"] = not any(r["domain"] in ("overall", "preference") and r["kind"] == "independent" for r in e["raw"])
     return sorted(entries.values(), key=lambda e: (not e["comparable"], e["overall"] is None, -(e["overall"] or 0)))
 
@@ -198,6 +220,15 @@ def best_for(role, provider=None, entries=None):
     entries = standings() if entries is None else entries
     mine = {mid for key, mid, _, _ in lineup() if provider is None or key == provider}
     scored = [(role_score(e, role), e) for e in entries if e["model"] in mine and e["comparable"]]
+    if role == "chores":
+        # a price per token is the same at every effort, and higher effort spends more tokens: each model is
+        # weighed at its lowest effort that has a score
+        lowest = {}
+        for s_, e in scored:
+            if s_ is not None and (e["model"] not in lowest or
+                                   EFFORT_ORDER.get(e["effort"], 99) < EFFORT_ORDER.get(lowest[e["model"]][1]["effort"], 99)):
+                lowest[e["model"]] = (s_, e)
+        scored = list(lowest.values())
     return [e for s, e in sorted(((s, e) for s, e in scored if s is not None), key=lambda x: -x[0])]
 
 
@@ -301,9 +332,8 @@ def recommend_for(key):
             # the cheapest model, then its lowest effort: fewer tokens a task
             e = min(near, key=lambda x: (x["cost"]["value"], EFFORT_ORDER.get(x["effort"], 0))) if near else top
         if role == "chores":
-            why = (f"most Intelligence Index points per dollar among {providers.get(key).label} models "
-                   f"({e['index']:g} points at ${e['cost']['value']:.2f} {'per 1M tokens' if pricing(e['cost']) else 'a task'}"
-                   + ("; the lowest effort, for the fewest tokens" if pricing(e["cost"]) else "") + ")")
+            why = (f"most Intelligence Index points per dollar among {providers.get(key).label} models at their lowest "
+                   f"effort ({e['index']:g} points at ${e['cost']['value']:.2f} {'per 1M tokens' if pricing(e['cost']) else 'a task'})")
         else:
             why = (f"{role} score {role_score(e, role):.0f} of 100 across the lineup"
                    + (f", within {NEAR} of the best ({entry_name(top)}, {role_score(top, role):.0f})"
@@ -407,7 +437,14 @@ AA_FIELDS = {"artificial_analysis_intelligence_index": ("overall", "Intelligence
              "gpqa": ("reasoning", "GPQA Diamond", "fraction"), "hle": ("reasoning", "Humanity's Last Exam", "fraction"),
              "mmlu_pro": ("reasoning", "MMLU-Pro", "fraction"), "livecodebench": ("coding", "LiveCodeBench", "fraction"),
              "scicode": ("coding", "SciCode", "fraction"), "math_500": ("math", "MATH-500", "fraction"),
-             "aime": ("math", "AIME", "fraction")}
+             "aime": ("math", "AIME", "fraction"), "aime_25": ("math", "AIME 2025", "fraction"),
+             "ifbench": ("instructions", "IFBench", "fraction"), "lcr": ("long-context", "AA-LCR", "fraction"),
+             "tau2": ("agentic", "τ²-Bench", "fraction"), "tau_banking": ("agentic", "τ²-Bench Banking", "fraction"),
+             "terminalbench_hard": ("agentic", "Terminal-Bench Hard", "fraction"),
+             "terminalbench_v2_1": ("agentic", "Terminal-Bench 2.1", "fraction")}
+# Words a source adds to a model's name to say how it was run; any other word (pro, mini) is another model.
+VARIANT_WORDS = set(EFFORTS) | {"reasoning", "non", "adaptive", "effort", "default", "fallback", "thinking",
+                                "claude", "gpt", "openai", "anthropic"}
 
 
 def pieces(name):
@@ -417,21 +454,31 @@ def pieces(name):
 
 
 def match(model, entry):
-    """The variant of this model an Artificial Analysis entry measured ("" for the model as it is), or None if
-    it's another model. Every piece of the model's ID must be in the entry's slug or name, in any order (Claude
-    4.5 Haiku is claude-haiku-4-5), and what's left must be words (an effort level, reasoning or not), never a
-    number (so claude-sonnet-5 isn't claude-sonnet-5-5)."""
+    """The variant of this model an Artificial Analysis entry measured ("" for the model as listed), or None if
+    it's another model. Every piece of the model's ID must be in the entry's slug and name, in any order (Claude
+    4.5 Haiku is claude-haiku-4-5), and what's left must be words that say how it was run: an effort level,
+    reasoning or not. A number left over (claude-sonnet-5 against Sonnet 5.5) or any other word (GPT-5.5 Pro)
+    means another model. The effort is read from the name as well as the slug: 'GPT-6 Astra (max)'."""
     from collections import Counter
     mine = Counter(pieces(model))
+    left = []
     for label in (entry.get("slug") or "", entry.get("name") or ""):
         theirs = Counter(pieces(label))
+        if not label:
+            continue
         if not mine or mine - theirs:
-            continue
-        left = list((theirs - mine).elements())
-        if any(p.isdigit() for p in left):
-            continue
-        return "-".join(p for p in left if p not in ("claude", "gpt", "openai", "anthropic"))
-    return None
+            return None
+        extra = list((theirs - mine).elements())
+        if any(p.isdigit() or p not in VARIANT_WORDS for p in extra):
+            return None
+        left += extra
+    words = set(left)
+    effort = next((x for x in ("xhigh", "max", "high", "medium", "low", "minimal", "ultra", "none") if x in words), None)
+    if effort:
+        return effort
+    if "reasoning" in words:
+        return "non-reasoning" if "non" in words else "reasoning"
+    return ""
 
 
 def records_from(data, lineup_models, date):
@@ -471,11 +518,13 @@ def refresh(opener=None):
     data, err = aa_get(opener=opener)
     out = {"at": board.now(), "error": err}
     if not err:
+        snap = snapshots_dir() / f"{board.now()[:19].replace(':', '')}.json"      # their reply, kept as it came
+        snap.parent.mkdir(parents=True, exist_ok=True)
+        snap.write_text(json.dumps(data))
         models = [mid for _, mid, _, _ in lineup()]
         rows, matched, unmatched, unknown = records_from(data, models, board.now()[:10])
-        added, _ = add(rows)
         out.update(models=len(data), matched=matched, missing=[m for m in models if m not in matched],
-                   unmatched=len(unmatched), unknown_fields=unknown, added=added)
+                   unmatched=len(unmatched), unknown_fields=unknown, added=len(rows))
     p = board.home() / "bench" / "fetched.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(out, indent=1))
