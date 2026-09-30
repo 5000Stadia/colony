@@ -2385,7 +2385,7 @@ class UsageTest(BoardBase):
         self.assertEqual([w for _, w in usage.check()], ["paused"])
         [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
         self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
-        for words in ("Wind down", "don't cancel them", "where things stand", "1. Wait for the reset", "2. Hand this project to Codex",
+        for words in ("Safe pause: Claude Code is at 98.5%", "so nothing is cut off mid-task", "don't cancel them", "where things stand", "1. Wait for the reset", "2. Hand this project to Codex",
                       "3. Keep going past the limit"):
             self.assertIn(words, note["text"])
         self.assertEqual(usage.check(), [], "told once")
@@ -2409,13 +2409,18 @@ class UsageTest(BoardBase):
         from colony import usage
         board.track(self.root)
         self.claude_at(98)
-        board.project_settings(self.root, {"usage_pause": "off"})
+        board.project_settings(self.root, {"safe_pause": "off"})
         self.assertEqual(usage.check(), [], "off for this project")
-        board.project_settings(self.root, {"usage_pause": ""})
-        board.set_setting("usage_pause", "99")
+        board.project_settings(self.root, {"safe_pause": ""})
+        board.set_setting("safe_pause", "99")
         self.assertEqual(usage.check(), [], "colony's threshold moved up")
         with self.assertRaises(KeyError):
-            board.set_setting("usage_pause", "150")
+            board.set_setting("safe_pause", "150")
+        reg = json.loads((board.home() / "board.json").read_text())
+        reg["settings"]["usage_pause"] = 95                  # its name before "safe pause"
+        reg["settings"].pop("safe_pause")
+        (board.home() / "board.json").write_text(json.dumps(reg))
+        self.assertEqual(board.registry()["settings"]["safe_pause"], 95, "an old setting carries over")
 
     def test_the_status_line_records_the_limits_and_shows_them(self):
         payload = {"model": {"display_name": "Opus 5.5"},

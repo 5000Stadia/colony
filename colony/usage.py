@@ -1,5 +1,5 @@
 """Each agent program's usage limits (its 5-hour and weekly windows), read without spending a token, and the
-pause colony calls when one runs low: at the threshold (97% by default, the person's call; per project too) each
+safe pause colony calls when one runs low, so no work is cut off mid-task by the limit itself: at the threshold (97% by default, the person's call; per project too) each
 project on that program is told on its next turn, not woken, to wind down and tell the person where things stand
 and their options; once the window resets, it is woken to carry on.
 
@@ -95,7 +95,7 @@ def threshold(root=None):
     """The percentage of a window at which projects pause: the project's own, else colony's; None is off."""
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
     try:
-        t = float(s.get("usage_pause") or 0)
+        t = float(s.get("safe_pause") or 0)
     except (TypeError, ValueError):
         return None
     return t if 0 < t <= 100 else None
@@ -150,7 +150,7 @@ def check():
             why = (f"{prov.label}'s {w['window']} usage limit has reset" if turned
                    else f"{prov.label} is back under this project's pause threshold ({t:g}%)" if t
                    else "this project no longer pauses at a usage limit")
-            board.add_note(p, None, f"{why}. Carry on where you stopped.", author="colony")
+            board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped.", author="colony")
             changed.append((p, "resumed"))
     if now != was:
         folder().mkdir(parents=True, exist_ok=True)
@@ -180,9 +180,10 @@ def wind_down(root, prov, window, v, others):
                        "what to take over" if t else
                        f"hand this project to {x.label}{room}: colony track {board.workdir(root)} --provider {k} "
                        f"--name {root.name}-{k}")
-    options.append(f"keep going past the limit: colony settings --project {root.name} usage_pause off")
-    return (f"{prov.label} is at {v['used']:g}% of its {window} usage limit, which resets {when(v.get('resets_at'))}. "
-            "Wind down: there is a little room left, enough to land what's in flight, not to start more. Let work "
+    options.append(f"keep going past the limit: colony settings --project {root.name} safe_pause off")
+    return (f"Safe pause: {prov.label} is at {v['used']:g}% of its {window} usage limit, which resets "
+            f"{when(v.get('resets_at'))}. Wind down now, so nothing is cut off mid-task: there is a little room left, "
+            "enough to land what's in flight, not to start more. Let work "
             "already running finish, helpers included (don't cancel them), and take in what they hand back; then commit "
             "what works so far (a clean point, not the item finished: the item stays in progress). Start nothing new: no new helpers or consultations. Then "
             "end your turn by telling the person, briefly, where things stand (done, half-done, next) and their "

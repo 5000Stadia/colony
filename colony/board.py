@@ -137,14 +137,17 @@ def registry():
     reg.setdefault("roots", [str(PACKAGE_PROJECTS)])  # folders whose every subfolder is a project
     reg.setdefault("new_root", reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS))
     reg.setdefault("hidden", [])                       # subfolders of project folders taken off the board
-    reg["settings"] = dict(DEFAULT_SETTINGS, **reg.get("settings", {}))
+    old = reg.get("settings", {})
+    if "usage_pause" in old:                           # its name before "safe pause"
+        old.setdefault("safe_pause", old.pop("usage_pause"))
+    reg["settings"] = dict(DEFAULT_SETTINGS, **old)
     return reg
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
-                    "usage_pause": 98, "auto_update": True}
+                    "safe_pause": 98, "auto_update": True}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -164,7 +167,7 @@ SETTING_HELP = {
     "effort": "effort for new project sessions (blank: the provider's default)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
-    "usage_pause": "pause a program's projects at this % of a usage limit (5-hour or weekly), resuming at the reset; off to never pause",
+    "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
 
@@ -179,7 +182,7 @@ def set_setting(key, value):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
-    elif key == "usage_pause":
+    elif key == "safe_pause":
         v = str(value).strip().rstrip("%").lower()
         if v in ("off", "0"):
             reg["settings"][key] = 0
@@ -224,13 +227,15 @@ def set_setting(key, value):
     return reg
 
 
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "usage_pause")
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause")
 
 
 def project_settings(root, changes=None):
     """A project's own choices, each falling back to the global setting when not made."""
     path = Path(root) / ".board" / "settings.json"
     own = json.loads(path.read_text()) if path.exists() else {}
+    if "usage_pause" in own:                           # its name before "safe pause"
+        own.setdefault("safe_pause", own.pop("usage_pause"))
     if changes:
         for k, v in changes.items():
             if k not in PROJECT_KEYS:
@@ -1367,8 +1372,8 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
             # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
-            f"<label>Pause at <input name='usage_pause' value='{e(str(own.get('usage_pause', '')))}' size='4' "
-            f"placeholder='{e(str(g['usage_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
+            f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
+            f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
             + (tier_fields(root) if root else "") + f"<button>Save</button></form>")
 
 
@@ -2033,9 +2038,9 @@ def settings_page(reg):
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
                + "</select></label>"
                + provider_fields(s["provider"], s["model"], s["effort"], "the provider's default") +
-               f"<label>Pause a program's projects at <input name='usage_pause' value='{e(str(s['usage_pause'] or 'off'))}' size='4'> % "
-               f"of its 5-hour or weekly limit <span class='muted'>(they wind down and tell you where things stand; "
-               f"colony wakes them at the reset)</span></label>"
+               f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> % "
+               f"of a program's 5-hour or weekly limit <span class='muted'>(its projects land what's in flight, save their "
+               f"work and tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset)</span></label>"
                f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
@@ -2327,9 +2332,9 @@ class Handler(BaseHTTPRequestHandler):
                 set_setting("provider", form["provider"])
             set_setting("model", form.get("model", ""))
             set_setting("effort", form.get("effort", ""))
-            if form.get("usage_pause", "").strip():
+            if form.get("safe_pause", "").strip():
                 try:
-                    set_setting("usage_pause", form["usage_pause"])
+                    set_setting("safe_pause", form["safe_pause"])
                 except KeyError:
                     pass                                  # not a percentage: the old one stays
             if form.get("new_root", "").strip():
