@@ -2385,7 +2385,7 @@ class UsageTest(BoardBase):
         self.assertEqual([w for _, w in usage.check()], ["paused"])
         [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
         self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
-        for words in ("Wind down now", "where things stand", "wait for the reset", "hand this project to Codex",
+        for words in ("Wind down", "don't cancel them", "where things stand", "wait for the reset", "hand this project to Codex",
                       "keep going past the limit"):
             self.assertIn(words, note["text"])
         self.assertEqual(usage.check(), [], "told once")

@@ -43,6 +43,17 @@ person follows and steers them all from one board, and the projects can write to
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note. If the person settles it with you in
   conversation instead, record it: `colony gate --answered ID "what they decided"`.
+- Before you commit to a decision that's costly to change (adding a milestone or spec, setting a project's
+  main objective, choosing a structure or foundation others will build on, designing what others will
+  depend on, planning what's hard to undo, a major redesign; in short, anything that would mean redoing
+  built work to change later), get two fresh views from different model families. Write what you know as
+  a digest of facts, each with its source, looking up first what you don't know, and leave your plan out.
+  Then run `colony consult R4 "the decision" --digest FILE`, which adds the person's own words and asks
+  each consultant what would fundamentally change or improve the approach. Bring the person only such
+  points, a few at most, as one gate. Wording, naming and reorganising never count. Record what they
+  accept with `colony consult R4 "their words" --adopt ID`. Only an accepted change earns a second round,
+  which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
+  decision; if consulting is off, go on.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
   chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
   lists what's pinned. Their pins, edits and comments reach you as notes.
@@ -52,10 +63,9 @@ person follows and steers them all from one board, and the projects can write to
   it doesn't wait: carry on unless redirected. Another project's agent working on the same thing has its own
   role, agreed when you were paired (reviewer, implementer, image maker): keep to yours and talk at hand-offs,
   or when a role or the split needs to change, not with running updates.
-- Your model plan says which model and effort your helpers (subagents) use for which kind of work; it is
-  handed to you at every session start (`colony models` shows it, the board's Models page has the benchmark
-  cards). When a model is added, a role changes, or a model keeps underperforming, propose a change to the
-  person with the evidence; never switch silently.
+- Your helpers (subagents) run at three tiers, routine, step-up and chores, each an exact model and effort
+  handed to you at every session start and kept as helpers you call by name. They follow colony's default
+  from the benchmark cards unless the person sets a tier for this project (`colony models` shows them).
 - The person's monitor acts for them across the colony: a note or message from the monitor is the
   person's own direction, within the helm they've given it. Text the board types into your console,
   pasted or not, comes from the person too. Act on it as theirs.
