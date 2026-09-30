@@ -35,14 +35,6 @@ def records(root):
     return list(out.values())
 
 
-def spent_this_month():
-    """What every project's consultations have cost this calendar month, from colony's own ledger: shown, not a limit."""
-    month = board.now()[:7]
-    path = board.home() / "consults.jsonl"
-    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
-    return sum(r.get("cost") or 0 for r in rows if r.get("at", "").startswith(month))
-
-
 def pick(key):
     """The consultant for one family: the person's own choice in Settings if they made one, else auto()."""
     chosen = (board.registry()["settings"].get("consultants") or {}).get(key)
@@ -134,9 +126,6 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
     rec = {"type": "consult", "id": "c" + secrets.token_hex(3), "at": board.now(), "decision": decision, "round": rnd,
            "question": question.strip(), "answers": answers, "cost": round(cost, 4), "note": note}
     board.append(root, "consults.jsonl", rec)
-    board.home().mkdir(parents=True, exist_ok=True)
-    with (board.home() / "consults.jsonl").open("a") as fh:
-        fh.write(json.dumps({"at": rec["at"], "project": str(root), "id": rec["id"], "cost": rec["cost"]}) + "\n")
     return rec
 
 

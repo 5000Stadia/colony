@@ -813,7 +813,7 @@ class GlanceTest(BoardBase):
         monitor.setup()
         queued = (board.home() / "to_monitor.jsonl").read_text()
         self.assertIn("First-time setup: walk the person through it now", queued)
-        self.assertIn("Run first-time setup again", board.settings_page(board.registry()))
+        self.assertNotIn("setup again", board.settings_page(board.registry()), "everything setup covers is in Settings")
         self.assertIn("walk you through setup", self.cli("setup").stdout)
 
     def test_start_says_what_it_needs_when_neither_program_is_here(self):
@@ -2233,7 +2233,6 @@ class ConsultTest(BoardBase):
         self.assertIsNone(self.calls[0]["price"])                 # Claude Code reports its own cost
         self.assertIsNone(self.calls[1]["price"])                 # Codex doesn't, and no benchmark data prices it here
         self.assertEqual(rec["cost"], 0.6)
-        self.assertAlmostEqual(self.consult.spent_this_month(), 0.6)
         self.assertIn("Consultant 2: gpt-6-astra at high", self.consult.report(rec))
 
     def test_a_second_round_needs_an_accepted_change_and_there_is_never_a_third(self):
@@ -2317,7 +2316,7 @@ class ConsultTest(BoardBase):
         self.assertIn("gpt-6-astra at high · $0.30", page)
         self.assertIn("You accepted: keep them local", page)
         settings = board.settings_page(reg)
-        self.assertIn("$0.60 spent on consulting this month", settings)
+        self.assertNotIn("spent", settings)
         self.assertIn("<option value='claude-opus-5-5:high' selected>", settings)
 
 
