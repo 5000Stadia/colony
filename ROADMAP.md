@@ -56,7 +56,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R43 Claude-only extras (Remote Control, plugin suggestions, the unattended runtime) step aside where only Codex is installed
 - [x] R44 The monitor runs on whichever program is installed, its brief where that program reads it
 - [x] R50 Settings: the person ticks which agent programs colony uses; one that's off isn't offered or the default, and projects already on it keep running
-- [ ] R62 Agent programs kept current: when Claude Code or Codex has an update, colony installs it and reloads each console on it only while that console is idle, resuming the same conversation; nothing mid-task is interrupted
+- [~] R62 Agent programs kept current: when Claude Code or Codex has an update, colony installs it and reloads each console on it only while that console is idle, resuming the same conversation; nothing mid-task is interrupted
 - [x] R63 Usage limits watched: each program's 5-hour and weekly use read without tokens (Codex's session files; Claude Code's status line) and shown on the board; past a threshold (90% by default) each active agent on that program is told after its turn, and then winds down, hands off to the other program or pauses until the reset, as set colony-wide or per project
 - [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
@@ -64,7 +64,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 
 - [x] R45 Benchmark records and a card per model and effort level: two or three respected overall scores (Artificial Analysis, LMArena, Epoch AI) put on one scale and averaged, cost and time per task, gaps shown as gaps; kept on this machine
 - [x] R46 Today's lineup researched and recorded, once (Claude models by colony, Codex models by colony-codex)
-- [?] R47 A Models page on the board: the cards, a domain comparison, an effort-vs-cost curve per model, best for each role; an ⓘ beside each model when adding a project
+- [x] R47 A Models page on the board: the cards, a domain comparison, an effort-vs-cost curve per model, best for each role; an ⓘ beside each model when adding a project
 - [x] R48 Each project's model plan: which model and effort its helpers use for which work, recommended at its start and agreed with the person, kept in .board and handed over at every session start, revisited when a model is added
 - [x] R49 Adding a model to colony includes its research check; colony notices a new model, builds its card, reranks, and tells each project
 - [x] R51 Each connected program's models are discovered (Codex's catalog; Claude Code asked, then each ID confirmed with a tiny call), at setup, when a program updates, and on request: the lineup is only what the person can run
