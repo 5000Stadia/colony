@@ -1298,7 +1298,8 @@ class SettingsTest(BoardBase):
             self.assertEqual(console.command("plants"), "claude --remote-control plants", "remote is on by default")
             run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
-            self.assertIn("remote     on", run("settings").stdout)
+            self.assertRegex(run("settings").stdout, r"remote +on")
+            self.assertRegex(run("settings", "consult_budget", "$30").stdout, r"consult_budget +\$30.00")
             run("settings", "remote", "off")
             run("settings", "model", "claude-opus-5-5")
             run("settings", "effort", "medium")
@@ -2191,6 +2192,138 @@ class TabTest(BoardBase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class ConsultTest(BoardBase):
+    """Consulting at a decision costly to change: a fresh model from each of two families, hard caps, at most two
+    rounds, a monthly budget, an off switch."""
+
+    def fake(self, spent=0.3):
+        calls = []
+
+        def consult(brief, model, effort, cap, project, price=None):
+            calls.append({"brief": brief, "model": model, "effort": effort, "cap": cap, "price": price})
+            return {"text": f"point from {model}", "cost": spent, "usage": {}, "error": None}
+        return calls, consult
+
+    def setUp(self):
+        super().setUp()
+        from colony import consult
+        self.consult = consult
+        self.calls, fake = self.fake()
+        self.saved = {k: p.consult for k, p in providers.PROVIDERS.items()}
+        for p in providers.PROVIDERS.values():
+            p.consult = fake
+        board.set_setting("consultants", "claude=claude-opus-5-5:high,codex=gpt-6-astra:high")
+
+    def tearDown(self):
+        for k, p in providers.PROVIDERS.items():
+            del p.consult                         # the instance attribute: the class's method again
+        super().tearDown()
+
+    def test_two_families_answer_a_brief_in_the_persons_words_and_the_cost_is_logged(self):
+        rec = self.consult.run(self.root, "R3", "How should reminders work?", "Plants are in plants.db (db.py:12).")
+        self.assertEqual([c["model"] for c in self.calls], ["claude-opus-5-5", "gpt-6-astra"])
+        brief = self.calls[0]["brief"]
+        self.assertIn("A tool for my plants.", brief)             # the person's goal, verbatim
+        self.assertIn("roadmap item R3: reminders", brief)
+        self.assertIn("plants.db (db.py:12)", brief)
+        self.assertNotIn("revised approach", brief)               # round one is blind to the plan
+        self.assertIsNone(self.calls[0]["price"])                 # Claude Code reports its own cost
+        self.assertEqual(self.calls[1]["price"], (15, 75))        # Codex doesn't: priced high when unknown
+        self.assertEqual(rec["cost"], 0.6)
+        self.assertAlmostEqual(self.consult.spent_this_month(), 0.6)
+        self.assertIn("Consultant 2: gpt-6-astra at high", self.consult.report(rec))
+
+    def test_a_second_round_needs_an_accepted_change_and_there_is_never_a_third(self):
+        rec = self.consult.run(self.root, "R3", "q", "d")
+        with self.assertRaisesRegex(ValueError, "first round"):
+            self.consult.run(self.root, "R3", "q reworded", "d")
+        with self.assertRaisesRegex(ValueError, "accepted a change"):
+            self.consult.run(self.root, "R3", "q", "d", plan="revised", rnd=2)
+        self.consult.adopt(self.root, rec["id"], "point 2: keep reminders local")
+        self.consult.run(self.root, "R3", "q", "d", plan="the revised plan", rnd=2)
+        self.assertIn("the revised plan", self.calls[-1]["brief"])
+        with self.assertRaisesRegex(ValueError, "both its rounds"):
+            self.consult.run(self.root, "R3", "q", "d", plan="again", rnd=2)
+
+    def test_the_off_switch_and_the_monthly_budget_stop_a_run_before_it_starts(self):
+        board.set_setting("consult", "off")
+        with self.assertRaisesRegex(ValueError, "off"):
+            self.consult.run(self.root, "R3", "q", "d")
+        board.set_setting("consult", "on")
+        board.set_setting("consult_budget", "2")
+        with self.assertRaisesRegex(ValueError, "budget"):
+            self.consult.run(self.root, "R3", "q", "d", cap=1.5)   # two at $1.50 could pass $2
+        self.consult.run(self.root, "R3", "q", "d", cap=0.5)
+        self.assertEqual(self.calls[0]["cap"], 0.5)
+        with self.assertRaises(KeyError):
+            board.set_setting("consult_cap", "nothing")
+
+    def test_one_family_is_one_consultant_said_plainly_never_a_second_of_the_same_family(self):
+        board.set_setting("providers", "claude")
+        who, note = self.consult.consultants()
+        self.assertEqual([k for k, *_ in who], ["claude"])
+        self.assertIn("only one model family", note)
+        with self.assertRaises(KeyError):
+            providers.get("gemini", strict=True)
+
+    def test_without_a_choice_each_family_takes_its_best_for_planning_from_the_cards(self):
+        from colony import bench
+        board.set_setting("consultants", "")
+        saved = bench.recommend_for
+        bench.recommend_for = lambda k: {"planning": {"model": f"{k}-top", "effort": "high", "why": "planning score 90"}}
+        try:
+            who, _ = self.consult.consultants()
+        finally:
+            bench.recommend_for = saved
+        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-top", "high"), ("codex", "codex-top", "high")])
+        self.assertIn("planning score 90", who[0][3])
+
+
+class CodexConsultCapTest(unittest.TestCase):
+    """Codex reports tokens, not dollars: its run is priced as it streams and stopped at the cap."""
+
+    def test_the_run_is_killed_when_its_priced_usage_passes_the_cap(self):
+        import io
+
+        class Proc:
+            killed = False
+
+            def __init__(self, cmd, **kw):
+                self.cmd = cmd
+                self.stdin = io.StringIO()
+                lines = [{"type": "turn.completed", "usage": {"input_tokens": 100_000 * i, "output_tokens": 10_000 * i}} for i in (1, 2, 3)]
+                self.stdout = iter(json.dumps(x) + "\n" for x in lines)
+
+            def kill(self):
+                Proc.killed = True
+
+            def wait(self, timeout=None):
+                return 0
+        seen = {}
+
+        def popen(cmd, **kw):
+            seen["cmd"] = cmd
+            return Proc(cmd, **kw)
+        out = providers.get("codex").consult("brief", "gpt-6-astra", "high", 2.0, Path("/x"), price=(10, 50), popen=popen)
+        self.assertTrue(Proc.killed)
+        self.assertEqual(out["error"], "stopped at the spending cap")
+        self.assertAlmostEqual(out["cost"], 3.0)                 # 200k in at $10, 20k out at $50: past $2
+        self.assertIn("read-only", seen["cmd"])
+
+    def test_claude_code_runs_in_an_empty_folder_with_no_settings_and_its_own_cap(self):
+        seen = {}
+
+        def run(cmd, **kw):
+            seen["cmd"], seen["cwd"] = cmd, kw["cwd"]
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok", "total_cost_usd": 0.2}), "")
+        out = providers.get("claude").consult("brief", "claude-opus-5-5", "high", 1.5, Path("/proj"), run=run)
+        self.assertEqual((out["text"], out["cost"]), ("ok", 0.2))
+        self.assertIn("--max-budget-usd", seen["cmd"])
+        self.assertEqual(seen["cmd"][seen["cmd"].index("--setting-sources") + 1], "")
+        self.assertNotEqual(seen["cwd"], "/proj")
+        self.assertIn("Bash", seen["cmd"][seen["cmd"].index("--disallowedTools") + 1])
 
 
 class ServerTest(BoardBase):

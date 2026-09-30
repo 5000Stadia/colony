@@ -63,6 +63,21 @@ def api_records():
     return records_from(data, [mid for _, mid, _, _ in lineup()], date)[0]
 
 
+def token_price(model):
+    """A model's price per 1M input and output tokens from the latest Artificial Analysis reply, or None: what
+    costs a run for a program that doesn't report its cost."""
+    snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
+    try:
+        data = json.loads(snaps[-1].read_text()) if snaps else []
+    except (OSError, ValueError):
+        return None
+    for e in data:
+        pr = e.get("pricing") or {}
+        if match(model, e) is not None and pr.get("price_1m_input_tokens") and pr.get("price_1m_output_tokens"):
+            return (pr["price_1m_input_tokens"], pr["price_1m_output_tokens"])
+    return None
+
+
 def problems(r):
     """What's wrong with a record, if anything: every key present, a known domain and kind, a number, a URL."""
     out = [f"missing {k}" for k in KEYS if k not in r]

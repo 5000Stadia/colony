@@ -35,6 +35,9 @@ what it assumes and what a second provider needs there. What a provider supplies
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
+  consult(brief, model, effort, cap, project)
+                           one fresh, stateless consultation: an empty folder, no settings or hooks, read-only, a
+                           hard spending cap; returns {"text", "cost", "usage", "error"} (colony consult uses it)
   choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it;
                            with choice(), it also lets the watcher answer a session's start-up questions (starting())
   enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
@@ -158,6 +161,24 @@ class ClaudeCode:
                 found.append((mid, self.model_name(mid) if mid in dict(self.models) else _label(mid),
                               [e for e in self.efforts]))
         return found
+
+    def consult(self, brief, model, effort, cap, project, run=None):
+        """One fresh, stateless consultation: in an empty folder with none of the project's settings or hooks (so
+        it can't take the person's notes or act as the project's agent), reading the project only by path, with a
+        hard spending cap. Returns the answer and what it cost."""
+        import subprocess
+        import tempfile
+        here = tempfile.mkdtemp(prefix="colony-consult-")
+        cmd = [self.program, "-p", "--model", model, "--effort", effort, "--setting-sources", "", "--output-format", "json",
+               "--max-budget-usd", f"{cap:.2f}", "--add-dir", str(project), "--allowedTools", "Read,Grep,Glob",
+               "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent"]
+        try:
+            out = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, timeout=1800).stdout
+            d = json.loads(out)
+        except (ValueError, OSError, subprocess.TimeoutExpired) as err:
+            return {"text": "", "cost": None, "error": f"{err.__class__.__name__}"}
+        return {"text": d.get("result") or "", "cost": d.get("total_cost_usd"), "usage": d.get("usage"),
+                "error": None if not d.get("is_error") else (d.get("subtype") or "error")}
 
     def conversation(self, payload):
         """Which conversation a hook ran in, and where it is kept: for a console that must be restarted."""
@@ -388,6 +409,7 @@ class Codex:
     See https://developers.openai.com/codex/hooks for the payload and output contracts."""
     label = "Codex"
     program, site = "codex", "https://developers.openai.com/codex"
+    reports_cost = False                      # codex exec reports tokens, not dollars
     aliases = {}
     efforts = ["low", "medium", "high", "xhigh", "max", ("ultra", "Ultra — delegates to subagents")]
     efforts_for = {"gpt-5.5": efforts[:4], "gpt-5.6-luna": efforts[:5], "gpt-6-luna": efforts[:5]}
@@ -402,6 +424,41 @@ class Codex:
 
     def catalog(self):
         return self.discover()
+
+    def consult(self, brief, model, effort, cap, project, price=None, popen=None):
+        """One fresh, stateless consultation in its read-only sandbox, in an empty folder, with hooks off. Codex has
+        no spending cap of its own, so its reported usage is priced as it streams and the run is stopped at the cap."""
+        import subprocess
+        import tempfile
+        here = tempfile.mkdtemp(prefix="colony-consult-")
+        last = Path(here) / "answer.txt"
+        cmd = [self.program, "exec", "-m", model, "-c", f"model_reasoning_effort={effort}", "-s", "read-only",
+               "--skip-git-repo-check", "--ephemeral", "--disable", "hooks", "--json", "-o", str(last), "-C", here, "-"]
+        pin, pout = price or (0, 0)
+        cost = lambda u: ((u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)) * pin
+                          + u.get("cached_input_tokens", 0) * pin * 0.1 + u.get("output_tokens", 0) * pout) / 1e6
+        usage, stopped = {}, False
+        try:
+            proc = (popen or subprocess.Popen)(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            proc.stdin.write(brief)
+            proc.stdin.close()
+            for line in proc.stdout:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                u = e.get("usage") or (e.get("msg") or {}).get("usage")
+                if isinstance(u, dict) and u:
+                    usage = u
+                    if price and cost(usage) > cap:
+                        proc.kill()
+                        stopped = True
+                        break
+            proc.wait(timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as err:
+            return {"text": "", "cost": None, "error": err.__class__.__name__}
+        return {"text": last.read_text() if last.exists() else "", "cost": cost(usage) if price else None,
+                "usage": usage, "error": "stopped at the spending cap" if stopped else None}
 
     def discover(self, run=None):
         """The models this account can run, from Codex's own catalog of them, with each one's effort levels;
@@ -686,7 +743,11 @@ def unusable(provider):
 DEFAULT = "claude"
 
 
-def get(name):
+def get(name, strict=False):
+    """A provider by name; none named is the default. strict: an unknown name is an error, never quietly Claude Code
+    (a consultation must know which family it's getting)."""
+    if strict and name not in PROVIDERS:
+        raise KeyError(name)
     return PROVIDERS.get(name or DEFAULT, PROVIDERS[DEFAULT])
 
 

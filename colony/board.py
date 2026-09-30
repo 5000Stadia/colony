@@ -131,7 +131,7 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
-                    "permissions": "ask"}
+                    "permissions": "ask", "consult": True, "consult_cap": 1.5, "consult_budget": 20.0, "consultants": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -149,6 +149,10 @@ SETTING_HELP = {
     "monitor": "the monitor session runs with the board",
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
+    "consult": "agents consult two fresh models at decisions costly to change (colony consult)",
+    "consult_cap": "the most one consultant may spend, in dollars (a hard stop)",
+    "consult_budget": "the most all consultations may spend in a calendar month, in dollars",
+    "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
 
 
@@ -158,10 +162,28 @@ def set_setting(key, value):
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
-    elif key in ("remote", "monitor", "lan", "messaging", "trust"):
+    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
+    elif key in ("consult_cap", "consult_budget"):
+        try:
+            amount = float(str(value).strip().lstrip("$"))
+        except ValueError:
+            raise KeyError(key)
+        if amount <= 0:
+            raise KeyError(key)
+        reg["settings"][key] = amount
+    elif key == "consultants":
+        from .providers import PROVIDERS
+        chosen = {}
+        for pair in (x.strip() for x in str(value).split(",") if x.strip()):
+            fam, _, spec = pair.partition("=")
+            model, _, effort = spec.strip().partition(":")
+            if fam.strip() not in PROVIDERS or not model:
+                raise KeyError(key)
+            chosen[fam.strip()] = {"model": model.strip(), "effort": effort.strip() or "high"}
+        reg["settings"][key] = chosen
     elif key == "permissions":
         if value not in PERMISSIONS:
             raise KeyError(key)

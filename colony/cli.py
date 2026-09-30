@@ -26,6 +26,7 @@ located signals and a project memory.
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
     colony choose NAME "OPTION"     pick an option a project is showing (trust question, permission prompt)
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
+    colony consult R4 "QUESTION" --digest FILE   two fresh views at a decision costly to change
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
     colony setup                    the monitor walks you through first-time setup (again)
@@ -538,6 +539,39 @@ def cmd_gate(a):
     return 0
 
 
+def cmd_consult(a):
+    """Consult two fresh models from different families at a decision costly to change; or record which of their
+    points the person accepted; or show a consultation again."""
+    from . import board, consult
+    root = board.root_of()
+    if a.adopt:
+        try:
+            consult.adopt(root, a.adopt, a.decision)
+        except KeyError:
+            print(f"no consultation {a.adopt}", file=sys.stderr)
+            return 2
+        print(f"recorded for {a.adopt}: {a.decision}")
+        return 0
+    if a.show:
+        rec = next((r for r in consult.records(root) if r["id"] == a.show), None)
+        if not rec:
+            print(f"no consultation {a.show}", file=sys.stderr)
+            return 2
+        print(consult.report(rec))
+        return 0
+    if not a.question or not a.digest:
+        raise SystemExit("colony consult DECISION \"QUESTION\" --digest FILE (- for stdin); see colony consult -h")
+    read = lambda f: sys.stdin.read() if f == "-" else Path(f).expanduser().read_text()
+    try:
+        rec = consult.run(root, a.decision, a.question, read(a.digest), read(a.plan) if a.plan else None,
+                          2 if a.plan else 1, cap=a.cap)
+    except (ValueError, OSError) as err:
+        print(err, file=sys.stderr)
+        return 2
+    print(consult.report(rec))
+    return 0
+
+
 def cmd_pin(a):
     """Pin something for the person: a file in the project or a URL, shown at the top of its page."""
     from . import board, pins
@@ -819,11 +853,12 @@ def cmd_settings(a):
     reg = board.registry()
     from . import providers
     for k, v in reg["settings"].items():
-        shown = ("on" if v else "off") if isinstance(v, bool) else (", ".join(v or providers.PROVIDERS) if k == "providers"
-                                                                   else v or "(the provider's default)")
-        print(f"{k:10} {shown:28} {board.SETTING_HELP[k]}")
-    print(f"{'new-folder':10} {reg['new_root']:28} where new projects are created")
-    print(f"{'folders':10} {', '.join(reg['roots']) or '(none)'}")
+        shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
+                 else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
+                 if k == "consultants" else f"${v:.2f}" if k.startswith("consult_") else v or "(the provider's default)")
+        print(f"{k:14} {shown:28} {board.SETTING_HELP[k]}")
+    print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
+    print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
     return 0
 
 
@@ -1023,6 +1058,15 @@ def main(argv=None):
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.set_defaults(fn=cmd_gate)
+    p = sub.add_parser("consult", help="two fresh models from different families, at a decision costly to change")
+    p.add_argument("decision", help="the roadmap item (R12) or a short name for the decision")
+    p.add_argument("question", nargs="?", help="the decision, in a sentence or two")
+    p.add_argument("--digest", metavar="FILE", help="your digest of the facts, each with its source (- for stdin)")
+    p.add_argument("--plan", metavar="FILE", help="round two: your revised approach, for the consultants to check")
+    p.add_argument("--cap", type=float, help="the most each consultant may spend, in dollars (default: colony settings)")
+    p.add_argument("--adopt", metavar="ID", help="record which points of consultation ID the person accepted (DECISION is their words)")
+    p.add_argument("--show", metavar="ID", help="show consultation ID again")
+    p.set_defaults(fn=cmd_consult)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)

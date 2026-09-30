@@ -72,12 +72,13 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R55 Choosing models: the form's suggestion is the cards', framed as theirs, the same an agent sees; no fixed suggestion
 
 
-## M9 — Auto mode: the cheapest model that reliably does the work, the strongest at the moments that need it
+## M9 — Consulting at decisions costly to change: the most insight per dollar
 
-- [ ] R56 The consultation: at a planning, design or costly-to-undo moment (or when work struggles), the agent writes its approach in brief and asks the strongest model what it would do differently, specifically; takes concrete points and carries on, hands over only uncharted work — design/auto-mode.md
-- [ ] R57 Each consultation logged with what it changed and whether that held, per project
-- [ ] R58 Auto mode proposes model and effort changes to the person from what the record shows, never silently — design/auto-mode.md
-- [ ] R59 Each project's actual usage (tokens, time) shown beside its plan, so the person sees what their wallet is carrying
+- [x] R56 The consult call for each program: fresh, in an empty folder with no settings or hooks, a hard spending cap, read-only; no silent fallback to Claude for an unknown provider — design/consult-log.md
+- [x] R57 colony consult: each family's consultant chosen from the benchmark cards (best for planning, the cheapest within a few points), or the person's pick in Settings; the brief assembled in code (the person's words from the roadmap, item and notes; the asking agent's sourced digest; the question), two families side by side, the decision record (at most two rounds), every cost and answer logged; a colony-wide monthly budget and an off switch
+- [ ] R58 Gates carry the consultants' points, each accepted or rejected by the person; only an accepted change opens a second, checking round
+- [ ] R59 The rule in every project's instructions, with examples of costly decisions; each project's consultations and their cost on the board
+- [ ] R60 Each project's actual usage (reading against thinking and writing) beside its model plan
 
 ## M6 — Later
 
