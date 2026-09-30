@@ -115,6 +115,9 @@ class ClaudeCode:
             entries = cfg.setdefault("hooks", {}).setdefault(event, [])
             if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
                 entries.append({"hooks": [{"type": "command", "command": command}]})
+        # PROVIDER: Claude Code hands its usage limits only to its status line; colony's records them and shows
+        # the person's own status line, if they set one. A project that set its own keeps it.
+        cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
 
     HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"

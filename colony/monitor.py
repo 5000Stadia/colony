@@ -393,6 +393,7 @@ class Watcher:
         self.nudged = set()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
+        self.usage_checked = self.discovered
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -460,7 +461,7 @@ class Watcher:
         gate answer from the person whose moment has come. Start its session if it isn't running, and once
         it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
         on a question, is left alone until its turn ends, unless the mail is urgent."""
-        from . import mail
+        from . import mail, usage
         for p in board.projects():
             if not p.exists():
                 continue
@@ -471,6 +472,8 @@ class Watcher:
                 continue
             state = console.snapshot(p, lines=1)["state"]
             urgent = any(m.get("urgent") for m in letters)
+            if str(p) in usage.paused() and not urgent:
+                continue                            # paused at a usage limit: what waits is handed over at its next turn
             if state == "off":
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
@@ -546,8 +549,21 @@ class Watcher:
         queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page, "
               "and each project's helper tiers already follow it.")
 
+    def usage(self):
+        """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down
+        (told on their next turn, not woken), and at the reset they're woken to carry on."""
+        if time.time() - self.usage_checked < 60:
+            return
+        self.usage_checked = time.time()
+        from . import usage
+        winding = [p.name for p, what in usage.check() if what == "paused"]
+        if winding:
+            queue(f"Winding down at a usage limit: {', '.join(winding)}. Each agent tells the person where things stand "
+                  "and their options on its next turn; colony wakes them at the reset.")
+
     def tick(self):
         self.models()
+        self.usage()
         me = snapshot()
         if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)

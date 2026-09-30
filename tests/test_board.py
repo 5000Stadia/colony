@@ -2356,6 +2356,71 @@ class HelperTierTest(BoardBase):
         self.assertFalse((self.root / ".codex" / "agents" / "colony-chores.toml").exists(), "a tier colony can't fill: no helper")
 
 
+class UsageTest(BoardBase):
+    """Each program's usage limits, read without tokens; at the threshold its projects wind down and the person
+    hears where things stand and their options; at the reset they're woken to carry on."""
+
+    def claude_at(self, weekly, resets_in=3600):
+        from colony import usage
+        usage.record_claude({"rate_limits": {"seven_day": {"used_percentage": weekly, "resets_at": time.time() + resets_in},
+                                             "five_hour": {"used_percentage": 5, "resets_at": time.time() + 600}}})
+
+    def test_codex_limits_come_from_its_session_files(self):
+        from colony import usage
+        day = Path(self.tmp.name) / "codex" / "sessions" / "2026" / "09" / "30"
+        day.mkdir(parents=True)
+        event = {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+            "primary": {"used_percent": 42.0, "window_minutes": 10080, "resets_at": 1791201695}, "secondary": None}}}
+        (day / "rollout-x.jsonl").write_text(json.dumps({"type": "session_meta"}) + "\n" + json.dumps(event) + "\n")
+        self.assertEqual(usage.codex(Path(self.tmp.name) / "codex")["windows"], {"weekly": {"used": 42.0, "resets_at": 1791201695}})
+
+    def test_past_the_threshold_a_project_winds_down_and_at_the_reset_it_is_woken(self):
+        from colony import usage
+        board.track(self.root)
+        settings = json.loads((self.root / ".claude" / "settings.json").read_text())
+        self.assertEqual(settings["statusLine"]["command"], "colony statusline", "Claude Code hands its limits to it")
+        self.claude_at(96)
+        self.assertEqual(usage.check(), [], "under 97%: nothing")
+        self.claude_at(97.5)
+        self.assertEqual([w for _, w in usage.check()], ["paused"])
+        [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
+        self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
+        for words in ("Wind down now", "where things stand", "wait for the reset", "hand this project to Codex",
+                      "keep going past the limit"):
+            self.assertIn(words, note["text"])
+        self.assertEqual(usage.check(), [], "told once")
+        board.add_note(self.root, None, "a note from the person")
+        w = monitor.Watcher(quiet=0)
+        w.mail()
+        self.assertFalse(w.nudged, "a paused project isn't woken")
+        self.claude_at(97.5, resets_in=-1)                   # the week has turned over
+        self.assertEqual([x for _, x in usage.check()], ["resumed"])
+        self.assertIn("has reset. Carry on", board.notes(self.root)[-1]["text"])
+        self.assertFalse(board.notes(self.root)[-1].get("quiet"), "woken to carry on")
+
+    def test_a_project_can_keep_going_or_pause_sooner(self):
+        from colony import usage
+        board.track(self.root)
+        self.claude_at(98)
+        board.project_settings(self.root, {"usage_pause": "off"})
+        self.assertEqual(usage.check(), [], "off for this project")
+        board.project_settings(self.root, {"usage_pause": ""})
+        board.set_setting("usage_pause", "99")
+        self.assertEqual(usage.check(), [], "colony's threshold moved up")
+        with self.assertRaises(KeyError):
+            board.set_setting("usage_pause", "150")
+
+    def test_the_status_line_records_the_limits_and_shows_them(self):
+        payload = {"model": {"display_name": "Opus 5.5"},
+                   "rate_limits": {"seven_day": {"used_percentage": 61, "resets_at": time.time() + 3600}}}
+        out = subprocess.run([sys.executable, "-m", "colony", "statusline"], input=json.dumps(payload), capture_output=True,
+                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), CLAUDE_CONFIG_DIR=self.tmp.name)).stdout
+        self.assertIn("Opus 5.5 · weekly 61%", out)
+        from colony import usage
+        self.assertEqual(usage.read("claude")["weekly"]["used"], 61)
+        self.assertIn("Usage: weekly 61%", board.settings_page(board.registry()))
+
+
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
 

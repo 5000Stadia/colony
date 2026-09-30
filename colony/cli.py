@@ -576,6 +576,33 @@ def cmd_consult(a):
     return 0
 
 
+def cmd_statusline(a):
+    """(Claude Code's status line) Record the usage limits Claude Code hands its status line, then show the
+    person's own status line if they set one, else a short line of their own usage."""
+    from . import usage
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        payload = json.loads(raw or "{}")
+    except ValueError:
+        payload = {}
+    try:
+        usage.record_claude(payload)
+    except OSError:
+        pass
+    from .providers import get
+    try:
+        own = (json.loads((get("claude").config_home() / "settings.json").read_text()).get("statusLine") or {}).get("command")
+    except (OSError, ValueError, AttributeError):
+        own = None
+    if own and "colony statusline" not in own:
+        r = subprocess.run(own, shell=True, input=raw, capture_output=True, text=True, timeout=10)
+        print(r.stdout.rstrip("\n"))
+        return 0
+    model = (payload.get("model") or {}).get("display_name") or ""
+    print(" · ".join(filter(None, [model, usage.line("claude")])))
+    return 0
+
+
 def cmd_pin(a):
     """Pin something for the person: a file in the project or a URL, shown at the top of its page."""
     from . import board, pins
@@ -1064,6 +1091,7 @@ def main(argv=None):
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.set_defaults(fn=cmd_gate)
+    sub.add_parser("statusline", help="(Claude Code's status line) record its usage limits").set_defaults(fn=cmd_statusline)
     p = sub.add_parser("consult", help="two fresh models from different families, at a decision costly to change")
     p.add_argument("decision", help="the roadmap item (R12) or a short name for the decision")
     p.add_argument("question", nargs="?", help="the decision, in a sentence or two")

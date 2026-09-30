@@ -141,7 +141,8 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
-                    "permissions": "ask", "consult": True, "consultants": {}}
+                    "permissions": "ask", "consult": True, "consultants": {},
+                    "usage_pause": 97}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -160,6 +161,7 @@ SETTING_HELP = {
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
+    "usage_pause": "pause a program's projects at this % of a usage limit (5-hour or weekly), resuming at the reset; off to never pause",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
 
@@ -174,6 +176,18 @@ def set_setting(key, value):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
+    elif key == "usage_pause":
+        v = str(value).strip().rstrip("%").lower()
+        if v in ("off", "0"):
+            reg["settings"][key] = 0
+        else:
+            try:
+                n = float(v)
+            except ValueError:
+                raise KeyError(key)
+            if not 0 < n <= 100:
+                raise KeyError(key)
+            reg["settings"][key] = n
     elif key == "consultants":
         from .providers import PROVIDERS
         chosen = {}
@@ -207,7 +221,7 @@ def set_setting(key, value):
     return reg
 
 
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote")
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "usage_pause")
 
 
 def project_settings(root, changes=None):
@@ -861,6 +875,12 @@ def sidebar(reg, pid):
                     f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                     f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                     f"{' · ' + e(last) if last else ''}</span></a>")
+    from . import providers as pv, usage
+    for k, prov in pv.PROVIDERS.items():
+        ws = usage.read(k) if pv.usable(prov) else {}
+        if ws:
+            side.append(f"<div class='sline long' style='padding:2px 10px'>{e(prov.label)}: "
+                        + " · ".join(f"{e(w)} {v['used']:g}%" for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly")) + "</div>")
     side.append("<div class='navfoot'><a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
@@ -1343,6 +1363,8 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
             # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
+            f"<label>Pause at <input name='usage_pause' value='{e(str(own.get('usage_pause', '')))}' size='4' "
+            f"placeholder='{e(str(g['usage_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
             + (tier_fields(root) if root else "") + f"<button>Save</button></form>")
 
 
@@ -1980,8 +2002,11 @@ def settings_page(reg):
         state = ("installed" if pv.installed(p) else f"not installed: <a href='{e(p.site)}' target='_blank' rel='noopener'>get it</a>")
         also = (f"; off, but {len(using)} project{'s' * (len(using) != 1)} still run on it ({e(', '.join(using))})"
                 if using and not pv.enabled(p) else f"; {len(using)} project{'s' * (len(using) != 1)}" if using else "")
+        from . import usage
+        used = usage.line(k) if pv.installed(p) else ""
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
-                f"<span class='muted'>({state}{also})</span></label>")
+                f"<span class='muted'>({state}{also})</span></label>"
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>Usage: {e(used)}</p>" if used else ""))
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
@@ -2002,6 +2027,9 @@ def settings_page(reg):
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
                + "</select></label>"
                + provider_fields(s["provider"], s["model"], s["effort"], "the provider's default") +
+               f"<label>Pause a program's projects at <input name='usage_pause' value='{e(str(s['usage_pause'] or 'off'))}' size='4'> % "
+               f"of its 5-hour or weekly limit <span class='muted'>(they wind down and tell you where things stand; "
+               f"colony wakes them at the reset)</span></label>"
                f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
@@ -2292,6 +2320,11 @@ class Handler(BaseHTTPRequestHandler):
                 set_setting("provider", form["provider"])
             set_setting("model", form.get("model", ""))
             set_setting("effort", form.get("effort", ""))
+            if form.get("usage_pause", "").strip():
+                try:
+                    set_setting("usage_pause", form["usage_pause"])
+                except KeyError:
+                    pass                                  # not a percentage: the old one stays
             if form.get("new_root", "").strip():
                 set_setting("new-folder", form["new_root"].strip())
             self.send_response(303)
