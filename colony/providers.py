@@ -48,6 +48,7 @@ The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are p
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
 import json
+import sys
 import shlex
 from pathlib import Path
 
@@ -424,6 +425,31 @@ class Codex:
 
     def catalog(self):
         return self.discover()
+
+    # PROVIDER: Codex sandboxes its commands with bubblewrap on Linux. Ubuntu 24.04 and later forbid the user
+    # namespaces bubblewrap needs unless an AppArmor profile allows them: without one, a Codex agent or consultant
+    # can't run a command, or even read a file, in its read-only or workspace sandbox.
+    APPARMOR = ("abi <abi/4.0>,\ninclude <tunables/global>\n\nprofile codex-bwrap "
+                "/{usr/bin/bwrap,home/*/.codex/packages/standalone/releases/*/codex-resources/bwrap} "
+                "flags=(unconfined) {\n  userns,\n\n  include if exists <local/codex-bwrap>\n}\n")
+
+    def sandbox_problem(self, run=None):
+        """Why Codex's sandbox can't start on this machine, with the fix; None when it can (or isn't Linux's)."""
+        import shutil
+        import subprocess
+        if not sys.platform.startswith("linux") or not shutil.which("bwrap"):
+            return None
+        try:
+            r = (run or subprocess.run)(["bwrap", "--unshare-net", "--ro-bind", "/", "/", "true"], capture_output=True,
+                                        text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if r.returncode == 0:
+            return None
+        return ("Codex's sandbox can't start here (" + (r.stderr.strip().splitlines() or ["bwrap failed"])[-1] + "), so "
+                "Codex can't run commands or read files in it. On Ubuntu, allow bubblewrap its user namespaces: "
+                "printf '" + self.APPARMOR.replace("\n", "\\n") + "' | sudo tee /etc/apparmor.d/codex-bwrap && "
+                "sudo apparmor_parser -r /etc/apparmor.d/codex-bwrap")
 
     def consult(self, brief, model, effort, cap, project, price=None, popen=None):
         """One fresh, stateless consultation in its read-only sandbox, in an empty folder, with hooks off. Codex has

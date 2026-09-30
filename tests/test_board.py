@@ -2223,6 +2223,7 @@ class ConsultTest(BoardBase):
 
     def test_two_families_answer_a_brief_in_the_persons_words_and_the_cost_is_logged(self):
         rec = self.consult.run(self.root, "R3", "How should reminders work?", "Plants are in plants.db (db.py:12).")
+        self.assertIn("don't survey the project", self.calls[0]["brief"])   # bounded: no wild-goose chase
         self.assertEqual([c["model"] for c in self.calls], ["claude-opus-5-5", "gpt-6-astra"])
         brief = self.calls[0]["brief"]
         self.assertIn("A tool for my plants.", brief)             # the person's goal, verbatim
@@ -2252,11 +2253,11 @@ class ConsultTest(BoardBase):
         with self.assertRaisesRegex(ValueError, "off"):
             self.consult.run(self.root, "R3", "q", "d")
         board.set_setting("consult", "on")
-        board.set_setting("consult_budget", "2")
+        board.set_setting("consult_budget", "0.5")
+        self.consult.run(self.root, "R3", "q", "d")               # a run takes what it takes: $0.60 against $0.50
+        self.assertEqual(self.calls[0]["cap"], 5.0, "the cap is a runaway stop, far above a consultation")
         with self.assertRaisesRegex(ValueError, "budget"):
-            self.consult.run(self.root, "R3", "q", "d", cap=1.5)   # two at $1.50 could pass $2
-        self.consult.run(self.root, "R3", "q", "d", cap=0.5)
-        self.assertEqual(self.calls[0]["cap"], 0.5)
+            self.consult.run(self.root, "R4", "q", "d")           # but none starts once the month's budget is spent
         with self.assertRaises(KeyError):
             board.set_setting("consult_cap", "nothing")
 

@@ -485,6 +485,10 @@ def cmd_doctor(a):
     for p in providers.PROVIDERS.values():
         print(f"{'ok  ' if p in here else 'note'}  {p.label} ({p.program}) {'installed' if p in here else 'not installed'}"
               + ("" if providers.enabled(p) else "; off in colony's Settings"))
+    for p in here:
+        trouble = providers.enabled(p) and hasattr(p, "sandbox_problem") and p.sandbox_problem()
+        if trouble:
+            problems.append(trouble)
     if not here:
         problems.append("no agent program is installed: Claude Code (https://claude.com/claude-code) or Codex "
                         "(https://developers.openai.com/codex)")

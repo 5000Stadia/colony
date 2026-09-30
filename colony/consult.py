@@ -4,8 +4,9 @@ person's own words, then (only if the person accepted a change) one checking rou
 The recipe, from the holodeck pilot and two rounds on the rule itself (design/consult-log.md): any second pass beats
 a first draft; a second model family adds what one misses; a checking round pays most consistently; reading is the
 expensive part, so the asking agent, who knows the ground, writes the digest of sourced facts and the consultants
-think from it. Limits are enforced, never declared: each consultant has a hard spending cap, and one colony-wide
-monthly budget is checked before every run. Every round is logged with its cost, and later with what was adopted.
+think from it and check at the source only what their answer turns on. The task is bounded (a few points, a few
+hundred words) so a consultant takes what it takes; a runaway stop far above that catches only a run gone wrong,
+and one colony-wide monthly budget is checked before every run. Every round is logged with its cost, and later with what was adopted.
 """
 import json
 import secrets
@@ -83,8 +84,9 @@ def brief(root, decision, question, digest, plan=None, rnd=1):
     parts = [f"You are `consultant · {root.name} · this decision only`: a fresh, independent view on a decision in "
              "someone's project. Read nothing into who asked.", "## In the person's own words", "\n".join(words) or "(none recorded)",
              f"## The decision\n{question}",
-             "## The asking agent's digest of the facts (with sources: check at the source anything you doubt; you "
-             f"may read files under {root}, and change nothing)", digest.strip()]
+             "## The asking agent's digest of the facts, with their sources",
+             f"The digest is your material. Check a fact at its source (read-only, under {root}) only when your "
+             "answer turns on it and you doubt it; don't survey the project.", digest.strip()]
     if rnd == 2 and plan:
         parts += ["## The revised approach", plan.strip(), "## Your task", ROUND2]
     else:
@@ -113,9 +115,9 @@ def run(root, decision, question, digest, plan=None, rnd=1, cap=None, pool=None)
         raise ValueError("no provider that can consult is installed and on")
     cap = cap if cap is not None else float(s["consult_cap"])
     budget = float(s["consult_budget"])
-    if spent_this_month() + cap * len(who) > budget:
-        raise ValueError(f"this month's consultation budget (${budget:.2f}) would be passed: "
-                         f"${spent_this_month():.2f} spent (colony settings consult-budget to raise it)")
+    if spent_this_month() >= budget:
+        raise ValueError(f"this month's consultation budget (${budget:.2f}) is spent: "
+                         f"${spent_this_month():.2f} (colony settings consult_budget to raise it)")
     text = brief(root, decision, question, digest, plan, rnd)
     import concurrent.futures as cf
 

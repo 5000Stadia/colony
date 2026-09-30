@@ -142,7 +142,7 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
-                    "permissions": "ask", "consult": True, "consult_cap": 1.5, "consult_budget": 20.0, "consultants": {}}
+                    "permissions": "ask", "consult": True, "consult_cap": 5.0, "consult_budget": 20.0, "consultants": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -161,7 +161,7 @@ SETTING_HELP = {
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
     "consult": "agents consult two fresh models at decisions costly to change (colony consult)",
-    "consult_cap": "the most one consultant may spend, in dollars (a hard stop)",
+    "consult_cap": "a runaway stop for one consultant, in dollars: far above what one takes (about $0.30-1), so it never cuts a sound answer short",
     "consult_budget": "the most all consultations may spend in a calendar month, in dollars",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
@@ -2011,7 +2011,7 @@ def settings_page(reg):
     consulting = (f"<form method='post' action='/consulting' class='options'>"
                   f"<label><input type='checkbox' name='consult' value='on'{check('consult')}> Agents consult two fresh models "
                   f"at decisions costly to change <span class='muted'>(a new milestone or spec, a foundation others build on, a major redesign)</span></label>"
-                  f"<label>Most one consultant may spend <input name='consult_cap' value='{s['consult_cap']:.2f}' inputmode='decimal' size='6'> dollars</label>"
+                  f"<label>Stop a consultant that runs away past <input name='consult_cap' value='{s['consult_cap']:.2f}' inputmode='decimal' size='6'> dollars <span class='muted'>(one takes about $0.30-1)</span></label>"
                   f"<label>Most all consultations may spend a month <input name='consult_budget' value='{s['consult_budget']:.2f}' inputmode='decimal' size='6'> dollars</label>"
                   f"<p class='muted'>${spent:.2f} spent this month. Consultants: "
                   + (e("; ".join(f"{m} at {eff} ({why})" for _, m, eff, why in picks)) or "none: no program that can consult is on")
