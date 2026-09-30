@@ -70,8 +70,9 @@ def _find(x, key):
     return None
 
 
-def read(key):
-    """A program's windows now: {name: {used, resets_at}}; a window past its reset reads as unused."""
+def read(key, raw=False):
+    """A program's windows now: {name: {used, resets_at}}; a window past its reset reads as unused (raw: as
+    last reported)."""
     if key == "claude":
         try:
             got = json.loads((folder() / "claude.json").read_text())
@@ -83,6 +84,8 @@ def read(key):
         got = None
     if not got:
         return {}
+    if raw:
+        return got["windows"]
     now = time.time()
     return {w: dict(v, used=0 if v.get("resets_at") and v["resets_at"] <= now else v["used"])
             for w, v in got["windows"].items()}
@@ -141,8 +144,13 @@ def check():
                 board.add_note(p, None, wind_down(p, prov, window, v, others), author="colony", quiet=True)
                 changed.append((p, "paused"))
         elif str(p) in was:
-            board.add_note(p, None, f"{prov.label}'s {was[str(p)]['window']} usage limit has reset. Carry on where you "
-                                    "stopped.", author="colony")
+            w = was[str(p)]
+            latest = read(key, raw=True).get(w["window"]) or {}
+            turned = min(w.get("resets_at") or 0, latest.get("resets_at") or w.get("resets_at") or 0) <= time.time()
+            why = (f"{prov.label}'s {w['window']} usage limit has reset" if turned
+                   else f"{prov.label} is back under this project's pause threshold ({t:g}%)" if t
+                   else "this project no longer pauses at a usage limit")
+            board.add_note(p, None, f"{why}. Carry on where you stopped.", author="colony")
             changed.append((p, "resumed"))
     if now != was:
         folder().mkdir(parents=True, exist_ok=True)
