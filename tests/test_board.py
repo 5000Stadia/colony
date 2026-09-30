@@ -871,6 +871,8 @@ class GlanceTest(BoardBase):
                      "isn't ranked against the rows above"):
             self.assertIn(want, page)
         self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison or the best-for lists")
+        head = re.search(r"<table class='bench'><tr>(.*?)</tr>", page).group(1)
+        self.assertNotIn("<th>preference</th>", head, "a domain no model here has a score in isn't a column")
         self.assertEqual(len(board.once([by[("claude-opus-5-5", "high")], by[("claude-opus-5-5", "medium")]])), 1, "each model once")
         add = board.add_project_page(board.registry(), "new", "")
         self.assertIn("ⓘ benchmarks</a>", add, "beside the model, when adding a project")

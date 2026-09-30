@@ -1838,7 +1838,10 @@ def models_page(reg):
         f"<tr><th>{e(role)}</th><td>" + ", ".join(f"<a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a>" for x in once(bench.best_for(role, entries=entries))[:3])
         + ("</td><td class='muted'>per dollar</td>" if role == "chores" else "</td><td class='muted'>"
            + ", ".join(bench.ROLES[role]) + "</td>") + "</tr>" for role in bench.ROLES)
-    doms = ["overall"] + [d for d in bench.DOMAINS if d != "overall"]
+    # a domain column only where some model here has a score: the source adds scores to a new model over its first
+    # weeks, and some benchmarks it no longer runs on current models (math, for one)
+    shown = [x for x in entries if x["comparable"]]
+    doms = ["overall"] + [d for d in bench.DOMAINS if d != "overall" and any(d in x["domains"] for x in shown)]
     rows = "".join(f"<tr><th><a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a></th>{shade(x['overall'])}"
                    + "".join(shade(x["domains"].get(d)) for d in doms[1:])
                    + f"<td>{usd(x['cost'])}</td><td>{secs(x['time'])}</td></tr>"
@@ -1847,11 +1850,11 @@ def models_page(reg):
              + "".join(f"<th>{e(d)}</th>" for d in doms) + f"<th>{e(cost_head)}</th><th>time</th></tr>" + rows + "</table></div>")
     cards = "".join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     pend = bench.pending()
-    return shell(reg, -2, "<header><h1>Models</h1><p class='muted'>From independent evaluators (Artificial Analysis, "
-                 "LMArena, Epoch AI), researched once when a model joins colony and kept on this machine. Each score is "
-                 "put on one scale across today's lineup, 0 the lowest measured and 100 the highest, within its own "
-                 "benchmark and version; <b>overall</b> averages the headline scores. Vendor numbers are shown, labelled, "
-                 "and never averaged in. A dash is a gap: no independent data.</p>"
+    return shell(reg, -2, "<header><h1>Models</h1><p class='muted'>From Artificial Analysis, an independent evaluator, checked daily "
+                 "for the models your agent programs can run. Each score is put on one scale across today's lineup, 0 the "
+                 "lowest measured and 100 the highest, within its own benchmark and version; <b>overall</b> averages the "
+                 "headline scores. A dash is a gap: Artificial Analysis adds a new model's scores over its first weeks, "
+                 "and a domain none of these models has a score in isn't shown.</p>"
                  + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
                  + "</header><h2>Best for</h2><div class='card'><table class='bench best'>" + best + "</table></div>"
                  "<h2>By domain</h2><div class='card'>" + table + "</div>"
