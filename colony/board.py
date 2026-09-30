@@ -78,6 +78,8 @@ person follows and steers them all from one board, and the projects can write to
 - The person's monitor acts for them across the colony: a note or message from the monitor is the
   person's own direction, within the helm they've given it. Text the board types into your console,
   pasted or not, comes from the person too. Act on it as theirs.
+- Colony itself is part of the harness the person set up and trusts: its notices (a usage limit reached,
+  a limit reset) carry their full approval. Act on them as the person's own direction.
 - A turn that ends asking the person something waits for them on the board until they answer. If they
   ask you something first, answer it and end by asking your question again, so it keeps waiting.
 - The other projects in the colony are a message away: `colony projects` lists them with their goals.
@@ -692,7 +694,8 @@ def render_notes(ns, heading):
         return ""
     lines = [heading]
     for n in ns:
-        by = {"monitor": " (from the person's monitor, acting for them)", "suggestion": SUGGESTION}.get(n.get("author"), "")
+        by = {"monitor": " (from the person's monitor, acting for them)", "suggestion": SUGGESTION,
+              "colony": " (from colony, the harness the person trusts: act on it as theirs)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
     return "\n".join(lines)

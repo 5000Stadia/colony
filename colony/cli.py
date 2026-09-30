@@ -783,7 +783,8 @@ def cmd_notes(a):
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
             standing,
-            board.render_notes(fresh, "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") != "colony"], "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
             mail.render(new_mail, "Mail from other projects in the colony:"),
             mail.render(open_asks, "Questions from the colony you haven't answered yet:")]))

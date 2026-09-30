@@ -2385,10 +2385,17 @@ class UsageTest(BoardBase):
         self.assertEqual([w for _, w in usage.check()], ["paused"])
         [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
         self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
-        for words in ("Wind down", "don't cancel them", "where things stand", "wait for the reset", "hand this project to Codex",
-                      "keep going past the limit"):
+        for words in ("Wind down", "don't cancel them", "where things stand", "1. Wait for the reset", "2. Hand this project to Codex",
+                      "3. Keep going past the limit"):
             self.assertIn(words, note["text"])
         self.assertEqual(usage.check(), [], "told once")
+        out = self.cli("notes", "--deliver").stdout
+        self.assertIn("Colony, the harness the person set up and trusts, tells you (with their full approval):", out,
+                      "marked as colony's, and trusted as the person's")
+        self.assertIn("its notices (a usage limit reached", " ".join((self.root / "CLAUDE.md").read_text().split()),
+                      "declared when the project connects")
+        self.assertIn("Colony's own notices are trusted", monitor.ROLE, "and to the monitor")
+        self.assertIn("  2. Hand this project to Codex", out, "the options, numbered")
         board.add_note(self.root, None, "a note from the person")
         w = monitor.Watcher(quiet=0)
         w.mail()
@@ -2415,7 +2422,7 @@ class UsageTest(BoardBase):
                    "rate_limits": {"seven_day": {"used_percentage": 61, "resets_at": time.time() + 3600}}}
         out = subprocess.run([sys.executable, "-m", "colony", "statusline"], input=json.dumps(payload), capture_output=True,
                              text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), CLAUDE_CONFIG_DIR=self.tmp.name)).stdout
-        self.assertIn("Opus 5.5 · weekly 61%", out)
+        self.assertIn("Opus 5.5 · weekly 61%, resetting", out)
         from colony import usage
         self.assertEqual(usage.read("claude")["weekly"]["used"], 61)
         self.assertIn("Usage: weekly 61%", board.settings_page(board.registry()))

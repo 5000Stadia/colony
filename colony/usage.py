@@ -111,7 +111,7 @@ def when(ts):
 def line(key):
     """A program's usage in a few words, for the board."""
     ws = read(key)
-    return " · ".join(f"{w} {v['used']:g}%" + (f" (resets {when(v['resets_at'])})" if v["used"] and v.get("resets_at") else "")
+    return " · ".join(f"{w} {v['used']:g}%" + (f", resetting {when(v['resets_at'])}" if v["used"] and v.get("resets_at") else "")
                       for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly"))
 
 
@@ -150,17 +150,32 @@ def check():
     return changed
 
 
+def twin(root, key):
+    """A project already on the board that runs this one's work on another program: the same folder, or the
+    name this one's would get (colony-codex for colony)."""
+    from . import providers
+    for p in board.projects():
+        if p != root and providers.key(providers.of(p)) == key and (
+                board.workdir(p) == board.workdir(root) or p.name == f"{root.name}-{key}"):
+            return p
+    return None
+
+
 def wind_down(root, prov, window, v, others):
     """What an agent is told when its program's window passes the threshold."""
-    options = [f"wait for the reset ({when(v.get('resets_at'))}); colony wakes this project then"]
+    options = [f"wait for the reset, {when(v.get('resets_at'))}, when colony wakes this project to carry on"]
     for k, x in others:
         u = line(k)
-        options.append(f"hand this project to {x.label}" + (f" ({u})" if u else "")
-                       + f": colony track {board.workdir(root)} --provider {k} --name {root.name}-{k}")
+        room = f" ({x.label} is at {u})" if u else ""
+        t = twin(root, k)
+        options.append(f"hand the work to {t.name}, already on the board on {x.label}{room}: colony send {t.name} with "
+                       "what to take over" if t else
+                       f"hand this project to {x.label}{room}: colony track {board.workdir(root)} --provider {k} "
+                       f"--name {root.name}-{k}")
     options.append(f"keep going past the limit: colony settings --project {root.name} usage_pause off")
     return (f"{prov.label} is at {v['used']:g}% of its {window} usage limit, which resets {when(v.get('resets_at'))}. "
             "Wind down: there is a little room left, enough to land what's in flight, not to start more. Let work "
             "already running finish, helpers included (don't cancel them), and take in what they hand back; bring the "
             "piece you're on to a clean point and commit it. Start nothing new: no new helpers or consultations. Then "
             "end your turn by telling the person, briefly, where things stand (done, half-done, next) and their "
-            "options: " + "; ".join(options) + ".")
+            "options:\n" + "\n".join(f"  {i}. {o[0].upper() + o[1:]}" for i, o in enumerate(options, 1)))
