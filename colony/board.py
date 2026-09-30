@@ -52,6 +52,17 @@ person follows and steers them all from one board, and the projects can write to
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note. If the person settles it with you in
   conversation instead, record it: `colony gate --answered ID "what they decided"`.
+- Before you commit to a decision that's costly to change (adding a milestone or spec, setting a project's
+  main objective, choosing a structure or foundation others will build on, designing what others will
+  depend on, planning what's hard to undo, a major redesign; in short, anything that would mean redoing
+  built work to change later), get two fresh views from different model families. Write what you know as
+  a digest of facts, each with its source, looking up first what you don't know, and leave your plan out.
+  Then run `colony consult R4 "the decision" --digest FILE`, which adds the person's own words and asks
+  each consultant what would fundamentally change or improve the approach. Bring the person only such
+  points, a few at most, as one gate. Wording, naming and reorganising never count. Record what they
+  accept with `colony consult R4 "their words" --adopt ID`. Only an accepted change earns a second round,
+  which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
+  decision; if consulting is off or over its budget, go on and say so.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
   chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
   lists what's pinned. Their pins, edits and comments reach you as notes.
@@ -1189,6 +1200,10 @@ def render_item(reg, pid, iid):
                            f"<form class='add' method='post' action='/answer'><input type='hidden' name='p' value='{pid}'>"
                            f"<input type='hidden' name='gate' value='{e(g['id'])}'><input type='hidden' name='back' value='/item?p={pid}&id={e(iid)}'>"
                            f"<textarea name='text' placeholder='Your answer'></textarea><button>Answer</button></form>") + "</div>")
+    from . import consult
+    cs = [c for c in consult.records(root) if c["decision"] == iid]
+    if cs:
+        body.append("<h2>Consultations</h2>" + "".join(consultation(c) for c in cs))
     work = [l.split("\x1f") for l in git(root, "log", "--format=%h\x1f%aI\x1f%s", f"--grep={iid}\\b", "-E").splitlines() if l]
     body.append("<h2>Work done on it</h2><div class='card'>" + ("".join(
         f"<div class='muted'><code>{e(h)}</code> {e(t_[:10])} {e(s)}</div>" for h, t_, s in work)
@@ -1198,6 +1213,20 @@ def render_item(reg, pid, iid):
                 + note_box(pid, "item", iid, "What should the agent cover or keep in mind for this item?", back=f"/item?p={pid}&id={iid}")
                 + "</div>")
     return shell(reg, pid, "".join(body))
+
+
+def consultation(c):
+    """One round of consulting on a decision: who was asked and why, what each said and cost, what the person took."""
+    def answer(x):
+        cost = f" · ${x['cost']:.2f}" if x.get("cost") is not None else ""
+        err = f" · {e(x['error'])}" if x.get("error") else ""
+        return (f"<details><summary>{e(x['model'])} at {e(x['effort'])}{cost}{err}</summary>"
+                f"<p class='muted'>{e(x.get('why') or '')}</p><div class='pre'>{e(x.get('text') or '(no answer)')}</div></details>")
+    note = f" · {e(c['note'])}" if c.get("note") else ""
+    return (f"<div class='card'><b>Round {c['round']}: {e(c['question'])}</b> "
+            f"<span class='muted'>{e(c['at'][:10])} · ${c['cost']:.2f}{note}</span>"
+            + "".join(answer(x) for x in c["answers"])
+            + (f"<p>You accepted: {e(c['adopted'])}</p>" if c.get("adopted") else "") + "</div>")
 
 
 def suggestions(name, values):
@@ -1976,10 +2005,21 @@ def settings_page(reg):
               "<p class='muted'>The Models page's scores come from Artificial Analysis "
               "(<a href='https://artificialanalysis.ai/' target='_blank' rel='noopener'>artificialanalysis.ai</a>): free for "
               "personal use, with attribution, up to 1,000 requests a day.</p>")
+    from . import consult
+    spent = consult.spent_this_month()
+    picks = consult.consultants()[0]
+    consulting = (f"<form method='post' action='/consulting' class='options'>"
+                  f"<label><input type='checkbox' name='consult' value='on'{check('consult')}> Agents consult two fresh models "
+                  f"at decisions costly to change <span class='muted'>(a new milestone or spec, a foundation others build on, a major redesign)</span></label>"
+                  f"<label>Most one consultant may spend <input name='consult_cap' value='{s['consult_cap']:.2f}' inputmode='decimal' size='6'> dollars</label>"
+                  f"<label>Most all consultations may spend a month <input name='consult_budget' value='{s['consult_budget']:.2f}' inputmode='decimal' size='6'> dollars</label>"
+                  f"<p class='muted'>${spent:.2f} spent this month. Consultants: "
+                  + (e("; ".join(f"{m} at {eff} ({why})" for _, m, eff, why in picks)) or "none: no program that can consult is on")
+                  + ". Pin your own with colony settings consultants.</p><button>Save</button></form>")
     rerun = ("<form method='post' action='/setup' class='caughtup' style='position:static;height:auto;margin:0'>"
              "<button class='quiet'>Run first-time setup again</button></form>")
     body = (f"<header><div class='titlerow'><h1>Settings</h1>{rerun}</div></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
-            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
@@ -2202,6 +2242,18 @@ class Handler(BaseHTTPRequestHandler):
                 set_setting("providers", ",".join(on))
             except KeyError:
                 pass                                      # none ticked: at least one stays on, so nothing changes
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/consulting":
+            set_setting("consult", form.get("consult", "off"))
+            for k in ("consult_cap", "consult_budget"):
+                try:
+                    set_setting(k, form.get(k, ""))
+                except KeyError:
+                    pass                                  # not a positive amount: the old one stays
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")
@@ -2459,6 +2511,7 @@ header h1 { margin:14px 0 4px; font-size:21px } header p { margin:0 0 4px }
 h2 { font-size:14px; margin:26px 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em }
 h3 { margin:0 0 8px; font-size:15px } a { color:var(--accent) } a:visited { color:var(--accent) } code { font-family:ui-monospace,Menlo,monospace; font-size:.9em }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:12px; padding:14px 16px }
+.pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 }
 .card.gate { background:var(--flag-bg); border-color:transparent } .muted { color:var(--muted) }
 .badge { margin-left:auto; padding:0 7px; border-radius:999px; font-size:12px; background:var(--sunk); color:var(--muted) }
 .badge.gate { background:var(--flag-bg); color:var(--flag) } .badge.new + .badge, .badge + .badge { margin-left:4px }

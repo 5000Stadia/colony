@@ -2281,6 +2281,24 @@ class ConsultTest(BoardBase):
         self.assertIn("planning score 90", who[0][3])
 
 
+    def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
+        for words in ("costly to change", "redoing built work", "colony consult R4", "leave your plan out",
+                      "never a third", "Wording, naming and reorganising never count"):
+            self.assertIn(words, " ".join(board.PROTOCOL.split()))
+        rec = self.consult.run(self.root, "R3", "How should reminders work?", "d")
+        self.consult.adopt(self.root, rec["id"], "keep them local")
+        board.track(self.root)
+        reg = board.registry()
+        pid = [p.name for p in board.projects(reg)].index("plants")
+        page = board.render_item(reg, pid, "R3")
+        self.assertIn("Round 1: How should reminders work?", page)
+        self.assertIn("gpt-6-astra at high · $0.30", page)
+        self.assertIn("You accepted: keep them local", page)
+        settings = board.settings_page(reg)
+        self.assertIn("$0.60 spent this month", settings)
+        self.assertIn("claude-opus-5-5 at high (chosen in Settings)", settings)
+
+
 class CodexConsultCapTest(unittest.TestCase):
     """Codex reports tokens, not dollars: its run is priced as it streams and stopped at the cap."""
 
