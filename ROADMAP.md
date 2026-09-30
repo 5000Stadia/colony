@@ -56,7 +56,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R43 Claude-only extras (Remote Control, plugin suggestions, the unattended runtime) step aside where only Codex is installed
 - [x] R44 The monitor runs on whichever program is installed, its brief where that program reads it
 - [x] R50 Settings: the person ticks which agent programs colony uses; one that's off isn't offered or the default, and projects already on it keep running
-- [~] R62 Agent programs kept current: when Claude Code or Codex has an update, colony installs it and reloads each console on it only while that console is idle, resuming the same conversation; nothing mid-task is interrupted
+- [x] R62 Agent programs kept current: when Claude Code or Codex has an update, colony installs it and reloads each console on it only while that console is idle, resuming the same conversation; nothing mid-task is interrupted
 - [x] R63 Usage limits watched: each program's 5-hour and weekly use read without tokens (Codex's session files; Claude Code's status line) and shown on the board; past a threshold (90% by default) each active agent on that program is told after its turn, and then winds down, hands off to the other program or pauses until the reset, as set colony-wide or per project
 - [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 

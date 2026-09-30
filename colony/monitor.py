@@ -381,6 +381,7 @@ def snapshot():
 # ---------------------------------------------------------------- the watcher (no tokens)
 
 STARTUP_WINDOW = 300            # seconds after a console starts in which its questions count as start-up ones
+RELOAD_AFTER = 300              # seconds a stale console must sit idle, untouched, before it is reloaded
 
 # A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
 WAKE = {("working", "idle"): "finished a turn"}
@@ -396,7 +397,8 @@ class Watcher:
         self.nudged = set()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
-        self.usage_checked = self.discovered
+        self.usage_checked = self.current_checked = self.discovered
+        self.idle_since = {}
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -538,6 +540,10 @@ class Watcher:
 
     def models_daily(self):
         from . import bench
+        if board.registry()["settings"]["auto_update"]:
+            for p in providers.PROVIDERS.values():
+                if providers.usable(p) and hasattr(p, "update"):
+                    p.update()                          # installed beside the running version: consoles move over when idle
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
         if bench.aa_key() and bench.pending():
@@ -564,9 +570,37 @@ class Watcher:
             queue(f"Winding down at a usage limit: {', '.join(winding)}. Each agent tells the person where things stand "
                   "and their options on its next turn; colony wakes them at the reset.")
 
+    def current(self):
+        """Every two minutes, with no tokens: a console whose program has been updated, or whose settings or helper
+        tiers changed, is reloaded into the same conversation, but only once it has sat idle a few minutes, with
+        nothing typed in it and no one looking at it. Nothing in the middle of work is touched."""
+        if time.time() - self.current_checked < 120 or not board.registry()["settings"]["auto_update"]:
+            return
+        self.current_checked = time.time()
+        seats = [(p, console.session_name(p), None) for p in board.projects() if p.exists()] + [(home(), name(), "monitor")]
+        for root, nm, label in seats:
+            if not console.running(nm):
+                self.idle_since.pop(nm, None)
+                continue
+            state = console.snapshot(root, lines=1, name=nm)["state"]
+            if state != "idle" or console.drafting(nm) or console.attached(nm):
+                self.idle_since.pop(nm, None)
+                continue
+            first = self.idle_since.setdefault(nm, time.time())
+            if time.time() - first < RELOAD_AFTER:
+                continue
+            why = console.stale(root, nm, label)
+            if why:
+                console.reload(root, nm, label)
+                self.idle_since.pop(nm, None)
+                board.home().mkdir(parents=True, exist_ok=True)
+                with (board.home() / "reloads.jsonl").open("a") as fh:
+                    fh.write(json.dumps({"at": board.now(), "console": nm, "why": why}) + "\n")
+
     def tick(self):
         self.models()
         self.usage()
+        self.current()
         me = snapshot()
         if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)

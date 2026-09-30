@@ -121,6 +121,14 @@ class ClaudeCode:
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
 
     HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
+
+    def update(self):
+        """Install the newest Claude Code beside the running one (its own updater)."""
+        return _run([self.program, "update"], timeout=600)
+
+    def startup_files(self, root):
+        """What Claude Code reads only when it starts, among what colony writes: the tier helpers."""
+        return [root / ".claude" / "agents" / f"{self.helper_name(t)}.md" for t in self.HELPER_BRIEF]
     HELPER_BRIEF = {"routine": "ordinary work: building, editing, looking things up across files",
                     "step-up": "work that has stalled, been retried or redone, or needs the strongest reasoning here",
                     "chores": "clear, mechanical tasks: small edits, running a named test, copying, simple lookups"}
@@ -561,6 +569,14 @@ class Codex:
                 "delivered notes at session start or when a `[colony]` line arrives, run "
                 "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
                 "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
+
+    def update(self):
+        """Install the newest Codex beside the running one (its own updater)."""
+        return _run([self.program, "update"], timeout=600)
+
+    def startup_files(self, root):
+        """What Codex reads only when it starts, among what colony writes: the tier overlays."""
+        return [root / ".codex" / "agents" / f"{self.helper_name(t)}.toml" for t in self.HELPER_BRIEF]
 
     HELPER_CALL = "spawn one with agent_type set to its name and fork_turns \"none\"; its model and effort come from it"
     HELPER_BRIEF = {"routine": "Colony's routine tier: ordinary work, building, editing, looking things up across files",

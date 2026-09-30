@@ -2380,8 +2380,8 @@ class UsageTest(BoardBase):
         settings = json.loads((self.root / ".claude" / "settings.json").read_text())
         self.assertEqual(settings["statusLine"]["command"], "colony statusline", "Claude Code hands its limits to it")
         self.claude_at(96)
-        self.assertEqual(usage.check(), [], "under 97%: nothing")
-        self.claude_at(97.5)
+        self.assertEqual(usage.check(), [], "under 98%: nothing")
+        self.claude_at(98.5)
         self.assertEqual([w for _, w in usage.check()], ["paused"])
         [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
         self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
@@ -2400,7 +2400,7 @@ class UsageTest(BoardBase):
         w = monitor.Watcher(quiet=0)
         w.mail()
         self.assertFalse(w.nudged, "a paused project isn't woken")
-        self.claude_at(97.5, resets_in=-1)                   # the week has turned over
+        self.claude_at(98.5, resets_in=-1)                   # the week has turned over
         self.assertEqual([x for _, x in usage.check()], ["resumed"])
         self.assertIn("has reset. Carry on", board.notes(self.root)[-1]["text"])
         self.assertFalse(board.notes(self.root)[-1].get("quiet"), "woken to carry on")
@@ -2426,6 +2426,65 @@ class UsageTest(BoardBase):
         from colony import usage
         self.assertEqual(usage.read("claude")["weekly"]["used"], 61)
         self.assertIn("Usage: weekly 61%", board.settings_page(board.registry()))
+
+
+class StayCurrentTest(BoardBase):
+    """Programs updated daily; a stale console is reloaded into the same conversation, only once it has sat idle
+    with nothing typed and no one looking."""
+
+    def test_a_console_is_stale_when_its_program_or_its_start_changes(self):
+        from unittest.mock import patch
+        board.track(self.root)
+        name = console.ensure(self.root)
+        claude = providers.get("claude")
+        with patch.object(console, "running_version", lambda n: "2.1.283"), patch.object(type(claude), "version", lambda self: "2.1.284 (Claude Code)"):
+            self.assertEqual(console.stale(self.root), "Claude Code 2.1.283 → 2.1.284")
+        with patch.object(console, "running_version", lambda n: "2.1.284"), patch.object(type(claude), "version", lambda self: "2.1.284 (Claude Code)"):
+            self.assertIsNone(console.stale(self.root), "current")
+            claude.write_helpers(self.root, {"chores": {"model": "claude-haiku-4-5-20251001", "effort": None}})
+            self.assertEqual(console.stale(self.root), "its settings or helper tiers changed")
+            console.reload(self.root)
+            self.assertTrue(console.running(name))
+            self.assertIsNone(console.stale(self.root), "reloaded onto what it would start with now")
+
+    def test_the_watcher_reloads_only_an_idle_untouched_console_after_a_while(self):
+        from unittest.mock import patch
+        board.track(self.root)
+        console.ensure(self.root)
+        w = monitor.Watcher(quiet=0)
+        reloaded = []
+        state = {"state": "idle"}
+        with patch.object(console, "stale", lambda root, name=None, label=None: "Claude Code 1 → 2" if root == self.root else None), \
+                patch.object(console, "reload", lambda root, name=None, label=None: reloaded.append(root)), \
+                patch.object(console, "snapshot", lambda *a, **k: dict(state, lines=[])), \
+                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False):
+            w.current_checked = 0
+            w.current()
+            self.assertEqual(reloaded, [], "idle only just now: wait")
+            w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+            state["state"] = "working"
+            w.current_checked = 0
+            w.current()
+            self.assertEqual(reloaded, [], "in the middle of work: never")
+            state["state"] = "idle"
+            w.current_checked = 0
+            w.current()
+            w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+            with patch.object(console, "attached", lambda n: True):
+                w.current_checked = 0
+                w.current()
+            self.assertEqual(reloaded, [], "someone has it open: never")
+            w.current_checked = 0
+            w.current()
+            w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+            w.current_checked = 0
+            w.current()
+            self.assertEqual(reloaded, [self.root], "idle a while, untouched: reloaded")
+        self.assertIn("Claude Code 1 → 2", [json.loads(l)["why"] for l in (board.home() / "reloads.jsonl").read_text().splitlines()])
+        board.set_setting("auto_update", "off")
+        w.current_checked = 0
+        w.current()
+        self.assertEqual(len(reloaded), 1, "off: nothing")
 
 
 class ConsultCallTest(unittest.TestCase):

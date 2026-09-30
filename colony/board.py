@@ -144,7 +144,7 @@ def registry():
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
-                    "usage_pause": 97}
+                    "usage_pause": 98, "auto_update": True}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -163,6 +163,7 @@ SETTING_HELP = {
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
+    "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "usage_pause": "pause a program's projects at this % of a usage limit (5-hour or weekly), resuming at the reset; off to never pause",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
@@ -174,7 +175,7 @@ def set_setting(key, value):
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
-    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult"):
+    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
@@ -189,7 +190,7 @@ def set_setting(key, value):
                 raise KeyError(key)
             if not 0 < n <= 100:
                 raise KeyError(key)
-            reg["settings"][key] = n
+            reg["settings"][key] = int(n) if n.is_integer() else n
     elif key == "consultants":
         from .providers import PROVIDERS
         chosen = {}
@@ -2023,6 +2024,8 @@ def settings_page(reg):
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
                f"<span class='muted'>(one inbox per project)</span></label>"
+               f"<label><input type='checkbox' name='auto_update' value='on'{check('auto_update')}> Keep Claude Code and Codex updated "
+               f"<span class='muted'>(daily; a console moves to the new version once it sits idle, in the same conversation)</span></label>"
                f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Answer a new console's start-up questions "
                f"<span class='muted'>(folder trust, permission mode, Remote Control, hooks: so it runs as set up)</span></label>"
                f"<label>Permissions for new sessions <select name='permissions'>"
@@ -2317,6 +2320,7 @@ class Handler(BaseHTTPRequestHandler):
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
             set_setting("trust", form.get("trust", "off"))
+            set_setting("auto_update", form.get("auto_update", "off"))
             if form.get("permissions"):
                 set_setting("permissions", form["permissions"])
             if form.get("provider"):
