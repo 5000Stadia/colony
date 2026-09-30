@@ -183,7 +183,7 @@ def wind_down(root, prov, window, v, others):
     options.append(f"keep going past the limit: colony settings --project {root.name} usage_pause off")
     return (f"{prov.label} is at {v['used']:g}% of its {window} usage limit, which resets {when(v.get('resets_at'))}. "
             "Wind down: there is a little room left, enough to land what's in flight, not to start more. Let work "
-            "already running finish, helpers included (don't cancel them), and take in what they hand back; bring the "
-            "piece you're on to a clean point and commit it. Start nothing new: no new helpers or consultations. Then "
+            "already running finish, helpers included (don't cancel them), and take in what they hand back; then commit "
+            "what works so far (a clean point, not the item finished: the item stays in progress). Start nothing new: no new helpers or consultations. Then "
             "end your turn by telling the person, briefly, where things stand (done, half-done, next) and their "
             "options:\n" + "\n".join(f"  {i}. {o[0].upper() + o[1:]}" for i, o in enumerate(options, 1)))
