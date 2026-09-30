@@ -32,7 +32,7 @@ located signals and a project memory.
     colony setup                    the monitor walks you through first-time setup (again)
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
                                     fetch pulls Artificial Analysis' data; key reads the key from stdin
-    colony models [set ROLE MODEL EFFORT --why ...]     this project's model plan for its helpers
+    colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores)
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
@@ -657,21 +657,23 @@ def cmd_bench(a):
 
 
 def cmd_models(a):
-    """This project's model plan: which model and effort its helpers use for which kind of work."""
+    """This project's helper tiers: colony's default from the cards, or the project's own choice for a tier."""
     from . import bench, board
     root = board.root_of()
-    if a.what == "set":
-        role, model, effort = (a.args + [None, None, None])[:3]
-        if role not in bench.ROLES or not model:
-            raise SystemExit(f"colony models set ROLE MODEL [EFFORT] --why ...; roles: {', '.join(bench.ROLES)}")
-        bench.set_plan(root, role, model, effort, a.why or "")
-        print(f"{root.name}: {role} → {model}" + (f" at {effort}" if effort else ""))
+    if a.what in ("set", "reset"):
+        tier, model, effort = (a.args + [None, None, None])[:3]
+        if tier not in bench.TIERS or (a.what == "set" and not model):
+            raise SystemExit(f"colony models set TIER MODEL [EFFORT], or colony models reset TIER; tiers: {', '.join(bench.TIERS)}")
+        bench.set_plan(root, tier, model if a.what == "set" else None, effort, a.why or "")
+        bench.write_helpers(root)
+        print(f"{root.name}: {tier} → " + (f"{model}" + (f" at {effort}" if effort else "") if a.what == "set" else "colony's default"))
         return 0
-    agreed, rec = bench.plan(root), bench.recommend(root)
-    for role in bench.ROLES:
-        now = agreed.get(role)
-        print(f"{role:9} " + (f"{now['model']} {now['effort'] or ''}".strip() if now else "(not agreed yet)")
-              + (f"   recommended now: {rec[role]['model']} {rec[role]['effort'] or ''}".rstrip() if role in rec else ""))
+    for tier, r in bench.effective(root).items():
+        print(f"{tier:8} {r['model']} {r['effort'] or ''}".rstrip() + ("   (this project's choice)" if r["own"] else f"   {r['why']}"))
+    from . import providers
+    waiting = bench.unmeasured(providers.key(providers.of(root)))
+    if waiting:
+        print("not yet measured (not picked until they are): " + ", ".join(waiting))
     return 0
 
 
@@ -747,7 +749,7 @@ def cmd_notes(a):
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves
         from . import bench
-        standing = bench.plan_text(root) if a.session else ""       # the agreed model plan, every session
+        standing = bench.plan_text(root) if a.session else ""       # the helper tiers, every session
         fresh, still = board.deliver(root, session=a.session)
         if any(not n.get("quiet") and not n["anchor"] for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
@@ -1093,8 +1095,8 @@ def main(argv=None):
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
-    p = sub.add_parser("models", help="this project's model plan for its helpers")
-    p.add_argument("what", nargs="?", choices=("set",)); p.add_argument("args", nargs="*"); p.add_argument("--why")
+    p = sub.add_parser("models", help="this project's helper tiers: routine, step-up, chores")
+    p.add_argument("what", nargs="?", choices=("set", "reset")); p.add_argument("args", nargs="*"); p.add_argument("--why")
     p.set_defaults(fn=cmd_models)
     p = sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) record only in this provider's matching board console")

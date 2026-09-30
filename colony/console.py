@@ -47,7 +47,7 @@ def command(label, root=None):
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
-    return providers.of(root).command(label, s, **({"resume": resume} if resume else {}))
+    return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
 
 
 def _conversations():

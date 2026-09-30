@@ -80,7 +80,7 @@ class ClaudeCode:
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
              "Stop": "colony turn"}
 
-    def command(self, label, s, resume=None):
+    def command(self, label, s, resume=None, root=None):
         """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort;
         with resume, back in that conversation."""
         from .board import PERMISSIONS
@@ -116,6 +116,39 @@ class ClaudeCode:
             if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
                 entries.append({"hooks": [{"type": "command", "command": command}]})
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
+    HELPER_BRIEF = {"routine": "ordinary work: building, editing, looking things up across files",
+                    "step-up": "work that has stalled, been retried or redone, or needs the strongest reasoning here",
+                    "chores": "clear, mechanical tasks: small edits, running a named test, copying, simple lookups"}
+
+    @staticmethod
+    def helper_name(tier):
+        return "colony-" + tier.replace("-", "")
+
+    def write_helpers(self, root, tiers):
+        """A helper definition per tier in .claude/agents, so a helper runs at exactly its tier's model and effort
+        (the Agent tool picks a model only by alias, and no effort). Rewritten when a tier changes; a tier colony
+        can't fill leaves no file. Returns the files it changed."""
+        folder = root / ".claude" / "agents"
+        changed = []
+        for tier, brief in self.HELPER_BRIEF.items():
+            path = folder / f"{self.helper_name(tier)}.md"
+            t = tiers.get(tier)
+            if not t:
+                if path.exists():
+                    path.unlink()
+                    changed.append(path)
+                continue
+            text = (f"---\nname: {self.helper_name(tier)}\ndescription: Colony's {tier} tier: {brief}.\n"
+                    f"model: {t['model']}\n" + (f"effort: {t['effort']}\n" if t.get("effort") else "")
+                    + "---\n\nDo the task you are given within its brief, and hand in what you find and do.\n"
+                    "<!-- written by colony from this project's tiers (colony models); edits here are replaced -->\n")
+            if not path.exists() or path.read_text() != text:
+                folder.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                changed.append(path)
+        return changed
 
     def version(self):
         return _run([self.program, "--version"])
@@ -526,7 +559,39 @@ class Codex:
                 "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
                 "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
 
-    def command(self, label, s, resume=None):
+    HELPER_CALL = "spawn one with agent_type set to its name and fork_turns \"none\"; its model and effort come from it"
+    HELPER_BRIEF = {"routine": "Colony's routine tier: ordinary work, building, editing, looking things up across files",
+                    "step-up": "Colony's step-up tier: work that has stalled, been retried or redone, or needs the strongest reasoning here",
+                    "chores": "Colony's chores tier: clear, mechanical tasks, small edits, running a named test, simple lookups"}
+
+    @staticmethod
+    def helper_name(tier):
+        return "colony-" + tier.replace("-", "")
+
+    def write_helpers(self, root, tiers):
+        """A config overlay per tier in .codex/agents (model and reasoning effort), which the console command
+        registers as a named agent; the agent spawns it by agent_type. Verified on Codex 0.154 by colony-codex
+        (docs/codex-helper-tiers.md there). A new or changed tier takes hold when the console next starts."""
+        folder = root / ".codex" / "agents"
+        changed = []
+        for tier in self.HELPER_BRIEF:
+            path = folder / f"{self.helper_name(tier)}.toml"
+            t = tiers.get(tier)
+            if not t:
+                if path.exists():
+                    path.unlink()
+                    changed.append(path)
+                continue
+            text = ("# written by colony from this project's tiers (colony models); edits here are replaced\n"
+                    f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
+                    + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n')
+            if not path.exists() or path.read_text() != text:
+                folder.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                changed.append(path)
+        return changed
+
+    def command(self, label, s, resume=None, root=None):
         """The person's own `codex`: inline, so its console keeps scrollback, without the update question at
         start; the project's permissions, model and effort. Remote Control has no Codex equivalent here."""
         from .board import home
@@ -544,6 +609,15 @@ class Codex:
         for event, command in self.hooks.items():
             value = f'hooks.{event}=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]'
             parts += ["-c", shlex.quote(value)]
+        # the helper tiers, registered for this session (a project file would need the project trusted first);
+        # each overlay holds its tier's model and effort (write_helpers)
+        from .board import workdir
+        for tier in (self.HELPER_BRIEF if root else ()):
+            overlay = workdir(root) / ".codex" / "agents" / f"{self.helper_name(tier)}.toml"
+            if overlay.exists():
+                name = self.helper_name(tier)
+                parts += ["-c", shlex.quote(f"agents.{name}.description={json.dumps(self.HELPER_BRIEF[tier])}"),
+                          "-c", shlex.quote(f"agents.{name}.config_file={json.dumps(str(overlay))}")]
         if resume:
             parts += ["resume", shlex.quote(resume)]
         return " ".join(parts)

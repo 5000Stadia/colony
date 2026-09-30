@@ -523,8 +523,8 @@ class Watcher:
 
     def models(self):
         """Once a day (and at start), with no tokens: read each program's own list of its models; while any model
-        has no Artificial Analysis data yet, ask Artificial Analysis once; and act on a model only when its data
-        has come: its card fills, and projects with a model plan and the monitor hear of it."""
+        has no Artificial Analysis data yet, ask Artificial Analysis once; keep every project's helper tiers at
+        what the data says; and tell the monitor of a model once its data has come."""
         if time.time() - self.discovered < 86400:
             return
         self.discovered = time.time()
@@ -536,15 +536,15 @@ class Watcher:
         bench.lineup_changed()
         if bench.aa_key() and bench.pending():
             bench.refresh()                             # one request, only while a model waits for its data
+        for p in board.projects():
+            if p.exists():
+                bench.write_helpers(p)                  # the tiers follow the data: each project's helpers with them
         ready = bench.ready_to_announce()
         if not ready:
             return
         names = ", ".join(bench.name(m) for m in ready)
-        for p in board.projects():
-            if p.exists() and bench.plan(p):
-                board.add_note(p, None, f"A model joined colony, with its benchmarks: {names}. Look at your model plan "
-                                        "against its card (colony models, the board's Models page) and propose any change to the person.")
-        queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page.")
+        queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page, "
+              "and each project's helper tiers already follow it.")
 
     def tick(self):
         self.models()

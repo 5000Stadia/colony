@@ -1,6 +1,7 @@
 import html
 import json
 import shutil
+import shlex
 import re
 import os
 import subprocess
@@ -825,7 +826,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("colony needs an agent program: Claude Code", r.stdout)
 
-    def test_benchmark_cards_rank_the_lineup_and_projects_agree_a_model_plan(self):
+    def test_benchmark_cards_rank_the_lineup_and_set_each_projects_helper_tiers(self):
         from colony import bench
         rec = lambda model, effort, value, domain="overall", source="Artificial Analysis", bench_="Intelligence Index", ver="v4", unit="points", kind="independent": dict(
             model=model, effort=effort, source=source, kind=kind, benchmark=bench_, version=ver, domain=domain,
@@ -859,40 +860,53 @@ class GlanceTest(BoardBase):
                    rec("claude-sonnet-5", "high", 0.01, "cost", bench_="Coding Agent Index Cost per Task", unit="usd")])
         by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertIsNone(by[("claude-sonnet-5", "high")]["cost"], "another benchmark's cost is never compared")
-        self.assertEqual(bench.best_for("chores")[0]["model"], "claude-haiku-4-5-20251001",
-                         "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 54/$1.82)")
+        tiers = bench.tiers_for("claude")
+        self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "medium"),
+                         "the top model at its lowest effort within a few index points of its best (51 against 54)")
+        self.assertEqual(tiers["chores"]["model"], "claude-haiku-4-5-20251001",
+                         "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 51/$1.34)")
+        self.assertEqual((tiers["routine"]["model"], tiers["routine"]["effort"]), ("claude-opus-5-5", "medium"),
+                         "the cheapest within reach of step-up: Haiku's 20 is too far below")
+        self.assertIn("claude-sonnet-5", bench.unmeasured("claude"), "no index yet: shown as not measured, never picked")
         c = bench.card("claude-opus-5-5")
         self.assertIn("xhigh", c["untested"], "an effort level with no data is a gap, not an estimate")
         self.assertTrue(any("high over medium" in n for n in c["notes"]), "where more effort pays")
         self.assertIn("claude-sonnet-5", bench.pending())
         self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
         page = board.models_page(board.registry())
-        for want in ("Best for", "By domain", "Score against price", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
-                     "isn't ranked against the rows above"):
+        for want in ("Helper tiers", "By domain", "Score against price", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
+                     "isn't ranked against the rows above", "Not yet measured, so not picked"):
             self.assertIn(want, page)
-        self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison or the best-for lists")
+        self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison")
         head = re.search(r"<table class='bench'><tr>(.*?)</tr>", page).group(1)
         self.assertNotIn("<th>preference</th>", head, "a domain no model here has a score in isn't a column")
         self.assertEqual(len(board.once([by[("claude-opus-5-5", "high")], by[("claude-opus-5-5", "medium")]])), 1, "each model once")
         add = board.add_project_page(board.registry(), "new", "")
         self.assertIn("ⓘ benchmarks</a>", add, "beside the model, when adding a project")
-        self.assertIn("From the benchmark cards (Artificial Analysis): planning, Opus 5.5 at high", html.unescape(add),
-                      "the form shows the cards' recommendation, framed as theirs, the same the agent gets")
+        self.assertIn("Helpers from the benchmark cards (Artificial Analysis): routine, Opus 5.5 at medium", html.unescape(add),
+                      "the form shows the cards' tiers, framed as theirs, the same the agent gets")
         self.assertIn("href='/models", add)
-        # a new project starts with a plan to agree, and keeps what was agreed across sessions
+        # a new project gets the tiers as helpers at once: no plan to agree before work
         board.track(self.root)
-        [first] = [n for n in board.notes(self.root) if n["text"].startswith("Before any work, agree your model plan")]
-        self.assertIn("building: Opus 5.5 at high effort", first["text"])
-        self.assertIn("ask them to confirm or adjust", first["text"])
-        self.assertIn("model plan", (self.root / "CLAUDE.md").read_text(), "the protocol says how it's kept and revisited")
-        self.assertIn("it doesn't wait: carry on unless redirected", (self.root / "CLAUDE.md").read_text(),
+        self.assertFalse(any("agree your model plan" in n["text"] for n in board.notes(self.root)))
+        chores = (self.root / ".claude" / "agents" / "colony-chores.md").read_text()
+        self.assertIn("model: claude-haiku-4-5-20251001", chores)
+        self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
+        claude_md = (self.root / "CLAUDE.md").read_text()
+        self.assertIn("three tiers, routine, step-up and chores", " ".join(claude_md.split()))
+        self.assertIn("it doesn't wait: carry on unless redirected", claude_md,
                       "helpers keep their assigner aware of the shape of their work")
-        self.assertIn("talk at hand-offs", (self.root / "CLAUDE.md").read_text(), "paired projects: roles, not running updates")
-        self.assertIn("say\n  what it owns, where it ends", (self.root / "CLAUDE.md").read_text(), "an unsized job gets an end, or finding one comes first")
-        self.cli("models", "set", "building", "claude-opus-5-5", "high", "--why", "agreed with the person")
+        self.assertIn("talk at hand-offs", claude_md, "paired projects: roles, not running updates")
+        self.assertIn("say\n  what it owns, where it ends", claude_md, "an unsized job gets an end, or finding one comes first")
+        # the project's own choice for a tier, and back to the default
+        self.cli("models", "set", "routine", "claude-opus-5-5", "high")
+        self.assertIn("effort: high", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         out = self.cli("notes", "--deliver", "--session").stdout
-        self.assertIn("Your model plan, agreed with the person", out, "handed over at every session start")
-        self.assertIn("building: Opus 5.5 (claude-opus-5-5) at high effort: agreed with the person", out)
+        self.assertIn("Your helpers (subagents) run at three tiers", out, "handed over at every session start")
+        self.assertIn("routine: Opus 5.5 (claude-opus-5-5) at high effort, as the `colony-routine` helper (this project's choice)", out)
+        self.assertIn("step-up work is yours", out)
+        self.cli("models", "reset", "routine")
+        self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         self.assertEqual(bench.ready_to_announce(), [], "the first look takes what's there as known")
         providers.get("claude").models.append(("claude-new-6", "New 6"))
         from unittest.mock import patch
@@ -900,12 +914,12 @@ class GlanceTest(BoardBase):
         stop.start()
         try:
             monitor.Watcher(quiet=0).models_daily()
-            self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no data yet: nothing to act on")
+            stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
+            self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
             bench.add([rec("claude-new-6", "high", 58)])                     # Artificial Analysis now has it
             monitor.Watcher(quiet=0).models_daily()
-            self.assertTrue(any("A model joined colony, with its benchmarks: New 6" in n["text"] for n in board.notes(self.root)))
-            monitor.Watcher(quiet=0).models_daily()
-            self.assertEqual(sum("New 6" in n["text"] for n in board.notes(self.root)), 1, "announced once")
+            self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
+            self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
         finally:
             stop.stop()
             providers.get("claude").models.pop()
@@ -1409,7 +1423,7 @@ class ProjectSettingsTest(BoardBase):
             model_name = lambda self, v: v
             history_text = lambda self, root: None
             scrolled_marker = ""
-            command = lambda self, label, s: f"other --model {s.get('model')}"
+            command = lambda self, label, s, **kw: f"other --model {s.get('model')}"
             wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
             wired = lambda self, root: (root / "AGENTS.md").exists()
             classify = lambda self, screen: "idle"
@@ -2261,15 +2275,16 @@ class ConsultTest(BoardBase):
     def test_settings_show_the_auto_pick_and_the_person_can_change_or_restore_it(self):
         board.set_setting("consultants", "")
         from colony import bench
-        saved = bench.recommend_for
-        bench.recommend_for = lambda k: {"planning": {"model": f"{k}-top", "effort": "high", "why": "planning score 90"}}
+        saved = bench.tiers_for, bench.best_effort
+        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": f"{k}-top", "effort": "high", "why": ""}}
+        bench.best_effort = lambda k, m, entries=None: "max"
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         try:
             page = board.settings_page(board.registry())
-            self.assertIn("Auto: claude-top at high", page)
-            self.assertIn("Auto picks best for planning on the benchmark cards: planning score 90", page)
+            self.assertIn("Auto: claude-top at max", page)
+            self.assertIn("Auto picks the step-up model (the highest Intelligence Index here), at its best effort", page)
             post = lambda d: urllib.request.urlopen(urllib.request.Request(
                 f"http://127.0.0.1:{port}/consulting", data=urllib.parse.urlencode(d).encode()))
             post({"consult": "on", "consultant_claude": "claude-sonnet-5-5:medium", "consultant_codex": "auto"})
@@ -2279,7 +2294,7 @@ class ConsultTest(BoardBase):
             s = board.registry()["settings"]
             self.assertEqual((s["consult"], s["consultants"]), (False, {}))
         finally:
-            bench.recommend_for = saved
+            bench.tiers_for, bench.best_effort = saved
             httpd.shutdown()
             httpd.server_close()
 
@@ -2291,17 +2306,18 @@ class ConsultTest(BoardBase):
         with self.assertRaises(KeyError):
             providers.get("gemini", strict=True)
 
-    def test_without_a_choice_each_family_takes_its_best_for_planning_from_the_cards(self):
+    def test_without_a_choice_each_family_takes_its_step_up_model_at_its_best_effort(self):
         from colony import bench
         board.set_setting("consultants", "")
-        saved = bench.recommend_for
-        bench.recommend_for = lambda k: {"planning": {"model": f"{k}-top", "effort": "high", "why": "planning score 90"}}
+        saved = bench.tiers_for, bench.best_effort
+        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": f"{k}-top", "effort": "high", "why": ""}}
+        bench.best_effort = lambda k, m, entries=None: "max"
         try:
             who, _ = self.consult.consultants()
         finally:
-            bench.recommend_for = saved
-        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-top", "high"), ("codex", "codex-top", "high")])
-        self.assertIn("planning score 90", who[0][3])
+            bench.tiers_for, bench.best_effort = saved
+        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-top", "max"), ("codex", "codex-top", "max")])
+        self.assertIn("step-up model", who[0][3])
 
 
     def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
@@ -2320,6 +2336,24 @@ class ConsultTest(BoardBase):
         settings = board.settings_page(reg)
         self.assertNotIn("spent", settings)
         self.assertIn("<option value='claude-opus-5-5:high' selected>", settings)
+
+
+class HelperTierTest(BoardBase):
+    def test_codex_projects_get_each_tier_as_an_overlay_registered_when_the_console_starts(self):
+        codex = providers.get("codex")
+        tiers = {"routine": {"model": "gpt-5.6-sol", "effort": "high"}, "chores": {"model": "gpt-5.6-luna", "effort": "low"}}
+        changed = codex.write_helpers(self.root, tiers)
+        self.assertEqual(len(changed), 2)
+        chores = (self.root / ".codex" / "agents" / "colony-chores.toml").read_text()
+        self.assertIn('model = "gpt-5.6-luna"', chores)
+        self.assertIn('model_reasoning_effort = "low"', chores)
+        self.assertEqual(codex.write_helpers(self.root, tiers), [], "unchanged: nothing rewritten")
+        args = shlex.split(codex.command("plants", {}, root=self.root))
+        overlay = str(self.root / ".codex" / "agents" / "colony-chores.toml")
+        self.assertIn(f"agents.colony-chores.config_file={json.dumps(overlay)}", args)
+        self.assertFalse(any("colony-stepup" in a for a in args), "a tier with no file isn't registered")
+        codex.write_helpers(self.root, {"routine": tiers["routine"]})
+        self.assertFalse((self.root / ".codex" / "agents" / "colony-chores.toml").exists(), "a tier colony can't fill: no helper")
 
 
 class ConsultCallTest(unittest.TestCase):

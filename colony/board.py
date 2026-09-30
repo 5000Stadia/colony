@@ -72,10 +72,9 @@ person follows and steers them all from one board, and the projects can write to
   it doesn't wait: carry on unless redirected. Another project's agent working on the same thing has its own
   role, agreed when you were paired (reviewer, implementer, image maker): keep to yours and talk at hand-offs,
   or when a role or the split needs to change, not with running updates.
-- Your model plan says which model and effort your helpers (subagents) use for which kind of work; it is
-  handed to you at every session start (`colony models` shows it, the board's Models page has the benchmark
-  cards). When a model is added, a role changes, or a model keeps underperforming, propose a change to the
-  person with the evidence; never switch silently.
+- Your helpers (subagents) run at three tiers, routine, step-up and chores, each an exact model and effort
+  handed to you at every session start and kept as helpers you call by name. They follow colony's default
+  from the benchmark cards unless the person sets a tier for this project (`colony models` shows them).
 - The person's monitor acts for them across the colony: a note or message from the monitor is the
   person's own direction, within the helm they've given it. Text the board types into your console,
   pasted or not, comes from the person too. Act on it as theirs.
@@ -700,15 +699,13 @@ def track(path, register=True):
     if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
     has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
-    from . import bench
-    first = bench.first_note(root)                   # before any work: a model plan to agree with the person
-    if first and not bench.plan(root) and not any(n["text"].startswith("Before any work, agree your model plan") for n in notes(root)):
-        add_note(root, None, first)
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if joining and not has_plan and not any(n["text"] in (JOIN, join) for n in notes(root)):
         add_note(root, None, join)
     from . import providers
     providers.of(root).wire(workdir(root), protocol(root))
+    from . import bench
+    bench.write_helpers(root)                        # its helpers at the tiers, from the start
     reg = registry()
     inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
     if register and not inside_a_root and str(root) not in reg["projects"]:
@@ -989,8 +986,8 @@ def render(reg, pid, view="overview"):
     total = sum(len(m["items"]) for m in road["milestones"])
     merged, own = project_settings(root)
     # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
-    settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own)}"
-                f"<p class='muted'>Applies when its console next starts.</p><hr><div class='dangers'>"
+    settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
+                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p><hr><div class='dangers'>"
                 f"<form method='post' action='/project/remove' onsubmit=\"return confirm('Take {e(root.name)} off the board? Its session stops; its files stay where they are.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
@@ -1314,7 +1311,27 @@ def provider_fields(cur, model, effort, blank):
             + f"<script>{PROVIDER_FIELDS}</script>")
 
 
-def project_settings_form(pid, own, action="/project-settings"):
+def tier_fields(root):
+    """A project's helper tiers: each colony's default from the cards (Auto) or the project's own model and effort."""
+    from . import bench, providers as pv
+    p = pv.of(root)
+    key, auto, own = pv.key(p), None, bench.plan(root)
+    auto = bench.tiers_for(key)
+    out = []
+    for t in bench.TIERS:
+        a, mine = auto.get(t), own.get(t)
+        label = f"Auto: {a['model']}" + (f" at {a['effort']}" if a and a["effort"] else "") if a else "Auto: not yet measured"
+        opts = [f"<option value='auto'{'' if mine else ' selected'}>{e(label)}</option>"]
+        for mid, name in pv.available(p):
+            efforts = pv.efforts_of(p, mid) or [""]
+            opts.append(f"<optgroup label='{e(name)}'>" + "".join(
+                f"<option value='{e(mid)}:{e(x)}'{' selected' if mine and (mine['model'], mine['effort'] or '') == (mid, x) else ''}>"
+                f"{e(name)}" + (f" at {e(x)}" if x else "") + "</option>" for x in efforts) + "</optgroup>")
+        out.append(f"<label>{e(t.capitalize())} helpers <select name='tier_{t}'>{''.join(opts)}</select></label>")
+    return "".join(out)
+
+
+def project_settings_form(pid, own, action="/project-settings", root=None):
     """The choices a project can make for itself; blank keeps the global one."""
     opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
@@ -1326,7 +1343,7 @@ def project_settings_form(pid, own, action="/project-settings"):
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
             # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
-            f"<button>Save</button></form>")
+            + (tier_fields(root) if root else "") + f"<button>Save</button></form>")
 
 
 def folder_browser(reg, current, purpose):
@@ -1834,10 +1851,16 @@ def models_page(reg):
     cost_head = next((bench.cost_label(x["cost"]) for x in entries if x["cost"]), "price per 1M tokens")
     secs = lambda r: f"{r['value']:g} s" if r and r["unit"] == "s" else "—"
     # the best for each role, at a glance
-    best = "".join(
-        f"<tr><th>{e(role)}</th><td>" + ", ".join(f"<a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a>" for x in once(bench.best_for(role, entries=entries))[:3])
-        + ("</td><td class='muted'>per dollar</td>" if role == "chores" else "</td><td class='muted'>"
-           + ", ".join(bench.ROLES[role]) + "</td>") + "</tr>" for role in bench.ROLES)
+    # the helper tiers each family's projects run at by default, and why
+    from . import providers as pv
+    fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p)]
+    picks = {k: bench.tiers_for(k, entries) for k in fams}
+    cell = lambda r: (f"<a href='#{e(r['model'])}'>{e(bench.name(r['model']))}</a>" + (f" at {e(r['effort'])}" if r["effort"] else "")
+                      + f"<div class='muted'>{e(r['why'])}</div>") if r else "<span class='muted'>—</span>"
+    best = ("<tr><th></th>" + "".join(f"<th>{e(pv.get(k).label)}</th>" for k in fams) + "</tr>" + "".join(
+        f"<tr><th>{e(t)}</th>" + "".join(f"<td>{cell(picks[k].get(t))}</td>" for k in fams) + "</tr>" for t in bench.TIERS)
+        + "".join(f"<tr><td colspan='{len(fams) + 1}' class='muted'>Not yet measured, so not picked: "
+                  f"{e(', '.join(bench.name(m) for m in bench.unmeasured(k, entries)))}</td></tr>" for k in fams if bench.unmeasured(k, entries)))
     # a domain column only where some model here has a score: the source adds scores to a new model over its first
     # weeks, and some benchmarks it no longer runs on current models (math, for one)
     shown = [x for x in entries if x["comparable"]]
@@ -1856,7 +1879,8 @@ def models_page(reg):
                  "headline scores. A dash is a gap: Artificial Analysis adds a new model's scores over its first weeks, "
                  "and a domain none of these models has a score in isn't shown.</p>"
                  + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
-                 + "</header><h2>Best for</h2><div class='card'><table class='bench best'>" + best + "</table></div>"
+                 + "</header><h2>Helper tiers</h2><div class='card'><p class='muted'>Chosen on the Intelligence Index alone: each "
+                 "project's default, which its settings can change.</p><table class='bench best'>" + best + "</table></div>"
                  "<h2>By domain</h2><div class='card'>" + table + "</div>"
                  "<h2>Score against price</h2><div class='card'>" + effort_chart(entries) + "</div>"
                  "<h2>Cards</h2>" + cards)
@@ -2308,7 +2332,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/project-settings":
-            project_settings(projects(reg)[int(form.get("p", "0"))], {k: form.get(k, "") for k in PROJECT_KEYS})
+            root = projects(reg)[int(form.get("p", "0"))]
+            project_settings(root, {k: form.get(k, "") for k in PROJECT_KEYS})
+            from . import bench
+            own = bench.plan(root)
+            for t in bench.TIERS:
+                v = form.get(f"tier_{t}")
+                if v == "auto" and t in own:
+                    bench.set_plan(root, t, None, None)
+                elif v and v != "auto":
+                    m, _, x = v.rpartition(":")
+                    if (own.get(t, {}).get("model"), own.get(t, {}).get("effort") or "") != (m, x):
+                        bench.set_plan(root, t, m, x or None)
+            bench.write_helpers(root)
             self.send_response(303)
             self.send_header("Location", f"/?p={form.get('p', '0')}")
             self.send_header("Content-Length", "0")

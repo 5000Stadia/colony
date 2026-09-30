@@ -44,12 +44,13 @@ def pick(key):
 
 
 def auto(key):
-    """The family's best for planning on the benchmark cards (the cheapest entry within a few points of the best,
-    as the model plans choose); else the family's first listed model. Returns (model, effort, why)."""
+    """The family's step-up model at its best-scoring effort: consultations are rare and short, and are where a
+    touch more buys the most. Else the family's first listed model. Returns (model, effort, why)."""
     from . import bench
-    rec = bench.recommend_for(key).get("planning")
-    if rec and rec["effort"]:
-        return rec["model"], rec["effort"], f"best for planning on the benchmark cards: {rec['why']}"
+    up = bench.tiers_for(key).get("step-up")
+    if up:
+        effort = bench.best_effort(key, up["model"]) or up["effort"]
+        return up["model"], effort, f"the step-up model (the highest Intelligence Index here), at its best effort"
     p = providers.get(key, strict=True)
     model = providers.available(p)[0][0]
     efforts = providers.efforts_of(p, model)

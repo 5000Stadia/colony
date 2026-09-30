@@ -11,3 +11,7 @@ projects/*
 
 # the design notes, kept on this machine
 design/
+
+# helper tiers colony writes from the benchmark data (colony models): machine-specific
+.claude/agents/colony-*.md
+.codex/agents/colony-*.toml

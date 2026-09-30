@@ -27,11 +27,14 @@ EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DOMAINS = ("overall", "coding", "agentic", "reasoning", "math", "long-context", "instructions", "preference")
 MEASURES = ("cost", "latency")                 # recorded as the source states them, never converted
 KEYS = ("model", "effort", "source", "kind", "benchmark", "version", "domain", "value", "unit", "date", "url", "note")
-# The work a project hands its helpers, and the domains that speak to it. Chores also weigh cost.
-NEAR = 5                                    # points of a role's score that more effort must add to be worth it
 INDEX = "intelligence index"                # the overall benchmark whose cost and time per task price every entry
-ROLES = {"planning": ("reasoning", "overall"), "building": ("coding", "agentic"),
-         "review": ("coding", "reasoning"), "chores": ("overall",)}
+# The tiers a project's helpers run at, chosen on one early, general score: Artificial Analysis' Intelligence
+# Index, in its own points. A new model gets it first and it covers every domain roughly enough; domains stay on
+# the Models page as information and play no part in the choice (the person's call).
+TIERS = ("routine", "step-up", "chores")
+NEAR = 5                                    # index points more effort must add to be worth its extra tokens
+REACH = 10                                  # how far below the step-up pick routine work may score
+ROUTINE_TOP = "high"                        # xhigh and max are kept for hard problems (GUIDE.md)
 
 
 def path():
@@ -215,38 +218,6 @@ def per(benchmark):
     return "per" in b and "task" in b
 
 
-def role_score(e, role):
-    """How an entry serves a role: the mean of that role's domains it has scores for. Chores are value: the
-    Intelligence Index's own points per dollar a task costs (not the 0-100 scale, whose lowest entry is 0
-    however cheap it is)."""
-    if role == "chores":
-        if e.get("index") is None or not e["cost"] or not e["cost"]["value"]:
-            return None
-        value = e["index"] / e["cost"]["value"]
-        # a price per token is the same at every effort: among them, the lowest effort spends the fewest tokens
-        return value - (EFFORT_ORDER.get(e["effort"], 0) * 1e-6 if pricing(e["cost"]) else 0)
-    have = [e["domains"][d] for d in ROLES[role] if d in e["domains"]]
-    return sum(have) / len(have) if have else None
-
-
-def best_for(role, provider=None, entries=None):
-    """The entries that serve a role best, highest first; within one provider's models if given."""
-    from . import providers
-    entries = standings() if entries is None else entries
-    mine = {mid for key, mid, _, _ in lineup() if provider is None or key == provider}
-    scored = [(role_score(e, role), e) for e in entries if e["model"] in mine and e["comparable"]]
-    if role == "chores":
-        # a price per token is the same at every effort, and higher effort spends more tokens: each model is
-        # weighed at its lowest effort that has a score
-        lowest = {}
-        for s_, e in scored:
-            if s_ is not None and (e["model"] not in lowest or
-                                   EFFORT_ORDER.get(e["effort"], 99) < EFFORT_ORDER.get(lowest[e["model"]][1]["effort"], 99)):
-                lowest[e["model"]] = (s_, e)
-        scored = list(lowest.values())
-    return [e for s, e in sorted(((s, e) for s, e in scored if s is not None), key=lambda x: -x[0])]
-
-
 def name(model):
     return next((label for _, mid, label, _ in lineup() if mid == model), model)
 
@@ -283,11 +254,10 @@ def card(model, entries=None):
         else:
             out["notes"].append(f"{b['effort']} over {a['effort']}: {gain:+d} points, at the same price per token "
                                 f"but more tokens a task: {verdict}")
-    for role in ROLES:
-        ranks = best_for(role, entries=entries)
-        for e in mine:
-            if ranks and e in ranks[:3]:
-                out["notes"].append(f"{entry_name(e)}: among the best for {role}")
+    key = next((k for k, mid, _, _ in lineup() if mid == model), None)
+    for tier, t in (tiers_for(key, entries) if key else {}).items():
+        if t["model"] == model:
+            out["notes"].append(f"{name(model)} at {t['effort']}: the {tier} tier")
     return out
 
 
@@ -307,81 +277,131 @@ def lineup_changed():
     return [] if before is None else [m for m in now if m not in before]
 
 
-# ---------------------------------------------------------------- a project's model plan
+# ---------------------------------------------------------------- a project's helper tiers
 
 def plan(root):
-    """The model and effort a project's helpers use for each kind of work, as agreed with the person: the latest
-    choice for each role, kept in the project's .board so every session starts with it."""
+    """A project's own choice for any tier, kept in its .board: the latest for each; a reset drops it."""
     out = {}
     for r in board.read(root, "models.jsonl"):
-        out[r["role"]] = r
+        if r["role"] not in TIERS:
+            continue                             # roles from before the tiers are not carried over
+        if r.get("model"):
+            out[r["role"]] = r
+        else:
+            out.pop(r["role"], None)
     return out
 
 
 def set_plan(root, role, model, effort, why=""):
+    """A project's own choice for a tier; model None goes back to the colony default."""
     board.append(root, "models.jsonl", {"role": role, "model": model, "effort": effort or None, "why": why.strip(),
                                         "at": board.now()})
 
 
-def recommend(root):
-    """For each role, the best entry among the models the project's own program can run, with why."""
-    from . import providers
-    return recommend_for(providers.key(providers.of(root)))
-
-
-def recommend_for(key):
-    """For each role, the best entry among one provider's models, with why: what a new project's agent is
-    told, and what the add-project form shows, so the two never differ."""
-    from . import providers
-    entries = standings()
+def scored(key, entries=None):
+    """A provider's entries that have an Intelligence Index score, by model."""
+    entries = standings() if entries is None else entries
+    mine = {mid for k, mid, _, _ in lineup() if k == key}
     out = {}
-    for role in ROLES:
-        ranked = best_for(role, provider=key, entries=entries)
-        ranked = [x for x in ranked if x["effort"]] or ranked      # one that names an effort can be acted on
-        if not ranked:
-            continue
-        top, e = ranked[0], ranked[0]
-        if role != "chores":
-            # more effort pays only while it scores clearly more: the cheapest entry within NEAR of the best
-            near = [x for x in ranked if role_score(x, role) >= role_score(top, role) - NEAR and x["cost"]]
-            # the cheapest model, then its lowest effort: fewer tokens a task
-            e = min(near, key=lambda x: (x["cost"]["value"], EFFORT_ORDER.get(x["effort"], 0))) if near else top
-        if role == "chores":
-            why = (f"most Intelligence Index points per dollar among {providers.get(key).label} models at their lowest "
-                   f"effort ({e['index']:g} points at ${e['cost']['value']:.2f} {'per 1M tokens' if pricing(e['cost']) else 'a task'})")
-        else:
-            why = (f"{role} score {role_score(e, role):.0f} of 100 across the lineup"
-                   + (f", within {NEAR} of the best ({entry_name(top)}, {role_score(top, role):.0f})"
-                      + (f" at a lower effort: fewer tokens a task" if e["model"] == top["model"] else
-                         f" at ${e['cost']['value']:.2f} against ${top['cost']['value']:.2f} {cost_label(e['cost'])}")
-                      if e is not top and top["cost"] else ""))
-        out[role] = {"model": e["model"], "effort": e["effort"], "why": why}
+    for e in entries:
+        if e["model"] in mine and e["comparable"] and e["index"] is not None and e["variant"] != "non-reasoning":
+            out.setdefault(e["model"], []).append(e)
+    for es in out.values():
+        es.sort(key=lambda e: EFFORT_ORDER.get(e["effort"], 0))
     return out
 
 
+def unmeasured(key, entries=None):
+    """A provider's models with no Intelligence Index yet: shown as not yet measured, never picked."""
+    have = scored(key, entries)
+    return [mid for k, mid, _, _ in lineup() if k == key and mid not in have]
+
+
+def tiers_for(key, entries=None):
+    """The colony-wide default for one provider's helpers, from the Intelligence Index alone:
+    - step-up: the highest-scoring model, at its lowest effort within NEAR points of its best;
+    - routine: the cheapest model (price per 1M tokens) reaching within REACH points of the step-up pick at an
+      effort no higher than ROUTINE_TOP, at its lowest effort that does;
+    - chores: the most index points per dollar, each model at its lowest scored effort.
+    The free data prices tokens, not tasks, so effort is kept down by rule, not by cost per task."""
+    by = scored(key, entries)
+    if not by:
+        return {}
+    price = lambda e: e["cost"]["value"] if e["cost"] else None      # per 1M tokens (or an older per-task cost)
+    out = {}
+    top_model = max(by, key=lambda m: max(e["index"] for e in by[m]))
+    best = max(e["index"] for e in by[top_model])
+    up = next(e for e in by[top_model] if e["index"] >= best - NEAR)
+    out["step-up"] = {"model": top_model, "effort": up["effort"],  # None: a model without effort levels
+                      "why": f"the highest Intelligence Index here ({best:g} at its best), at its lowest effort within {NEAR} "
+                             f"points ({up['index']:g})"}
+    bar = up["index"] - REACH
+    fits = [(m, next((e for e in es if e["index"] >= bar and EFFORT_ORDER.get(e["effort"], 0) <= EFFORT_ORDER[ROUTINE_TOP]), None))
+            for m, es in by.items()]
+    fits = [(m, e) for m, e in fits if e and price(e) is not None]
+    if fits:
+        m, e = min(fits, key=lambda x: (price(x[1]), EFFORT_ORDER.get(x[1]["effort"], 0)))
+        out["routine"] = {"model": m, "effort": e["effort"],
+                          "why": f"the cheapest model within {REACH} points of step-up ({e['index']:g} at ${price(e):g} {cost_label(e['cost'])}), "
+                                 f"at its lowest effort that reaches it"}
+    value = [(es[0]["index"] / price(es[0]), m, es[0]) for m, es in by.items() if price(es[0])]
+    if value:
+        v, m, e = max(value, key=lambda x: x[0])
+        out["chores"] = {"model": m, "effort": e["effort"],
+                         "why": f"the most Intelligence Index points per dollar ({e['index']:g} at ${price(e):g} {cost_label(e['cost'])}), "
+                                f"at its lowest effort"}
+    return {t: out[t] for t in TIERS if t in out}
+
+
+def best_effort(key, model, entries=None):
+    """A model's highest-scoring effort: what a consultant runs at (rare, short, and worth the most)."""
+    es = scored(key, entries).get(model)
+    return max(es, key=lambda e: (e["index"], -EFFORT_ORDER.get(e["effort"], 0)))["effort"] if es else None
+
+
+def effective(root):
+    """The tiers a project's helpers run at: its own choice for a tier if it made one, else the colony default."""
+    from . import providers
+    key = providers.key(providers.of(root))
+    auto, own = tiers_for(key), plan(root)
+    out = {}
+    for t in TIERS:
+        if t in own:
+            out[t] = dict(own[t], own=True)
+        elif t in auto:
+            out[t] = dict(auto[t], own=False)
+    return out
+
+
+def write_helpers(root):
+    """Keep a project's helper definitions at its tiers, where its program has them (see providers)."""
+    from . import board as b, providers
+    p = providers.of(root)
+    if not hasattr(p, "write_helpers"):
+        return []
+    try:
+        return p.write_helpers(b.workdir(root), effective(root))
+    except OSError:
+        return []
+
+
 def plan_text(root):
-    """The plan as the agent is handed it at the start of each session."""
-    agreed = plan(root)
-    if not agreed:
+    """The tiers as the agent is handed them at the start of each session."""
+    from . import providers
+    tiers = effective(root)
+    if not tiers:
         return ""
-    lines = [f"- {role}: {name(r['model'])} ({r['model']})" + (f" at {r['effort']} effort" if r["effort"] else "")
-             + (f": {r['why']}" if r["why"] else "") for role, r in agreed.items()]
-    return ("Your model plan, agreed with the person: use these for helpers (subagents) by kind of work. Propose "
-            "a change to the person, never switch silently, when a model is added, a role changes, or one keeps "
-            "underperforming (colony models shows it and today's recommendation):\n" + "\n".join(lines))
-
-
-def first_note(root):
-    """What a new project's agent is told before any work: the recommended plan, to agree with the person."""
-    rec = recommend(root)
-    if not rec:
-        return None
-    lines = "\n".join(f"- {role}: {name(r['model'])} at {r['effort'] or 'its default'} effort ({r['why']})" for role, r in rec.items())
-    return ("Before any work, agree your model plan with the person: which model and effort your helpers (subagents) "
-            "use for which kind of work. The benchmark cards (the board's Models page, or `colony bench card MODEL`) "
-            f"recommend:\n{lines}\nPresent this, say briefly what each choice trades (quality, cost, speed), and ask "
-            "them to confirm or adjust. Record what they agree with `colony models set ROLE MODEL EFFORT --why "
-            "\"...\"`; it is handed to you at every session start from then on.")
+    p = providers.of(root)
+    named = hasattr(p, "helper_name")
+    lines = [f"- {t}: {name(r['model'])} ({r['model']}) at {r['effort'] or 'its default'} effort"
+             + (f", as the `{p.helper_name(t)}` helper" if named else "")
+             + (" (this project's choice)" if r["own"] else "") for t, r in tiers.items()]
+    return ("Your helpers (subagents) run at three tiers, colony's default from the benchmark cards unless this "
+            "project set its own (`colony models` shows them): routine for ordinary work, chores for clear "
+            "mechanical tasks, step-up when the work struggles (stalls, retries, work redone); step back down once "
+            "the hard part is done. If you already run on the step-up model, step-up work is yours: a helper would "
+            "rebuild context you hold. Costly decisions go to consultants (colony consult)."
+            + (f" Each tier is a helper: {p.HELPER_CALL}." if named else "") + "\n" + "\n".join(lines))
 
 
 # ---------------------------------------------------------------- Artificial Analysis, the one source
@@ -563,10 +583,10 @@ def ready_to_announce():
 
 
 def framing(key):
-    """The cards' recommendation for a provider, framed as theirs, in a line: for the add-project form."""
-    rec = recommend_for(key)
-    if not rec:
+    """The cards' tiers for a provider, framed as theirs, in a line: for the add-project form."""
+    t = tiers_for(key)
+    if not t:
         return ""
-    return ("From the benchmark cards (Artificial Analysis): " + "; ".join(
-        f"{role}, {name(r['model'])}" + (f" at {r['effort']}" if r["effort"] else "") for role, r in rec.items())
-        + ". Your agent proposes a plan from them before any work.")
+    return ("Helpers from the benchmark cards (Artificial Analysis): " + "; ".join(
+        f"{tier}, {name(r['model'])}" + (f" at {r['effort']}" if r["effort"] else "") for tier, r in t.items())
+        + ". A project can change any of them in its settings.")
