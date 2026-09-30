@@ -122,6 +122,14 @@ class ClaudeCode:
 
     HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
 
+    def latest_conversation(self, folder):
+        """The conversation last active in a folder, from Claude Code's own records: for a console whose hooks
+        don't record it (the monitor's)."""
+        import re as _re
+        d = self.config_home() / "projects" / _re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+        files = sorted(d.glob("*.jsonl"), key=lambda f: f.stat().st_mtime) if d.exists() else []
+        return files[-1].stem if files else None
+
     def update(self):
         """Install the newest Claude Code beside the running one (its own updater)."""
         return _run([self.program, "update"], timeout=600)

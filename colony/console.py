@@ -37,9 +37,10 @@ def token():
 COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the provider's CLI (tests, demos)
 
 
-def command(label, root=None):
+def command(label, root=None, folder=None):
     """How the project's provider starts its agent, with the project's settings (falling back to the global ones),
-    back in the conversation it was last in, if it had one."""
+    back in the conversation it was last in, if it had one. folder: a console that isn't a project's (the
+    monitor's) resumes the conversation last active there."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
     from . import board, providers
@@ -47,6 +48,8 @@ def command(label, root=None):
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
+    if not root and folder and hasattr(providers.of(None), "latest_conversation"):
+        resume = providers.of(None).latest_conversation(folder)
     return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
 
 
@@ -110,7 +113,7 @@ def ensure(root, name=None, label=None):
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
                         "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
-                        contained(command(label or Path(root).name, None if label else root))],
+                        contained(command(label or Path(root).name, None if label else root, folder=root if label else None))],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
         _started(name, fingerprint(root, label))
@@ -124,8 +127,8 @@ def fingerprint(root, label=None):
     its program reads only at start (see the provider's startup_files). A change means a reload would differ."""
     import hashlib
     from . import board, providers
-    cmd = command(label or Path(root).name, None if label else root)
-    cmd = re.sub(r" resume \S+$", "", cmd)
+    cmd = command(label or Path(root).name, None if label else root, folder=root if label else None)
+    cmd = re.sub(r" (--)?resume \S+", "", cmd)
     p = providers.of(None if label else root)
     files = [f for f in (p.startup_files(board.workdir(root)) if hasattr(p, "startup_files") and not label else [])
              if f.exists()]

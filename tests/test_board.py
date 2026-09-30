@@ -2452,6 +2452,27 @@ class StayCurrentTest(BoardBase):
             self.assertTrue(console.running(name))
             self.assertIsNone(console.stale(self.root), "reloaded onto what it would start with now")
 
+    def test_the_monitor_resumes_its_latest_conversation_and_a_new_conversation_isnt_a_new_setup(self):
+        from unittest.mock import patch
+        cfg = Path(self.tmp.name) / "claude-config"
+        folder = Path(self.tmp.name) / "monitor-home"
+        slug = cfg / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+        slug.mkdir(parents=True)
+        (slug / "older.jsonl").write_text("{}")
+        time.sleep(0.01)
+        (slug / "latest.jsonl").write_text("{}")
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(cfg)}):
+                self.assertIn("--resume latest", console.command("monitor", None, folder=folder))
+                board.track(self.root)
+                console.remember(self.root, "conv-1", str(slug / "latest.jsonl"))
+                first = console.fingerprint(self.root)
+                console.remember(self.root, "conv-2", str(slug / "latest.jsonl"))
+                self.assertEqual(console.fingerprint(self.root), first, "which conversation it resumes isn't its setup")
+        finally:
+            console.COMMAND = saved
+
     def test_the_watcher_reloads_only_an_idle_untouched_console_after_a_while(self):
         from unittest.mock import patch
         board.track(self.root)
