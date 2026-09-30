@@ -1299,7 +1299,7 @@ class SettingsTest(BoardBase):
             run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
             self.assertRegex(run("settings").stdout, r"remote +on")
-            self.assertRegex(run("settings", "consult_budget", "$30").stdout, r"consult_budget +\$30.00")
+            self.assertRegex(run("settings", "consult", "off").stdout, r"consult +off")
             run("settings", "remote", "off")
             run("settings", "model", "claude-opus-5-5")
             run("settings", "effort", "medium")
@@ -2201,8 +2201,8 @@ class ConsultTest(BoardBase):
     def fake(self, spent=0.3):
         calls = []
 
-        def consult(brief, model, effort, cap, project, price=None):
-            calls.append({"brief": brief, "model": model, "effort": effort, "cap": cap, "price": price})
+        def consult(brief, model, effort, project, price=None):
+            calls.append({"brief": brief, "model": model, "effort": effort, "price": price})
             return {"text": f"point from {model}", "cost": spent, "usage": {}, "error": None}
         return calls, consult
 
@@ -2231,7 +2231,7 @@ class ConsultTest(BoardBase):
         self.assertIn("plants.db (db.py:12)", brief)
         self.assertNotIn("revised approach", brief)               # round one is blind to the plan
         self.assertIsNone(self.calls[0]["price"])                 # Claude Code reports its own cost
-        self.assertEqual(self.calls[1]["price"], (15, 75))        # Codex doesn't: priced high when unknown
+        self.assertIsNone(self.calls[1]["price"])                 # Codex doesn't, and no benchmark data prices it here
         self.assertEqual(rec["cost"], 0.6)
         self.assertAlmostEqual(self.consult.spent_this_month(), 0.6)
         self.assertIn("Consultant 2: gpt-6-astra at high", self.consult.report(rec))
@@ -2248,18 +2248,39 @@ class ConsultTest(BoardBase):
         with self.assertRaisesRegex(ValueError, "both its rounds"):
             self.consult.run(self.root, "R3", "q", "d", plan="again", rnd=2)
 
-    def test_the_off_switch_and_the_monthly_budget_stop_a_run_before_it_starts(self):
+    def test_the_off_switch_stops_a_run_and_nothing_else_limits_one(self):
         board.set_setting("consult", "off")
         with self.assertRaisesRegex(ValueError, "off"):
             self.consult.run(self.root, "R3", "q", "d")
         board.set_setting("consult", "on")
-        board.set_setting("consult_budget", "0.5")
-        self.consult.run(self.root, "R3", "q", "d")               # a run takes what it takes: $0.60 against $0.50
-        self.assertEqual(self.calls[0]["cap"], 5.0, "the cap is a runaway stop, far above a consultation")
-        with self.assertRaisesRegex(ValueError, "budget"):
-            self.consult.run(self.root, "R4", "q", "d")           # but none starts once the month's budget is spent
-        with self.assertRaises(KeyError):
-            board.set_setting("consult_cap", "nothing")
+        for n in range(1, 4):                                    # no budget: every decision gets its consultation
+            self.consult.run(self.root, f"R{n}", "q", "d")
+        self.assertEqual(len(self.calls), 6)
+
+    def test_settings_show_the_auto_pick_and_the_person_can_change_or_restore_it(self):
+        board.set_setting("consultants", "")
+        from colony import bench
+        saved = bench.recommend_for
+        bench.recommend_for = lambda k: {"planning": {"model": f"{k}-top", "effort": "high", "why": "planning score 90"}}
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        try:
+            page = board.settings_page(board.registry())
+            self.assertIn("Auto: claude-top at high", page)
+            self.assertIn("Auto picks best for planning on the benchmark cards: planning score 90", page)
+            post = lambda d: urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{port}/consulting", data=urllib.parse.urlencode(d).encode()))
+            post({"consult": "on", "consultant_claude": "claude-sonnet-5-5:medium", "consultant_codex": "auto"})
+            self.assertEqual(board.registry()["settings"]["consultants"], {"claude": {"model": "claude-sonnet-5-5", "effort": "medium"}})
+            self.assertEqual(self.consult.pick("claude")[:2], ("claude-sonnet-5-5", "medium"))
+            post({"consultant_claude": "auto"})                  # unticked: off, and back to the cards' pick
+            s = board.registry()["settings"]
+            self.assertEqual((s["consult"], s["consultants"]), (False, {}))
+        finally:
+            bench.recommend_for = saved
+            httpd.shutdown()
+            httpd.server_close()
 
     def test_one_family_is_one_consultant_said_plainly_never_a_second_of_the_same_family(self):
         board.set_setting("providers", "claude")
@@ -2296,21 +2317,20 @@ class ConsultTest(BoardBase):
         self.assertIn("gpt-6-astra at high · $0.30", page)
         self.assertIn("You accepted: keep them local", page)
         settings = board.settings_page(reg)
-        self.assertIn("$0.60 spent this month", settings)
-        self.assertIn("claude-opus-5-5 at high (chosen in Settings)", settings)
+        self.assertIn("$0.60 spent on consulting this month", settings)
+        self.assertIn("<option value='claude-opus-5-5:high' selected>", settings)
 
 
-class CodexConsultCapTest(unittest.TestCase):
-    """Codex reports tokens, not dollars: its run is priced as it streams and stopped at the cap."""
+class ConsultCallTest(unittest.TestCase):
+    """Each program's consultation: fresh, read-only, priced, and never cut short."""
 
-    def test_the_run_is_killed_when_its_priced_usage_passes_the_cap(self):
+    def test_its_streamed_usage_is_priced_and_the_run_is_never_cut_short(self):
         import io
 
         class Proc:
             killed = False
 
             def __init__(self, cmd, **kw):
-                self.cmd = cmd
                 self.stdin = io.StringIO()
                 lines = [{"type": "turn.completed", "usage": {"input_tokens": 100_000 * i, "output_tokens": 10_000 * i}} for i in (1, 2, 3)]
                 self.stdout = iter(json.dumps(x) + "\n" for x in lines)
@@ -2325,10 +2345,9 @@ class CodexConsultCapTest(unittest.TestCase):
         def popen(cmd, **kw):
             seen["cmd"] = cmd
             return Proc(cmd, **kw)
-        out = providers.get("codex").consult("brief", "gpt-6-astra", "high", 2.0, Path("/x"), price=(10, 50), popen=popen)
-        self.assertTrue(Proc.killed)
-        self.assertEqual(out["error"], "stopped at the spending cap")
-        self.assertAlmostEqual(out["cost"], 3.0)                 # 200k in at $10, 20k out at $50: past $2
+        out = providers.get("codex").consult("brief", "gpt-6-astra", "high", Path("/x"), price=(10, 50), popen=popen)
+        self.assertFalse(Proc.killed)
+        self.assertAlmostEqual(out["cost"], 4.5)                 # 300k in at $10, 30k out at $50
         self.assertIn("read-only", seen["cmd"])
 
     def test_claude_code_runs_in_an_empty_folder_with_no_settings_and_its_own_cap(self):
@@ -2337,9 +2356,9 @@ class CodexConsultCapTest(unittest.TestCase):
         def run(cmd, **kw):
             seen["cmd"], seen["cwd"] = cmd, kw["cwd"]
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok", "total_cost_usd": 0.2}), "")
-        out = providers.get("claude").consult("brief", "claude-opus-5-5", "high", 1.5, Path("/proj"), run=run)
+        out = providers.get("claude").consult("brief", "claude-opus-5-5", "high", Path("/proj"), run=run)
         self.assertEqual((out["text"], out["cost"]), ("ok", 0.2))
-        self.assertIn("--max-budget-usd", seen["cmd"])
+        self.assertNotIn("--max-budget-usd", seen["cmd"])
         self.assertEqual(seen["cmd"][seen["cmd"].index("--setting-sources") + 1], "")
         self.assertNotEqual(seen["cwd"], "/proj")
         self.assertIn("Bash", seen["cmd"][seen["cmd"].index("--disallowedTools") + 1])

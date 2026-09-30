@@ -568,7 +568,7 @@ def cmd_consult(a):
     read = lambda f: sys.stdin.read() if f == "-" else Path(f).expanduser().read_text()
     try:
         rec = consult.run(root, a.decision, a.question, read(a.digest), read(a.plan) if a.plan else None,
-                          2 if a.plan else 1, cap=a.cap)
+                          2 if a.plan else 1)
     except (ValueError, OSError) as err:
         print(err, file=sys.stderr)
         return 2
@@ -859,8 +859,8 @@ def cmd_settings(a):
     for k, v in reg["settings"].items():
         shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
-                 if k == "consultants" else f"${v:.2f}" if k.startswith("consult_") else v or "(the provider's default)")
-        print(f"{k:14} {shown:28} {board.SETTING_HELP[k]}")
+                 if k == "consultants" else v or "(the provider's default)")
+        print(f"{k:14} {shown:28} {board.SETTING_HELP.get(k, '')}")
     print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
     return 0
@@ -1067,7 +1067,6 @@ def main(argv=None):
     p.add_argument("question", nargs="?", help="the decision, in a sentence or two")
     p.add_argument("--digest", metavar="FILE", help="your digest of the facts, each with its source (- for stdin)")
     p.add_argument("--plan", metavar="FILE", help="round two: your revised approach, for the consultants to check")
-    p.add_argument("--cap", type=float, help="the most each consultant may spend, in dollars (default: colony settings)")
     p.add_argument("--adopt", metavar="ID", help="record which points of consultation ID the person accepted (DECISION is their words)")
     p.add_argument("--show", metavar="ID", help="show consultation ID again")
     p.set_defaults(fn=cmd_consult)

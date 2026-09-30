@@ -5,8 +5,8 @@ The recipe, from the holodeck pilot and two rounds on the rule itself (design/co
 a first draft; a second model family adds what one misses; a checking round pays most consistently; reading is the
 expensive part, so the asking agent, who knows the ground, writes the digest of sourced facts and the consultants
 think from it and check at the source only what their answer turns on. The task is bounded (a few points, a few
-hundred words) so a consultant takes what it takes; a runaway stop far above that catches only a run gone wrong,
-and one colony-wide monthly budget is checked before every run. Every round is logged with its cost, and later with what was adopted.
+hundred words), so a consultant takes what it takes: no caps or budgets, whose cutting a sound answer short would
+cost more than they save (the person's call). Every round is logged with its cost, and later with what was adopted.
 """
 import json
 import secrets
@@ -36,7 +36,7 @@ def records(root):
 
 
 def spent_this_month():
-    """What every project's consultations have cost this calendar month, from colony's own ledger."""
+    """What every project's consultations have cost this calendar month, from colony's own ledger: shown, not a limit."""
     month = board.now()[:7]
     path = board.home() / "consults.jsonl"
     rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
@@ -44,13 +44,17 @@ def spent_this_month():
 
 
 def pick(key):
-    """The consultant for one family: the person's own choice in Settings if they made one; else the family's best
-    for planning on the benchmark cards (the cheapest entry within a few points of the best, as the model plans
-    choose); else the family's first listed model. Returns (model, effort, why)."""
-    from . import bench
+    """The consultant for one family: the person's own choice in Settings if they made one, else auto()."""
     chosen = (board.registry()["settings"].get("consultants") or {}).get(key)
     if chosen:
         return chosen["model"], chosen.get("effort") or "high", "chosen in Settings"
+    return auto(key)
+
+
+def auto(key):
+    """The family's best for planning on the benchmark cards (the cheapest entry within a few points of the best,
+    as the model plans choose); else the family's first listed model. Returns (model, effort, why)."""
+    from . import bench
     rec = bench.recommend_for(key).get("planning")
     if rec and rec["effort"]:
         return rec["model"], rec["effort"], f"best for planning on the benchmark cards: {rec['why']}"
@@ -94,8 +98,8 @@ def brief(root, decision, question, digest, plan=None, rnd=1):
     return "\n\n".join(parts)
 
 
-def run(root, decision, question, digest, plan=None, rnd=1, cap=None, pool=None):
-    """One round: checks the rules and the budget, asks the consultants side by side, logs it all. Returns the
+def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
+    """One round: checks the rules, asks the consultants side by side, logs it all. Returns the
     record, or raises ValueError with the reason it won't run."""
     root = Path(root)
     s = board.registry()["settings"]
@@ -113,21 +117,15 @@ def run(root, decision, question, digest, plan=None, rnd=1, cap=None, pool=None)
     who, note = consultants()
     if not who:
         raise ValueError("no provider that can consult is installed and on")
-    cap = cap if cap is not None else float(s["consult_cap"])
-    budget = float(s["consult_budget"])
-    if spent_this_month() >= budget:
-        raise ValueError(f"this month's consultation budget (${budget:.2f}) is spent: "
-                         f"${spent_this_month():.2f} (colony settings consult_budget to raise it)")
     text = brief(root, decision, question, digest, plan, rnd)
     import concurrent.futures as cf
 
     def ask(k, model, effort):
         p = providers.get(k, strict=True)
         if getattr(p, "reports_cost", True):
-            return p.consult(text, model, effort, cap, root)
-        # a program that doesn't report its cost is priced from the benchmark data; unknown, it's priced high,
-        # so the cap stops it early rather than late
-        return p.consult(text, model, effort, cap, root, price=bench.token_price(model) or (15, 75))
+            return p.consult(text, model, effort, root)
+        # a program that doesn't report its cost is priced from the benchmark data (unknown: no cost shown)
+        return p.consult(text, model, effort, root, price=bench.token_price(model))
     from . import bench
     with (pool or cf.ThreadPoolExecutor)(max_workers=2) as ex:
         futs = [(k, m, e, why, ex.submit(ask, k, m, e)) for k, m, e, why in who]

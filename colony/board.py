@@ -62,7 +62,7 @@ person follows and steers them all from one board, and the projects can write to
   points, a few at most, as one gate. Wording, naming and reorganising never count. Record what they
   accept with `colony consult R4 "their words" --adopt ID`. Only an accepted change earns a second round,
   which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
-  decision; if consulting is off or over its budget, go on and say so.
+  decision; if consulting is off, go on.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
   chapter, a shared document) with `colony pin PATH-or-URL --title "..." --why "..."`; `colony pins`
   lists what's pinned. Their pins, edits and comments reach you as notes.
@@ -142,7 +142,7 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
-                    "permissions": "ask", "consult": True, "consult_cap": 5.0, "consult_budget": 20.0, "consultants": {}}
+                    "permissions": "ask", "consult": True, "consultants": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -160,9 +160,7 @@ SETTING_HELP = {
     "monitor": "the monitor session runs with the board",
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
-    "consult": "agents consult two fresh models at decisions costly to change (colony consult)",
-    "consult_cap": "a runaway stop for one consultant, in dollars: far above what one takes (about $0.30-1), so it never cuts a sound answer short",
-    "consult_budget": "the most all consultations may spend in a calendar month, in dollars",
+    "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
 
@@ -177,14 +175,6 @@ def set_setting(key, value):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
-    elif key in ("consult_cap", "consult_budget"):
-        try:
-            amount = float(str(value).strip().lstrip("$"))
-        except ValueError:
-            raise KeyError(key)
-        if amount <= 0:
-            raise KeyError(key)
-        reg["settings"][key] = amount
     elif key == "consultants":
         from .providers import PROVIDERS
         chosen = {}
@@ -2007,15 +1997,25 @@ def settings_page(reg):
               "personal use, with attribution, up to 1,000 requests a day.</p>")
     from . import consult
     spent = consult.spent_this_month()
-    picks = consult.consultants()[0]
+    fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p) and hasattr(p, "consult")][:2]
+
+    def seat(k):
+        p, mine = pv.get(k), (s["consultants"] or {}).get(k)
+        am, ae, why = consult.auto(k)
+        opts = [f"<option value='auto'{'' if mine else ' selected'}>Auto: {e(am)} at {e(ae)}</option>"]
+        for mid, label in pv.available(p):
+            opts.append(f"<optgroup label='{e(label)}'>" + "".join(
+                f"<option value='{e(mid)}:{e(x)}'{' selected' if mine and (mine['model'], mine['effort']) == (mid, x) else ''}>"
+                f"{e(label)} at {e(x)}</option>" for x in pv.efforts_of(p, mid)) + "</optgroup>")
+        return (f"<label>{e(p.label)} consultant <select name='consultant_{k}'>{''.join(opts)}</select></label>"
+                f"<p class='muted'>Auto picks {e(why)}.</p>")
     consulting = (f"<form method='post' action='/consulting' class='options'>"
-                  f"<label><input type='checkbox' name='consult' value='on'{check('consult')}> Agents consult two fresh models "
-                  f"at decisions costly to change <span class='muted'>(a new milestone or spec, a foundation others build on, a major redesign)</span></label>"
-                  f"<label>Stop a consultant that runs away past <input name='consult_cap' value='{s['consult_cap']:.2f}' inputmode='decimal' size='6'> dollars <span class='muted'>(one takes about $0.30-1)</span></label>"
-                  f"<label>Most all consultations may spend a month <input name='consult_budget' value='{s['consult_budget']:.2f}' inputmode='decimal' size='6'> dollars</label>"
-                  f"<p class='muted'>${spent:.2f} spent this month. Consultants: "
-                  + (e("; ".join(f"{m} at {eff} ({why})" for _, m, eff, why in picks)) or "none: no program that can consult is on")
-                  + ". Pin your own with colony settings consultants.</p><button>Save</button></form>")
+                  f"<label><input type='checkbox' name='consult' value='on'{check('consult')}> Agents consult two fresh models, "
+                  f"one from each family, at decisions costly to change <span class='muted'>(a new milestone or spec, a "
+                  f"foundation others build on, a major redesign)</span></label>"
+                  + ("".join(seat(k) for k in fams) or "<p class='muted'>No program that can consult is on.</p>")
+                  + ("<p class='muted'>Only one model family is on, so one consultant.</p>" if len(fams) == 1 else "")
+                  + f"<p class='muted'>${spent:.2f} spent on consulting this month.</p><button>Save</button></form>")
     rerun = ("<form method='post' action='/setup' class='caughtup' style='position:static;height:auto;margin:0'>"
              "<button class='quiet'>Run first-time setup again</button></form>")
     body = (f"<header><div class='titlerow'><h1>Settings</h1>{rerun}</div></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
@@ -2249,11 +2249,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/consulting":
             set_setting("consult", form.get("consult", "off"))
-            for k in ("consult_cap", "consult_budget"):
-                try:
-                    set_setting(k, form.get(k, ""))
-                except KeyError:
-                    pass                                  # not a positive amount: the old one stays
+            from .providers import PROVIDERS
+            mine = dict(registry()["settings"]["consultants"] or {})
+            for k in PROVIDERS:
+                v = form.get(f"consultant_{k}")
+                if v == "auto":
+                    mine.pop(k, None)
+                elif v and ":" in v:
+                    m, _, x = v.rpartition(":")
+                    mine[k] = {"model": m, "effort": x}
+            set_setting("consultants", ",".join(f"{k}={c['model']}:{c['effort']}" for k, c in mine.items()))
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")

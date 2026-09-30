@@ -35,9 +35,9 @@ what it assumes and what a second provider needs there. What a provider supplies
                            monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
-  consult(brief, model, effort, cap, project)
+  consult(brief, model, effort, project)
                            one fresh, stateless consultation: an empty folder, no settings or hooks, read-only, a
-                           hard spending cap; returns {"text", "cost", "usage", "error"} (colony consult uses it)
+                           no cap: it takes what it takes; returns {"text", "cost", "usage", "error"} (colony consult uses it)
   choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it;
                            with choice(), it also lets the watcher answer a session's start-up questions (starting())
   enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
@@ -163,15 +163,15 @@ class ClaudeCode:
                               [e for e in self.efforts]))
         return found
 
-    def consult(self, brief, model, effort, cap, project, run=None):
+    def consult(self, brief, model, effort, project, run=None):
         """One fresh, stateless consultation: in an empty folder with none of the project's settings or hooks (so
-        it can't take the person's notes or act as the project's agent), reading the project only by path, with a
-        hard spending cap. Returns the answer and what it cost."""
+        it can't take the person's notes or act as the project's agent), reading the project only by path.
+        Returns the answer and what it cost."""
         import subprocess
         import tempfile
         here = tempfile.mkdtemp(prefix="colony-consult-")
         cmd = [self.program, "-p", "--model", model, "--effort", effort, "--setting-sources", "", "--output-format", "json",
-               "--max-budget-usd", f"{cap:.2f}", "--add-dir", str(project), "--allowedTools", "Read,Grep,Glob",
+               "--add-dir", str(project), "--allowedTools", "Read,Grep,Glob",
                "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent"]
         try:
             out = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, timeout=1800).stdout
@@ -451,9 +451,9 @@ class Codex:
                 "printf '" + self.APPARMOR.replace("\n", "\\n") + "' | sudo tee /etc/apparmor.d/codex-bwrap && "
                 "sudo apparmor_parser -r /etc/apparmor.d/codex-bwrap")
 
-    def consult(self, brief, model, effort, cap, project, price=None, popen=None):
-        """One fresh, stateless consultation in its read-only sandbox, in an empty folder, with hooks off. Codex has
-        no spending cap of its own, so its reported usage is priced as it streams and the run is stopped at the cap."""
+    def consult(self, brief, model, effort, project, price=None, popen=None):
+        """One fresh, stateless consultation in its read-only sandbox, in an empty folder, with hooks off. Codex
+        reports tokens, not dollars: price (per 1M tokens in, out) turns its usage into what it cost."""
         import subprocess
         import tempfile
         here = tempfile.mkdtemp(prefix="colony-consult-")
@@ -463,7 +463,7 @@ class Codex:
         pin, pout = price or (0, 0)
         cost = lambda u: ((u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)) * pin
                           + u.get("cached_input_tokens", 0) * pin * 0.1 + u.get("output_tokens", 0) * pout) / 1e6
-        usage, stopped = {}, False
+        usage = {}
         try:
             proc = (popen or subprocess.Popen)(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
             proc.stdin.write(brief)
@@ -476,15 +476,11 @@ class Codex:
                 u = e.get("usage") or (e.get("msg") or {}).get("usage")
                 if isinstance(u, dict) and u:
                     usage = u
-                    if price and cost(usage) > cap:
-                        proc.kill()
-                        stopped = True
-                        break
             proc.wait(timeout=60)
         except (OSError, subprocess.TimeoutExpired) as err:
             return {"text": "", "cost": None, "error": err.__class__.__name__}
         return {"text": last.read_text() if last.exists() else "", "cost": cost(usage) if price else None,
-                "usage": usage, "error": "stopped at the spending cap" if stopped else None}
+                "usage": usage, "error": None if last.exists() else "no answer"}
 
     def discover(self, run=None):
         """The models this account can run, from Codex's own catalog of them, with each one's effort levels;
