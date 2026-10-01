@@ -181,7 +181,7 @@ def prepare_home(root, home, source):
         raise RemoteError('ChatGPT file sign-in is needed for a project remote host; sign in with Codex first')
     home.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(home, 0o700)
-    for name in ('auth.json', 'skills', 'plugins', 'rules', 'agents', 'models_cache.json', 'AGENTS.md', 'AGENTS.override.md'):
+    for name in ('auth.json', 'skills', 'plugins', 'rules', 'agents', 'AGENTS.md', 'AGENTS.override.md'):
         origin, target = source / name, home / name
         if origin.exists():
             if target.is_symlink():
@@ -191,6 +191,15 @@ def prepare_home(root, home, source):
                 raise RemoteError('Owned Codex home contains an independent sign-in or shared configuration')
             else:
                 target.symlink_to(origin, target_is_directory=origin.is_dir())
+    # Catalogs are writable caches, unlike shared credentials/configuration. Different CLI
+    # versions may advertise different models; a host must not overwrite another's cache.
+    origin, target = source / 'models_cache.json', home / 'models_cache.json'
+    if target.is_symlink():
+        if target.resolve() != origin.resolve():
+            raise RemoteError('Owned Codex home has an unexpected catalog target')
+        target.unlink()
+    if not target.exists() and origin.is_file():
+        target.write_bytes(origin.read_bytes())
     config['cli_auth_credentials_store'] = 'file'
     config['sqlite_home'] = str(home)
     # Paths in a user config are normally relative to the original config directory.

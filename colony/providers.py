@@ -606,16 +606,40 @@ class Codex:
     def discover(self, run=None):
         """The models this account can run, from Codex's own catalog of them, with each one's effort levels;
         what it keeps hidden (internal models) is left out. Nothing is called."""
-        try:
-            catalog = json.loads((self.config_home() / "models_cache.json").read_text())
-        except (OSError, ValueError):
-            return []
+        return self.catalog_snapshot()[0]
+
+    def catalog_snapshot(self):
+        """Read model rows and their actual writer version together, not the installed CLI's version."""
+        from . import board
         import re
+        source = self.config_home()
+        paths = [source / 'models_cache.json']
+        # Only hosts sharing this sign-in may supply this account's catalog. Prefer
+        # the newer client, then its freshest snapshot; never union removed models.
+        for host in (board.home() / 'codex-remote').glob('*'):
+            auth = host / 'auth.json'
+            if auth.is_symlink() and auth.resolve() == (source / 'auth.json').resolve():
+                paths.append(host / 'models_cache.json')
+        snapshots = []
+        for path in paths:
+            try:
+                catalog = json.loads(path.read_text())
+                if not isinstance(catalog.get('models'), list):
+                    continue
+                version = tuple(map(int, re.findall(r'\d+', catalog.get('client_version') or '')[:3]))
+                snapshots.append((version, catalog.get('fetched_at') or '', str(path), catalog))
+            except (OSError, ValueError, AttributeError, TypeError):
+                continue
+        if not snapshots:
+            return [], {}
+        _, _, path, catalog = max(snapshots, key=lambda x: x[:3])
         known = dict(self.models)
         name = lambda m: known.get(m["slug"]) or re.sub(r"-(?=[A-Za-z])", " ", m.get("display_name") or m["slug"])
-        return [(m["slug"], name(m),
+        found = [(m["slug"], name(m),
                  [x["effort"] if isinstance(x, dict) else x for x in m.get("supported_reasoning_levels") or []] or list(self.efforts))
                 for m in catalog.get("models", []) if m.get("visibility") == "list" and m.get("slug")]
+        return found, dict(source=str(source.resolve()), path=path, client_version=catalog.get('client_version'),
+                           fetched_at=catalog.get('fetched_at'))
 
     @property
     def models(self):
@@ -910,7 +934,21 @@ def discover(force=False, run=None, calls=True):
         if not usable(p) or not hasattr(p, "discover"):
             continue
         ver = p.version() if run is None else "test"
-        if run is None and not calls:
+        catalog = {}
+        if isinstance(p, Codex) and run is None:
+            found, catalog = p.catalog_snapshot()
+            previous = have.get(k) or {}
+            prior = previous.get('catalog') or {}
+            import re
+            version = lambda value: tuple(map(int, re.findall(r'\d+', value or '')[:3]))
+            writer = version(catalog.get('client_version'))
+            prior_writer = version(prior.get('client_version') or previous.get('version'))
+            same_source = not prior.get('source') or prior['source'] == catalog.get('source')
+            if same_source and writer and prior_writer and writer < prior_writer:
+                continue                 # an older still-running CLI overwrote the shared cache
+            if not found:
+                continue
+        elif run is None and not calls:
             found = p.catalog() if hasattr(p, "catalog") else p.discover()
             if not found:
                 continue
@@ -918,6 +956,8 @@ def discover(force=False, run=None, calls=True):
             found = p.discover(run) if run else p.discover()
         if found or k not in have:
             have[k] = {"version": ver, "at": board.now(), "models": found}
+            if catalog:
+                have[k]['catalog'] = catalog
         looked.append(k)
     path = board.home() / "bench" / "available.json"
     path.parent.mkdir(parents=True, exist_ok=True)
