@@ -171,7 +171,7 @@ class IntegrationTest(BoardBase):
         board.project_settings(self.root, {'model': 'claude-sonnet-5', 'effort': 'low'})
         board.set_setting('model_adoption', 'ask')
         candidate = {'model': 'claude-opus-5-5', 'effort': 'high', 'why': 'Highest measured score'}
-        with patch.object(selection.bench, 'tiers_for', return_value={'step-up': candidate, 'routine': candidate}):
+        with patch.object(selection.bench, 'role_pick', return_value=candidate):
             state = selection.reconcile()
             proposal = state['pending']['claude-opus-5-5']
             self.assertTrue(any(s['pinned'] for c in proposal['roles'].values() for s in c['seats']))
@@ -193,7 +193,9 @@ class IntegrationTest(BoardBase):
             return [('claude-opus-5-5', 'Opus')] if providers.key(provider) == 'claude' else original(provider)
         candidate = {'model': 'claude-opus-5-5', 'effort': 'high', 'why': 'Measured'}
         with patch.object(providers, 'available', side_effect=catalog), \
-                patch.object(selection.bench, 'tiers_for', side_effect=lambda k, entries=None: {'step-up': candidate, 'routine': candidate} if k == 'claude' else {}):
+                patch.object(selection, 'recommendations', side_effect=lambda state: {
+                    'claude:' + role: candidate for role in selection.ROLES
+                } if candidate['model'] not in state['rejected'] else {}):
             choice = selection.auto('claude', 'main')
             self.assertEqual(choice['model'], 'claude-opus-5-5')
             pending = selection.read()['pending']['claude-opus-5-5']
@@ -246,7 +248,7 @@ class IntegrationTest(BoardBase):
         board.track(self.root)
         board.set_setting('model_adoption', 'ask')
         candidate = {'model': 'claude-opus-5-5', 'effort': 'high', 'why': 'Measured'}
-        with patch.object(selection.bench, 'tiers_for', return_value={'step-up': candidate, 'routine': candidate}), \
+        with patch.object(selection.bench, 'role_pick', return_value=candidate), \
                 patch.object(selection.bench, 'token_price', side_effect=lambda m: (2, 8) if m == candidate['model'] else (1, 4)):
             old = selection.reconcile()['pending'][candidate['model']]['id']
             board.project_settings(self.root, {'model': 'claude-sonnet-5', 'effort': 'high'})

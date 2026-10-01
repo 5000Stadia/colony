@@ -389,8 +389,8 @@ def knee(key, model, entries):
 
 
 def tiers_for(key, entries=None):
-    """Judgement uses the smartest model; effort distinguishes routine from rare step-up work.
-    Chores retain the most Intelligence Index per dollar at each model's lowest effort.
+    """Judgement uses the smartest model; ordinary helpers retain R61's cheaper model rule.
+    Routine effort uses that model's knee; chores keep their existing value rule.
     """
     by = scored(key, entries)
     if not by:
@@ -400,9 +400,22 @@ def tiers_for(key, entries=None):
     effort = nearest_effort(key, top_model, 'max')
     out = {'step-up': dict(model=top_model, effort=effort, policy='role-effort-v1',
                           evidence=dict(best_index=best, target_effort='max'),
-                          why=f"the highest Intelligence Index here ({best:g}); {effort} for rare judgement"),
-           'routine': knee(key, top_model, by[top_model])}
+                          why=f"the highest Intelligence Index here ({best:g}); {effort} for rare judgement")}
     price = lambda e: e['cost']['value'] if e['cost'] else None
+    # Keep R61's reach reference independent of rare judgement's new max effort.
+    reference = next(e for e in by[top_model] if e['index'] >= best - NEAR)
+    bar = reference['index'] - REACH
+    fits = [(m, next((e for e in es if e['index'] >= bar
+                     and EFFORT_ORDER.get(e['effort'], 0) <= EFFORT_ORDER[ROUTINE_TOP]), None))
+            for m, es in by.items()]
+    fits = [(m, e) for m, e in fits if e and price(e) is not None]
+    if fits:
+        model, entry = min(fits, key=lambda pair: (price(pair[1]), EFFORT_ORDER.get(pair[1]['effort'], 0)))
+        pick = knee(key, model, by[model])
+        pick['why'] = (f"the cheapest model within {REACH} points of R61's step-up reference "
+                       f"({entry['index']:g} at ${price(entry):g} {cost_label(entry['cost'])}); " + pick['why'])
+        pick['evidence']['model_reach_reference'] = reference['index']
+        out['routine'] = pick
     value = [(es[0]['index'] / price(es[0]), m, es[0]) for m, es in by.items() if price(es[0])]
     if value:
         v, m, e = max(value, key=lambda x: x[0])
@@ -413,8 +426,14 @@ def tiers_for(key, entries=None):
 
 
 def role_pick(key, role, entries=None):
+    if role in ('main', 'runtime'):
+        by = scored(key, entries)
+        if not by:
+            return None
+        model = max(by, key=lambda m: max(e['index'] for e in by[m]))
+        return knee(key, model, by[model])
     tiers = tiers_for(key, entries)
-    chosen = tiers.get(role if role in TIERS else 'routine' if role in ('main', 'runtime') else 'step-up')
+    chosen = tiers.get(role if role in TIERS else 'step-up')
     if chosen and role in ('consultant', 'monitor'):
         target = 'max' if role == 'consultant' else 'xhigh'
         chosen = dict(chosen, effort=nearest_effort(key, chosen['model'], target), policy='role-effort-v1',
