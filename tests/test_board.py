@@ -2343,6 +2343,7 @@ class HelperTierTest(BoardBase):
         self.assertEqual(len(changed), 2)
         chores = (self.root / ".codex" / "agents" / "colony-chores.toml").read_text()
         self.assertIn('model = "gpt-5.6-luna"', chores)
+        self.assertIn('name = "colony-chores"', chores, "Codex 0.159 reads them as roles, which need a name")
         self.assertIn('model_reasoning_effort = "low"', chores)
         self.assertEqual(codex.write_helpers(self.root, tiers), [], "unchanged: nothing rewritten")
         launch = shlex.split(codex.command("plants", {}, root=self.root))

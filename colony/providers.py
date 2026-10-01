@@ -687,6 +687,9 @@ class Codex:
                     changed.append(path)
                 continue
             text = ("# written by colony from this project's tiers (colony models); edits here are replaced\n"
+                    # Codex 0.159 also finds these by itself in .codex/agents, as roles that must carry a name
+                    f"name = {json.dumps(self.helper_name(tier))}\n"
+                    f"description = {json.dumps(self.HELPER_BRIEF[tier])}\n"
                     f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
                     + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n')
             if not path.exists() or path.read_text() != text:
