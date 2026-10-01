@@ -300,6 +300,23 @@ class ConsoleConfigTest(unittest.TestCase):
 
 
 class PairingTest(unittest.TestCase):
+    def test_first_connection_offers_once_through_claude_monitor_without_creating_code(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.dict(os.environ, COLONY_BOARD_HOME=folder), patch.object(remote, 'Client') as client:
+            board.save_registry({'roots': [], 'settings': {'provider': 'claude'}})
+            root = Path(folder) / 'codex-project'
+            remote.offer_pairing(root)
+            remote.offer_pairing(root)
+            queued = (board.home() / 'to_monitor.jsonl').read_text().splitlines()
+            self.assertEqual(len(queued), 1)
+            self.assertIn('even if you run through Claude', json.loads(queued[0])['text'])
+            self.assertEqual(remote.pairing_choice(root), 'offered')
+            remote.pairing_choice(root, 'deferred')
+            remote.offer_pairing(root)
+            self.assertEqual((board.home() / 'to_monitor.jsonl').read_text().splitlines(), queued)
+            self.assertEqual(remote.pairing_choice(root), 'deferred')
+            client.assert_not_called()
+
     def test_pair_and_check_use_existing_project_socket_and_only_return_manual_code(self):
         with patch.object(remote, 'home_for', return_value=Path('/owned/project')), \
                 patch.object(remote, 'alive', return_value=True), patch.object(remote, 'Client') as client:

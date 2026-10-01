@@ -77,7 +77,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R65 Effort by role: smartest model at max for rare judgement (consultants, the step-up helper), xhigh for the monitor, the knee for main agents; routine keeps R61's cheapest model within reach, at its knee; any role still overridable
   Inactive provider seats also refresh their accepted effort; this leaves the running monitor and runtime provider unchanged.
 - [?] R66 Codex consoles reachable from the ChatGPT app, as Claude Code's are through Remote Control: on by default, set up by colony
-  Live and confirmed reachable in ChatGPT for colony-codex. Board pairing with code expiry and acceptance checks, plus first-time setup guidance, built for each project's separate identity; awaiting deployment and the person's check of the pairing flow.
+  Live and confirmed reachable in ChatGPT for colony-codex. First connection offers pairing through either monitor provider; Yes generates the fresh code with Codex → Add manually instructions, Not now remembers the choice. Board pairing includes expiry and acceptance checks; awaiting deployment and the person's check of the pairing flow.
 
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar

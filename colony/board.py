@@ -2130,12 +2130,15 @@ def codex_pairing_options(reg):
     rows = []
     for root in roots:
         ready = codex_remote.alive(codex_remote.home_for(root))
+        offered = codex_remote.pairing_choice(root) == 'offered'
         rows.append(f"<li><b>{e(root.name)}</b> "
+                    + ("<p>Would you like to pair this project with ChatGPT now? Open the app first; the code expires quickly.</p>" if offered else '')
                     + (f"<form method='post' action='/codex-pair'><input type='hidden' name='project' value='{e(str(root))}'>"
-                       "<button>Pair with ChatGPT</button></form>" if ready else
+                       + ("<button>Yes, pair now</button> <button formaction='/codex-pair/defer' class='quiet'>Not now</button>" if offered else
+                          "<button>Pair with ChatGPT</button>") + "</form>" if ready else
                        "<span class='muted'>Open its console with Remote Control on to pair it.</span>") + '</li>')
-    return ("<h3>Codex in ChatGPT</h3><p>Pair each project once with your ChatGPT app. "
-            "Sign in to the same account as Codex, then enter its fresh code in ChatGPT’s Remote pairing screen. "
+    return ("<h3 id='codex-pairing'>Codex in ChatGPT</h3><p>Pair each project once with your ChatGPT app. "
+            "Sign in to the same account as Codex. When you are ready, get a fresh code and open Codex → Add manually in the app. "
             "You can pair another device here later.</p><ul class='folders'>" + ''.join(rows) + '</ul>')
 
 
@@ -2143,13 +2146,15 @@ def codex_pairing_page(reg, root, result):
     from datetime import datetime, timezone
     expiry = datetime.fromtimestamp(result['expiresAt'], timezone.utc).strftime('%H:%M:%S UTC')
     body = (f"<header><h1>Pair {e(root.name)} with ChatGPT</h1></header><div class='card'>"
-            "<p>In the ChatGPT app, sign in to the same account as Codex. Open Remote’s pairing screen and enter:</p>"
+            "<ol class='steps'><li>In the ChatGPT app, sign in to the same account as Codex.</li>"
+            "<li>Open <b>Codex</b>, then choose <b>Add manually</b>.</li>"
+            "<li>Enter this code before it expires:</li></ol>"
             f"<p><strong id='pair-code' style='font-size:2em;letter-spacing:.12em'>{e(result['manualPairingCode'])}</strong></p>"
             "<p id='pair-state' role='status'>Enter this code in ChatGPT to pair.</p>"
             f"<p id='pair-expiry' data-expiry='{result['expiresAt']}'>Expires at {expiry}.</p>"
             f"<form id='pair-again' method='post' action='/codex-pair'><input id='pair-project' type='hidden' name='project' value='{e(str(root))}'>"
             "<button>Get a fresh code</button></form>"
-            "<p>Once paired, choose the machine host in Remote, then this project’s named conversation.</p>"
+            "<p>Once paired, open this project’s named conversation in the app’s Codex section.</p>"
             "<p><a href='/settings'>Back to Settings</a></p></div>" + r"""
 <script>(() => {
   const code = document.getElementById('pair-code'), state = document.getElementById('pair-state');
@@ -2175,7 +2180,7 @@ def codex_pairing_page(reg, root, result):
       const result = await response.json();
       if (finished) return;
       if (result.claimed) {
-        finish('Paired with ChatGPT. Open this project’s conversation in Remote.');
+        finish('Paired with ChatGPT. Open this project’s conversation in the app’s Codex section.');
         document.getElementById('pair-again').hidden = true;
         return;
       }
@@ -2521,17 +2526,26 @@ class Handler(BaseHTTPRequestHandler):
             form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
-        if path in ('/codex-pair', '/codex-pair/status'):
+        if path in ('/codex-pair', '/codex-pair/status', '/codex-pair/defer'):
             from . import codex_remote
             root = next((r for r in projects(reg) if str(r) == form.get('project')), None)
             if root is None or not root.exists() or providers.of(root) is not providers.get('codex'):
                 return self._send(404, b'Codex project not found on this board')
+            if path.endswith('/defer'):
+                codex_remote.pairing_choice(root, 'deferred')
+                self.send_response(303)
+                self.send_header('Location', '/settings#codex-pairing')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             try:
                 result = codex_remote.pair(root, form.get('code', '') if path.endswith('/status') else None)
             except codex_remote.RemoteError as err:
                 return self._send(409, shell(reg, -2, f"<h1>Pair with ChatGPT</h1><p>{e(str(err))}</p>"
                                             "<p><a href='/settings'>Back to Settings</a></p>").encode())
             if path.endswith('/status'):
+                if result.get('claimed'):
+                    codex_remote.pairing_choice(root, 'paired')
                 body = json.dumps(result).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -2539,6 +2553,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
                 return self.wfile.write(body)
+            codex_remote.pairing_choice(root, 'accepted')
             return self._send(200, codex_pairing_page(reg, root, result).encode())
         if path == '/model-decision':
             from . import selection

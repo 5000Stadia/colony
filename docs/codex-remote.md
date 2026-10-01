@@ -5,14 +5,19 @@ by default. An existing conversation moves when its console next closes idle and
 reopens; an active writer defers the move. The console and ChatGPT then attach to
 the same thread in a project-owned app server.
 
-First open the project's console with Remote Control on. On the board, go to
-**Settings → Agent programs → Pair with ChatGPT** for that project. Enter the
-fresh code in ChatGPT's Remote pairing screen. The board shows the expiry and
+First open the project's console with Remote Control on. That first connection
+queues a pairing offer for the monitor, even if the monitor runs through Claude.
+On the board, **Settings → Agent programs → Codex in ChatGPT** asks whether you
+want to pair now. Open the app first, then choose **Yes, pair now** to generate
+the short-lived code. **Not now** remembers your choice; **Pair with ChatGPT**
+stays available there for later. Reconnecting does not repeat the offer.
+In the ChatGPT app, open **Codex → Add manually** and enter the fresh code.
+The board shows the expiry and
 checks whether the code has been accepted; request a new code if it expires.
 Pairing uses the running project's socket without restarting or interrupting it.
 The console works even before pairing. First-time setup includes this step.
 
-In ChatGPT, open **Remote**, select the machine host, then the conversation named
+In ChatGPT, open **Codex**, select the machine host, then the conversation named
 after the project (first rollout: **colony-codex** on **Box**). Sign in to the same
 ChatGPT account used by Codex. Codex fixes host names to the OS hostname; project
 names belong to the conversations. Account/workspace access to Remote is also

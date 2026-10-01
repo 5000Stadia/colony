@@ -1250,11 +1250,15 @@ class CodexPairingTest(BoardBase):
         from unittest.mock import patch
         from colony import codex_remote
         board.track(self.root)
-        board.set_setting('provider', 'codex')
+        board.set_setting('provider', 'claude')
+        board.project_settings(self.root, {'provider': 'codex'})
+        codex_remote.offer_pairing(self.root)
         with patch.object(codex_remote, 'alive', return_value=True), \
                 patch.object(codex_remote, 'pair') as pair:
             options = board.codex_pairing_options(board.registry())
-            self.assertIn('Pair with ChatGPT', options)
+            self.assertIn('Would you like to pair', options)
+            self.assertIn('Yes, pair now', options)
+            self.assertIn('Not now', options)
             pair.assert_not_called()
             pair.return_value = dict(manualPairingCode='TEST-CODE', expiresAt=int(time.time()) + 180)
             httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
@@ -1266,17 +1270,25 @@ class CodexPairingTest(BoardBase):
                 return urllib.request.urlopen(urllib.request.Request(base + path, data=data,
                     headers={'Origin': origin or base}))
             try:
+                post('/codex-pair/defer').close()
+                self.assertEqual(codex_remote.pairing_choice(self.root), 'deferred')
+                self.assertIn('Pair with ChatGPT', board.codex_pairing_options(board.registry()))
+                self.assertNotIn('Would you like to pair', board.codex_pairing_options(board.registry()))
+                pair.assert_not_called()
                 response = post('/codex-pair')
                 page = response.read().decode()
                 self.assertEqual(response.headers['Cache-Control'], 'no-store')
                 self.assertIn('TEST-CODE', page)
                 self.assertIn('Expires at', page)
+                self.assertIn('Add manually', page)
+                self.assertEqual(codex_remote.pairing_choice(self.root), 'accepted')
                 pair.assert_called_once_with(self.root, None)
                 self.assertNotIn('TEST-CODE', board.codex_pairing_options(board.registry()))
                 pair.return_value = {'claimed': True}
                 checked = post('/codex-pair/status', code='TEST-CODE')
                 self.assertEqual(checked.headers['Content-Type'], 'application/json')
                 self.assertEqual(json.load(checked), {'claimed': True})
+                self.assertEqual(codex_remote.pairing_choice(self.root), 'paired')
                 pair.assert_called_with(self.root, 'TEST-CODE')
                 pair.reset_mock()
                 for kwargs, expected in [({'project': '/not-registered'}, 404),
@@ -1285,7 +1297,7 @@ class CodexPairingTest(BoardBase):
                         post('/codex-pair', **kwargs)
                     self.assertEqual(caught.exception.code, expected)
                 pair.assert_not_called()
-                board.set_setting('provider', 'claude')
+                board.project_settings(self.root, {'provider': 'claude'})
                 with self.assertRaises(urllib.error.HTTPError) as caught:
                     post('/codex-pair')
                 self.assertEqual(caught.exception.code, 404)

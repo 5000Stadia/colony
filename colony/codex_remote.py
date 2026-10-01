@@ -119,6 +119,33 @@ def pair(root, manual_code=None):
         raise RemoteError('Could not reach Codex pairing. Check its sign-in and Remote Control connection, then try again.') from None
 
 
+def pairing_choice(root, choice=None):
+    """Remember the offer/answer, never its short-lived code."""
+    path = home_for(root) / 'colony-pairing.json'
+    if choice is not None:
+        atomic_json(path, {'choice': choice, 'at': time.time()})
+    return read_json(path).get('choice')
+
+
+def offer_pairing(root):
+    """First remote connection asks through the monitor, whatever runs it.
+
+    launch() holds the project lock. A reconnect must not repeat the offer or
+    create a code while the person is still deciding.
+    """
+    from . import monitor
+    if pairing_choice(root) is not None:
+        return
+    monitor.queue(f'First Codex connection for {Path(root).name}. Offer ChatGPT pairing now, even if you run '
+                  'through Claude. Ask whether the person wants to pair; do not generate a code in advance. '
+                  'Send them to Settings → Agent programs → Codex in ChatGPT (/settings#codex-pairing), '
+                  'where Yes, pair now generates the code only when they are ready, or Not now defers it. '
+                  'Then explain: in the app, open Codex → Add manually and enter the fresh code before it expires. '
+                  f'Before asking, check {home_for(root) / "colony-pairing.json"}; skip this offer if its choice '
+                  'is no longer offered. Never put a pairing code in a note or message.')
+    pairing_choice(root, 'offered')
+
+
 def environment(root, home, source):
     from . import board, console
     env = {k: v for k, v in os.environ.items() if not k.startswith('COLONY_')}
@@ -378,6 +405,7 @@ def launch(root, settings, resume=None):
             raise RemoteError('ChatGPT remote enrollment is unavailable; the conversation remains local')
         mode = 'connected' if remote_state['status'] == 'connected' else 'connecting'
         report(home, root, mode, server=remote_state.get('serverName'), thread=resume)
+        offer_pairing(root)
         args = ['codex', '--remote', 'unix://' + str(socket_for(home)), '--no-alt-screen',
                 *flags(console_config(config)), 'resume', resume]
         os.execvpe(args[0], args, environment(root, home, source))
