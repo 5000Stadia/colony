@@ -37,6 +37,10 @@ Publish anything.
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        from unittest.mock import patch
+        isolated = patch.dict(os.environ, COLONY_BOARD_HOME=str(Path(self.tmp.name) / 'board'))
+        isolated.start()
+        self.addCleanup(isolated.stop)
         self.dir = Path(self.tmp.name) / "proj"
         env = dict(os.environ, PYTHONPATH=str(ROOT))
         subprocess.run([sys.executable, "-m", "colony", "init", str(self.dir)], env=env, check=True, capture_output=True)

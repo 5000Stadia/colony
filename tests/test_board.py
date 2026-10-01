@@ -149,7 +149,7 @@ class BoardTest(BoardBase):
         self.assertIn("keep it simple", self.cli("notes", "--deliver", "--session").stdout,
                       "delivered but not acted on: repeated at the start of the next session")
         self.cli("noted", n["id"], "kept it to one screen")
-        self.assertEqual(self.cli("notes", "--deliver", "--session").stdout, "")
+        self.assertNotIn("keep it simple", self.cli("notes", "--deliver", "--session").stdout)
         self.assertEqual(board.notes(self.root)[0]["reply"], "kept it to one screen")
 
     def test_session_delivery_keeps_fresh_notes_and_mail_out_of_the_backlog(self):
@@ -1311,7 +1311,7 @@ class SettingsTest(BoardBase):
     def test_settings_shape_new_consoles_and_the_monitor_can_read_and_change_them(self):
         saved, console.COMMAND = console.COMMAND, None
         try:
-            self.assertEqual(console.command("plants"), "claude --remote-control plants", "remote is on by default")
+            self.assertEqual(console.command("plants"), "claude --remote-control plants --model claude-fable-5-1 --effort medium", "Auto resolves both model and effort")
             run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
             self.assertRegex(run("settings").stdout, r"remote +on")
@@ -1379,20 +1379,17 @@ class ProjectSettingsTest(BoardBase):
         with patch.object(codex, "own_defaults", return_value={"model": None, "effort": None}):
             page = board.provider_fields("codex", "", "", "global")
             self.assertNotIn("Suggested for a new Codex project", page, "no fixed suggestion: the cards frame it")
-            self.assertIn("name='model' list='models' value=''", page)
-            self.assertIn("name='effort' list='efforts' value=''", page)
+            self.assertIn("name='model_pick'", page)
+            self.assertIn("value='auto' selected", page)
             data = json.loads(html.unescape(re.search("data-providers='([^']*)'", page)[1]))
-            self.assertIn(["ultra", "Ultra — delegates to subagents"], data["codex"]["efforts"])
+            opts = dict(data['codex'])
+            self.assertIn('gpt-6-astra:ultra', opts)
             for model in ("gpt-5.6-luna", "gpt-6-luna", "gpt-5.5"):
-                options = board.provider_fields("codex", model, "", "global").split("<datalist id='efforts'>")[1].split("</datalist>")[0]
-                self.assertNotIn("ultra", options)
-                if model == "gpt-5.5":
-                    self.assertNotIn("max", options)
+                self.assertNotIn(model + ':ultra', opts)
+            self.assertNotIn('gpt-5.5:max', opts)
             with patch.object(codex, "own_defaults", return_value={"model": "gpt-6-luna", "effort": "high"}):
                 page = board.provider_fields("codex", "", "", "the provider's default")
-                options = page.split("<datalist id='efforts'>")[1].split("</datalist>")[0]
-                self.assertNotIn("ultra", options, "blank model uses the configured model's efforts")
-                self.assertIn("name='model' list='models' value=''", page)
+                self.assertIn("value='auto' selected", page)
             board.set_setting("provider", "codex")
             page = board.add_project_page(board.registry())
             self.assertNotIn("Suggested for a new Codex project", page, "no fixed suggestion")
@@ -1403,9 +1400,9 @@ class ProjectSettingsTest(BoardBase):
         board.track(self.root)
         saved, console.COMMAND = console.COMMAND, None
         try:
-            self.assertEqual(console.command("plants", self.root), "claude --remote-control plants")
+            self.assertEqual(console.command("plants", self.root), "claude --remote-control plants --model claude-fable-5-1 --effort medium")
             board.project_settings(self.root, {"permissions": "edits", "remote": "off", "effort": "high"})
-            self.assertEqual(console.command("plants", self.root), "claude --permission-mode acceptEdits --effort high")
+            self.assertEqual(console.command("plants", self.root), "claude --permission-mode acceptEdits --model claude-fable-5-1 --effort medium", "Auto selects the whole pair")
             board.set_setting("model", "claude-opus-5-5")
             self.assertIn("--model claude-opus-5-5", console.command("plants", self.root), "unset here: the global one")
             board.project_settings(self.root, {"permissions": ""})
@@ -1435,18 +1432,18 @@ class ProjectSettingsTest(BoardBase):
             port = httpd.server_address[1]
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/add?for=project&dir={self.tmp.name}").read().decode()
             self.assertIn(">Claude Code</option>", page)
-            self.assertIn("<option value='claude-opus-5-5'>Opus 5.5</option>", page, "exact models are suggested, by name")
+            self.assertIn("<option value='claude-opus-5-5:medium'>Opus 5.5 at medium</option>", page, "exact models are suggested, by name")
             self.assertIn("<option value='claude' selected>Claude Code</option>", page, "a new project starts filled in")
             self.assertNotIn(">global<", page)
             for name, provider in (("seeds", "claude"), ("soil", "other")):
-                data = urllib.parse.urlencode({"within": self.tmp.name, "name": name, "provider": provider, "model": "big"}).encode()
+                data = urllib.parse.urlencode({"within": self.tmp.name, "name": name, "provider": provider, "model_pick": "claude-opus-5-5:medium" if provider == "claude" else "big-1:deep"}).encode()
                 urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/new", data=data))
             seeds, soil = Path(self.tmp.name) / "seeds", Path(self.tmp.name) / "soil"
             console.COMMAND = None                         # only to read the command each would start with
             self.assertIn("This project is part of a colony", (seeds / "CLAUDE.md").read_text())
-            self.assertEqual(console.command("seeds", seeds), "claude --remote-control seeds --model big")
+            self.assertEqual(console.command("seeds", seeds), "claude --remote-control seeds --model claude-opus-5-5 --effort medium")
             self.assertTrue((soil / "AGENTS.md").exists() and not (soil / "CLAUDE.md").exists(), "wired by its own provider")
-            self.assertEqual(console.command("soil", soil), "other --model big")
+            self.assertEqual(console.command("soil", soil), "other --model big-1")
             with self.assertRaises(KeyError):
                 board.project_settings(seeds, {"provider": "nobody"})
         finally:
@@ -2276,20 +2273,20 @@ class ConsultTest(BoardBase):
         board.set_setting("consultants", "")
         from colony import bench
         saved = bench.tiers_for, bench.best_effort
-        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": f"{k}-top", "effort": "high", "why": ""}}
+        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5" if k == "claude" else "gpt-6-astra", "effort": "high", "why": ""}}
         bench.best_effort = lambda k, m, entries=None: "max"
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         try:
             page = board.settings_page(board.registry())
-            self.assertIn("Auto: claude-top at max", page)
+            self.assertIn("Auto: claude-opus-5-5 at max", page)
             self.assertIn("Auto picks the step-up model (the highest Intelligence Index here), at its best effort", page)
             post = lambda d: urllib.request.urlopen(urllib.request.Request(
                 f"http://127.0.0.1:{port}/consulting", data=urllib.parse.urlencode(d).encode()))
-            post({"consult": "on", "consultant_claude": "claude-sonnet-5-5:medium", "consultant_codex": "auto"})
-            self.assertEqual(board.registry()["settings"]["consultants"], {"claude": {"model": "claude-sonnet-5-5", "effort": "medium"}})
-            self.assertEqual(self.consult.pick("claude")[:2], ("claude-sonnet-5-5", "medium"))
+            post({"consult": "on", "consultant_claude": "claude-sonnet-5:medium", "consultant_codex": "auto"})
+            self.assertEqual(board.registry()["settings"]["consultants"], {"claude": {"model": "claude-sonnet-5", "effort": "medium"}})
+            self.assertEqual(self.consult.pick("claude")[:2], ("claude-sonnet-5", "medium"))
             post({"consultant_claude": "auto"})                  # unticked: off, and back to the cards' pick
             s = board.registry()["settings"]
             self.assertEqual((s["consult"], s["consultants"]), (False, {}))
@@ -2310,13 +2307,13 @@ class ConsultTest(BoardBase):
         from colony import bench
         board.set_setting("consultants", "")
         saved = bench.tiers_for, bench.best_effort
-        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": f"{k}-top", "effort": "high", "why": ""}}
+        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5" if k == "claude" else "gpt-6-astra", "effort": "high", "why": ""}}
         bench.best_effort = lambda k, m, entries=None: "max"
         try:
             who, _ = self.consult.consultants()
         finally:
             bench.tiers_for, bench.best_effort = saved
-        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-top", "max"), ("codex", "codex-top", "max")])
+        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-opus-5-5", "max"), ("codex", "gpt-6-astra", "max")])
         self.assertIn("step-up model", who[0][3])
 
 
@@ -2567,8 +2564,8 @@ class MonitorUpkeepTest(BoardBase):
                 cmd = console.command("monitor", None, folder=monitor.home())
                 self.assertIn("--model claude-opus-5-5 --effort high --autocompact 150k", cmd)
                 self.assertIn("Auto: claude-opus-5-5 at high", board.settings_page(board.registry()))
-                board.set_setting("monitor_model", "claude-sonnet-5-5:max")
-                self.assertIn("--model claude-sonnet-5-5 --effort max", console.command("monitor", None, folder=monitor.home()))
+                board.set_setting("monitor_model", "claude-sonnet-5:max")
+                self.assertIn("--model claude-sonnet-5 --effort max", console.command("monitor", None, folder=monitor.home()))
                 board.set_setting("monitor_model", "auto")
                 self.assertEqual(board.registry()["settings"]["monitor_model"], {})
         finally:
@@ -2603,9 +2600,11 @@ class FollowsNewModelsTest(BoardBase):
         from colony import bench, project
         from unittest.mock import patch
         self.assertIsNone(project.DEFAULTS["model"])
-        self.assertEqual(project.strongest(), "opus", "no data: Claude Code's own alias for its newest Opus")
-        with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-new-6", "effort": "high"}}):
-            self.assertEqual(project.strongest(), "claude-new-6")
+        self.assertEqual(project.strongest(), "claude-fable-5-1", "no data: a fixed catalog model, never an alias")
+        with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5", "effort": "high"}}):
+            from colony import selection
+            selection.reconcile()
+            self.assertEqual(project.strongest(), "claude-opus-5-5")
         self.assertGreater(bench.days_since_fetch(), 7, "never fetched")
         (board.home() / "bench").mkdir(parents=True, exist_ok=True)
         (board.home() / "bench" / "fetched.json").write_text(json.dumps({"at": board.now()}))

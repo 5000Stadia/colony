@@ -316,15 +316,10 @@ def fresh_flag():
 def choice():
     """The monitor's model and effort: the person's pick in Settings, else its program's step-up tier (it settles
     questions for the person when it holds the helm: judgement worth the strongest pick, kept affordable by a
-    small context). Returns (model, effort, why); (None, None, ...) leaves it to the program."""
-    from . import bench
-    mine = board.registry()["settings"].get("monitor_model") or {}
-    if mine.get("model"):
-        return mine["model"], mine.get("effort"), "chosen in Settings"
-    up = bench.tiers_for(providers.key(provider())).get("step-up")
-    if up:
-        return up["model"], up["effort"], "the step-up tier: its judgement settles questions for you at the helm"
-    return None, None, "no benchmark data: its program's default"
+    small context). Returns a concrete (model, effort, why)."""
+    from . import selection
+    value = selection.monitor()
+    return value['model'], value['effort'], value['why']
 
 
 def unseen(root):
@@ -647,6 +642,8 @@ class Watcher:
         bench.lineup_changed()
         if bench.aa_key() and (bench.pending() or bench.days_since_fetch() >= 7):
             bench.refresh()     # one request: while a model waits for its data, and weekly as scores and prices move
+        from . import selection
+        selection.reconcile()
         for p in board.projects():
             if p.exists():
                 bench.write_helpers(p)                  # the tiers follow the data: each project's helpers with them
@@ -655,7 +652,7 @@ class Watcher:
             return
         names = ", ".join(bench.name(m) for m in ready)
         queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page, "
-              "and each project's helper tiers already follow it.")
+              "Model recommendations and any adoption questions are on the board.")
 
     def usage(self):
         """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down

@@ -37,24 +37,16 @@ def records(root):
 
 def pick(key):
     """The consultant for one family: the person's own choice in Settings if they made one, else auto()."""
-    chosen = (board.registry()["settings"].get("consultants") or {}).get(key)
-    if chosen:
-        return chosen["model"], chosen.get("effort") or "high", "chosen in Settings"
-    return auto(key)
+    from . import selection
+    value = selection.consultant(key)
+    return value['model'], value['effort'], value['why']
 
 
 def auto(key):
-    """The family's step-up model at its best-scoring effort: consultations are rare and short, and are where a
-    touch more buys the most. Else the family's first listed model. Returns (model, effort, why)."""
-    from . import bench
-    up = bench.tiers_for(key).get("step-up")
-    if up:
-        effort = bench.best_effort(key, up["model"]) or up["effort"]
-        return up["model"], effort, f"the step-up model (the highest Intelligence Index here), at its best effort"
-    p = providers.get(key, strict=True)
-    model = providers.available(p)[0][0]
-    efforts = providers.efforts_of(p, model)
-    return model, "high" if "high" in efforts else efforts[-1], "no benchmark data: the first model its program lists"
+    """The family's accepted Auto consultant, including any pending adoption hold."""
+    from . import selection
+    value = selection.consultant(key, automatic=True)
+    return value['model'], value['effort'], value['why']
 
 
 def consultants():

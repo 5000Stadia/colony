@@ -76,7 +76,7 @@ def token_price(model):
         return None
     for e in data:
         pr = e.get("pricing") or {}
-        if match(model, e) is not None and pr.get("price_1m_input_tokens") and pr.get("price_1m_output_tokens"):
+        if match(model, e) is not None and pr.get("price_1m_input_tokens") is not None and pr.get("price_1m_output_tokens") is not None:
             return (pr["price_1m_input_tokens"], pr["price_1m_output_tokens"])
     return None
 
@@ -361,16 +361,8 @@ def best_effort(key, model, entries=None):
 
 def effective(root):
     """The tiers a project's helpers run at: its own choice for a tier if it made one, else the colony default."""
-    from . import providers
-    key = providers.key(providers.of(root))
-    auto, own = tiers_for(key), plan(root)
-    out = {}
-    for t in TIERS:
-        if t in own:
-            out[t] = dict(own[t], own=True)
-        elif t in auto:
-            out[t] = dict(auto[t], own=False)
-    return out
+    from . import selection
+    return {t: selection.helper(root, t) for t in TIERS}
 
 
 def write_helpers(root):

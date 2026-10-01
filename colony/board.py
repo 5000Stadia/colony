@@ -147,7 +147,8 @@ def registry():
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
-                    "safe_pause": 98, "auto_update": True, "monitor_model": {}}
+                    "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
+                    "runtime_model": {}, "helper_models": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -163,9 +164,12 @@ SETTING_HELP = {
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the monitor session runs with the board",
-    "model": "model for new project sessions (blank: the provider's default)",
-    "effort": "effort for new project sessions (blank: the provider's default)",
+    "model": "main-agent model pin for this provider (blank: colony Auto)",
+    "effort": "effort for a main-agent model pin (Auto chooses both model and effort)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
+    "model_adoption": "when a new model becomes a recommendation: automatic or ask (one decision per model)",
+    "runtime_model": "the unattended runtime model, as MODEL:EFFORT (auto: colony chooses)",
+    "helper_models": "provider-specific helper pins; edit the colony helper tiers in Settings",
     "monitor_model": "the monitor's model, as MODEL:EFFORT (blank: its program's step-up tier)",
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
@@ -174,8 +178,15 @@ SETTING_HELP = {
 
 
 def set_setting(key, value):
+    if key in ('model', 'effort', 'provider', 'monitor_model', 'runtime_model', 'consultants'):
+        from . import selection
+        selection.migrate()
     reg = registry()
-    if key == "new-folder":
+    if key == "model_adoption":
+        if value not in ("automatic", "ask"):
+            raise KeyError(key)
+        reg["settings"][key] = value
+    elif key == "new-folder":
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
@@ -195,7 +206,7 @@ def set_setting(key, value):
             if not 0 < n <= 100:
                 raise KeyError(key)
             reg["settings"][key] = int(n) if n.is_integer() else n
-    elif key == "monitor_model":
+    elif key in ("monitor_model", "runtime_model"):
         model, _, effort = str(value).strip().rpartition(":") if ":" in str(value) else (str(value).strip(), "", "")
         reg["settings"][key] = {"model": model, "effort": effort or None} if model and model != "auto" else {}
     elif key == "consultants":
@@ -216,7 +227,15 @@ def set_setting(key, value):
         from .providers import PROVIDERS
         if value not in PROVIDERS:
             raise KeyError(key)
-        reg["settings"][key] = value
+        previous = reg['settings']['provider']
+        saved = reg['settings'].setdefault('main_models', {})
+        saved[previous] = {k: reg['settings'].get(k) for k in ('model', 'effort')}
+        monitors = reg['settings'].setdefault('monitor_models', {})
+        monitors[previous] = reg['settings'].get('monitor_model') or {}
+        reg['settings']['monitor_model'] = monitors.get(value) or {}
+        reg['settings'][key] = value
+        for field in ('model', 'effort'):
+            reg['settings'][field] = (saved.get(value) or {}).get(field) or ''
     elif key == "providers":
         from .providers import PROVIDERS
         on = [k.strip() for k in str(value).split(",") if k.strip()]
@@ -224,7 +243,8 @@ def set_setting(key, value):
             raise KeyError(key)                  # at least one, and only ones colony knows
         reg["settings"][key] = None if set(on) == set(PROVIDERS) else on
         if reg["settings"]["provider"] not in on:
-            reg["settings"]["provider"] = on[0]  # the default is always one that's on
+            save_registry(reg)
+            return set_setting('provider', on[0])  # retain each provider's own pins
     else:
         raise KeyError(key)
     save_registry(reg)
@@ -241,6 +261,9 @@ def project_settings(root, changes=None):
     if "usage_pause" in own:                           # its name before "safe pause"
         own.setdefault("safe_pause", own.pop("usage_pause"))
     if changes:
+        from . import selection
+        selection.migrate(root)
+        own = json.loads(path.read_text())
         for k, v in changes.items():
             if k not in PROJECT_KEYS:
                 raise KeyError(k)
@@ -1280,32 +1303,12 @@ def default_label(value, fallback="Claude Code picks"):
 PROVIDER_FIELDS = """
 (() => {
   const box = document.currentScript.previousElementSibling, data = JSON.parse(box.dataset.providers);
-  const provider = box.querySelector('[name=provider]'), model = box.querySelector('[name=model]');
-  const effort = box.querySelector('[name=effort]'), lists = box.querySelectorAll('datalist');
-  const id = window.colonyProviderFields = (window.colonyProviderFields || 0) + 1;
-  lists.forEach((list, i) => list.id = 'provider-options-' + id + '-' + i);
-  model.setAttribute('list', lists[0].id); effort.setAttribute('list', lists[1].id);
-  function options(list, values) {
-    list.replaceChildren(...values.map(v => {
-      const option = document.createElement('option');
-      option.value = Array.isArray(v) ? v[0] : v;
-      option.textContent = Array.isArray(v) ? v[1] : '';
-      return option;
+  const provider = box.querySelector('[name=provider]'), pick = box.querySelector('[name=model_pick]');
+  provider.addEventListener('change', () => {
+    pick.replaceChildren(...data[provider.value].map(v => {
+      const option = document.createElement('option'); option.value = v[0]; option.textContent = v[1]; return option;
     }));
-  }
-  function update() {
-    const p = data[provider.value], effective = model.value.trim() || p.model;
-    options(lists[0], p.models);
-    options(lists[1], p.efforts_for[effective] || p.efforts);
-    model.placeholder = p.model_placeholder; effort.placeholder = p.effort_placeholder;
-    const hint = box.querySelector('[data-recommendation]');
-    hint.textContent = p.recommendation; hint.hidden = !p.recommendation;
-  }
-  const info = box.querySelector('a.modelinfo');
-  const link = () => { const m = model.value.trim() || data[provider.value].model; if (info) info.href = '/models' + (m ? '#' + m : ''); };
-  provider.addEventListener('change', link); model.addEventListener('input', link); link();
-  provider.addEventListener('change', update); model.addEventListener('input', update);
-  update();
+  });
 })();
 """
 
@@ -1316,48 +1319,38 @@ def bench_framing(key):
 
 
 def provider_fields(cur, model, effort, blank):
-    """Provider, model and effort: the provider from those colony knows, the model and effort free to type,
-    with the provider's own suggestions. A project's form (blank="global") starts filled with what the project
-    will use; the global form leaves them blank to mean the provider's own, and says what that is."""
-    from .providers import PROVIDERS, get, installed, usable, available, efforts_of
-    g = registry()["settings"]
-    cur = cur or g["provider"]
-    p = get(cur)
-    own = p.own_defaults()
-    in_project = blank == "global"
-    if in_project:              # a project's form starts filled with what it will actually use
-        cur = cur or g["provider"]
-        model = model or g["model"] or own["model"] or ""
-        effort = effort or g["effort"] or own["effort"] or ""
-        dm = de = f"{p.label} picks"
-    else:                       # the global form: blank leaves it to the provider, and says what that is
-        dm = default_label(p.model_name(own["model"]) if own["model"] else None, f"{p.label} picks")
-        de = default_label(own["effort"], f"{p.label} picks")
+    """An explicit Auto pair: saving unrelated settings cannot create a model pin."""
+    from . import providers as pv, selection
+    cur = cur or registry()['settings']['provider']
     data = {}
-    for key, provider in PROVIDERS.items():
-        defaults = provider.own_defaults()
-        offered = available(provider) if usable(provider) else []      # only what this machine can run
-        data[key] = {"models": offered, "efforts": provider.efforts,
-                     "efforts_for": {m: efforts_of(provider, m) for m, _ in offered},
-                     "model": (g["model"] if in_project else "") or defaults["model"] or "",
-                     "model_placeholder": default_label(provider.model_name(defaults["model"]), f"{provider.label} picks"),
-                     "effort_placeholder": default_label(defaults["effort"], f"{provider.label} picks"),
-                     "recommendation": bench_framing(key) if usable(provider) else ""}
-    effective = model or data[cur]["model"]
-    effort_options = data[cur]["efforts_for"].get(effective) or (efforts_of(p, effective) if effective else p.efforts)
-    hint = data[cur]["recommendation"]
+    for family, provider in pv.PROVIDERS.items():
+        if pv.usable(provider):
+            settings = registry()['settings']
+            pin = settings if family == settings['provider'] else (settings.get('main_models') or {}).get(family)
+            chosen = selection.resolve(family, 'main', pin if blank == 'global' else None)
+            label = f"Auto: {chosen['model']}" + (f" at {chosen['effort']}" if chosen['effort'] else '')
+        else:
+            label = 'Auto'
+        opts = [('auto', label)]
+        for mid, name in pv.available(provider):
+            opts += [(mid + ':' + (x or ''), name + (f' at {x}' if x else ''))
+                     for x in pv.efforts_of(provider, mid) or [None]]
+        data[family] = opts
+    selected = model + ':' + (effort or '') if model else 'auto'
+    if model and not effort:
+        chosen = selection.concrete(cur, {'model': model})
+        if chosen:
+            selected = model + ':' + (chosen['effort'] or '')
+    if model and selected not in dict(data[cur]):
+        data[cur].append((selected, f'{model} at {effort or "unspecified effort"} (current pick)'))
     return (f"<div class='provider-fields' data-providers='{e(json.dumps(data))}'>"
-            f"<label>Provider <select name='provider'>"
-            + "".join(f"<option value='{k}'{' selected' if cur == k else ''}{'' if usable(v) else ' disabled'}>"
-                      f"{e(v.label)}{'' if usable(v) else ' (not installed)' if not installed(v) else ' (off in Settings)'}</option>"
-                      for k, v in PROVIDERS.items())
-            + "</select></label>"
-            f"<label>Model <input name='model' list='models' value='{e(model)}' placeholder='{e(dm)}'>"
-            f"<a class='modelinfo' href='/models{'#' + e(model) if model else ''}' target='_blank' "
-            f"title='What the benchmarks say about this model, at each effort level'>ⓘ benchmarks</a></label>"
-            f"<label>Effort <input name='effort' list='efforts' value='{e(effort)}' placeholder='{e(de)}'></label>"
-            + suggestions("models", data[cur]["models"]) + suggestions("efforts", effort_options)
-            + f"<p class='muted' data-recommendation{'' if hint else ' hidden'}>{e(hint)}</p></div>"
+            "<label>Provider <select name='provider'>" + ''.join(
+                f"<option value='{e(k)}'{' selected' if k == cur else ''}{'' if pv.usable(p) else ' disabled'}>{e(p.label)}{'' if pv.usable(p) else ' (not installed)' if not pv.installed(p) else ' (off in Settings)'}</option>"
+                for k, p in pv.PROVIDERS.items()) + '</select></label>'
+            + "<label>Model and effort <select name='model_pick'>" + ''.join(
+                f"<option value='{e(v)}'{' selected' if v == selected else ''}>{e(label)}</option>" for v, label in data[cur])
+            + "</select> <a href='/models'>ⓘ benchmarks</a></label>"
+            + f"<p class='muted'>{e(bench_framing(cur))}</p></div>"
             + f"<script>{PROVIDER_FIELDS}</script>")
 
 
@@ -1366,7 +1359,9 @@ def tier_fields(root):
     from . import bench, providers as pv
     p = pv.of(root)
     key, auto, own = pv.key(p), None, bench.plan(root)
-    auto = bench.tiers_for(key)
+    from . import selection
+    global_pins = registry()['settings'].get('helper_models') or {}
+    auto = {t: selection.resolve(key, t, global_pins.get(key + ':' + t)) for t in bench.TIERS}
     out = []
     for t in bench.TIERS:
         a, mine = auto.get(t), own.get(t)
@@ -1886,10 +1881,98 @@ function keepCurrent(el, url, after) {
 """
 
 
+def role_field(family, role, field, mine=None):
+    from . import providers as pv, selection
+    value = selection.auto(family, role)
+    desc = lambda v: v['model'] + (f" at {v['effort']}" if v.get('effort') else '')
+    options = [("auto", 'Auto: ' + desc(value))]
+    for mid, label in pv.available(pv.get(family)):
+        options.extend((mid + ':' + (effort or ''), label + (f' at {effort}' if effort else ''))
+                       for effort in pv.efforts_of(pv.get(family), mid) or [None])
+    selected = mine['model'] + ':' + (mine.get('effort') or '') if mine else 'auto'
+    return f"<label>{e(family)} {e(role)} <select name='{e(field)}'>" + ''.join(
+        f"<option value='{e(v)}'{' selected' if v == selected else ''}>{e(label)}</option>" for v, label in options) + '</select></label>'
+
+
+def global_role_fields():
+    from . import providers as pv, bench
+    settings = registry()['settings']
+    helpers = settings.get('helper_models') or {}
+    rows = ''.join(role_field(family, role, 'helper_' + family + ':' + role, helpers.get(family + ':' + role))
+                   for family, provider in pv.PROVIDERS.items() if pv.usable(provider) for role in bench.TIERS)
+    # PROVIDER: the unattended runtime currently supports Claude Code only.
+    runtime = role_field('claude', 'runtime', 'runtime_model', settings.get('runtime_model')) if pv.usable(pv.get('claude')) else ''
+    return ("<h2>Colony helper tiers</h2><form class='card options' method='post' action='/role-models'>" + rows
+            + "<button>Save</button></form>" + ("<h2>Unattended runtime</h2><form class='card options' method='post' action='/runtime-model'>"
+                                               + runtime + "<button>Save</button></form>" if runtime else ''))
+
+
+def model_changes(pending_only=False):
+    """Colony decisions are deliberately outside project questions and monitor wake-ups."""
+    from . import selection
+    state = selection.read()
+    if state.get('recovery') or (not state['accepted'] and not pending_only):
+        state = selection.reconcile()
+    pending = state['pending']
+    if pending_only and not pending:
+        return ''
+    def describe(value):
+        return (value['model'] + (f" at {value['effort']}" if value.get('effort') else '')) if value else 'no previous pick'
+    def cost(prices):
+        before, after = prices.get('before'), prices.get('after')
+        if before is None or after is None:
+            return 'Token-price change unknown (missing price data).'
+        parts = []
+        for label, old, new in zip(('input', 'output'), before, after):
+            relative = f', {(new / old - 1) * 100:+.0f}%' if old else ''
+            parts.append(f'{label}: ${old:g} → ${new:g} ({new-old:+g}{relative})')
+        return 'USD per million tokens: ' + '; '.join(parts) + '.'
+    def row(label, before, after, prices, pinned=False):
+        return (f"<li><strong>{e(label)}</strong>: {e(describe(before))} → {e(describe(after))}"
+                + (' <strong>Your pin stays until you choose Auto in Settings.</strong>' if pinned else '')
+                + f"<br><span class='muted'>{e(cost(prices))}</span></li>")
+    out = ["<section class='card' id='model-changes'><h2>Model choices</h2>"]
+    if not pending_only:
+        policy = registry()['settings'].get('model_adoption', 'automatic')
+        out.append("<form method='post' action='/model-decision'><input type='hidden' name='action' value='policy'>"
+                   "<label>When a new model would become a pick <select name='policy'>" + ''.join(
+                       f"<option value='{v}'{' selected' if v == policy else ''}>{label}</option>"
+                       for v, label in [('automatic', 'Switch automatically'), ('ask', 'Ask me')])
+                   + "</select></label> <button>Save</button></form>")
+    for model, proposal in pending.items():
+        out.append(f"<h3>{e(model)}</h3>")
+        if proposal.get('emergency'):
+            out.append(f"<p>{e(proposal['emergency'])}. The concrete replacement below is already in use so work can continue. "
+                       "Keep it, or choose another model in Settings.</p>")
+        out.append('<ul>')
+        for ident, change in proposal['roles'].items():
+            for seat in change.get('seats') or selection.affected(ident, change['before'], change['after']):
+                out.append(row(seat['label'], seat['before'], seat['after'],
+                               selection.price_change(seat['before'], seat['after']), seat['pinned']))
+        out.append("</ul><form method='post' action='/model-decision'>"
+                   f"<input type='hidden' name='model' value='{e(model)}'>"
+                   f"<input type='hidden' name='proposal' value='{e(proposal['id'])}'>"
+                   f"<button name='action' value='approve'>{'Keep this model' if proposal.get('emergency') else 'Switch to this model'}</button> "
+                   "<button name='action' value='reject'>Not this one</button></form>")
+    if not pending_only:
+        out.append('<h3>Recent choices</h3>')
+        for event in reversed(state['history'][-30:]):
+            out.append('<ul>' + row(selection.role_label(event['role']), event['before'], event['after'], event['prices']) + '</ul>'
+                       + f"<p class='muted'>{e(event['reason'])} · {e(event['at'])}</p>")
+            if selection.returnable(state, event):
+                out.append("<form method='post' action='/model-decision'><input type='hidden' name='action' value='rollback'>"
+                           f"<input type='hidden' name='event' value='{e(event['id'])}'>"
+                           "<button>Return to previous choice</button></form>")
+    out.append("<p class='muted'>These are token rates, not a task-cost estimate. Effort and tokens used affect total spend. "
+               "Changes take effect when a console reloads while idle.</p></section>")
+    return ''.join(out)
+
+
 def needs_you(reg):
     """Needs you: what every project is waiting on the person for, in one place, and the supports the
     monitor has brought them."""
-    rows = support_rows() + [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
+    choices = model_changes(pending_only=True)
+    rows = ([choices] if choices else []) + support_rows() + [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
     return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
@@ -1925,7 +2008,7 @@ def models_page(reg):
              + "".join(f"<th>{e(d)}</th>" for d in doms) + f"<th>{e(cost_head)}</th><th>time</th></tr>" + rows + "</table></div>")
     cards = "".join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     pend = bench.pending()
-    return shell(reg, -2, "<header><h1>Models</h1><p class='muted'>From Artificial Analysis, an independent evaluator, checked daily "
+    return shell(reg, -2, model_changes() + "<header><h1>Models</h1><p class='muted'>From Artificial Analysis, an independent evaluator, checked daily "
                  "for the models your agent programs can run. Each score is put on one scale across today's lineup, 0 the "
                  "lowest measured and 100 the highest, within its own benchmark and version; <b>overall</b> averages the "
                  "headline scores. A dash is a gap: Artificial Analysis adds a new model's scores over its first weeks, "
@@ -2038,6 +2121,9 @@ def signed_out():
 
 
 def settings_page(reg):
+    from . import selection
+    selection.migrate()
+    reg = registry()
     rows = []
     for r in reg["roots"]:
         default = r == reg["new_root"]
@@ -2155,7 +2241,7 @@ def settings_page(reg):
                   f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
                   + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
     body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>{signin}"
-            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Monitor</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+            f"{model_changes()}{global_role_fields()}<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Monitor</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
@@ -2349,8 +2435,31 @@ class Handler(BaseHTTPRequestHandler):
             length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
             body_text = self.rfile.read(length).decode("utf-8", "replace")
             form = {k: v[0] for k, v in urllib.parse.parse_qs(body_text).items()}
+        if 'model_pick' in form:
+            value = form['model_pick']
+            form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path == '/model-decision':
+            from . import selection
+            try:
+                if form.get('action') == 'policy':
+                    set_setting('model_adoption', form.get('policy', 'automatic'))
+                    selection.reconcile()
+                elif form.get('action') == 'rollback':
+                    selection.rollback(form.get('event', ''))
+                else:
+                    selection.decide(form.get('model', ''), form.get('proposal', ''), form.get('action', ''))
+                for root in projects():
+                    if root.exists():
+                        selection.bench.write_helpers(root)
+            except ValueError as err:
+                return self._send(409, str(err).encode())
+            self.send_response(303)
+            self.send_header('Location', '/models')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         if path == "/aa-key":
             from . import bench
             if form.get("do") == "remove":
@@ -2359,13 +2468,37 @@ class Handler(BaseHTTPRequestHandler):
                 bench.set_key(form["key"])
             if form.get("do") in ("save", "fetch") and bench.aa_key():
                 bench.refresh()                           # check the key by using it: fetch, keep, say what came
+                from . import selection
+                selection.reconcile()
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if path == "/monitor-model":
-            set_setting("monitor_model", form.get("monitor_model", "auto"))
+        if path == '/role-models':
+            from . import bench, providers as pv
+            chosen = dict(reg['settings'].get('helper_models') or {})
+            for family in pv.PROVIDERS:
+                for role in bench.TIERS:
+                    ident = family + ':' + role
+                    value = form.get('helper_' + ident)
+                    if value == 'auto':
+                        chosen.pop(ident, None)
+                    elif value:
+                        model, _, effort = value.rpartition(':')
+                        chosen[ident] = dict(model=model, effort=effort or None)
+            reg['settings']['helper_models'] = chosen
+            save_registry(reg)
+            for root in projects():
+                bench.write_helpers(root)
+            self.send_response(303)
+            self.send_header('Location', '/settings')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        if path in ("/monitor-model", "/runtime-model"):
+            field = 'monitor_model' if path == '/monitor-model' else 'runtime_model'
+            set_setting(field, form.get(field, "auto"))
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")

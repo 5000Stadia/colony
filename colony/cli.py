@@ -516,7 +516,7 @@ def cmd_doctor(a):
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
-        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board"], cwd=home,
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection"], cwd=home,
                            capture_output=True, text=True)
         (print("ok    the test suite passes") if r.returncode == 0
          else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
@@ -633,6 +633,9 @@ def cmd_bench(a):
     if a.what == "import":
         rows = [json.loads(l) for l in Path(a.arg).read_text().splitlines() if l.strip()]
         added, bad = bench.add(rows)
+        if added:
+            from . import selection
+            selection.reconcile()
         print(f"{added} new record(s) kept; {len(rows) - added - len(bad)} already kept")
         for line, wrong in bad:
             print(f"line {line} skipped: {'; '.join(wrong)}", file=sys.stderr)
@@ -643,6 +646,8 @@ def cmd_bench(a):
         return 0
     if a.what == "fetch":
         out = bench.refresh()
+        from . import selection
+        selection.reconcile()
         if out["error"]:
             print(f"colony: {out['error']}", file=sys.stderr)
             return 1
@@ -906,7 +911,7 @@ def cmd_settings(a):
         except KeyError:
             raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
         for k in board.PROJECT_KEYS:
-            print(f"{k:12} {str(merged[k]) or '(provider default)':24} {'set for this project' if k in own else 'global'}")
+            print(f"{k:12} {str(merged[k]) or '(colony Auto)':24} {'set for this project' if k in own else 'global'}")
         return 0
     if a.key:
         try:
@@ -915,11 +920,12 @@ def cmd_settings(a):
             raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.DEFAULT_SETTINGS)}, new-folder")
     reg = board.registry()
     from . import providers
-    for k, v in reg["settings"].items():
+    for k in board.DEFAULT_SETTINGS:
+        v = reg["settings"][k]
         shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
-                 if k == "consultants" else v or "(the provider's default)")
-        print(f"{k:14} {shown:28} {board.SETTING_HELP.get(k, '')}")
+                 if k == "consultants" else v or "(colony Auto)")
+        print(f"{k:14} {str(shown):28} {board.SETTING_HELP.get(k, '')}")
     print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
     return 0

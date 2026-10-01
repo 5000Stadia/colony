@@ -43,16 +43,18 @@ def command(label, root=None, folder=None):
     monitor's) resumes the conversation last active there."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
-    from . import board, providers
+    from . import board, providers, selection
+    selection.migrate(root)
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
+    if label != "monitor" or root:
+        s = dict(s, **selection.pair(selection.main(root)))
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
     if label == "monitor" and not root:
         from . import monitor
         model, effort, _ = monitor.choice()
-        s = dict(s, **({"model": model} if model else {}), **({"effort": effort} if effort else {}),
-                 autocompact=monitor.CONTEXT_CAP)
+        s = dict(s, model=model, effort=effort, autocompact=monitor.CONTEXT_CAP)
         if monitor.fresh_flag().exists():
             folder = None                               # a fresh start: no conversation to resume
     if not root and folder and hasattr(providers.of(None), "latest_conversation"):

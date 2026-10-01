@@ -18,13 +18,9 @@ DEFAULTS = {"model": None, "effort": "medium",
 
 
 def strongest():
-    """The strongest Claude model here, from the benchmark cards (the step-up tier's model); else Claude Code's
-    own "opus" alias, which follows its newest Opus."""
-    try:
-        from . import bench
-        return (bench.tiers_for("claude").get("step-up") or {}).get("model") or "opus"
-    except Exception:          # the runtime must start even where the board's data is missing or unreadable
-        return "opus"
+    """The accepted concrete runtime choice; never a floating provider alias."""
+    from . import selection
+    return selection.runtime()['model']
 
 
 class Project:
@@ -56,7 +52,8 @@ class Project:
         cfg = dict(DEFAULTS)
         if path.exists():
             cfg.update(json.loads(path.read_text()))
-        cfg["model"] = cfg["model"] or strongest()
+        from . import selection
+        cfg.update(selection.pair(selection.runtime(self.root, cfg if cfg.get('model') else None)))
         return cfg
 
     def append(self, name, record):
