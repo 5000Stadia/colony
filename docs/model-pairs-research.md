@@ -34,3 +34,9 @@ Sources: https://artificialanalysis.ai/models/claude-sonnet-5-5 ; https://artifi
 11. A read-only holdout calculation (step-up review, no paid model tasks) hid measured GPT-6.1 Sol efforts and applied the requested additive rule to measured Codex-family donors. Hidden low estimated 42.6519 points/$0.022262 versus measured 42.0836/$0.130752; hidden max estimated 53.7523/$0.922645 versus measured 51.8333/$0.724167. The former can distort the knee, the latter the frontier top. These illustrate uncertainty, not new real measurements or a reason to change the person's requested estimator silently.
 
 A measured-only [frontier plot](data/model-pair-frontiers.svg) shows the current runnable pairs using the new snapshot and retained v4.3.2 curves. It does not select roles or include estimates. Hover a point for its model, effort and values.
+
+## Consultation and pending decision
+
+First consultation c8aafb9 cost $2.72 (Opus $2.39, Astra $0.33). Both identified tiny score differences and insertion-sensitive marginal-cost knees as consequential. Opus proposed an outer convex-hull knee and proportional cost steps; Astra stressed explicit policy tolerance and eligibility/pins/rollback before role assignment. Their other suggestions are not implicitly adopted.
+
+Gate g835a7b asks whether to use a one-point policy tolerance, an outer-curve knee with incumbent fallback when unclear, and positive proportional cost-step estimates that propose changes for approval. The person's latest nearest-same-provider donor direction is retained; the gate asks specifically to change dollar differences into proportional steps and to settle estimate participation. No selection implementation, global evidence import or live model change has been made. An accepted change opens the one permitted checking round.
