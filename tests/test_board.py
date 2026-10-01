@@ -2757,7 +2757,7 @@ class MonitorUpkeepTest(BoardBase):
 
 
 class FollowsNewModelsTest(BoardBase):
-    def test_no_model_is_written_in_and_the_data_is_refreshed_weekly(self):
+    def test_no_model_is_written_in_and_the_data_is_refreshed_daily(self):
         from colony import bench, project
         from unittest.mock import patch
         self.assertIsNone(project.DEFAULTS["model"])

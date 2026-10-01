@@ -664,8 +664,8 @@ class Watcher:
         self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
-        if bench.aa_key() and (bench.pending() or bench.days_since_fetch() >= 7):
-            bench.refresh()     # one request: while a model waits for its data, and weekly as scores and prices move
+        if bench.aa_key() and bench.days_since_fetch() >= 0.9:
+            bench.refresh()     # one request a day (the free API allows 1,000): new scores, filled gaps, prices
         from . import selection
         selection.reconcile()
         for p in board.projects():
