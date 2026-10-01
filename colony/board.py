@@ -156,9 +156,8 @@ PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", 
 SETTING_HELP = {
     "providers": "the agent programs colony uses: claude, codex (comma-separated; all by default)",
     "provider": "which CLI runs new projects' agents (colony knows: claude, codex)",
-    # PROVIDER: Remote Control is Claude Code's. Another provider maps "remote" to its own way of reaching a
-    # session from elsewhere in its command(), or ignores it; say which in this help and in the forms.
-    "remote": "new consoles start with Remote Control, reachable from the Claude app",
+    # PROVIDER: Claude uses Remote Control; Codex uses an isolated app-server host.
+    "remote": "new consoles are reachable in their provider's app: Claude or ChatGPT",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
@@ -623,12 +622,12 @@ def restates_gate(question, root):
     return bool(mine) and any(len(mine & words(g["question"])) >= 0.6 * len(mine) for g in gates(root) if not g["answer"])
 
 
-def record_ask(root, key, text):
+def record_ask(root, key, text, explicit=False):
     """One entry per turn: the turn's whole text. A newer question replaces an unanswered older one. A turn whose
     only questions are open gates restated asks nothing new: the gates already wait on the person."""
-    if not text or not asks_question(text) or any(e.get("key") == key for e in read(root, "asks.jsonl") if key):
+    if not text or (not explicit and not asks_question(text)) or any(e.get("key") == key for e in read(root, "asks.jsonl") if key):
         return None
-    if all(restates_gate(q, root) for q in questions(text) or [text]):
+    if not explicit and all(restates_gate(q, root) for q in questions(text) or [text]):
         return None
     answer_asks(root, "superseded by a later turn")
     ask = {"type": "ask", "id": "a" + secrets.token_hex(3), "at": now(), "key": key, "text": text.strip()}
@@ -1386,7 +1385,6 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
-            # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
@@ -2150,17 +2148,27 @@ def settings_page(reg):
         used = f"Usage: {used}" if used else ""
         out = signed_out().get(k)
         used = (f"signed out since {out}: sign in again in a terminal" + (f" · {used}" if used else "")) if out else used
+        remote_info = ''
+        if k == 'codex':                         # PROVIDER: each Codex project owns its app-server process
+            from . import codex_remote
+            hosts = codex_remote.statuses()
+            count = sum(h['running'] for h in hosts)
+            remote_info = f"<p class='muted' style='margin:0 0 8px 26px'>{count} project daemon{'s' if count != 1 else ''} running"
+            if hosts:
+                remote_info += ': ' + '; '.join(e(Path(h.get('project', h['home'])).name) + ' — '
+                                               + e(h.get('mode', 'not started'))
+                                               + (': ' + e(h['reason']) if h.get('reason') else '') for h in hosts)
+            remote_info += '. ChatGPT shows the machine name as host; each conversation carries its project name.</p>'
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
                 f"<span class='muted'>({state}{also})</span></label>"
-                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else ""))
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + remote_info)
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
                   "you untick keep running. At least one stays on.</p><button>Save</button></form>")
     options = (f"<form method='post' action='/options' class='options'>"
-               # PROVIDER: Remote Control and the Claude app are Claude Code's; see SETTING_HELP["remote"].
                f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
-               f"<span class='muted'>(reach them from the Claude app)</span></label>"
+               f"<span class='muted'>(reach them from Claude or ChatGPT)</span></label>"
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
