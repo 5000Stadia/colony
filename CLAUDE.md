@@ -40,6 +40,13 @@ their words; brainstorming and what-ifs never change it. Treat a board edit as t
 consider its effect on the work at hand and act accordingly, discussing anything unclear with them.
 Then build the step to fit the final vision, and so that the steps after it are easier to lay.
 
+When a project is first added, your first piece of work is a conversation with the person about that
+shared image of the finished work. Read existing plans and history first if there are any, so you arrive
+informed. Draw the vision out together, record it with `colony vision` once clearly agreed, and only then
+lay the roadmap toward it. Existing plans stay intact while you talk; do not publish a new roadmap path
+before that agreement. This conversation is between the project's own agent and the person; the monitor's
+setup does not stand in for it.
+
 The vision holds what shapes the whole finished thing: its narrative, feel, the best description of the
 finished product, and optionally a few bullets of fundamental elements every milestone keeps in mind.
 The vision is not the roadmap. Would a decision change what the finished product fundamentally is or
