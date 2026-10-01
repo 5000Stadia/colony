@@ -67,15 +67,19 @@ own app, where it has one); each project also has its own session they can talk 
      claude,codex`). For one they want but don't have: Claude Code from https://claude.com/claude-code, then
      `claude` and `/login`; Codex from https://developers.openai.com/codex, then `codex login`. Signing in is
      theirs to do, in a terminal.
-  2. Benchmark data: the Models page needs a free Artificial Analysis key. Give them the steps in Settings,
+  2. Claude Code's lasting sign-in (if they use Claude Code): its regular sign-in expires every week or so.
+     Ask them to run `claude setup-token` in a terminal, sign in in the browser it opens, and paste the
+     token it prints in Settings, under Claude Code sign-in, never into the conversation. Colony checks it
+     and starts every Claude Code console with it.
+  3. Benchmark data: the Models page needs a free Artificial Analysis key. Give them the steps in Settings,
      under Benchmark data (an account at https://artificialanalysis.ai/login, a key from its Insights Platform),
      and ask them to paste it there, never into the conversation. Then `colony bench fetch`.
-  3. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
+  4. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
      permissions (ask, edits, all, plan).
-  4. Where new projects go (`colony settings new-folder PATH`).
-  5. Access: opening the board from their phone on the home network (lan); Remote Control (Claude Code only).
-  6. Start-up questions: whether new consoles answer them themselves (trust).
-  7. The helm: whether you settle routine questions for them.
+  5. Where new projects go (`colony settings new-folder PATH`).
+  6. Access: opening the board from their phone on the home network (lan); Remote Control (Claude Code only).
+  7. Start-up questions: whether new consoles answer them themselves (trust).
+  8. The helm: whether you settle routine questions for them.
 - Keep your messages to the person short: they are often on a phone.
 
 {direction}
@@ -538,12 +542,34 @@ class Watcher:
         self.discovered = time.time()
         threading.Thread(target=self.models_daily, daemon=True).start()
 
+    def signin(self):
+        """Daily, with no tokens: each program's own sign-in status. One found signed out is shown in Settings and
+        the person hears it once, rather than finding a console that stopped working."""
+        path = board.home() / "signed-out.json"
+        try:
+            was = json.loads(path.read_text())
+        except (OSError, ValueError):
+            was = {}
+        now = {}
+        for k, p in providers.PROVIDERS.items():
+            if providers.usable(p) and hasattr(p, "signed_in") and p.signed_in() is False:
+                now[k] = was.get(k) or board.now()[:16].replace("T", " ")
+                if k not in was:
+                    hint = (" A long-lived sign-in stops this: Settings → Claude Code sign-in." if k == "claude"
+                            and not p.token() else "")
+                    queue(f"{p.label} is signed out on this machine: its consoles can't work until the person signs in "
+                          f"again in a terminal ({p.program}, then its login).{hint}")
+        if now != was:
+            board.home().mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(now))
+
     def models_daily(self):
         from . import bench
         if board.registry()["settings"]["auto_update"]:
             for p in providers.PROVIDERS.values():
                 if providers.usable(p) and hasattr(p, "update"):
                     p.update()                          # installed beside the running version: consoles move over when idle
+        self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
         if bench.aa_key() and bench.pending():

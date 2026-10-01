@@ -85,6 +85,9 @@ class ClaudeCode:
         with resume, back in that conversation."""
         from .board import PERMISSIONS
         parts = ["claude"] + (["--resume", shlex.quote(resume)] if resume else [])
+        if self.token():
+            # the long-lived sign-in, read from its file as the console starts: never written into the command
+            parts.insert(0, f'{self.TOKEN_ENV}="$(cat {shlex.quote(str(self.token_path()))})"')
         if PERMISSIONS.get(s.get("permissions") or "ask"):
             parts += ["--permission-mode", PERMISSIONS[s["permissions"]]]
         if s.get("remote"):
@@ -121,6 +124,64 @@ class ClaudeCode:
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
 
     HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
+
+    # PROVIDER: Claude Code's long-lived sign-in (claude setup-token, on a subscription), so its consoles aren't
+    # signed out every week or so; given to each as it starts, from a file only the person can read.
+    TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+    TOKEN_STEPS = [("In a terminal on this machine, run `claude setup-token` and sign in in the browser it opens", None),
+                   ("Copy the token it prints", None),
+                   ("Paste it below and save: colony checks it with one tiny call, keeps it on this machine only, and "
+                    "starts each Claude Code console with it from then on (each moves over once it sits idle)", None)]
+
+    @staticmethod
+    def token_path():
+        from .board import home
+        return home() / "claude-token"
+
+    def token(self):
+        try:
+            return self.token_path().read_text().strip() or None
+        except OSError:
+            return None
+
+    def set_token(self, token):
+        """Keep the long-lived token, readable by the person alone; empty removes it."""
+        import os
+        p = self.token_path()
+        if not token.strip():
+            p.unlink(missing_ok=True)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(token.strip() + "\n")
+        p.chmod(0o600)
+
+    def check_token(self, token, run=None):
+        """Whether a token signs in, by one tiny call on it (Claude Code's own status doesn't check). Returns
+        (ok, why)."""
+        import os
+        import subprocess
+        import tempfile
+        env = dict(os.environ, **{self.TOKEN_ENV: token.strip()})
+        try:
+            r = (run or subprocess.run)([self.program, "-p", "--model", "claude-haiku-4-5-20251001", "--setting-sources", "",
+                                         "--output-format", "json"], input="Reply with: ok", capture_output=True, text=True,
+                                        env=env, cwd=tempfile.mkdtemp(prefix="colony-token-"), timeout=120)
+            d = json.loads(r.stdout or "{}")
+        except (OSError, ValueError, subprocess.TimeoutExpired) as err:
+            return False, f"the check couldn't run ({err.__class__.__name__})"
+        if d.get("is_error") or not d.get("result"):
+            return False, (d.get("result") or r.stderr or "the token was refused").strip()[:200]
+        return True, "signed in"
+
+    def signed_in(self, run=None):
+        """Whether Claude Code is signed in here, by its own status (no tokens spent)."""
+        out = (run or _run)([self.program, "auth", "status", "--json"])
+        try:
+            return bool(json.loads(out or "{}").get("loggedIn"))
+        except ValueError:
+            return None
 
     def latest_conversation(self, folder):
         """The conversation last active in a folder, from Claude Code's own records: for a console whose hooks
@@ -226,7 +287,9 @@ class ClaudeCode:
                "--add-dir", str(project), "--allowedTools", "Read,Grep,Glob",
                "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent"]
         try:
-            out = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, timeout=1800).stdout
+            import os
+            env = dict(os.environ, **({self.TOKEN_ENV: self.token()} if self.token() else {}))
+            out = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, env=env, timeout=1800).stdout
             d = json.loads(out)
         except (ValueError, OSError, subprocess.TimeoutExpired) as err:
             return {"text": "", "cost": None, "error": f"{err.__class__.__name__}"}
@@ -577,6 +640,16 @@ class Codex:
                 "delivered notes at session start or when a `[colony]` line arrives, run "
                 "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
                 "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
+
+    def signed_in(self, run=None):
+        """Whether Codex is signed in here, by its own status (no tokens spent)."""
+        import subprocess
+        try:
+            r = (run or subprocess.run)([self.program, "login", "status"], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        out = (r.stdout + r.stderr).strip().lower()       # it reports on stderr
+        return None if not out else out.startswith("logged in")
 
     def update(self):
         """Install the newest Codex beside the running one (its own updater)."""

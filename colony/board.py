@@ -1993,6 +1993,29 @@ def per(benchmark):
     return bench.per(benchmark)
 
 
+def signin_result(why=False):
+    """The last token check's failure, kept for the Settings page to show; why=None clears it, a string sets it."""
+    path = home() / "claude-token-check"
+    if why is False:
+        try:
+            return path.read_text().strip() or None
+        except OSError:
+            return None
+    if why:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(why)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def signed_out():
+    """The programs found signed out by the daily check, and since when."""
+    try:
+        return json.loads((home() / "signed-out.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def settings_page(reg):
     rows = []
     for r in reg["roots"]:
@@ -2013,9 +2036,12 @@ def settings_page(reg):
                 if using and not pv.enabled(p) else f"; {len(using)} project{'s' * (len(using) != 1)}" if using else "")
         from . import usage
         used = usage.line(k) if pv.installed(p) else ""
+        used = f"Usage: {used}" if used else ""
+        out = signed_out().get(k)
+        used = (f"signed out since {out}: sign in again in a terminal" + (f" · {used}" if used else "")) if out else used
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
                 f"<span class='muted'>({state}{also})</span></label>"
-                + (f"<p class='muted' style='margin:0 0 8px 26px'>Usage: {e(used)}</p>" if used else ""))
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else ""))
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
@@ -2081,7 +2107,18 @@ def settings_page(reg):
                   + ("".join(seat(k) for k in fams) or "<p class='muted'>No program that can consult is on.</p>")
                   + ("<p class='muted'>Only one model family is on, so one consultant.</p>" if len(fams) == 1 else "")
                   + "<button>Save</button></form>")
-    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
+    claude = pv.get("claude")
+    signin = ""
+    if pv.installed(claude) and pv.enabled(claude):
+        tok, failed = claude.token(), signin_result()
+        steps_ = "".join(f"<li>{e(t)}</li>" for t, _ in claude.TOKEN_STEPS)
+        signin = (f"<h2>Claude Code sign-in</h2><div class='card'><p>{'Long-lived sign-in connected: Claude Code consoles use it, so they are not signed out every week or so.' if tok else 'Using the regular sign-in, which expires every week or so. A long-lived one keeps every console signed in.'}</p>"
+                  + (f"<p class='muted'>That token didn't work: {e(failed)}</p>" if failed else "")
+                  + f"<ol class='steps'>{steps_}</ol><form method='post' action='/claude-token' class='options'>"
+                  f"<label>Token <input type='password' name='token' autocomplete='off' placeholder='{'Paste a new token to replace it' if tok else 'Paste the token'}'></label>"
+                  f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
+                  + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
+    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>{signin}"
             f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
@@ -2286,6 +2323,22 @@ class Handler(BaseHTTPRequestHandler):
                 bench.set_key(form["key"])
             if form.get("do") in ("save", "fetch") and bench.aa_key():
                 bench.refresh()                           # check the key by using it: fetch, keep, say what came
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/claude-token":
+            from . import providers as pv
+            claude = pv.get("claude")
+            if form.get("do") == "remove":
+                claude.set_token("")
+                signin_result(None)
+            elif form.get("token", "").strip():
+                ok, why = claude.check_token(form["token"])
+                if ok:
+                    claude.set_token(form["token"])
+                signin_result(why if not ok else None)
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")

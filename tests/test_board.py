@@ -2513,6 +2513,47 @@ class StayCurrentTest(BoardBase):
         self.assertEqual(len(reloaded), 1, "off: nothing")
 
 
+class SignInTest(BoardBase):
+    """Claude Code's long-lived sign-in, kept by colony and given to each console; each program's sign-in
+    checked daily without tokens."""
+
+    def test_a_checked_token_is_kept_private_and_each_claude_console_starts_with_it(self):
+        claude = providers.get("claude")
+        refused = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps({"is_error": True, "result": "Invalid token"}), "")
+        self.assertEqual(claude.check_token("bad", run=refused), (False, "Invalid token"))
+        seen = {}
+
+        def accepted(cmd, **kw):
+            seen["env"] = kw["env"].get("CLAUDE_CODE_OAUTH_TOKEN")
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok"}), "")
+        self.assertEqual(claude.check_token(" good \n", run=accepted), (True, "signed in"))
+        self.assertEqual(seen["env"], "good", "checked with the token itself")
+        claude.set_token("good")
+        self.assertEqual(oct(claude.token_path().stat().st_mode & 0o777), "0o600", "readable by the person alone")
+        cmd = claude.command("plants", {})
+        self.assertNotIn("good", cmd, "never written into the command")
+        self.assertIn(f'CLAUDE_CODE_OAUTH_TOKEN="$(cat {claude.token_path()})" claude', cmd)
+        self.assertIn("Long-lived sign-in connected", board.settings_page(board.registry()))
+        claude.set_token("")
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", claude.command("plants", {}))
+        self.assertIn("claude setup-token", monitor.ROLE, "a step of first-time setup")
+
+    def test_a_program_found_signed_out_is_shown_and_told_once(self):
+        from unittest.mock import patch
+        claude = providers.get("claude")
+        with patch.object(type(claude), "signed_in", lambda self, run=None: False), \
+                patch.object(type(providers.get("codex")), "signed_in", lambda self, run=None: True):
+            monitor.Watcher(quiet=0).signin()
+            monitor.Watcher(quiet=0).signin()
+        told = " ".join(json.loads(l)["text"] for l in (board.home() / "to_monitor.jsonl").read_text().splitlines())
+        self.assertEqual(told.count("Claude Code is signed out"), 1, "told once")
+        self.assertIn("Settings → Claude Code sign-in", told)
+        self.assertIn("signed out since", board.settings_page(board.registry()))
+        with patch.object(type(claude), "signed_in", lambda self, run=None: True):
+            monitor.Watcher(quiet=0).signin()
+        self.assertNotIn("signed out since", board.settings_page(board.registry()))
+
+
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
 
