@@ -656,6 +656,7 @@ class Watcher:
 
     def models_daily(self):
         from . import bench
+        board.rewire_projects()
         if board.registry()["settings"]["auto_update"]:
             for p in providers.PROVIDERS.values():
                 if providers.usable(p) and hasattr(p, "update"):

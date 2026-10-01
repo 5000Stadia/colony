@@ -814,6 +814,20 @@ def track(path, register=True):
     return root
 
 
+def rewire_projects():
+    """Bring missing provider hooks up to date without restarting a project console."""
+    from . import providers
+    for root in projects():
+        if not root.exists():
+            continue
+        try:
+            provider, folder = providers.of(root), workdir(root)
+            if not provider.wired(folder):
+                provider.wire(folder, protocol(root))
+        except (OSError, ValueError):
+            continue  # The doctor continues to report a project that could not be wired.
+
+
 def remove_project(root):
     """Take a project off the board: its session stops, its files stay where they are."""
     root = Path(root)
@@ -2992,6 +3006,7 @@ class Handler(BaseHTTPRequestHandler):
 def serve(port, lan=False, monitor=True):
     from . import monitor as mon, vision
     vision.install_all()
+    rewire_projects()
     watcher = mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.watcher = watcher

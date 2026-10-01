@@ -90,6 +90,39 @@ class BoardTest(BoardBase):
         self.assertEqual(len(cfg["hooks"]["SessionStart"]), 2)
         self.assertEqual(board.registry()["projects"], [str(self.root)])
 
+    def test_startup_and_daily_upkeep_install_new_hooks_without_restarting_projects(self):
+        from unittest.mock import patch
+        from colony import bench
+        board.track(self.root)
+        provider = providers.of(self.root)
+        settings = self.root / '.claude' / 'settings.json'
+        def old_wiring():
+            cfg = json.loads(settings.read_text())
+            cfg['hooks'].pop('PreCompact', None)
+            for event in ('SessionStart', 'UserPromptSubmit'):
+                cfg['hooks'][event] = [entry for entry in cfg['hooks'][event]
+                                       if not any('colony context' in h['command'] for h in entry['hooks'])]
+            cfg['hooks']['SessionStart'].append(dict(hooks=[dict(type='command', command='echo personal')]))
+            settings.write_text(json.dumps(cfg))
+        old_wiring()
+        self.assertFalse(provider.wired(self.root))
+        with patch.object(board, 'ThreadingHTTPServer'), patch.object(monitor, 'start'), patch('colony.vision.install_all'), \
+                patch.object(console, 'reload') as reload:
+            board.serve(0, monitor=False)
+            reload.assert_not_called()
+        self.assertTrue(provider.wired(self.root))
+        old_wiring()
+        with patch('colony.providers.discover'), patch.object(monitor.Watcher, 'signin'), \
+                patch.object(bench, 'aa_key', return_value=None), patch.object(bench, 'ready_to_announce', return_value=[]), \
+                patch.object(providers, 'usable', return_value=False), patch('colony.selection.reconcile'), \
+                patch.object(bench, 'write_helpers'), patch.object(console, 'reload') as reload:
+            monitor.Watcher().models_daily()
+            reload.assert_not_called()
+        self.assertTrue(provider.wired(self.root))
+        cfg = json.loads(settings.read_text())
+        self.assertEqual(cfg['model'], 'x')
+        self.assertIn('echo personal', json.dumps(cfg['hooks']))
+
     def test_the_persons_open_notes_are_listed_and_none_is_lost_with_its_item(self):
         board.track(self.root)
         kept = board.add_note(self.root, {"item": "R1"}, "use the wording from the brief")
