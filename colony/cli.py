@@ -588,6 +588,8 @@ def cmd_statusline(a):
         payload = {}
     try:
         usage.record_claude(payload)
+        from . import board, context
+        context.usage(board.root_of(), payload)
     except OSError:
         pass
     from .providers import get
@@ -739,14 +741,40 @@ def _hook_input():
 
 def _console_hook_allowed(root, provider):
     """Optional hook scope: a project's board console running the expected provider, never cwd alone."""
-    from . import console, providers
-    return (not provider or (os.environ.get("COLONY_CONSOLE") == console.session_name(root)
-                            and providers.PROVIDERS.get(provider) is providers.of(root)))
+    from . import context, providers
+    return (not provider or (os.environ.get("COLONY_CONSOLE") == context.seat(root)
+                            and providers.PROVIDERS.get(provider) is context.program(root)))
 
 
 HOOK_SCOPE_MESSAGE = ("Colony hook skipped outside the matching project's board console. Use that console for "
                       "automatic delivery. For manual delivery, explicitly choose the intended project with "
                       "COLONY_PROJECT=/absolute/project/path colony notes --deliver; do not infer it from a shared folder.")
+
+
+def cmd_context(a):
+    """Context status, or provider compaction hooks scoped to this exact console."""
+    from . import board, context
+    root = board.root_of()
+    if not a.hook:
+        print(json.dumps(context.read(context.file(root)), indent=2))
+        return 0
+    payload = _hook_input()
+    try:
+        if a.hook == 'before':
+            context.before_compact(root, a.console, payload)
+        else:
+            text = context.on_prompt(root, a.console, payload)
+            if text:
+                output = json.dumps({'hookSpecificOutput': {'hookEventName': payload['hook_event_name'],
+                                    'additionalContext': text}}) if a.console == 'codex' else text
+                print(output, flush=True)
+                context.delivered(root, payload)
+            return 0
+    except (OSError, ValueError, RuntimeError) as err:
+        print(f"Colony context restoration pending: {err}", file=sys.stderr)
+    if a.console == 'codex':
+        print('{}')
+    return 0
 
 
 def cmd_turn(a):
@@ -763,7 +791,11 @@ def cmd_turn(a):
         from . import codex_remote
         if not codex_remote.accepts_hook(root, payload):
             return 0
-    key, text = providers.of(root).turn_text(payload)
+    from . import context
+    payload.setdefault("hook_event_name", "Stop")
+    if context.carry_reply(root, a.console or providers.key(context.program(root)), payload):
+        return 0
+    key, text = context.program(root).turn_text(payload)
     board.record_ask(root, key, text)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     return 0
@@ -785,7 +817,9 @@ def cmd_notes(a):
             from . import codex_remote
             if not codex_remote.accepts_hook(root, payload):
                 return 0
-        from . import vision
+        from . import vision, context
+        payload.setdefault("hook_event_name", "SessionStart" if a.session else "UserPromptSubmit")
+        context.register(root, a.console or providers.key(context.program(root)), payload)
         vision.observe(root)
         seen = getattr(providers.of(root), "conversation", None)
         if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here
@@ -1202,6 +1236,10 @@ def main(argv=None):
     p = sub.add_parser("models", help="this project's helper tiers: routine, step-up, chores")
     p.add_argument("what", nargs="?", choices=("set", "reset")); p.add_argument("args", nargs="*"); p.add_argument("--why")
     p.set_defaults(fn=cmd_models)
+    p = sub.add_parser("context", help="context refresh status")
+    p.add_argument("--hook", choices=["before", "restore"])
+    p.add_argument("--console", choices=["claude", "codex"])
+    p.set_defaults(fn=cmd_context)
     p = sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) record only in this provider's matching board console")
     p.set_defaults(fn=cmd_turn)

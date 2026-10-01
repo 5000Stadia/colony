@@ -105,6 +105,9 @@ there, follows new models on its own, keeps itself current, and never gets in th
   Live in colony at 635e496 (204 checks). Follow-up built: every newly added project's own agent discusses and records the agreed vision with the person before laying the roadmap, including joined projects with existing plans; monitor setup does not replace that conversation. CLI, browser and join checks pass; awaiting colony deployment.
 
 
+- [x] R68 Rolling fresh context: at a context threshold, idle main agents write what colony's records do not hold, then continue fresh with that carry-over and the last few conversational turns verbatim; the monitor keeps its daily refresh with the same continuity. Preserve safe typing/turn boundaries and app access; consult on mechanics first. Built by colony-codex.
+  Approved by the person (Yea, gate g165e3f); adoption recorded on ce22bd8. Checking round cffe64a ($3.41) completed. Same-chat compaction and bounded historical restoration are built, including both providers and the monitor. Minimal live-account Claude and Codex continuity checks passed without restarting projects; the 220-test regression suite and 28 final context/monitor checks passed. Ready for colony merge and deployment. Mechanics, recovery limits and rollout evidence: docs/rolling-context.md.
+
 ## M9 — Consulting at decisions costly to change: the most insight per dollar
 
 - [x] R56 The consult call for each program: fresh, in an empty folder with no settings or hooks, read-only; no silent fallback to Claude for an unknown provider — design/consult-log.md

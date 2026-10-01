@@ -84,10 +84,10 @@ class BoardTest(BoardBase):
         cfg = json.loads((self.root / ".claude" / "settings.json").read_text())
         self.assertEqual(cfg["model"], "x")
         commands = [h["command"] for e in cfg["hooks"]["UserPromptSubmit"] for h in e["hooks"]]
-        self.assertEqual(commands, ["colony notes --deliver"])
+        self.assertEqual(commands, ["colony context --hook restore --console claude", "colony notes --deliver"])
         board.track(self.root)                                  # twice changes nothing
         cfg = json.loads((self.root / ".claude" / "settings.json").read_text())
-        self.assertEqual(len(cfg["hooks"]["SessionStart"]), 1)
+        self.assertEqual(len(cfg["hooks"]["SessionStart"]), 2)
         self.assertEqual(board.registry()["projects"], [str(self.root)])
 
     def test_the_persons_open_notes_are_listed_and_none_is_lost_with_its_item(self):
@@ -503,9 +503,9 @@ class GlanceTest(BoardBase):
     def test_codex_fresh_and_resumed_commands_supply_guarded_synchronous_hooks(self):
         for resume in (None, "saved-conversation"):
             hooks = self.codex_launch_hooks(resume)
-            self.assertEqual(set(hooks), {"SessionStart", "UserPromptSubmit", "Stop"})
+            self.assertEqual(set(hooks), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact"})
             for event, groups in hooks.items():
-                self.assertEqual(groups, [{"hooks": [{"type": "command", "command": providers.get("codex").hooks[event]}]}])
+                self.assertEqual(groups, providers.hook_entries(providers.get("codex"))[event])
 
     def test_codex_hooks_deliver_record_questions_and_remember_resume(self):
         import shlex
@@ -524,11 +524,14 @@ class GlanceTest(BoardBase):
         hooks = self.codex_launch_hooks()
 
         def run(event, **extra):
-            command = hooks[event][0]["hooks"][0]["command"]
-            result = subprocess.run(command, shell=True, cwd=self.root, env=env, text=True,
-                                    input=json.dumps(dict(payload, hook_event_name=event, **extra)), capture_output=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            return result.stdout
+            output = []
+            for entry in hooks[event]:
+                for hook in entry['hooks']:
+                    result = subprocess.run(hook['command'], shell=True, cwd=self.root, env=env, text=True,
+                                            input=json.dumps(dict(payload, hook_event_name=event, **extra)), capture_output=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    output.append(result.stdout)
+            return ''.join(output)
 
         board.add_note(self.root, {}, "Use blue pots.")
         self.assertNotIn("Use blue pots.", run("SessionStart"))
@@ -573,7 +576,7 @@ class GlanceTest(BoardBase):
         codex.wire(self.root, board.PROTOCOL)
         codex.wire(self.root, board.PROTOCOL)
         cfg = json.loads(path.read_text())
-        for event, command in codex.hooks.items():
+        for event, command in codex.legacy_hooks.items():
             self.assertEqual([h["command"] for e in cfg["hooks"][event] for h in e["hooks"]],
                              ["echo personal"])
         self.assertTrue(codex.wired(self.root))
@@ -591,7 +594,7 @@ class GlanceTest(BoardBase):
         self.assertTrue(codex.wired(worktree))
         self.assertFalse((worktree / ".codex" / "hooks.json").exists(), "launch configuration does not need a file hook")
         self.assertEqual(main_hooks.read_bytes(), before)
-        self.assertEqual(set(self.codex_launch_hooks()), {"SessionStart", "UserPromptSubmit", "Stop"})
+        self.assertEqual(set(self.codex_launch_hooks()), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact"})
 
     def test_codex_hooks_in_shared_folder_only_act_for_matching_board_console(self):
         board.track(self.root)
@@ -2651,28 +2654,13 @@ class MonitorUpkeepTest(BoardBase):
         finally:
             console.COMMAND = saved
 
-    def test_once_a_day_it_writes_what_to_carry_on_and_starts_fresh_with_it(self):
+    def test_daily_refresh_uses_same_chat_context_without_restarting_monitor(self):
         from unittest.mock import patch
-        monitor.ensure()
-        w = monitor.Watcher(quiet=0)
-        typed = []
-        with patch.object(console, "type_into", lambda n, text: typed.append(text) or True), \
-                patch.object(monitor, "snapshot", lambda: {"state": "idle", "lines": []}), \
-                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False):
-            w.freshen()
-            self.assertEqual(typed, [], "its clock starts the first time it is seen")
-            st = board.home() / "monitor-fresh.json"
-            st.write_text(json.dumps({"last": time.time() - monitor.FRESH_EVERY - 1}))
-            w.freshen()
-            self.assertIn("Daily fresh start", typed[0])
-            monitor.carried_path().write_text("The person wants Bookflow's release held until Friday.")
-            started = []
-            with patch.object(monitor, "ensure", lambda: started.append(console.command("monitor", None, folder=monitor.home()))):
-                w.freshen()
-            self.assertEqual(len(started), 1)
-            self.assertFalse(monitor.fresh_flag().exists())
-        monitor.brief()
-        self.assertIn("Bookflow's release held until Friday", monitor.brief_path().read_text(), "carried into its brief")
+        from colony import context
+        with patch.object(context, 'tick_all') as tick, patch.object(monitor, 'ensure') as start:
+            monitor.Watcher(quiet=0).freshen()
+            tick.assert_called_once()
+            start.assert_not_called()
 
 
 class FollowsNewModelsTest(BoardBase):

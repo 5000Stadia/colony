@@ -58,9 +58,10 @@ class Responses(BaseHTTPRequestHandler):
         else:
             item = dict(type='message', role='assistant', id='message',
                         content=[dict(type='output_text', text=self.server.answer)])
+        tokens = self.server.usage_sequence.pop(0) if getattr(self.server, 'usage_sequence', []) else 0
         events += [{'type': 'response.output_item.done', 'item': item},
                    {'type': 'response.completed', 'response': {'id': 'resp', 'usage': {
-                       'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}}]
+                       'input_tokens': tokens, 'output_tokens': 0, 'total_tokens': tokens}}}]
         data = ''.join('data: ' + json.dumps(e) + '\n\n' for e in events).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
@@ -158,6 +159,63 @@ class NativeRemoteTest(unittest.TestCase):
             own = 'first' if i < 2 else 'second'
             self.assertIn(('Private note for ' + own).encode(), request)
             self.assertNotIn(('Private note for ' + ('second' if own == 'first' else 'first')).encode(), request)
+
+    def test_compaction_restores_bounded_verbatim_context_once_and_survives_resume(self):
+        from colony import context
+        from colony.codex_transfer import atomic_json
+        root, settings = self.roots[0], self.settings[0]
+        words = 'Keep  exact\n\nΩ spacing. ' + ' x' * 2250
+        with self.native(root, settings) as (client, config, home):
+            tid = remote.attach(client, root, config, None)
+            self.turn(client, tid, words)
+            atomic_json(context.file(root), dict(job=dict(id='1234567890abcdef', session=tid,
+                        phase='ready', carry='Already sent invoice; do not resend.' + ' z' * 1400, written='now')))
+            client.call('thread/compact/start', dict(threadId=tid))
+            deadline = time.monotonic() + 30
+            while client.receive(deadline).get('method') != 'turn/completed':
+                pass
+            self.turn(client, tid, 'Continue without repeating completed work.')
+            text = self.server.requests[-1].decode()
+            self.assertEqual(text.count('colony-restored-1234567890abcdef'), 1)
+            body = json.loads(text)
+            restored = [c['text'] for m in body['input'] for c in m.get('content', [])
+                        if 'colony-restored-' in c.get('text', '')]
+            self.assertIn(words, restored[0])
+            self.assertIn('Already sent invoice; do not resend.', restored[0])
+            self.assertNotIn('persisted-output', restored[0])
+            self.assertEqual(context.read(context.file(root))['job']['phase'], 'restored')
+        with self.native(root, settings, home=home, prepare=False) as (client, config, home):
+            self.assertEqual(remote.attach(client, root, config, tid), tid)
+            self.turn(client, tid, 'Continue after server restart.')
+            self.assertEqual(self.server.requests[-1].decode().count('colony-restored-1234567890abcdef'), 1)
+
+    def test_automatic_compaction_restores_before_same_turn_continues(self):
+        from colony import context
+        root, settings = self.roots[0], self.settings[0]
+        # First response asks a tool question and crosses the native auto-compact threshold.
+        self.server.question = True
+        self.server.usage_sequence = [120_000, 0, 0]
+        original = remote.overrides
+        def config(*args):
+            return dict(original(*args), model_auto_compact_token_limit=100_000)
+        with patch.object(remote, 'overrides', side_effect=config), self.native(root, settings) as (client, cfg, home):
+            tid = remote.attach(client, root, cfg, None)
+            client.call('turn/start', dict(threadId=tid, input=[dict(type='text', text='Ask me to choose paint, then finish.', text_elements=[])],
+                        collaborationMode=dict(mode='plan', settings=dict(model=settings['model'], reasoning_effort='low', developer_instructions=None))))
+            deadline = time.monotonic() + 45
+            while True:
+                event = client.receive(deadline)
+                if event.get('method') == 'item/tool/requestUserInput':
+                    client.send(dict(id=event['id'], result=dict(answers={'color': {'answers': ['Blue']}})))
+                if event.get('method') == 'turn/completed':
+                    self.assertEqual(event['params']['turn']['status'], 'completed')
+                    break
+            job = context.read(context.file(root))['job']
+            self.assertTrue(job['automatic'])
+            self.assertEqual(job['phase'], 'restored')
+            text = self.server.requests[-1].decode()
+            self.assertEqual(text.count('colony-restored-' + job['id']), 1)
+            self.assertTrue('Ask me to choose paint, then finish.' in text, 'active input survives native automatic compaction')
 
     def test_transfer_preserves_id_and_original_history_and_excludes_another_project(self):
         root, settings = self.roots[0], self.settings[0]

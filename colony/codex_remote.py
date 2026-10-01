@@ -224,8 +224,8 @@ def overrides(root, home, settings):
     config['approval_policy'] = 'never' if permission in ('all', 'edits') else 'on-request'
     config['sandbox_mode'] = {'all': 'danger-full-access', 'plan': 'read-only'}.get(permission, 'workspace-write')
     config['sandbox_workspace_write.writable_roots'] = [str(board.home())]
-    for event, command in provider.hooks.items():
-        config['hooks.' + event] = [{'hooks': [{'type': 'command', 'command': command}]}]
+    for event, entries in providers.hook_entries(provider).items():
+        config['hooks.' + event] = entries
     hook = shlex.join([sys.executable, '-m', 'colony.codex_remote', 'hook'])
     for event in ('PreToolUse', 'PostToolUse'):
         config['hooks.' + event] = [{'matcher': '.*request_user_input.*', 'hooks': [{'type': 'command', 'command': hook}]}]
@@ -329,8 +329,9 @@ def trust_hooks(client, root, config):
                 for entry in entries for h in entry['hooks']}
     result = client.call('hooks/list', {'cwds': [str(board.workdir(root))]})
     hooks = [h for entry in result['data'] for h in entry['hooks'] if h.get('command') in commands]
-    if len(hooks) != 5 or any(not h['enabled'] for h in hooks):
-        raise RemoteError('Codex did not load all five project hooks')
+    expected = sum(len(entry['hooks']) for k, entries in config.items() if k.startswith('hooks.') for entry in entries)
+    if len(hooks) != expected or any(not h['enabled'] for h in hooks):
+        raise RemoteError('Codex did not load every project hook')
     updates = {h['key']: {'trusted_hash': h['currentHash']} for h in hooks if h['trustStatus'] != 'trusted'}
     if updates:
         if not board.registry()['settings']['trust']:
@@ -472,10 +473,12 @@ def hook():
 
 def accepts_hook(root, payload):
     """A helper's session must not replace the project's authoritative conversation."""
-    from . import console
-    if os.environ.get('COLONY_CONSOLE') != console.session_name(root):
+    from . import context
+    if payload.get('agent_id') or payload.get('subagent') or '/subagents/' in payload.get('transcript_path', ''):
         return False
-    expected = read_json(home_for(root) / 'colony-thread.json').get('thread')
+    if os.environ.get('COLONY_CONSOLE') != context.seat(root):
+        return False
+    expected = None if context.is_monitor(root) else read_json(home_for(root) / 'colony-thread.json').get('thread')
     return not expected or payload.get('session_id') == expected
 
 
