@@ -108,10 +108,8 @@ def recommendations(state):
         if not providers.usable(provider):
             continue
         for role in ROLES:
-            if role == 'runtime' and family != 'claude':
-                continue  # PROVIDER: unattended runtime is currently Claude Code only
-            if role == 'monitor' and family != board.registry()['settings']['provider']:
-                continue
+            # The ledger holds every family's role, including inactive seats.
+            # Keep their evidence current too; launchers decide which family runs.
             ident = key(family, role)
             blocked = state['blocked'].get(ident, [])
             usable = [e for e in entries if pair(e) not in blocked]
