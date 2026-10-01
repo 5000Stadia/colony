@@ -80,11 +80,14 @@ class ClaudeCode:
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
              "Stop": "colony turn"}
 
-    def command(self, label, s, resume=None):
+    def command(self, label, s, resume=None, root=None):
         """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort;
         with resume, back in that conversation."""
         from .board import PERMISSIONS
         parts = ["claude"] + (["--resume", shlex.quote(resume)] if resume else [])
+        if self.token():
+            # the long-lived sign-in, read from its file as the console starts: never written into the command
+            parts.insert(0, f'{self.TOKEN_ENV}="$(cat {shlex.quote(str(self.token_path()))})"')
         if PERMISSIONS.get(s.get("permissions") or "ask"):
             parts += ["--permission-mode", PERMISSIONS[s["permissions"]]]
         if s.get("remote"):
@@ -93,6 +96,8 @@ class ClaudeCode:
             parts += ["--model", shlex.quote(s["model"])]
         if s.get("effort"):
             parts += ["--effort", shlex.quote(s["effort"])]
+        if s.get("autocompact"):
+            parts += ["--autocompact", shlex.quote(s["autocompact"])]     # how large its conversation may grow
         return " ".join(parts)
 
     def wire(self, root, protocol):
@@ -115,7 +120,119 @@ class ClaudeCode:
             entries = cfg.setdefault("hooks", {}).setdefault(event, [])
             if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
                 entries.append({"hooks": [{"type": "command", "command": command}]})
+        # PROVIDER: Claude Code hands its usage limits only to its status line; colony's records them and shows
+        # the person's own status line, if they set one. A project that set its own keeps it.
+        cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
         settings.write_text(json.dumps(cfg, indent=2) + "\n")
+
+    HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
+
+    # PROVIDER: Claude Code's long-lived sign-in (claude setup-token, on a subscription), so its consoles aren't
+    # signed out every week or so; given to each as it starts, from a file only the person can read.
+    TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+    TOKEN_STEPS = [("In a terminal on this machine, run `claude setup-token` and sign in in the browser it opens", None),
+                   ("Copy the token it prints", None),
+                   ("Paste it below and save: colony checks it with one tiny call, keeps it on this machine only, and "
+                    "starts each Claude Code console with it from then on (each moves over once it sits idle)", None)]
+
+    @staticmethod
+    def token_path():
+        from .board import home
+        return home() / "claude-token"
+
+    def token(self):
+        try:
+            return self.token_path().read_text().strip() or None
+        except OSError:
+            return None
+
+    def set_token(self, token):
+        """Keep the long-lived token, readable by the person alone; empty removes it."""
+        import os
+        p = self.token_path()
+        if not token.strip():
+            p.unlink(missing_ok=True)
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(token.strip() + "\n")
+        p.chmod(0o600)
+
+    def check_token(self, token, run=None):
+        """Whether a token signs in, by one tiny call on it (Claude Code's own status doesn't check). Returns
+        (ok, why)."""
+        import os
+        import subprocess
+        import tempfile
+        env = dict(os.environ, **{self.TOKEN_ENV: token.strip()})
+        try:
+            from . import bench
+            cheap = (bench.tiers_for("claude").get("chores") or {}).get("model")     # the cheapest worth its points
+            r = (run or subprocess.run)([self.program, "-p", *(["--model", cheap] if cheap else []), "--setting-sources", "",
+                                         "--output-format", "json"], input="Reply with: ok", capture_output=True, text=True,
+                                        env=env, cwd=tempfile.mkdtemp(prefix="colony-token-"), timeout=120)
+            d = json.loads(r.stdout or "{}")
+        except (OSError, ValueError, subprocess.TimeoutExpired) as err:
+            return False, f"the check couldn't run ({err.__class__.__name__})"
+        if d.get("is_error") or not d.get("result"):
+            return False, (d.get("result") or r.stderr or "the token was refused").strip()[:200]
+        return True, "signed in"
+
+    def signed_in(self, run=None):
+        """Whether Claude Code is signed in here, by its own status (no tokens spent)."""
+        out = (run or _run)([self.program, "auth", "status", "--json"])
+        try:
+            return bool(json.loads(out or "{}").get("loggedIn"))
+        except ValueError:
+            return None
+
+    def latest_conversation(self, folder):
+        """The conversation last active in a folder, from Claude Code's own records: for a console whose hooks
+        don't record it (the monitor's)."""
+        import re as _re
+        d = self.config_home() / "projects" / _re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+        files = sorted(d.glob("*.jsonl"), key=lambda f: f.stat().st_mtime) if d.exists() else []
+        return files[-1].stem if files else None
+
+    def update(self):
+        """Install the newest Claude Code beside the running one (its own updater)."""
+        return _run([self.program, "update"], timeout=600)
+
+    def startup_files(self, root):
+        """What Claude Code reads only when it starts, among what colony writes: the tier helpers."""
+        return [root / ".claude" / "agents" / f"{self.helper_name(t)}.md" for t in self.HELPER_BRIEF]
+    HELPER_BRIEF = {"routine": "ordinary work: building, editing, looking things up across files",
+                    "step-up": "work that has stalled, been retried or redone, or needs the strongest reasoning here",
+                    "chores": "clear, mechanical tasks: small edits, running a named test, copying, simple lookups"}
+
+    @staticmethod
+    def helper_name(tier):
+        return "colony-" + tier.replace("-", "")
+
+    def write_helpers(self, root, tiers):
+        """A helper definition per tier in .claude/agents, so a helper runs at exactly its tier's model and effort
+        (the Agent tool picks a model only by alias, and no effort). Rewritten when a tier changes; a tier colony
+        can't fill leaves no file. Returns the files it changed."""
+        folder = root / ".claude" / "agents"
+        changed = []
+        for tier, brief in self.HELPER_BRIEF.items():
+            path = folder / f"{self.helper_name(tier)}.md"
+            t = tiers.get(tier)
+            if not t:
+                if path.exists():
+                    path.unlink()
+                    changed.append(path)
+                continue
+            text = (f"---\nname: {self.helper_name(tier)}\ndescription: Colony's {tier} tier: {brief}.\n"
+                    f"model: {t['model']}\n" + (f"effort: {t['effort']}\n" if t.get("effort") else "")
+                    + "---\n\nDo the task you are given within its brief, and hand in what you find and do.\n"
+                    "<!-- written by colony from this project's tiers (colony models); edits here are replaced -->\n")
+            if not path.exists() or path.read_text() != text:
+                folder.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                changed.append(path)
+        return changed
 
     def version(self):
         return _run([self.program, "--version"])
@@ -174,7 +291,9 @@ class ClaudeCode:
                "--add-dir", str(project), "--allowedTools", "Read,Grep,Glob",
                "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent"]
         try:
-            out = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, timeout=1800).stdout
+            import os
+            env = dict(os.environ, **({self.TOKEN_ENV: self.token()} if self.token() else {}))
+            out = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, env=env, timeout=1800).stdout
             d = json.loads(out)
         except (ValueError, OSError, subprocess.TimeoutExpired) as err:
             return {"text": "", "cost": None, "error": f"{err.__class__.__name__}"}
@@ -526,7 +645,57 @@ class Codex:
                 "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
                 "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
 
-    def command(self, label, s, resume=None):
+    def signed_in(self, run=None):
+        """Whether Codex is signed in here, by its own status (no tokens spent)."""
+        import subprocess
+        try:
+            r = (run or subprocess.run)([self.program, "login", "status"], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        out = (r.stdout + r.stderr).strip().lower()       # it reports on stderr
+        return None if not out else out.startswith("logged in")
+
+    def update(self):
+        """Install the newest Codex beside the running one (its own updater)."""
+        return _run([self.program, "update"], timeout=600)
+
+    def startup_files(self, root):
+        """What Codex reads only when it starts, among what colony writes: the tier overlays."""
+        return [root / ".codex" / "agents" / f"{self.helper_name(t)}.toml" for t in self.HELPER_BRIEF]
+
+    HELPER_CALL = "spawn one with agent_type set to its name and fork_turns \"none\"; its model and effort come from it"
+    HELPER_BRIEF = {"routine": "Colony's routine tier: ordinary work, building, editing, looking things up across files",
+                    "step-up": "Colony's step-up tier: work that has stalled, been retried or redone, or needs the strongest reasoning here",
+                    "chores": "Colony's chores tier: clear, mechanical tasks, small edits, running a named test, simple lookups"}
+
+    @staticmethod
+    def helper_name(tier):
+        return "colony-" + tier.replace("-", "")
+
+    def write_helpers(self, root, tiers):
+        """A config overlay per tier in .codex/agents (model and reasoning effort), which the console command
+        registers as a named agent; the agent spawns it by agent_type. Verified on Codex 0.154 by colony-codex
+        (docs/codex-helper-tiers.md there). A new or changed tier takes hold when the console next starts."""
+        folder = root / ".codex" / "agents"
+        changed = []
+        for tier in self.HELPER_BRIEF:
+            path = folder / f"{self.helper_name(tier)}.toml"
+            t = tiers.get(tier)
+            if not t:
+                if path.exists():
+                    path.unlink()
+                    changed.append(path)
+                continue
+            text = ("# written by colony from this project's tiers (colony models); edits here are replaced\n"
+                    f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
+                    + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n')
+            if not path.exists() or path.read_text() != text:
+                folder.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+                changed.append(path)
+        return changed
+
+    def command(self, label, s, resume=None, root=None):
         """The person's own `codex`: inline, so its console keeps scrollback, without the update question at
         start; the project's permissions, model and effort. Remote Control has no Codex equivalent here."""
         from .board import home
@@ -544,6 +713,15 @@ class Codex:
         for event, command in self.hooks.items():
             value = f'hooks.{event}=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]'
             parts += ["-c", shlex.quote(value)]
+        # the helper tiers, registered for this session (a project file would need the project trusted first);
+        # each overlay holds its tier's model and effort (write_helpers)
+        from .board import workdir
+        for tier in (self.HELPER_BRIEF if root else ()):
+            overlay = workdir(root) / ".codex" / "agents" / f"{self.helper_name(tier)}.toml"
+            if overlay.exists():
+                name = self.helper_name(tier)
+                parts += ["-c", shlex.quote(f"agents.{name}.description={json.dumps(self.HELPER_BRIEF[tier])}"),
+                          "-c", shlex.quote(f"agents.{name}.config_file={json.dumps(str(overlay))}")]
         if resume:
             parts += ["resume", shlex.quote(resume)]
         return " ".join(parts)

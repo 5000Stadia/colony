@@ -56,13 +56,15 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R43 Claude-only extras (Remote Control, plugin suggestions, the unattended runtime) step aside where only Codex is installed
 - [x] R44 The monitor runs on whichever program is installed, its brief where that program reads it
 - [x] R50 Settings: the person ticks which agent programs colony uses; one that's off isn't offered or the default, and projects already on it keep running
+- [x] R62 Agent programs kept current: when Claude Code or Codex has an update, colony installs it and reloads each console on it only while that console is idle, resuming the same conversation; nothing mid-task is interrupted
+- [x] R63 Usage limits watched: each program's 5-hour and weekly use read without tokens (Codex's session files; Claude Code's status line) and shown on the board; a safe pause (98% by default): each agent on that program is told on its next turn to land what's in flight, save its work and tell the person where things stand and their options; woken at the reset; colony-wide or per project
 - [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
 ## M8 — Models chosen from evidence
 
 - [x] R45 Benchmark records and a card per model and effort level: two or three respected overall scores (Artificial Analysis, LMArena, Epoch AI) put on one scale and averaged, cost and time per task, gaps shown as gaps; kept on this machine
 - [x] R46 Today's lineup researched and recorded, once (Claude models by colony, Codex models by colony-codex)
-- [?] R47 A Models page on the board: the cards, a domain comparison, an effort-vs-cost curve per model, best for each role; an ⓘ beside each model when adding a project
+- [x] R47 A Models page on the board: the cards, a domain comparison, an effort-vs-cost curve per model, best for each role; an ⓘ beside each model when adding a project
 - [x] R48 Each project's model plan: which model and effort its helpers use for which work, recommended at its start and agreed with the person, kept in .board and handed over at every session start, revisited when a model is added
 - [x] R49 Adding a model to colony includes its research check; colony notices a new model, builds its card, reranks, and tells each project
 - [x] R51 Each connected program's models are discovered (Codex's catalog; Claude Code asked, then each ID confirmed with a tiny call), at setup, when a program updates, and on request: the lineup is only what the person can run
@@ -70,12 +72,14 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R53 Settings: connect or reconnect the Artificial Analysis key, with step-by-step instructions beside it
 - [x] R54 First-time setup: the monitor's first conversation walks the person through agent programs, the key, defaults and options
 - [x] R55 Choosing models: the form's suggestion is the cards', framed as theirs, the same an agent sees; no fixed suggestion
+- [x] R61 Three tiers from one early, general score: routine, step-up and chores per family, picked from the Intelligence Index (lowest effort within a few points), a colony-wide default each project can change in its own settings; written as helper definitions (Claude Code: .claude/agents; Codex: its equivalent, derived with colony-codex) so the model and effort actually run; no plan to agree before work, no proposal per project when a model is released; the consultants are each family's step-up
+- [~] R64 Every role chosen by the data unless the person picks: Auto always an exact model colony chose (main agents included; no program alias), one colony-wide switch for new models (switch automatically, or ask once per model listing every role it would take, pinned ones included; "not this one" remembered), each switch showing its cost change with a one-click way back. Built by colony-codex — design/consult c6ed30b
 
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar
 
-- [x] R56 The consult call for each program: fresh, in an empty folder with no settings or hooks, a hard spending cap, read-only; no silent fallback to Claude for an unknown provider — design/consult-log.md
-- [x] R57 colony consult: each family's consultant chosen from the benchmark cards (best for planning, the cheapest within a few points), or the person's pick in Settings; the brief assembled in code (the person's words from the roadmap, item and notes; the asking agent's sourced digest; the question), two families side by side, the decision record (at most two rounds), every cost and answer logged; a colony-wide monthly budget and an off switch
+- [x] R56 The consult call for each program: fresh, in an empty folder with no settings or hooks, read-only; no silent fallback to Claude for an unknown provider — design/consult-log.md
+- [x] R57 colony consult: each family's consultant chosen from the benchmark cards (best for planning, the cheapest within a few points), or the person's pick in Settings; the brief assembled in code (the person's words from the roadmap, item and notes; the asking agent's sourced digest; the question), two families side by side, the decision record (at most two rounds), every cost and answer logged; an off switch (no caps or budgets: the person's call)
 - [ ] R58 Gates carry the consultants' points, each accepted or rejected by the person; only an accepted change opens a second, checking round
 - [?] R59 The rule in every project's instructions, with examples of costly decisions; each project's consultations and their cost on the board
 - [ ] R60 Each project's actual usage (reading against thinking and writing) beside its model plan

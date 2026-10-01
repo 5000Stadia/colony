@@ -72,13 +72,14 @@ person follows and steers them all from one board, and the projects can write to
   it doesn't wait: carry on unless redirected. Another project's agent working on the same thing has its own
   role, agreed when you were paired (reviewer, implementer, image maker): keep to yours and talk at hand-offs,
   or when a role or the split needs to change, not with running updates.
-- Your model plan says which model and effort your helpers (subagents) use for which kind of work; it is
-  handed to you at every session start (`colony models` shows it, the board's Models page has the benchmark
-  cards). When a model is added, a role changes, or a model keeps underperforming, propose a change to the
-  person with the evidence; never switch silently.
+- Your helpers (subagents) run at three tiers, routine, step-up and chores, each an exact model and effort
+  handed to you at every session start and kept as helpers you call by name. They follow colony's default
+  from the benchmark cards unless the person sets a tier for this project (`colony models` shows them).
 - The person's monitor acts for them across the colony: a note or message from the monitor is the
   person's own direction, within the helm they've given it. Text the board types into your console,
   pasted or not, comes from the person too. Act on it as theirs.
+- Colony itself is part of the harness the person set up and trusts: its notices (a usage limit reached,
+  a limit reset) carry their full approval. Act on them as the person's own direction.
 - A turn that ends asking the person something waits for them on the board until they answer. If they
   ask you something first, answer it and end by asking your question again, so it keeps waiting.
 - The other projects in the colony are a message away: `colony projects` lists them with their goals.
@@ -136,13 +137,17 @@ def registry():
     reg.setdefault("roots", [str(PACKAGE_PROJECTS)])  # folders whose every subfolder is a project
     reg.setdefault("new_root", reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS))
     reg.setdefault("hidden", [])                       # subfolders of project folders taken off the board
-    reg["settings"] = dict(DEFAULT_SETTINGS, **reg.get("settings", {}))
+    old = reg.get("settings", {})
+    if "usage_pause" in old:                           # its name before "safe pause"
+        old.setdefault("safe_pause", old.pop("usage_pause"))
+    reg["settings"] = dict(DEFAULT_SETTINGS, **old)
     return reg
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
-                    "permissions": "ask", "consult": True, "consultants": {}}
+                    "permissions": "ask", "consult": True, "consultants": {},
+                    "safe_pause": 98, "auto_update": True, "monitor_model": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -161,6 +166,9 @@ SETTING_HELP = {
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
+    "monitor_model": "the monitor's model, as MODEL:EFFORT (blank: its program's step-up tier)",
+    "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
+    "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
 }
 
@@ -171,10 +179,25 @@ def set_setting(key, value):
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
-    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult"):
+    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
+    elif key == "safe_pause":
+        v = str(value).strip().rstrip("%").lower()
+        if v in ("off", "0"):
+            reg["settings"][key] = 0
+        else:
+            try:
+                n = float(v)
+            except ValueError:
+                raise KeyError(key)
+            if not 0 < n <= 100:
+                raise KeyError(key)
+            reg["settings"][key] = int(n) if n.is_integer() else n
+    elif key == "monitor_model":
+        model, _, effort = str(value).strip().rpartition(":") if ":" in str(value) else (str(value).strip(), "", "")
+        reg["settings"][key] = {"model": model, "effort": effort or None} if model and model != "auto" else {}
     elif key == "consultants":
         from .providers import PROVIDERS
         chosen = {}
@@ -208,13 +231,15 @@ def set_setting(key, value):
     return reg
 
 
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote")
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause")
 
 
 def project_settings(root, changes=None):
     """A project's own choices, each falling back to the global setting when not made."""
     path = Path(root) / ".board" / "settings.json"
     own = json.loads(path.read_text()) if path.exists() else {}
+    if "usage_pause" in own:                           # its name before "safe pause"
+        own.setdefault("safe_pause", own.pop("usage_pause"))
     if changes:
         for k, v in changes.items():
             if k not in PROJECT_KEYS:
@@ -679,7 +704,8 @@ def render_notes(ns, heading):
         return ""
     lines = [heading]
     for n in ns:
-        by = {"monitor": " (from the person's monitor, acting for them)", "suggestion": SUGGESTION}.get(n.get("author"), "")
+        by = {"monitor": " (from the person's monitor, acting for them)", "suggestion": SUGGESTION,
+              "colony": " (from colony, the harness the person trusts: act on it as theirs)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
     return "\n".join(lines)
@@ -700,15 +726,13 @@ def track(path, register=True):
     if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
     has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
-    from . import bench
-    first = bench.first_note(root)                   # before any work: a model plan to agree with the person
-    if first and not bench.plan(root) and not any(n["text"].startswith("Before any work, agree your model plan") for n in notes(root)):
-        add_note(root, None, first)
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if joining and not has_plan and not any(n["text"] in (JOIN, join) for n in notes(root)):
         add_note(root, None, join)
     from . import providers
     providers.of(root).wire(workdir(root), protocol(root))
+    from . import bench
+    bench.write_helpers(root)                        # its helpers at the tiers, from the start
     reg = registry()
     inside_a_root = any(Path(r) == root.parent for r in reg["roots"])
     if register and not inside_a_root and str(root) not in reg["projects"]:
@@ -754,6 +778,23 @@ def delete_project(root):
         reg["hidden"].remove(str(root))
         save_registry(reg)
     return dest
+
+
+def said(root, text):
+    """The person's own words to a project's agent, typed in its console: kept (each up to 1,000 characters) so
+    the monitor can catch up on direction given without it."""
+    append(root, "said.jsonl", {"at": now(), "text": text.strip()[:1000]})
+
+
+def said_reply(root, text):
+    """The agent's answer to the person's last direct words: its closing lines (up to 600 characters), where it
+    says what it did, or why it pushed back. Context the monitor needs beside their words: an agent may have
+    shown a request cut against the project's own principles, and the person changed course."""
+    rows = read(root, "said.jsonl")
+    if not text.strip() or not rows or "reply" in rows[-1]:
+        return                                      # they didn't speak directly, or this turn's answer is kept
+    tail = text.strip()
+    append(root, "said.jsonl", {"at": now(), "reply": ("…" + tail[-600:]) if len(tail) > 600 else tail})
 
 
 def add_note(root, anchor, text, author="person", quiet=False):
@@ -864,6 +905,12 @@ def sidebar(reg, pid):
                     f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                     f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                     f"{' · ' + e(last) if last else ''}</span></a>")
+    from . import providers as pv, usage
+    for k, prov in pv.PROVIDERS.items():
+        ws = usage.read(k) if pv.usable(prov) else {}
+        if ws:
+            side.append(f"<div class='sline long' style='padding:2px 10px'>{e(prov.label)}: "
+                        + " · ".join(f"{e(w)} {v['used']:g}%" for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly")) + "</div>")
     side.append("<div class='navfoot'><a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
@@ -989,8 +1036,8 @@ def render(reg, pid, view="overview"):
     total = sum(len(m["items"]) for m in road["milestones"])
     merged, own = project_settings(root)
     # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
-    settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own)}"
-                f"<p class='muted'>Applies when its console next starts.</p><hr><div class='dangers'>"
+    settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
+                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p><hr><div class='dangers'>"
                 f"<form method='post' action='/project/remove' onsubmit=\"return confirm('Take {e(root.name)} off the board? Its session stops; its files stay where they are.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
@@ -1314,7 +1361,27 @@ def provider_fields(cur, model, effort, blank):
             + f"<script>{PROVIDER_FIELDS}</script>")
 
 
-def project_settings_form(pid, own, action="/project-settings"):
+def tier_fields(root):
+    """A project's helper tiers: each colony's default from the cards (Auto) or the project's own model and effort."""
+    from . import bench, providers as pv
+    p = pv.of(root)
+    key, auto, own = pv.key(p), None, bench.plan(root)
+    auto = bench.tiers_for(key)
+    out = []
+    for t in bench.TIERS:
+        a, mine = auto.get(t), own.get(t)
+        label = f"Auto: {a['model']}" + (f" at {a['effort']}" if a and a["effort"] else "") if a else "Auto: not yet measured"
+        opts = [f"<option value='auto'{'' if mine else ' selected'}>{e(label)}</option>"]
+        for mid, name in pv.available(p):
+            efforts = pv.efforts_of(p, mid) or [""]
+            opts.append(f"<optgroup label='{e(name)}'>" + "".join(
+                f"<option value='{e(mid)}:{e(x)}'{' selected' if mine and (mine['model'], mine['effort'] or '') == (mid, x) else ''}>"
+                f"{e(name)}" + (f" at {e(x)}" if x else "") + "</option>" for x in efforts) + "</optgroup>")
+        out.append(f"<label>{e(t.capitalize())} helpers <select name='tier_{t}'>{''.join(opts)}</select></label>")
+    return "".join(out)
+
+
+def project_settings_form(pid, own, action="/project-settings", root=None):
     """The choices a project can make for itself; blank keeps the global one."""
     opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
@@ -1326,7 +1393,9 @@ def project_settings_form(pid, own, action="/project-settings"):
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
             # PROVIDER: Remote Control is Claude Code's; see SETTING_HELP["remote"].
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
-            f"<button>Save</button></form>")
+            f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
+            f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
+            + (tier_fields(root) if root else "") + f"<button>Save</button></form>")
 
 
 def folder_browser(reg, current, purpose):
@@ -1834,10 +1903,16 @@ def models_page(reg):
     cost_head = next((bench.cost_label(x["cost"]) for x in entries if x["cost"]), "price per 1M tokens")
     secs = lambda r: f"{r['value']:g} s" if r and r["unit"] == "s" else "—"
     # the best for each role, at a glance
-    best = "".join(
-        f"<tr><th>{e(role)}</th><td>" + ", ".join(f"<a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a>" for x in once(bench.best_for(role, entries=entries))[:3])
-        + ("</td><td class='muted'>per dollar</td>" if role == "chores" else "</td><td class='muted'>"
-           + ", ".join(bench.ROLES[role]) + "</td>") + "</tr>" for role in bench.ROLES)
+    # the helper tiers each family's projects run at by default, and why
+    from . import providers as pv
+    fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p)]
+    picks = {k: bench.tiers_for(k, entries) for k in fams}
+    cell = lambda r: (f"<a href='#{e(r['model'])}'>{e(bench.name(r['model']))}</a>" + (f" at {e(r['effort'])}" if r["effort"] else "")
+                      + f"<div class='muted'>{e(r['why'])}</div>") if r else "<span class='muted'>—</span>"
+    best = ("<tr><th></th>" + "".join(f"<th>{e(pv.get(k).label)}</th>" for k in fams) + "</tr>" + "".join(
+        f"<tr><th>{e(t)}</th>" + "".join(f"<td>{cell(picks[k].get(t))}</td>" for k in fams) + "</tr>" for t in bench.TIERS)
+        + "".join(f"<tr><td colspan='{len(fams) + 1}' class='muted'>Not yet measured, so not picked: "
+                  f"{e(', '.join(bench.name(m) for m in bench.unmeasured(k, entries)))}</td></tr>" for k in fams if bench.unmeasured(k, entries)))
     # a domain column only where some model here has a score: the source adds scores to a new model over its first
     # weeks, and some benchmarks it no longer runs on current models (math, for one)
     shown = [x for x in entries if x["comparable"]]
@@ -1856,7 +1931,8 @@ def models_page(reg):
                  "headline scores. A dash is a gap: Artificial Analysis adds a new model's scores over its first weeks, "
                  "and a domain none of these models has a score in isn't shown.</p>"
                  + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
-                 + "</header><h2>Best for</h2><div class='card'><table class='bench best'>" + best + "</table></div>"
+                 + "</header><h2>Helper tiers</h2><div class='card'><p class='muted'>Chosen on the Intelligence Index alone: each "
+                 "project's default, which its settings can change.</p><table class='bench best'>" + best + "</table></div>"
                  "<h2>By domain</h2><div class='card'>" + table + "</div>"
                  "<h2>Score against price</h2><div class='card'>" + effort_chart(entries) + "</div>"
                  "<h2>Cards</h2>" + cards)
@@ -1938,6 +2014,29 @@ def per(benchmark):
     return bench.per(benchmark)
 
 
+def signin_result(why=False):
+    """The last token check's failure, kept for the Settings page to show; why=None clears it, a string sets it."""
+    path = home() / "claude-token-check"
+    if why is False:
+        try:
+            return path.read_text().strip() or None
+        except OSError:
+            return None
+    if why:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(why)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def signed_out():
+    """The programs found signed out by the daily check, and since when."""
+    try:
+        return json.loads((home() / "signed-out.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def settings_page(reg):
     rows = []
     for r in reg["roots"]:
@@ -1956,8 +2055,14 @@ def settings_page(reg):
         state = ("installed" if pv.installed(p) else f"not installed: <a href='{e(p.site)}' target='_blank' rel='noopener'>get it</a>")
         also = (f"; off, but {len(using)} project{'s' * (len(using) != 1)} still run on it ({e(', '.join(using))})"
                 if using and not pv.enabled(p) else f"; {len(using)} project{'s' * (len(using) != 1)}" if using else "")
+        from . import usage
+        used = usage.line(k) if pv.installed(p) else ""
+        used = f"Usage: {used}" if used else ""
+        out = signed_out().get(k)
+        used = (f"signed out since {out}: sign in again in a terminal" + (f" · {used}" if used else "")) if out else used
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
-                f"<span class='muted'>({state}{also})</span></label>")
+                f"<span class='muted'>({state}{also})</span></label>"
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else ""))
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
@@ -1971,6 +2076,8 @@ def settings_page(reg):
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
                f"<span class='muted'>(one inbox per project)</span></label>"
+               f"<label><input type='checkbox' name='auto_update' value='on'{check('auto_update')}> Keep Claude Code and Codex updated "
+               f"<span class='muted'>(daily; a console moves to the new version once it sits idle, in the same conversation)</span></label>"
                f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Answer a new console's start-up questions "
                f"<span class='muted'>(folder trust, permission mode, Remote Control, hooks: so it runs as set up)</span></label>"
                f"<label>Permissions for new sessions <select name='permissions'>"
@@ -1978,6 +2085,9 @@ def settings_page(reg):
                          [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
                + "</select></label>"
                + provider_fields(s["provider"], s["model"], s["effort"], "the provider's default") +
+               f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> % "
+               f"of a program's 5-hour or weekly limit <span class='muted'>(its projects land what's in flight, save their "
+               f"work and tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset)</span></label>"
                f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
@@ -2018,8 +2128,34 @@ def settings_page(reg):
                   + ("".join(seat(k) for k in fams) or "<p class='muted'>No program that can consult is on.</p>")
                   + ("<p class='muted'>Only one model family is on, so one consultant.</p>" if len(fams) == 1 else "")
                   + "<button>Save</button></form>")
-    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>"
-            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+    from . import monitor as mon
+    mp = mon.provider()
+    mm, me, mwhy = mon.choice()
+    mine = s.get("monitor_model") or {}
+    opts = [f"<option value='auto'{'' if mine else ' selected'}>Auto: {e(mm or 'its default') if not mine else 'step-up tier'}"
+            + (f" at {e(me)}" if me and not mine else "") + "</option>"]
+    for mid, label in pv.available(mp):
+        opts.append(f"<optgroup label='{e(label)}'>" + "".join(
+            f"<option value='{e(mid)}:{e(x)}'{' selected' if mine and (mine.get('model'), mine.get('effort') or '') == (mid, x) else ''}>"
+            f"{e(label)} at {e(x)}</option>" for x in pv.efforts_of(mp, mid)) + "</optgroup>")
+    monitor_card = (f"<form method='post' action='/monitor-model' class='options'><label>Model <select name='monitor_model'>{''.join(opts)}</select></label>"
+                    f"<p class='muted'>Now: {e(mm or 'its program default')}" + (f" at {e(me)}" if me else "") + f" ({e(mwhy)}). "
+                    f"Its conversation is kept small so each wake-up stays cheap: capped at {mon.CONTEXT_CAP} tokens, and about once a "
+                    f"day it writes down what to carry on from and starts fresh, when it's idle and no one is at it.</p>"
+                    f"<button>Save</button></form>")
+    claude = pv.get("claude")
+    signin = ""
+    if pv.installed(claude) and pv.enabled(claude):
+        tok, failed = claude.token(), signin_result()
+        steps_ = "".join(f"<li>{e(t)}</li>" for t, _ in claude.TOKEN_STEPS)
+        signin = (f"<h2>Claude Code sign-in</h2><div class='card'><p>{'Long-lived sign-in connected: Claude Code consoles use it, so they are not signed out every week or so.' if tok else 'Using the regular sign-in, which expires every week or so. A long-lived one keeps every console signed in.'}</p>"
+                  + (f"<p class='muted'>That token didn't work: {e(failed)}</p>" if failed else "")
+                  + f"<ol class='steps'>{steps_}</ol><form method='post' action='/claude-token' class='options'>"
+                  f"<label>Token <input type='password' name='token' autocomplete='off' placeholder='{'Paste a new token to replace it' if tok else 'Paste the token'}'></label>"
+                  f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
+                  + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
+    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>{signin}"
+            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Monitor</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
@@ -2228,6 +2364,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/monitor-model":
+            set_setting("monitor_model", form.get("monitor_model", "auto"))
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/claude-token":
+            from . import providers as pv
+            claude = pv.get("claude")
+            if form.get("do") == "remove":
+                claude.set_token("")
+                signin_result(None)
+            elif form.get("token", "").strip():
+                ok, why = claude.check_token(form["token"])
+                if ok:
+                    claude.set_token(form["token"])
+                signin_result(why if not ok else None)
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/providers":
             on = urllib.parse.parse_qs(body_text).get("on", []) if body_text else []
             try:
@@ -2262,12 +2421,18 @@ class Handler(BaseHTTPRequestHandler):
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
             set_setting("trust", form.get("trust", "off"))
+            set_setting("auto_update", form.get("auto_update", "off"))
             if form.get("permissions"):
                 set_setting("permissions", form["permissions"])
             if form.get("provider"):
                 set_setting("provider", form["provider"])
             set_setting("model", form.get("model", ""))
             set_setting("effort", form.get("effort", ""))
+            if form.get("safe_pause", "").strip():
+                try:
+                    set_setting("safe_pause", form["safe_pause"])
+                except KeyError:
+                    pass                                  # not a percentage: the old one stays
             if form.get("new_root", "").strip():
                 set_setting("new-folder", form["new_root"].strip())
             self.send_response(303)
@@ -2308,7 +2473,19 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/project-settings":
-            project_settings(projects(reg)[int(form.get("p", "0"))], {k: form.get(k, "") for k in PROJECT_KEYS})
+            root = projects(reg)[int(form.get("p", "0"))]
+            project_settings(root, {k: form.get(k, "") for k in PROJECT_KEYS})
+            from . import bench
+            own = bench.plan(root)
+            for t in bench.TIERS:
+                v = form.get(f"tier_{t}")
+                if v == "auto" and t in own:
+                    bench.set_plan(root, t, None, None)
+                elif v and v != "auto":
+                    m, _, x = v.rpartition(":")
+                    if (own.get(t, {}).get("model"), own.get(t, {}).get("effort") or "") != (m, x):
+                        bench.set_plan(root, t, m, x or None)
+            bench.write_helpers(root)
             self.send_response(303)
             self.send_header("Location", f"/?p={form.get('p', '0')}")
             self.send_header("Content-Length", "0")

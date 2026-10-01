@@ -1,6 +1,7 @@
 import html
 import json
 import shutil
+import shlex
 import re
 import os
 import subprocess
@@ -825,7 +826,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("colony needs an agent program: Claude Code", r.stdout)
 
-    def test_benchmark_cards_rank_the_lineup_and_projects_agree_a_model_plan(self):
+    def test_benchmark_cards_rank_the_lineup_and_set_each_projects_helper_tiers(self):
         from colony import bench
         rec = lambda model, effort, value, domain="overall", source="Artificial Analysis", bench_="Intelligence Index", ver="v4", unit="points", kind="independent": dict(
             model=model, effort=effort, source=source, kind=kind, benchmark=bench_, version=ver, domain=domain,
@@ -859,40 +860,53 @@ class GlanceTest(BoardBase):
                    rec("claude-sonnet-5", "high", 0.01, "cost", bench_="Coding Agent Index Cost per Task", unit="usd")])
         by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertIsNone(by[("claude-sonnet-5", "high")]["cost"], "another benchmark's cost is never compared")
-        self.assertEqual(bench.best_for("chores")[0]["model"], "claude-haiku-4-5-20251001",
-                         "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 54/$1.82)")
+        tiers = bench.tiers_for("claude")
+        self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "medium"),
+                         "the top model at its lowest effort within a few index points of its best (51 against 54)")
+        self.assertEqual(tiers["chores"]["model"], "claude-haiku-4-5-20251001",
+                         "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 51/$1.34)")
+        self.assertEqual((tiers["routine"]["model"], tiers["routine"]["effort"]), ("claude-opus-5-5", "medium"),
+                         "the cheapest within reach of step-up: Haiku's 20 is too far below")
+        self.assertIn("claude-sonnet-5", bench.unmeasured("claude"), "no index yet: shown as not measured, never picked")
         c = bench.card("claude-opus-5-5")
         self.assertIn("xhigh", c["untested"], "an effort level with no data is a gap, not an estimate")
         self.assertTrue(any("high over medium" in n for n in c["notes"]), "where more effort pays")
         self.assertIn("claude-sonnet-5", bench.pending())
         self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
         page = board.models_page(board.registry())
-        for want in ("Best for", "By domain", "Score against price", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
-                     "isn't ranked against the rows above"):
+        for want in ("Helper tiers", "By domain", "Score against price", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
+                     "isn't ranked against the rows above", "Not yet measured, so not picked"):
             self.assertIn(want, page)
-        self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison or the best-for lists")
+        self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison")
         head = re.search(r"<table class='bench'><tr>(.*?)</tr>", page).group(1)
         self.assertNotIn("<th>preference</th>", head, "a domain no model here has a score in isn't a column")
         self.assertEqual(len(board.once([by[("claude-opus-5-5", "high")], by[("claude-opus-5-5", "medium")]])), 1, "each model once")
         add = board.add_project_page(board.registry(), "new", "")
         self.assertIn("ⓘ benchmarks</a>", add, "beside the model, when adding a project")
-        self.assertIn("From the benchmark cards (Artificial Analysis): planning, Opus 5.5 at high", html.unescape(add),
-                      "the form shows the cards' recommendation, framed as theirs, the same the agent gets")
+        self.assertIn("Helpers from the benchmark cards (Artificial Analysis): routine, Opus 5.5 at medium", html.unescape(add),
+                      "the form shows the cards' tiers, framed as theirs, the same the agent gets")
         self.assertIn("href='/models", add)
-        # a new project starts with a plan to agree, and keeps what was agreed across sessions
+        # a new project gets the tiers as helpers at once: no plan to agree before work
         board.track(self.root)
-        [first] = [n for n in board.notes(self.root) if n["text"].startswith("Before any work, agree your model plan")]
-        self.assertIn("building: Opus 5.5 at high effort", first["text"])
-        self.assertIn("ask them to confirm or adjust", first["text"])
-        self.assertIn("model plan", (self.root / "CLAUDE.md").read_text(), "the protocol says how it's kept and revisited")
-        self.assertIn("it doesn't wait: carry on unless redirected", (self.root / "CLAUDE.md").read_text(),
+        self.assertFalse(any("agree your model plan" in n["text"] for n in board.notes(self.root)))
+        chores = (self.root / ".claude" / "agents" / "colony-chores.md").read_text()
+        self.assertIn("model: claude-haiku-4-5-20251001", chores)
+        self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
+        claude_md = (self.root / "CLAUDE.md").read_text()
+        self.assertIn("three tiers, routine, step-up and chores", " ".join(claude_md.split()))
+        self.assertIn("it doesn't wait: carry on unless redirected", claude_md,
                       "helpers keep their assigner aware of the shape of their work")
-        self.assertIn("talk at hand-offs", (self.root / "CLAUDE.md").read_text(), "paired projects: roles, not running updates")
-        self.assertIn("say\n  what it owns, where it ends", (self.root / "CLAUDE.md").read_text(), "an unsized job gets an end, or finding one comes first")
-        self.cli("models", "set", "building", "claude-opus-5-5", "high", "--why", "agreed with the person")
+        self.assertIn("talk at hand-offs", claude_md, "paired projects: roles, not running updates")
+        self.assertIn("say\n  what it owns, where it ends", claude_md, "an unsized job gets an end, or finding one comes first")
+        # the project's own choice for a tier, and back to the default
+        self.cli("models", "set", "routine", "claude-opus-5-5", "high")
+        self.assertIn("effort: high", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         out = self.cli("notes", "--deliver", "--session").stdout
-        self.assertIn("Your model plan, agreed with the person", out, "handed over at every session start")
-        self.assertIn("building: Opus 5.5 (claude-opus-5-5) at high effort: agreed with the person", out)
+        self.assertIn("Your helpers (subagents) run at three tiers", out, "handed over at every session start")
+        self.assertIn("routine: Opus 5.5 (claude-opus-5-5) at high effort, as the `colony-routine` helper (this project's choice)", out)
+        self.assertIn("step-up work is yours", out)
+        self.cli("models", "reset", "routine")
+        self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         self.assertEqual(bench.ready_to_announce(), [], "the first look takes what's there as known")
         providers.get("claude").models.append(("claude-new-6", "New 6"))
         from unittest.mock import patch
@@ -900,12 +914,12 @@ class GlanceTest(BoardBase):
         stop.start()
         try:
             monitor.Watcher(quiet=0).models_daily()
-            self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no data yet: nothing to act on")
+            stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
+            self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
             bench.add([rec("claude-new-6", "high", 58)])                     # Artificial Analysis now has it
             monitor.Watcher(quiet=0).models_daily()
-            self.assertTrue(any("A model joined colony, with its benchmarks: New 6" in n["text"] for n in board.notes(self.root)))
-            monitor.Watcher(quiet=0).models_daily()
-            self.assertEqual(sum("New 6" in n["text"] for n in board.notes(self.root)), 1, "announced once")
+            self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
+            self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
         finally:
             stop.stop()
             providers.get("claude").models.pop()
@@ -1409,7 +1423,7 @@ class ProjectSettingsTest(BoardBase):
             model_name = lambda self, v: v
             history_text = lambda self, root: None
             scrolled_marker = ""
-            command = lambda self, label, s: f"other --model {s.get('model')}"
+            command = lambda self, label, s, **kw: f"other --model {s.get('model')}"
             wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
             wired = lambda self, root: (root / "AGENTS.md").exists()
             classify = lambda self, screen: "idle"
@@ -2261,15 +2275,16 @@ class ConsultTest(BoardBase):
     def test_settings_show_the_auto_pick_and_the_person_can_change_or_restore_it(self):
         board.set_setting("consultants", "")
         from colony import bench
-        saved = bench.recommend_for
-        bench.recommend_for = lambda k: {"planning": {"model": f"{k}-top", "effort": "high", "why": "planning score 90"}}
+        saved = bench.tiers_for, bench.best_effort
+        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": f"{k}-top", "effort": "high", "why": ""}}
+        bench.best_effort = lambda k, m, entries=None: "max"
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         try:
             page = board.settings_page(board.registry())
-            self.assertIn("Auto: claude-top at high", page)
-            self.assertIn("Auto picks best for planning on the benchmark cards: planning score 90", page)
+            self.assertIn("Auto: claude-top at max", page)
+            self.assertIn("Auto picks the step-up model (the highest Intelligence Index here), at its best effort", page)
             post = lambda d: urllib.request.urlopen(urllib.request.Request(
                 f"http://127.0.0.1:{port}/consulting", data=urllib.parse.urlencode(d).encode()))
             post({"consult": "on", "consultant_claude": "claude-sonnet-5-5:medium", "consultant_codex": "auto"})
@@ -2279,7 +2294,7 @@ class ConsultTest(BoardBase):
             s = board.registry()["settings"]
             self.assertEqual((s["consult"], s["consultants"]), (False, {}))
         finally:
-            bench.recommend_for = saved
+            bench.tiers_for, bench.best_effort = saved
             httpd.shutdown()
             httpd.server_close()
 
@@ -2291,17 +2306,18 @@ class ConsultTest(BoardBase):
         with self.assertRaises(KeyError):
             providers.get("gemini", strict=True)
 
-    def test_without_a_choice_each_family_takes_its_best_for_planning_from_the_cards(self):
+    def test_without_a_choice_each_family_takes_its_step_up_model_at_its_best_effort(self):
         from colony import bench
         board.set_setting("consultants", "")
-        saved = bench.recommend_for
-        bench.recommend_for = lambda k: {"planning": {"model": f"{k}-top", "effort": "high", "why": "planning score 90"}}
+        saved = bench.tiers_for, bench.best_effort
+        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": f"{k}-top", "effort": "high", "why": ""}}
+        bench.best_effort = lambda k, m, entries=None: "max"
         try:
             who, _ = self.consult.consultants()
         finally:
-            bench.recommend_for = saved
-        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-top", "high"), ("codex", "codex-top", "high")])
-        self.assertIn("planning score 90", who[0][3])
+            bench.tiers_for, bench.best_effort = saved
+        self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-top", "max"), ("codex", "codex-top", "max")])
+        self.assertIn("step-up model", who[0][3])
 
 
     def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
@@ -2320,6 +2336,316 @@ class ConsultTest(BoardBase):
         settings = board.settings_page(reg)
         self.assertNotIn("spent", settings)
         self.assertIn("<option value='claude-opus-5-5:high' selected>", settings)
+
+
+class HelperTierTest(BoardBase):
+    def test_codex_projects_get_each_tier_as_an_overlay_registered_when_the_console_starts(self):
+        codex = providers.get("codex")
+        tiers = {"routine": {"model": "gpt-5.6-sol", "effort": "high"}, "chores": {"model": "gpt-5.6-luna", "effort": "low"}}
+        changed = codex.write_helpers(self.root, tiers)
+        self.assertEqual(len(changed), 2)
+        chores = (self.root / ".codex" / "agents" / "colony-chores.toml").read_text()
+        self.assertIn('model = "gpt-5.6-luna"', chores)
+        self.assertIn('model_reasoning_effort = "low"', chores)
+        self.assertEqual(codex.write_helpers(self.root, tiers), [], "unchanged: nothing rewritten")
+        args = shlex.split(codex.command("plants", {}, root=self.root))
+        overlay = str(self.root / ".codex" / "agents" / "colony-chores.toml")
+        self.assertIn(f"agents.colony-chores.config_file={json.dumps(overlay)}", args)
+        self.assertFalse(any("colony-stepup" in a for a in args), "a tier with no file isn't registered")
+        codex.write_helpers(self.root, {"routine": tiers["routine"]})
+        self.assertFalse((self.root / ".codex" / "agents" / "colony-chores.toml").exists(), "a tier colony can't fill: no helper")
+
+
+class UsageTest(BoardBase):
+    """Each program's usage limits, read without tokens; at the threshold its projects wind down and the person
+    hears where things stand and their options; at the reset they're woken to carry on."""
+
+    def claude_at(self, weekly, resets_in=3600):
+        from colony import usage
+        usage.record_claude({"rate_limits": {"seven_day": {"used_percentage": weekly, "resets_at": time.time() + resets_in},
+                                             "five_hour": {"used_percentage": 5, "resets_at": time.time() + 600}}})
+
+    def test_codex_limits_come_from_its_session_files(self):
+        from colony import usage
+        day = Path(self.tmp.name) / "codex" / "sessions" / "2026" / "09" / "30"
+        day.mkdir(parents=True)
+        event = {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+            "primary": {"used_percent": 42.0, "window_minutes": 10080, "resets_at": 1791201695}, "secondary": None}}}
+        (day / "rollout-x.jsonl").write_text(json.dumps({"type": "session_meta"}) + "\n" + json.dumps(event) + "\n")
+        self.assertEqual(usage.codex(Path(self.tmp.name) / "codex")["windows"], {"weekly": {"used": 42.0, "resets_at": 1791201695}})
+
+    def test_past_the_threshold_a_project_winds_down_and_at_the_reset_it_is_woken(self):
+        from colony import usage
+        board.track(self.root)
+        settings = json.loads((self.root / ".claude" / "settings.json").read_text())
+        self.assertEqual(settings["statusLine"]["command"], "colony statusline", "Claude Code hands its limits to it")
+        self.claude_at(96)
+        self.assertEqual(usage.check(), [], "under 98%: nothing")
+        self.claude_at(98.5)
+        self.assertEqual([w for _, w in usage.check()], ["paused"])
+        [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
+        self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
+        for words in ("Safe pause: Claude Code is at 98.5%", "so nothing is cut off mid-task", "don't cancel them", "where things stand", "1. Wait for the reset", "2. Hand this project to Codex",
+                      "3. Keep going past the limit"):
+            self.assertIn(words, note["text"])
+        self.assertEqual(usage.check(), [], "told once")
+        out = self.cli("notes", "--deliver").stdout
+        self.assertIn("Colony, the harness the person set up and trusts, tells you (with their full approval):", out,
+                      "marked as colony's, and trusted as the person's")
+        self.assertIn("its notices (a usage limit reached", " ".join((self.root / "CLAUDE.md").read_text().split()),
+                      "declared when the project connects")
+        self.assertIn("Colony's own notices are trusted", monitor.ROLE, "and to the monitor")
+        self.assertIn("  2. Hand this project to Codex", out, "the options, numbered")
+        board.add_note(self.root, None, "a note from the person")
+        w = monitor.Watcher(quiet=0)
+        w.mail()
+        self.assertFalse(w.nudged, "a paused project isn't woken")
+        self.claude_at(98.5, resets_in=-1)                   # the week has turned over
+        self.assertEqual([x for _, x in usage.check()], ["resumed"])
+        self.assertIn("has reset. Carry on", board.notes(self.root)[-1]["text"])
+        self.assertFalse(board.notes(self.root)[-1].get("quiet"), "woken to carry on")
+
+    def test_a_project_can_keep_going_or_pause_sooner(self):
+        from colony import usage
+        board.track(self.root)
+        self.claude_at(98)
+        board.project_settings(self.root, {"safe_pause": "off"})
+        self.assertEqual(usage.check(), [], "off for this project")
+        board.project_settings(self.root, {"safe_pause": ""})
+        board.set_setting("safe_pause", "99")
+        self.assertEqual(usage.check(), [], "colony's threshold moved up")
+        with self.assertRaises(KeyError):
+            board.set_setting("safe_pause", "150")
+        reg = json.loads((board.home() / "board.json").read_text())
+        reg["settings"]["usage_pause"] = 95                  # its name before "safe pause"
+        reg["settings"].pop("safe_pause")
+        (board.home() / "board.json").write_text(json.dumps(reg))
+        self.assertEqual(board.registry()["settings"]["safe_pause"], 95, "an old setting carries over")
+
+    def test_the_status_line_records_the_limits_and_shows_them(self):
+        payload = {"model": {"display_name": "Opus 5.5"},
+                   "rate_limits": {"seven_day": {"used_percentage": 61, "resets_at": time.time() + 3600}}}
+        out = subprocess.run([sys.executable, "-m", "colony", "statusline"], input=json.dumps(payload), capture_output=True,
+                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), CLAUDE_CONFIG_DIR=self.tmp.name)).stdout
+        self.assertIn("Opus 5.5 · weekly 61%, resetting", out)
+        from colony import usage
+        self.assertEqual(usage.read("claude")["weekly"]["used"], 61)
+        self.assertIn("Usage: weekly 61%", board.settings_page(board.registry()))
+
+
+class StayCurrentTest(BoardBase):
+    """Programs updated daily; a stale console is reloaded into the same conversation, only once it has sat idle
+    with nothing typed and no one looking."""
+
+    def test_a_console_is_stale_when_its_program_or_its_start_changes(self):
+        from unittest.mock import patch
+        board.track(self.root)
+        name = console.ensure(self.root)
+        claude = providers.get("claude")
+        with patch.object(console, "running_version", lambda n: "2.1.283"), patch.object(type(claude), "version", lambda self: "2.1.284 (Claude Code)"):
+            self.assertEqual(console.stale(self.root), "Claude Code 2.1.283 → 2.1.284")
+        with patch.object(console, "running_version", lambda n: "2.1.284"), patch.object(type(claude), "version", lambda self: "2.1.284 (Claude Code)"):
+            self.assertIsNone(console.stale(self.root), "current")
+            claude.write_helpers(self.root, {"chores": {"model": "claude-haiku-4-5-20251001", "effort": None}})
+            self.assertEqual(console.stale(self.root), "its settings or helper tiers changed")
+            console.reload(self.root)
+            self.assertTrue(console.running(name))
+            self.assertIsNone(console.stale(self.root), "reloaded onto what it would start with now")
+
+    def test_the_monitor_resumes_its_latest_conversation_and_a_new_conversation_isnt_a_new_setup(self):
+        from unittest.mock import patch
+        cfg = Path(self.tmp.name) / "claude-config"
+        folder = Path(self.tmp.name) / "monitor-home"
+        slug = cfg / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(folder))
+        slug.mkdir(parents=True)
+        (slug / "older.jsonl").write_text("{}")
+        time.sleep(0.01)
+        (slug / "latest.jsonl").write_text("{}")
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            with patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(cfg)}):
+                self.assertIn("--resume latest", console.command("monitor", None, folder=folder))
+                board.track(self.root)
+                console.remember(self.root, "conv-1", str(slug / "latest.jsonl"))
+                first = console.fingerprint(self.root)
+                console.remember(self.root, "conv-2", str(slug / "latest.jsonl"))
+                self.assertEqual(console.fingerprint(self.root), first, "which conversation it resumes isn't its setup")
+        finally:
+            console.COMMAND = saved
+
+    def test_the_watcher_reloads_only_an_idle_untouched_console_after_a_while(self):
+        from unittest.mock import patch
+        board.track(self.root)
+        console.ensure(self.root)
+        w = monitor.Watcher(quiet=0)
+        reloaded = []
+        state = {"state": "idle"}
+        with patch.object(console, "stale", lambda root, name=None, label=None: "Claude Code 1 → 2" if root == self.root else None), \
+                patch.object(console, "reload", lambda root, name=None, label=None: reloaded.append(root)), \
+                patch.object(console, "snapshot", lambda *a, **k: dict(state, lines=[])), \
+                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False):
+            w.current_checked = 0
+            w.current()
+            self.assertEqual(reloaded, [], "idle only just now: wait")
+            w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+            state["state"] = "working"
+            w.current_checked = 0
+            w.current()
+            self.assertEqual(reloaded, [], "in the middle of work: never")
+            state["state"] = "idle"
+            w.current_checked = 0
+            w.current()
+            w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+            with patch.object(console, "attached", lambda n: True):
+                w.current_checked = 0
+                w.current()
+            self.assertEqual(reloaded, [], "someone has it open: never")
+            w.current_checked = 0
+            w.current()
+            w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+            w.current_checked = 0
+            w.current()
+            self.assertEqual(reloaded, [self.root], "idle a while, untouched: reloaded")
+        self.assertIn("Claude Code 1 → 2", [json.loads(l)["why"] for l in (board.home() / "reloads.jsonl").read_text().splitlines()])
+        board.set_setting("auto_update", "off")
+        w.current_checked = 0
+        w.current()
+        self.assertEqual(len(reloaded), 1, "off: nothing")
+
+
+class SignInTest(BoardBase):
+    """Claude Code's long-lived sign-in, kept by colony and given to each console; each program's sign-in
+    checked daily without tokens."""
+
+    def test_a_checked_token_is_kept_private_and_each_claude_console_starts_with_it(self):
+        claude = providers.get("claude")
+        refused = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps({"is_error": True, "result": "Invalid token"}), "")
+        self.assertEqual(claude.check_token("bad", run=refused), (False, "Invalid token"))
+        seen = {}
+
+        def accepted(cmd, **kw):
+            seen["env"] = kw["env"].get("CLAUDE_CODE_OAUTH_TOKEN")
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok"}), "")
+        self.assertEqual(claude.check_token(" good \n", run=accepted), (True, "signed in"))
+        self.assertEqual(seen["env"], "good", "checked with the token itself")
+        claude.set_token("good")
+        self.assertEqual(oct(claude.token_path().stat().st_mode & 0o777), "0o600", "readable by the person alone")
+        cmd = claude.command("plants", {})
+        self.assertNotIn("good", cmd, "never written into the command")
+        self.assertIn(f'CLAUDE_CODE_OAUTH_TOKEN="$(cat {claude.token_path()})" claude', cmd)
+        self.assertIn("Long-lived sign-in connected", board.settings_page(board.registry()))
+        claude.set_token("")
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", claude.command("plants", {}))
+        self.assertIn("claude setup-token", monitor.ROLE, "a step of first-time setup")
+
+    def test_a_program_found_signed_out_is_shown_and_told_once(self):
+        from unittest.mock import patch
+        claude = providers.get("claude")
+        with patch.object(type(claude), "signed_in", lambda self, run=None: False), \
+                patch.object(type(providers.get("codex")), "signed_in", lambda self, run=None: True):
+            monitor.Watcher(quiet=0).signin()
+            monitor.Watcher(quiet=0).signin()
+        told = " ".join(json.loads(l)["text"] for l in (board.home() / "to_monitor.jsonl").read_text().splitlines())
+        self.assertEqual(told.count("Claude Code is signed out"), 1, "told once")
+        self.assertIn("Settings → Claude Code sign-in", told)
+        self.assertIn("signed out since", board.settings_page(board.registry()))
+        with patch.object(type(claude), "signed_in", lambda self, run=None: True):
+            monitor.Watcher(quiet=0).signin()
+        self.assertNotIn("signed out since", board.settings_page(board.registry()))
+
+
+class MonitorUpkeepTest(BoardBase):
+    """The monitor on its program's step-up tier unless the person picks, its conversation capped, and a fresh
+    start each day from what it wrote down to carry on."""
+
+    def test_its_model_is_the_step_up_tier_or_the_persons_pick_and_its_context_is_capped(self):
+        from colony import bench
+        from unittest.mock import patch
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5", "effort": "high"}}):
+                cmd = console.command("monitor", None, folder=monitor.home())
+                self.assertIn("--model claude-opus-5-5 --effort high --autocompact 150k", cmd)
+                self.assertIn("Auto: claude-opus-5-5 at high", board.settings_page(board.registry()))
+                board.set_setting("monitor_model", "claude-sonnet-5-5:max")
+                self.assertIn("--model claude-sonnet-5-5 --effort max", console.command("monitor", None, folder=monitor.home()))
+                board.set_setting("monitor_model", "auto")
+                self.assertEqual(board.registry()["settings"]["monitor_model"], {})
+        finally:
+            console.COMMAND = saved
+
+    def test_once_a_day_it_writes_what_to_carry_on_and_starts_fresh_with_it(self):
+        from unittest.mock import patch
+        monitor.ensure()
+        w = monitor.Watcher(quiet=0)
+        typed = []
+        with patch.object(console, "type_into", lambda n, text: typed.append(text) or True), \
+                patch.object(monitor, "snapshot", lambda: {"state": "idle", "lines": []}), \
+                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False):
+            w.freshen()
+            self.assertEqual(typed, [], "its clock starts the first time it is seen")
+            st = board.home() / "monitor-fresh.json"
+            st.write_text(json.dumps({"last": time.time() - monitor.FRESH_EVERY - 1}))
+            w.freshen()
+            self.assertIn("Daily fresh start", typed[0])
+            monitor.carried_path().write_text("The person wants Bookflow's release held until Friday.")
+            started = []
+            with patch.object(monitor, "ensure", lambda: started.append(console.command("monitor", None, folder=monitor.home()))):
+                w.freshen()
+            self.assertEqual(len(started), 1)
+            self.assertFalse(monitor.fresh_flag().exists())
+        monitor.brief()
+        self.assertIn("Bookflow's release held until Friday", monitor.brief_path().read_text(), "carried into its brief")
+
+
+class FollowsNewModelsTest(BoardBase):
+    def test_no_model_is_written_in_and_the_data_is_refreshed_weekly(self):
+        from colony import bench, project
+        from unittest.mock import patch
+        self.assertIsNone(project.DEFAULTS["model"])
+        self.assertEqual(project.strongest(), "opus", "no data: Claude Code's own alias for its newest Opus")
+        with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-new-6", "effort": "high"}}):
+            self.assertEqual(project.strongest(), "claude-new-6")
+        self.assertGreater(bench.days_since_fetch(), 7, "never fetched")
+        (board.home() / "bench").mkdir(parents=True, exist_ok=True)
+        (board.home() / "bench" / "fetched.json").write_text(json.dumps({"at": board.now()}))
+        self.assertLess(bench.days_since_fetch(), 1)
+
+
+class CatchUpTest(BoardBase):
+    """The person steers projects directly too; the monitor catches up on their own words before it acts."""
+
+    def test_the_monitor_sees_what_the_person_said_directly_before_it_acts(self):
+        board.track(self.root)
+        env = dict(os.environ, PYTHONPATH=str(ROOT), COLONY_CONSOLE=monitor.name())
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True, env=env)
+        payload = json.dumps({"prompt": "Hold the reminders feature until the person has tried it"})
+        subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver"], cwd=self.root, input=payload, capture_output=True,
+                       text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertTrue(monitor.unseen(self.root), "their own words, kept")
+        board.said_reply(self.root, "Held it: reminders would break the offline-first rule in the spine, so I kept them local.")
+        self.assertIn("its agent answered: Held it", monitor.unseen(self.root)[-1][2], "the exchange, not their words alone")
+        w = monitor.Watcher(quiet=0)
+        w.states[str(self.root)] = "working"
+        from unittest.mock import patch
+        with patch.object(console, "snapshot", lambda *a, **k: {"state": "idle", "lines": ["done"]}), \
+                patch.object(monitor, "helm_for", lambda p: True):
+            w.events()                                       # a finished turn reads twice before it counts
+            [event] = [x for x in w.events() if x[1] is None]
+        self.assertIn("colony said plants before you settle anything there", event[2])
+        r = run("decided", "plants", "go ahead with reminders")
+        self.assertEqual(r.returncode, 3, "nothing acted on")
+        self.assertIn("Hold the reminders feature", r.stdout)
+        self.assertFalse(monitor.unseen(self.root), "now caught up")
+        self.assertEqual(run("decided", "plants", "held reminders, as they said").returncode, 0)
+        self.assertIn("Nothing new from the person", run("said", "plants").stdout)
+        time.sleep(1.1)                                      # records are to the second
+        board.add_note(self.root, None, "Actually ship reminders on Friday")
+        self.assertIn("in a note on the board: Actually ship reminders", run("said", "plants").stdout)
+        r = subprocess.run([sys.executable, "-m", "colony", "decided", "plants", "x"], cwd=self.root, capture_output=True,
+                           text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertEqual(r.returncode, 0, "only the monitor's own console is held to it")
+        self.assertIn("colony said NAME", monitor.ROLE)
 
 
 class ConsultCallTest(unittest.TestCase):

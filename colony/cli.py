@@ -32,7 +32,7 @@ located signals and a project memory.
     colony setup                    the monitor walks you through first-time setup (again)
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
                                     fetch pulls Artificial Analysis' data; key reads the key from stdin
-    colony models [set ROLE MODEL EFFORT --why ...]     this project's model plan for its helpers
+    colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores)
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony page [--port 8788]       the project at a glance, for the person, with a note box on every row
     colony map [QUERY]              rebuild the map; with QUERY, what exists that bears on it
@@ -576,6 +576,33 @@ def cmd_consult(a):
     return 0
 
 
+def cmd_statusline(a):
+    """(Claude Code's status line) Record the usage limits Claude Code hands its status line, then show the
+    person's own status line if they set one, else a short line of their own usage."""
+    from . import usage
+    raw = sys.stdin.read() if not sys.stdin.isatty() else ""
+    try:
+        payload = json.loads(raw or "{}")
+    except ValueError:
+        payload = {}
+    try:
+        usage.record_claude(payload)
+    except OSError:
+        pass
+    from .providers import get
+    try:
+        own = (json.loads((get("claude").config_home() / "settings.json").read_text()).get("statusLine") or {}).get("command")
+    except (OSError, ValueError, AttributeError):
+        own = None
+    if own and "colony statusline" not in own:
+        r = subprocess.run(own, shell=True, input=raw, capture_output=True, text=True, timeout=10)
+        print(r.stdout.rstrip("\n"))
+        return 0
+    model = (payload.get("model") or {}).get("display_name") or ""
+    print(" · ".join(filter(None, [model, usage.line("claude")])))
+    return 0
+
+
 def cmd_pin(a):
     """Pin something for the person: a file in the project or a URL, shown at the top of its page."""
     from . import board, pins
@@ -657,21 +684,23 @@ def cmd_bench(a):
 
 
 def cmd_models(a):
-    """This project's model plan: which model and effort its helpers use for which kind of work."""
+    """This project's helper tiers: colony's default from the cards, or the project's own choice for a tier."""
     from . import bench, board
     root = board.root_of()
-    if a.what == "set":
-        role, model, effort = (a.args + [None, None, None])[:3]
-        if role not in bench.ROLES or not model:
-            raise SystemExit(f"colony models set ROLE MODEL [EFFORT] --why ...; roles: {', '.join(bench.ROLES)}")
-        bench.set_plan(root, role, model, effort, a.why or "")
-        print(f"{root.name}: {role} → {model}" + (f" at {effort}" if effort else ""))
+    if a.what in ("set", "reset"):
+        tier, model, effort = (a.args + [None, None, None])[:3]
+        if tier not in bench.TIERS or (a.what == "set" and not model):
+            raise SystemExit(f"colony models set TIER MODEL [EFFORT], or colony models reset TIER; tiers: {', '.join(bench.TIERS)}")
+        bench.set_plan(root, tier, model if a.what == "set" else None, effort, a.why or "")
+        bench.write_helpers(root)
+        print(f"{root.name}: {tier} → " + (f"{model}" + (f" at {effort}" if effort else "") if a.what == "set" else "colony's default"))
         return 0
-    agreed, rec = bench.plan(root), bench.recommend(root)
-    for role in bench.ROLES:
-        now = agreed.get(role)
-        print(f"{role:9} " + (f"{now['model']} {now['effort'] or ''}".strip() if now else "(not agreed yet)")
-              + (f"   recommended now: {rec[role]['model']} {rec[role]['effort'] or ''}".rstrip() if role in rec else ""))
+    for tier, r in bench.effective(root).items():
+        print(f"{tier:8} {r['model']} {r['effort'] or ''}".rstrip() + ("   (this project's choice)" if r["own"] else f"   {r['why']}"))
+    from . import providers
+    waiting = bench.unmeasured(providers.key(providers.of(root)))
+    if waiting:
+        print("not yet measured (not picked until they are): " + ", ".join(waiting))
     return 0
 
 
@@ -725,6 +754,7 @@ def cmd_turn(a):
         return 0
     key, text = providers.of(root).turn_text(_hook_input())
     board.record_ask(root, key, text)
+    board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     return 0
 
 
@@ -746,15 +776,17 @@ def cmd_notes(a):
         prompt = str(payload.get("prompt") or "")
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves
+            board.said(root, prompt)                         # their own words, for the monitor to catch up on
         from . import bench
-        standing = bench.plan_text(root) if a.session else ""       # the agreed model plan, every session
+        standing = bench.plan_text(root) if a.session else ""       # the helper tiers, every session
         fresh, still = board.deliver(root, session=a.session)
         if any(not n.get("quiet") and not n["anchor"] for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
             standing,
-            board.render_notes(fresh, "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") != "colony"], "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
             mail.render(new_mail, "Mail from other projects in the colony:"),
             mail.render(open_asks, "Questions from the colony you haven't answered yet:")]))
@@ -806,12 +838,39 @@ def cmd_peek(a):
     return 0
 
 
+def _caught_up(root):
+    """Run by the monitor's own console: if the person has spoken to this project directly since the monitor last
+    caught up, nothing is sent; their words are shown instead, so the monitor never acts on a stale picture of
+    what they want. True when it may go on."""
+    from . import console, monitor
+    if os.environ.get("COLONY_CONSOLE") != monitor.name():
+        return True
+    words = monitor.catch_up(root)
+    if not words:
+        return True
+    print(f"Nothing was sent. The person has spoken to {root.name} directly since you last caught up:\n{words}\n"
+          "If what you were doing still fits what they said there, run it again; if not, or if you can't tell, "
+          "bring it to them instead.")
+    return False
+
+
+def cmd_said(a):
+    """What the person has said to a project directly (in its console, or in a note on the board) since the
+    monitor last caught up on it: their own words only."""
+    from . import monitor
+    words = monitor.catch_up(_project(a.name))
+    print(words or f"Nothing new from the person in {a.name} since you last caught up.")
+    return 0
+
+
 def cmd_tell(a):
     """The monitor speaks for the person: as a note from them, delivered through the hooks into the agent's own
     context (typed text arrives as a paste, which an agent rightly doesn't take as the person's word), and a
     one-line nudge if the session is idle. It shows on the board like any note."""
     from . import board, console
     root = _project(a.name)
+    if not _caught_up(root):
+        return 3
     board.add_note(root, None, a.text, author="monitor")
     name = console.ensure(root)
     if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
@@ -871,6 +930,8 @@ def cmd_choose(a):
     `colony tell` would type the text and press Enter on whatever is highlighted."""
     from . import console, providers
     root = _project(a.name)
+    if not _caught_up(root):
+        return 3
     name = console.session_name(root)
     keys = providers.of(root).choose(console.screen(name), a.option)
     if not keys:
@@ -1022,6 +1083,8 @@ def cmd_supports(a):
 
 def cmd_decided(a):
     from . import monitor
+    if not _caught_up(_project(a.name)):
+        return 3
     monitor.decided(_project(a.name), a.text)
     print(f"recorded for {a.name}")
     return 0
@@ -1062,6 +1125,7 @@ def main(argv=None):
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.set_defaults(fn=cmd_gate)
+    sub.add_parser("statusline", help="(Claude Code's status line) record its usage limits").set_defaults(fn=cmd_statusline)
     p = sub.add_parser("consult", help="two fresh models from different families, at a decision costly to change")
     p.add_argument("decision", help="the roadmap item (R12) or a short name for the decision")
     p.add_argument("question", nargs="?", help="the decision, in a sentence or two")
@@ -1073,6 +1137,8 @@ def main(argv=None):
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
+    p = sub.add_parser("said", help="(monitor) what the person said to a project directly since you last caught up")
+    p.add_argument("name"); p.set_defaults(fn=cmd_said)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
     p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")
@@ -1093,8 +1159,8 @@ def main(argv=None):
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
-    p = sub.add_parser("models", help="this project's model plan for its helpers")
-    p.add_argument("what", nargs="?", choices=("set",)); p.add_argument("args", nargs="*"); p.add_argument("--why")
+    p = sub.add_parser("models", help="this project's helper tiers: routine, step-up, chores")
+    p.add_argument("what", nargs="?", choices=("set", "reset")); p.add_argument("args", nargs="*"); p.add_argument("--why")
     p.set_defaults(fn=cmd_models)
     p = sub.add_parser("turn", help="(hook) a turn ended; record it if it asks the person something")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) record only in this provider's matching board console")

@@ -3,9 +3,10 @@ import json
 import os
 from pathlib import Path
 
-# Lean by default: in pilots 1-7 a single agent at medium effort was the best value up to a
-# fourteen-row project, so every other mechanism starts off and is turned on where it earns its place.
-DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium",
+# Lean by default: in pilots 1-7 a single agent on the strongest model at medium effort was the best value up
+# to a fourteen-row project, so every other mechanism starts off and is turned on where it earns its place. The
+# model is chosen when the config is read (strongest(): it follows new models), never written in.
+DEFAULTS = {"model": None, "effort": "medium",
             "builder_budget_usd": 8.0, "fix_budget_usd": 4.0, "specialist_budget_usd": 1.5,
             "signals_per_specialist": 5,
             "review": "auto",            # never | auto | always. auto reviews a change that touches the
@@ -14,6 +15,16 @@ DEFAULTS = {"model": "claude-opus-5-5", "effort": "medium",
                                          # least this, e.g. 9.
             "checkpoint_every": 5,       # the page says a checkpoint is due after this many rows; never stops a run
             "allow_outward": []}         # refused commands the person lifts for work that needs them
+
+
+def strongest():
+    """The strongest Claude model here, from the benchmark cards (the step-up tier's model); else Claude Code's
+    own "opus" alias, which follows its newest Opus."""
+    try:
+        from . import bench
+        return (bench.tiers_for("claude").get("step-up") or {}).get("model") or "opus"
+    except Exception:          # the runtime must start even where the board's data is missing or unreadable
+        return "opus"
 
 
 class Project:
@@ -45,6 +56,7 @@ class Project:
         cfg = dict(DEFAULTS)
         if path.exists():
             cfg.update(json.loads(path.read_text()))
+        cfg["model"] = cfg["model"] or strongest()
         return cfg
 
     def append(self, name, record):

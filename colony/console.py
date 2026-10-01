@@ -37,9 +37,10 @@ def token():
 COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the provider's CLI (tests, demos)
 
 
-def command(label, root=None):
+def command(label, root=None, folder=None):
     """How the project's provider starts its agent, with the project's settings (falling back to the global ones),
-    back in the conversation it was last in, if it had one."""
+    back in the conversation it was last in, if it had one. folder: a console that isn't a project's (the
+    monitor's) resumes the conversation last active there."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
     from . import board, providers
@@ -47,7 +48,16 @@ def command(label, root=None):
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
-    return providers.of(root).command(label, s, **({"resume": resume} if resume else {}))
+    if label == "monitor" and not root:
+        from . import monitor
+        model, effort, _ = monitor.choice()
+        s = dict(s, **({"model": model} if model else {}), **({"effort": effort} if effort else {}),
+                 autocompact=monitor.CONTEXT_CAP)
+        if monitor.fresh_flag().exists():
+            folder = None                               # a fresh start: no conversation to resume
+    if not root and folder and hasattr(providers.of(None), "latest_conversation"):
+        resume = providers.of(None).latest_conversation(folder)
+    return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
 
 
 def _conversations():
@@ -110,10 +120,101 @@ def ensure(root, name=None, label=None):
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
                         "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
-                        contained(command(label or Path(root).name, None if label else root))],
+                        contained(command(label or Path(root).name, None if label else root, folder=root if label else None))],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
+        _started(name, fingerprint(root, label))
     return name
+
+
+# ---------------------------------------------------------------- staying current: reloading a stale console
+
+def fingerprint(root, label=None):
+    """What a console was started with: its launch command (less the conversation it resumes) and the files
+    its program reads only at start (see the provider's startup_files). A change means a reload would differ."""
+    import hashlib
+    from . import board, providers
+    cmd = command(label or Path(root).name, None if label else root, folder=root if label else None)
+    cmd = re.sub(r" (--)?resume \S+", "", cmd)
+    p = providers.of(None if label else root)
+    files = [f for f in (p.startup_files(board.workdir(root)) if hasattr(p, "startup_files") and not label else [])
+             if f.exists()]
+    h = hashlib.sha256(cmd.encode())
+    for f in sorted(files):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _started_path():
+    from . import board
+    return board.home() / "consoles.json"
+
+
+def _started(name, fp):
+    try:
+        have = json.loads(_started_path().read_text())
+    except (OSError, ValueError):
+        have = {}
+    have[name] = {"fingerprint": fp, "at": time.time()}
+    _started_path().parent.mkdir(parents=True, exist_ok=True)
+    _started_path().write_text(json.dumps(have))
+
+
+def running_version(name):
+    """The version of the program a console runs, from its process: each program keeps its versions side by side
+    (Claude Code's versions/2.1.284, Codex's releases/0.154.0-...), so the path says which one is running."""
+    r = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True)
+    todo, seen = r.stdout.split(), set()
+    while todo:
+        pid = todo.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        try:
+            exe = os.readlink(f"/proc/{pid}/exe")
+        except OSError:
+            exe = ""
+        m = re.search(r"/versions/(\d[\w.]*)$|/releases/(\d[\d.]*)-", exe)
+        if m:
+            return m.group(1) or m.group(2)
+        todo += subprocess.run(["pgrep", "-P", pid], capture_output=True, text=True).stdout.split()
+    return None
+
+
+def stale(root, name=None, label=None):
+    """Why a running console is out of date, or None: its program was updated since it started, or what it
+    would be started with has changed (a setting, a helper tier)."""
+    from . import providers
+    name = name or session_name(root)
+    if not running(name):
+        return None
+    p = providers.of(None if label else root)
+    now = re.search(r"\d+(\.\d+)+", p.version() or "")
+    ran = running_version(name)
+    if now and ran and now.group(0) != ran:
+        return f"{p.label} {ran} → {now.group(0)}"
+    try:
+        was = json.loads(_started_path().read_text()).get(name)
+    except (OSError, ValueError):
+        was = None
+    if not was:
+        return "started before colony kept a record of how it starts"
+    if was["fingerprint"] != fingerprint(root, label):
+        return "its settings or helper tiers changed"
+    return None
+
+
+def attached(name):
+    """Whether anyone has the console open: the board's terminal or a terminal of the person's."""
+    r = subprocess.run(["tmux", "display", "-p", "-t", name, "#{session_attached}"], capture_output=True, text=True)
+    return r.stdout.strip() not in ("", "0")
+
+
+def reload(root, name=None, label=None):
+    """Restart a console on what it would be started with now, back in the same conversation."""
+    name = name or session_name(root)
+    subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+    return ensure(root, name, label)
 
 
 def provider(name):

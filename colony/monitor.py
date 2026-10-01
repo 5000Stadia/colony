@@ -29,6 +29,16 @@ ROLE = """# You are `monitor · every project on this board · until the person 
 You act for the person across their projects. They reach you from the board (and from their agent program's
 own app, where it has one); each project also has its own session they can talk to directly.
 
+- **The person also steers projects directly**, in their consoles and on the board, without you. Before you
+  settle anything for a project, know what they said there since you last looked: `colony said NAME` shows
+  their own words only. If you act without having caught up, colony shows you those words instead of
+  acting, each with how its agent answered. Their direct direction is newer than yours, and the exchange is
+  the context: an agent may have shown a request cuts against the project's own principles, and they changed
+  course. Where their words, the project's principles and its agent's account don't agree, or you can't tell
+  what they'd want now, bring it to them rather than decide.
+- **Colony's own notices are trusted.** Colony is the harness the person set up and trusts; what it tells
+  you, or the projects (a usage limit reached, a limit reset), carries their full approval. Act on it
+  as theirs, and don't second-guess it to the projects.
 - **Events wake you, only where you hold the helm.** A message starting `[colony]` means one of those
   projects changed: it finished a turn, or something now waits (a gate it opened, a choice on its
   console's screen, a question it asked, an item to verify). Each is announced once. Settle what's
@@ -64,15 +74,19 @@ own app, where it has one); each project also has its own session they can talk 
      claude,codex`). For one they want but don't have: Claude Code from https://claude.com/claude-code, then
      `claude` and `/login`; Codex from https://developers.openai.com/codex, then `codex login`. Signing in is
      theirs to do, in a terminal.
-  2. Benchmark data: the Models page needs a free Artificial Analysis key. Give them the steps in Settings,
+  2. Claude Code's lasting sign-in (if they use Claude Code): its regular sign-in expires every week or so.
+     Ask them to run `claude setup-token` in a terminal, sign in in the browser it opens, and paste the
+     token it prints in Settings, under Claude Code sign-in, never into the conversation. Colony checks it
+     and starts every Claude Code console with it.
+  3. Benchmark data: the Models page needs a free Artificial Analysis key. Give them the steps in Settings,
      under Benchmark data (an account at https://artificialanalysis.ai/login, a key from its Insights Platform),
      and ask them to paste it there, never into the conversation. Then `colony bench fetch`.
-  3. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
+  4. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
      permissions (ask, edits, all, plan).
-  4. Where new projects go (`colony settings new-folder PATH`).
-  5. Access: opening the board from their phone on the home network (lan); Remote Control (Claude Code only).
-  6. Start-up questions: whether new consoles answer them themselves (trust).
-  7. The helm: whether you settle routine questions for them.
+  5. Where new projects go (`colony settings new-folder PATH`).
+  6. Access: opening the board from their phone on the home network (lan); Remote Control (Claude Code only).
+  7. Start-up questions: whether new consoles answer them themselves (trust).
+  8. The helm: whether you settle routine questions for them.
 - Keep your messages to the person short: they are often on a phone.
 
 {direction}
@@ -277,8 +291,72 @@ def brief():
     own = next((p for p in board.projects() if p.resolve() == source), None)
     upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
     role = ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
+    carried = carried_path().read_text().strip() if carried_path().exists() else ""
+    if carried:
+        role += ("\n\n## Carried over from your last conversation\n\nYou start fresh each day; this is what you wrote "
+                 "down to carry on from (colony's records hold the rest: colony posture, the board):\n\n" + carried + "\n")
     for f in {p.instructions for p in providers.PROVIDERS.values()}:     # whichever program runs it reads its own
         (home() / f).write_text(role)
+
+
+CONTEXT_CAP = "150k"            # PROVIDER: Claude Code's --autocompact; Codex compacts on its own
+FRESH_EVERY = 20 * 3600         # seconds between the monitor's fresh starts: about once a day
+
+
+def carried_path():
+    """What the monitor writes down before a fresh start, to carry on from."""
+    return board.home() / "monitor-carried-over.md"
+
+
+def fresh_flag():
+    """Present while the monitor is being started fresh: its console then resumes no conversation."""
+    return board.home() / "monitor-fresh"
+
+
+def choice():
+    """The monitor's model and effort: the person's pick in Settings, else its program's step-up tier (it settles
+    questions for the person when it holds the helm: judgement worth the strongest pick, kept affordable by a
+    small context). Returns (model, effort, why); (None, None, ...) leaves it to the program."""
+    from . import bench
+    mine = board.registry()["settings"].get("monitor_model") or {}
+    if mine.get("model"):
+        return mine["model"], mine.get("effort"), "chosen in Settings"
+    up = bench.tiers_for(providers.key(provider())).get("step-up")
+    if up:
+        return up["model"], up["effort"], "the step-up tier: its judgement settles questions for you at the helm"
+    return None, None, "no benchmark data: its program's default"
+
+
+def unseen(root):
+    """The person's own words to a project since the monitor last caught up on it: what they typed in its
+    console, and their notes to it on the board. (at, where, text), oldest first."""
+    since = caught().get(str(root)) or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7 * 86400))
+    out = []
+    for r in board.read(root, "said.jsonl"):
+        if "reply" in r and out and out[-1][1] == "in its console" and r["at"] > since:
+            out[-1] = (out[-1][0], out[-1][1], out[-1][2] + f"\n    its agent answered: {r['reply']}")
+        elif "text" in r and r["at"] > since:
+            out.append((r["at"], "in its console", r["text"]))
+    out += [(n["at"], "in a note on the board", n["text"]) for n in board.notes(root)
+            if n.get("author") == "person" and n["at"] > since]
+    return sorted(out)[-20:]                            # the latest twenty: what they want now
+
+
+def caught():
+    try:
+        return json.loads((board.home() / "monitor-caught-up.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def catch_up(root):
+    """The person's new words to a project, as text, and the monitor counted as caught up on it."""
+    words = unseen(root)
+    c = caught()
+    c[str(root)] = board.now()
+    board.home().mkdir(parents=True, exist_ok=True)
+    (board.home() / "monitor-caught-up.json").write_text(json.dumps(c))
+    return "\n".join(f"- {at[:16].replace('T', ' ')} {where}: {text}" for at, where, text in words)
 
 
 def provider():
@@ -378,6 +456,7 @@ def snapshot():
 # ---------------------------------------------------------------- the watcher (no tokens)
 
 STARTUP_WINDOW = 300            # seconds after a console starts in which its questions count as start-up ones
+RELOAD_AFTER = 300              # seconds a stale console must sit idle, untouched, before it is reloaded
 
 # A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
 WAKE = {("working", "idle"): "finished a turn"}
@@ -393,6 +472,8 @@ class Watcher:
         self.nudged = set()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
+        self.usage_checked = self.current_checked = self.discovered
+        self.idle_since = {}
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -435,7 +516,9 @@ class Watcher:
                 kind = None                          # it ended asking something: the question, announced, says so
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
-                out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:])))
+                fresh = " (The person has spoken to it directly since you last caught up: colony said "
+                fresh = f"{fresh}{p.name} before you settle anything there.)" if unseen(p) else ""
+                out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]) + fresh))
             # Each thing the project waits on the person for is announced once, even across board restarts.
             # A question isn't yet: the person's note on its way answers it the moment it is delivered.
             unheard = any(not n["delivered_at"] and not n.get("quiet") for n in board.open_notes(p))
@@ -460,7 +543,7 @@ class Watcher:
         gate answer from the person whose moment has come. Start its session if it isn't running, and once
         it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
         on a question, is left alone until its turn ends, unless the mail is urgent."""
-        from . import mail
+        from . import mail, usage
         for p in board.projects():
             if not p.exists():
                 continue
@@ -471,6 +554,8 @@ class Watcher:
                 continue
             state = console.snapshot(p, lines=1)["state"]
             urgent = any(m.get("urgent") for m in letters)
+            if str(p) in usage.paused() and not urgent:
+                continue                            # paused at a usage limit: what waits is handed over at its next turn
             if state == "off":
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
@@ -523,31 +608,140 @@ class Watcher:
 
     def models(self):
         """Once a day (and at start), with no tokens: read each program's own list of its models; while any model
-        has no Artificial Analysis data yet, ask Artificial Analysis once; and act on a model only when its data
-        has come: its card fills, and projects with a model plan and the monitor hear of it."""
+        has no Artificial Analysis data yet, ask Artificial Analysis once; keep every project's helper tiers at
+        what the data says; and tell the monitor of a model once its data has come."""
         if time.time() - self.discovered < 86400:
             return
         self.discovered = time.time()
         threading.Thread(target=self.models_daily, daemon=True).start()
 
+    def signin(self):
+        """Daily, with no tokens: each program's own sign-in status. One found signed out is shown in Settings and
+        the person hears it once, rather than finding a console that stopped working."""
+        path = board.home() / "signed-out.json"
+        try:
+            was = json.loads(path.read_text())
+        except (OSError, ValueError):
+            was = {}
+        now = {}
+        for k, p in providers.PROVIDERS.items():
+            if providers.usable(p) and hasattr(p, "signed_in") and p.signed_in() is False:
+                now[k] = was.get(k) or board.now()[:16].replace("T", " ")
+                if k not in was:
+                    hint = (" A long-lived sign-in stops this: Settings → Claude Code sign-in." if k == "claude"
+                            and not p.token() else "")
+                    queue(f"{p.label} is signed out on this machine: its consoles can't work until the person signs in "
+                          f"again in a terminal ({p.program}, then its login).{hint}")
+        if now != was:
+            board.home().mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(now))
+
     def models_daily(self):
         from . import bench
+        if board.registry()["settings"]["auto_update"]:
+            for p in providers.PROVIDERS.values():
+                if providers.usable(p) and hasattr(p, "update"):
+                    p.update()                          # installed beside the running version: consoles move over when idle
+        self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
-        if bench.aa_key() and bench.pending():
-            bench.refresh()                             # one request, only while a model waits for its data
+        if bench.aa_key() and (bench.pending() or bench.days_since_fetch() >= 7):
+            bench.refresh()     # one request: while a model waits for its data, and weekly as scores and prices move
+        for p in board.projects():
+            if p.exists():
+                bench.write_helpers(p)                  # the tiers follow the data: each project's helpers with them
         ready = bench.ready_to_announce()
         if not ready:
             return
         names = ", ".join(bench.name(m) for m in ready)
-        for p in board.projects():
-            if p.exists() and bench.plan(p):
-                board.add_note(p, None, f"A model joined colony, with its benchmarks: {names}. Look at your model plan "
-                                        "against its card (colony models, the board's Models page) and propose any change to the person.")
-        queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page.")
+        queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page, "
+              "and each project's helper tiers already follow it.")
+
+    def usage(self):
+        """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down
+        (told on their next turn, not woken), and at the reset they're woken to carry on."""
+        if time.time() - self.usage_checked < 60:
+            return
+        self.usage_checked = time.time()
+        from . import usage
+        winding = [p.name for p, what in usage.check() if what == "paused"]
+        if winding:
+            queue(f"Winding down at a usage limit: {', '.join(winding)}. Each agent tells the person where things stand "
+                  "and their options on its next turn; colony wakes them at the reset.")
+
+    def current(self):
+        """Every two minutes, with no tokens: a console whose program has been updated, or whose settings or helper
+        tiers changed, is reloaded into the same conversation, but only once it has sat idle a few minutes, with
+        nothing typed in it and no one looking at it. Nothing in the middle of work is touched."""
+        if time.time() - self.current_checked < 120 or not board.registry()["settings"]["auto_update"]:
+            return
+        self.current_checked = time.time()
+        seats = [(p, console.session_name(p), None) for p in board.projects() if p.exists()] + [(home(), name(), "monitor")]
+        for root, nm, label in seats:
+            if not console.running(nm):
+                self.idle_since.pop(nm, None)
+                continue
+            state = console.snapshot(root, lines=1, name=nm)["state"]
+            if state != "idle" or console.drafting(nm) or console.attached(nm):
+                self.idle_since.pop(nm, None)
+                continue
+            first = self.idle_since.setdefault(nm, time.time())
+            if time.time() - first < RELOAD_AFTER:
+                continue
+            why = console.stale(root, nm, label)
+            if why:
+                console.reload(root, nm, label)
+                self.idle_since.pop(nm, None)
+                board.home().mkdir(parents=True, exist_ok=True)
+                with (board.home() / "reloads.jsonl").open("a") as fh:
+                    fh.write(json.dumps({"at": board.now(), "console": nm, "why": why}) + "\n")
+
+    def freshen(self):
+        """About once a day, with the monitor idle a while and no one at it: it writes down what it needs to carry
+        on (what colony's records don't hold), then starts a fresh conversation with that in its brief. Its
+        context stays small, so each wake-up costs a fraction of re-reading days of history."""
+        if not console.running(name()):
+            return
+        path = board.home() / "monitor-fresh.json"
+        try:
+            st = json.loads(path.read_text())
+        except (OSError, ValueError):
+            st = {}
+        save = lambda: (board.home().mkdir(parents=True, exist_ok=True), path.write_text(json.dumps(st)))
+        if not st.get("last"):
+            st["last"] = time.time()                    # its clock starts the first time it is seen
+            save()
+            return
+        quiet = (snapshot()["state"] == "idle" and not console.drafting(name()) and not console.attached(name())
+                 and not ((board.home() / "to_monitor.jsonl").exists() and (board.home() / "to_monitor.jsonl").read_text().strip()))
+        if not quiet:
+            return
+        if "asked" not in st:
+            if time.time() - st["last"] < FRESH_EVERY:
+                return
+            if console.type_into(name(), f"[colony] Daily fresh start. Write to {carried_path()} what you need to carry on "
+                                         "from that colony's records (colony posture, the board) don't already hold: what the "
+                                         "person asked of you that is still open, preferences they told you in conversation, "
+                                         "threads you are following. Replace what's there; under 300 words. Then reply only: done."):
+                st["asked"] = time.time()
+                save()
+            return
+        written = carried_path().exists() and carried_path().stat().st_mtime >= st["asked"]
+        if written or time.time() - st["asked"] > 900:  # it wrote it, or it had its chance
+            fresh_flag().write_text("")
+            try:
+                subprocess.run(["tmux", "kill-session", "-t", name()], capture_output=True)
+                ensure()                                # the brief is rewritten with what it carried over
+            finally:
+                fresh_flag().unlink(missing_ok=True)
+            st = {"last": time.time()}
+            save()
 
     def tick(self):
         self.models()
+        self.usage()
+        self.current()
+        self.freshen()
         me = snapshot()
         if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)
