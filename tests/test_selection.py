@@ -128,6 +128,25 @@ from tests.test_board import BoardBase
 
 
 class IntegrationTest(BoardBase):
+    def test_inactive_codex_roles_reconcile_without_changing_the_running_provider(self):
+        board.set_setting('provider', 'claude')
+        def picked(family, role, entries):
+            return {'model': 'gpt-6-astra' if family == 'codex' else 'claude-opus-5-5',
+                    'effort': 'xhigh' if role == 'monitor' else 'high', 'why': 'Fixture role policy'}
+        with patch.object(providers, 'usable', return_value=True), \
+                patch.object(selection.bench, 'standings', return_value=[]), \
+                patch.object(selection.bench, 'role_pick', side_effect=picked):
+            selection.reconcile()
+            with selection.transaction() as state:
+                for role in ('monitor', 'runtime'):
+                    state['accepted']['codex:' + role]['effort'] = 'medium'
+            settled = selection.reconcile()
+            self.assertEqual(settled['accepted']['codex:monitor']['effort'], 'xhigh')
+            self.assertEqual(settled['accepted']['codex:runtime']['effort'], 'high')
+            self.assertEqual(board.registry()['settings']['provider'], 'claude')
+            self.assertEqual(selection.monitor()['model'], 'claude-opus-5-5')
+            self.assertEqual(selection.runtime()['model'], 'claude-opus-5-5')
+
     def test_legacy_form_pins_and_aliases_migrate_once_real_pins_survive(self):
         root = self.root
         (root / '.board').mkdir(exist_ok=True)

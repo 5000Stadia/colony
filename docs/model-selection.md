@@ -63,6 +63,8 @@ recorded in `.board/model-migrations.jsonl`. Main-agent and monitor global pins 
 per provider when the colony default provider changes.
 
 PROVIDER: the unattended runtime currently executes only through Claude Code. The shared
-selection state and the rest of the launchers are provider-neutral.
+selection state and the rest of the launchers are provider-neutral. Every usable provider's
+role choices stay current in the ledger, including an inactive monitor or runtime seat;
+reconciling those choices does not change which provider runs either role.
 
 Run `python3 -m unittest tests.test_colony tests.test_board tests.test_selection`.
