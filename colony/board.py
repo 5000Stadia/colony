@@ -49,6 +49,13 @@ their words; brainstorming and what-ifs never change it. Treat a board edit as t
 consider its effect on the work at hand and act accordingly, discussing anything unclear with them.
 Then build the step to fit the final vision, and so that the steps after it are easier to lay.
 
+When a project is first added, your first piece of work is a conversation with the person about that
+shared image of the finished work. Read existing plans and history first if there are any, so you arrive
+informed. Draw the vision out together, record it with `colony vision` once clearly agreed, and only then
+lay the roadmap toward it. Existing plans stay intact while you talk; do not publish a new roadmap path
+before that agreement. This conversation is between the project's own agent and the person; the monitor's
+setup does not stand in for it.
+
 The vision holds what shapes the whole finished thing: its narrative, feel, the best description of the
 finished product, and optionally a few bullets of fundamental elements every milestone keeps in mind.
 The vision is not the roadmap. Would a decision change what the finished product fundamentally is or
@@ -120,23 +127,30 @@ JOIN = """I've just added this project to my colony: the set of projects I follo
 I leave notes and answer your gates, and where the projects can message each other. The new section of \
 CLAUDE.md, "This project is part of a colony", says how it works.
 
-Please bring the roadmap on board. Read how this project already plans its work (its plan and spec \
-documents, notes, open work and recent history) and write ROADMAP.md in the colony format: milestones as \
+First, read how this project already plans its work (its plan and spec documents, notes, open work and \
+recent history), so you arrive informed. Then have a conversation with me about our shared vision: \
+draw out the image of the finished work with me. This is between you, this project's own agent, and me; \
+the monitor's setup does not stand in for it. Leave distant details open until the work depends on them. \
+Keep existing plans intact and do not publish a new roadmap path before we clearly agree the vision. \
+Once agreed, record it with `colony vision --file PATH --words "the person's words agreeing it"`.
+
+Only then bring the roadmap on board. Write ROADMAP.md in the colony format: milestones as \
 `## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` only for what \
 waits on my own eye; what you can check yourself, check. Include what's \
 done, what's under way, and features we've discussed but not built, as unchecked items under a later \
 milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
-documents stay where they are. Draft a shared vision from what you know of my intentions and bring it to me \
-to shape; when clearly agreed, record it under ## Vision near the top. Leave details open until the work \
-depends on them. Then show me the milestones before treating them as settled."""
+documents stay where they are. Show me the milestones before treating them as settled."""
+
+BEGIN = """I've just added this project. Your first piece of work is a conversation with me about its vision:
+draw out our shared image of the finished work with me. This is between you, this project's own agent,
+and me; the monitor's setup does not stand in for it. Leave distant details open until the work depends
+on them. Once we clearly agree the vision, record it with
+`colony vision --file PATH --words "the person's words agreeing it"`. Only then lay the roadmap toward it.
+Do not publish a roadmap path before that agreement."""
 
 SKELETON = """# Roadmap
 
 ## Vision
-
-## M1 — first milestone: what it looks like
-
-- [ ] R1 the smallest end-to-end step
 """
 
 
@@ -772,19 +786,20 @@ def track(path, register=True):
     shared = workdir(root) != root                # a second project in another's folder: no repository of its own
     ours = {".git", ".board", ".claude", "CLAUDE.md", "ROADMAP.md"}
     # Work of its own: any file colony didn't put there, or commits in its own repository (not an enclosing one).
-    joining = not shared and (any(p.name not in ours for p in root.iterdir()) or
+    joining = not shared and ((root / 'ROADMAP.md').exists() or any(p.name not in ours for p in root.iterdir()) or
                               ((root / ".git").exists() and bool(git(root, "rev-parse", "--verify", "-q", "HEAD").strip())))
     if not shared and not (root / ".git").exists():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".board").mkdir(exist_ok=True)
+    first_track = not any((root / '.board' / name).exists() for name in ('vision.jsonl', 'vision-installed'))
     if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
     from . import vision
     vision.observe(root)
-    has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
-    if joining and not has_plan and not any(n["text"] in (JOIN, join) for n in notes(root)):
-        add_note(root, None, join)
+    if first_track and not any(n.get('onboarding') == 'vision' for n in notes(root)):
+        append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(3), at=now(),
+               author='person', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
     from . import providers
     providers.of(root).wire(workdir(root), protocol(root))
     from . import bench
@@ -1495,7 +1510,7 @@ def add_project_page(reg, tab="new", error=""):
                        f"<label>Name <input name='name' placeholder='a new, empty project'></label>"
                        f"<div class='muted'>Created in:</div>{picker('within', where, where)}{choices}<button>Create project</button></form>"),
         "existing": ("Existing folder", f"<form method='post' action='/add' class='options'>"
-                     f"<div class='muted'>The folder becomes the project's root; its agent brings its plan over to the roadmap.</div>"
+                     f"<div class='muted'>The folder becomes the project's root. Existing plans stay intact while you and its agent shape the vision.</div>"
                      f"{picker('path', '', 'No folder chosen')}{choices}<button>Add project</button></form>"),
         "github": ("From GitHub", f"<form method='post' action='/clone' class='options'>"
                    f"<label>Repository <input name='url' placeholder='https://github.com/owner/repo'></label>"
@@ -1507,6 +1522,8 @@ def add_project_page(reg, tab="new", error=""):
     body = "".join(f"<div class='panel-tab' data-tab='{k}'{'' if k == tab else ' hidden'}>{html_}</div>" for k, (_, html_) in panels.items())
     return shell(reg, -2, f"""<header class='project'><div class='titlerow'><h1>Add a project</h1>
 <a class='exitlink' href='/'>✕ Cancel</a></div></header>{f"<div class='card gate'>{e(error)}</div>" if error else ""}
+<p>Your project's agent will first talk with you about the finished work. Once you agree the vision,
+it lays out the roadmap toward it.</p>
 <div class='segs'>{seg}</div><div class='card'>{body}</div>
 <script>
 document.querySelectorAll('.seg').forEach((b) => b.addEventListener('click', () => {{

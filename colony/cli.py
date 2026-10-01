@@ -911,7 +911,7 @@ def cmd_new(a):
         raise SystemExit(f"no such choice for {err}: colony settings shows the options")
     board.track(root)
     console.ensure(root)
-    print(f"{a.name} created at {root}, on the board, with its console running")
+    print(f"{a.name} created at {root}, on the board, with its console running. Your agent starts by shaping the vision with you.")
     return 0
 
 

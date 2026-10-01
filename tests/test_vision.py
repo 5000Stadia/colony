@@ -203,6 +203,25 @@ class VisionTest(BoardBase):
         self.assertNotIn('Starting draft', note['text'])
         self.assertEqual(self.path.read_text(), original)
 
+    def test_joining_with_a_roadmap_starts_with_conversation_and_preserves_the_plan(self):
+        joined = Path(self.tmp.name) / 'joined'
+        joined.mkdir()
+        (joined / 'ROADMAP.md').write_text(ROADMAP)
+        board.track(joined)
+        [note] = board.notes(joined)
+        self.assertFalse(note.get('quiet', False))
+        self.assertIn('read how this project already plans', note['text'])
+        self.assertIn('do not publish a new roadmap path before we clearly agree', note['text'])
+        self.assertIn('colony vision --file', note['text'])
+        self.assertIn("project's own agent", note['text'])
+        self.assertEqual((joined / 'ROADMAP.md').read_text(), ROADMAP)
+        board.deliver(joined)
+        board.append(joined, 'notes.jsonl', dict(type='addressed', of=note['id'], at=board.now(), text='Conversation begun.'))
+        board.track(joined)
+        vision.install(joined)
+        self.assertEqual(len(board.notes(joined)), 1, 'no repeat onboarding or second migration note')
+        self.assertEqual(board.open_notes(joined), [])
+
     def test_protocol_preserves_revision_prompt_and_scopes_local_details(self):
         self.assertIn("When the work shows the vision differently than it's written, propose a revision to the person.", board.PROTOCOL)
         for text in (board.PROTOCOL, vision.MIGRATION, monitor.ROLE):

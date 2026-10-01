@@ -100,6 +100,7 @@ there, follows new models on its own, keeps itself current, and never gets in th
 - [ ] R68 Rolling fresh context for every main agent and the monitor: past a context threshold (and at the monitor's daily start), compact what's done into a carry-over and keep the last handful of turns verbatim, so the conversation carries on seamlessly. Built by colony-codex
   The person settled g9fd35d: direct board saves, clearly agreed conversation updates, and observed file changes with before/after notes; no confirmation clicks or approval machinery. Details affecting only a few items belong in those descriptions or specifications, including details entered through the Vision box. Consulted in cc9948d and checked in c21b5b3; implementation and rollout notes in docs/vision.md.
   Built with isolated checks: full 203-test regression suite passed, then all 14 vision tests passed after the final migration refinement. Ready for merge/deployment by colony and the person's review of the Vision box and agent response.
+  Live in colony at 635e496 (204 checks). Follow-up built: every newly added project's own agent discusses and records the agreed vision with the person before laying the roadmap, including joined projects with existing plans; monitor setup does not replace that conversation. CLI, browser and join checks pass; awaiting colony deployment.
 
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar

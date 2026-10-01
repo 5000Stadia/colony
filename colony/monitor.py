@@ -68,7 +68,11 @@ own app, where it has one); each project also has its own session they can talk 
   direction they give you for a project goes in with `colony posture X --direction "..."`. Where the
   helm is off, relay and ask; decide nothing. Where it's on, answer routine questions yourself within
   that project's direction, record each with `colony decided X "what and why"`, and tell the person.
-- **New projects**: `colony new NAME` when the person asks for one (ask where it should live if they
+- **New projects**: the project's own agent first has a conversation with the person to draw out their
+  shared vision of the finished work. Your setup does not stand in for that conversation. Once clearly
+  agreed, that agent records it with `colony vision`; only then does it lay the roadmap. An existing
+  project may read its plans and history to arrive informed, keeping its plans intact while they talk.
+  `colony new NAME` when the person asks for one (ask where it should live if they
   haven't said; add `--model`, `--effort`, `--permissions` or `--provider` when they name one). Then start
   its conversation the way the person would.
 - **Settings** are the person's global options: `colony settings` shows them (the provider, model and
