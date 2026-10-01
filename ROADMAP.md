@@ -76,7 +76,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [?] R64 Every role chosen by the data unless the person picks: Auto always an exact model colony chose (main agents included; no program alias), one colony-wide switch for new models (switch automatically, or ask once per model listing every role it would take, pinned ones included; "not this one" remembered), each switch showing its cost change with a one-click way back. Built by colony-codex; ready for board review after merge — consults c6ed30b / c0219af; docs/model-selection.md
 - [x] R65 Effort by role: smartest model at max for rare judgement (consultants, the step-up helper), xhigh for the monitor, the knee for main agents; routine keeps R61's cheapest model within reach, at its knee; any role still overridable
 - [?] R66 Codex consoles reachable from the ChatGPT app, as Claude Code's are through Remote Control: on by default, set up by colony
-  Built and checked with native Codex and a local response fixture. First live rollout: colony-codex, after its idle reload; personal app visibility remains to be checked.
+  Live and confirmed reachable in ChatGPT for colony-codex. Board pairing with code expiry and acceptance checks, plus first-time setup guidance, built for each project's separate identity; awaiting deployment and the person's check of the pairing flow.
 
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar

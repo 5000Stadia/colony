@@ -92,6 +92,33 @@ def report(home, root, mode, reason='', **extra):
                                                       at=time.time(), **extra))
 
 
+def pair(root, manual_code=None):
+    """Pair the existing project host; never start, stop or reconfigure it.
+
+    Only the human-readable code leaves this function. Nothing is persisted or
+    logged by Colony; checking a code never creates a replacement.
+    """
+    home = home_for(root)
+    if not alive(home):
+        raise RemoteError('Open this project’s console with Remote Control on, then return here to pair it.')
+    try:
+        with Client(socket_for(home), timeout=40) as client:
+            if manual_code is not None:
+                if not isinstance(manual_code, str) or not manual_code or len(manual_code) > 256:
+                    raise RemoteError('The pairing code is missing or invalid. Request a fresh code.')
+                result = client.call('remoteControl/pairing/status', {'manualPairingCode': manual_code})
+                return {'claimed': result.get('claimed') is True}
+            result = client.call('remoteControl/pairing/start', {'manualCode': True})
+            code, expiry = result.get('manualPairingCode'), result.get('expiresAt')
+            if not isinstance(code, str) or not code or not isinstance(expiry, int) or expiry <= time.time():
+                raise RemoteError('Codex did not return a usable pairing code. Request a fresh code.')
+            return {'manualPairingCode': code, 'expiresAt': expiry}
+    except (OSError, RPCError):
+        # Native errors can include upstream response bodies; keep those out of
+        # the board and its logs, particularly during a pairing request.
+        raise RemoteError('Could not reach Codex pairing. Check its sign-in and Remote Control connection, then try again.') from None
+
+
 def environment(root, home, source):
     from . import board, console
     env = {k: v for k, v in os.environ.items() if not k.startswith('COLONY_')}

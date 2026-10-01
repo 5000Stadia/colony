@@ -5,12 +5,26 @@ by default. An existing conversation moves when its console next closes idle and
 reopens; an active writer defers the move. The console and ChatGPT then attach to
 the same thread in a project-owned app server.
 
+First open the project's console with Remote Control on. On the board, go to
+**Settings → Agent programs → Pair with ChatGPT** for that project. Enter the
+fresh code in ChatGPT's Remote pairing screen. The board shows the expiry and
+checks whether the code has been accepted; request a new code if it expires.
+Pairing uses the running project's socket without restarting or interrupting it.
+The console works even before pairing. First-time setup includes this step.
+
 In ChatGPT, open **Remote**, select the machine host, then the conversation named
 after the project (first rollout: **colony-codex** on **Box**). Sign in to the same
 ChatGPT account used by Codex. Codex fixes host names to the OS hostname; project
 names belong to the conversations. Account/workspace access to Remote is also
 required. Settings → Agent programs shows daemon counts, connection state and any
 local fallback reason. A connecting host can take a moment to enroll.
+
+Each owned home needs its own pairing. Native Codex stores an `installation_id`
+UUID per home, uses it for enrollment and refresh, and binds pairing to a specific
+server and environment. There is no verified multi-server contract for sharing
+that identity: Colony keeps installation IDs and enrollment records separate.
+Only sign-in credentials are shared. Pairing codes are returned only to the
+requesting board page, never persisted in Colony state or put in URLs or logs.
 
 Changing `remote` to off keeps the conversation in its owned home and starts the
 embedded local CLI. A running app turn defers that change. Colony sends SIGHUP to
