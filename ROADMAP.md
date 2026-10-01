@@ -39,6 +39,8 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R32 The roadmap folds and orders itself by the work: the latest started first, finished last in Completed, a live dot on what's in progress, each item's time in progress, and each heading's elapsed time
 - [x] R33 Not yet takes an item off the person's list until the agent says it's ready again
 - [x] R34 The overview line reads Roadmap: #/# · Active: the agent's time at work, all told
+- [~] R71 One switchable primary for a shared project and its roadmap, inherited item primaries with explicit exceptions, native Codex goals that continue to a coherent completed milestone/version, and human checkpoints proposed during the project's Vision/path conversation. The person requests colony-codex take the lead for Colony. Preserve the existing merge/deploy split unless they change it. Specification: docs/project-lead-spec.md.
+  First consultation cd37d08 ($0.96) complete. Native goal set/get, cold resume, clear, automatic activation and pause during an in-flight turn checked with local fixtures and no account calls. Proposed additions awaiting the person: consolidate routine item reviews at the milestone checkpoint, present the integrated usable deliverable for approval, and isolate or serialize item owners' edits. No live pairing or lead migration yet.
 
 ## M5 — Public: anyone can start with it
 
