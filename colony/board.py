@@ -2359,6 +2359,11 @@ def settings_page(reg):
         used = f"Usage: {used}" if used else ""
         out = signed_out().get(k)
         used = (f"signed out since {out}: sign in again in a terminal" + (f" · {used}" if used else "")) if out else used
+        from . import catalog_freshness
+        freshness = catalog_freshness.info(p)
+        fresh = " · ".join(f"{e(label)}: {e(value)}" for label, value in freshness['fields'])
+        fresh += (". <strong>" + e('; '.join(freshness['warnings'])) + "</strong>" if freshness['warnings'] else "")
+        fresh = "<p class='muted' style='margin:0 0 8px 26px'>Model list: " + fresh.lstrip('. ') + ". Re-read at the program's next session start.</p>"
         remote_info = ''
         if k == 'codex':                         # PROVIDER: each Codex project owns its app-server process
             from . import codex_remote
@@ -2372,7 +2377,7 @@ def settings_page(reg):
             remote_info += '. ChatGPT shows the machine name as host; each conversation carries its project name.</p>'
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
                 f"<span class='muted'>({state}{also})</span></label>"
-                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + remote_info)
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + fresh + remote_info)
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "

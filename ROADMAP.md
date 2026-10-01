@@ -69,6 +69,7 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R48 Each project's model plan: which model and effort its helpers use for which work, recommended at its start and agreed with the person, kept in .board and handed over at every session start, revisited when a model is added
 - [x] R49 Adding a model to colony includes its research check; colony notices a new model, builds its card, reranks, and tells each project
 - [x] R51 Each connected program's models are discovered (Codex's catalog; Claude Code asked, then each ID confirmed with a tiny call), at setup, when a program updates, and on request: the lineup is only what the person can run
+  Follow-up: separate writable Codex host catalogs, retain newer-client discovery against older writers, and respect catalog identity across account changes. Settings shows Codex client/fetch/identity and Claude fetch/expiry, flags older or expired catalogs, and each program’s session-start hook re-reads its native catalog without model calls. Seven catalog/freshness checks and all twelve native/remote checks pass on Codex 0.160.0.
 - [x] R52 Artificial Analysis as the single source: fetched with the person's free key when the lineup changes, the cards derived from it, attribution shown
 - [x] R53 Settings: connect or reconnect the Artificial Analysis key, with step-by-step instructions beside it
 - [x] R54 First-time setup: the monitor's first conversation walks the person through agent programs, the key, defaults and options

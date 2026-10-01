@@ -83,3 +83,25 @@ The provider suggests Astra, 5.6 Sol, 5.6 Terra and 5.6 Luna. GPT-6 Sol and Luna
 Effort suggestions run from low through max, plus Ultra labeled as delegating. Luna excludes Ultra; GPT-5.5 excludes both max and Ultra, matching the observed catalog. Model and provider changes update the suggestions without replacing what the person typed. No existing project is migrated.
 
 Suggested future trial, once available: GPT-6 Sol medium for ordinary building and GPT-6 Luna high for focused work. Availability and the lower token rate alone do not prove a better result on colony's projects.
+
+
+## Catalog freshness and concurrent clients (2026-10-01)
+
+An older running Codex client can overwrite a shared `models_cache.json` with a
+smaller catalog. Owned remote homes now have independent writable cache files;
+credentials remain shared. Discovery considers same-account catalogs, preferring
+the newer client and then its freshest snapshot, and never unions removed models.
+An older writer cannot replace a previously discovered newer catalog. A genuine
+identity change permits replacement and excludes an old-identity host cache.
+
+Settings shows Codex's catalog client version, fetch time and identity, flagging a
+client older than the installed program. Claude's section shows fetchedAt/staleAt,
+flags expiry and a fetch predating the installed executable update. These are
+native catalog timestamps, separate from Artificial Analysis benchmark freshness.
+Session-start hooks re-read only the starting provider's on-disk catalog, without
+model calls; compaction hooks do not repeat discovery.
+
+Remote integration is checked with both Codex 0.159.3 and 0.160.0. Native fixtures
+cover same-conversation transfer, hooks, compaction restoration, cold resume,
+active app turns and shared credential refresh. Unsupported releases retain a
+visible local-mode reason rather than claiming app connectivity.
