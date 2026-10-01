@@ -480,8 +480,8 @@ def plan_text(root):
     return ("Your helpers (subagents) run at three tiers, colony's default from the benchmark cards unless this "
             "project set its own (`colony models` shows them): routine for ordinary work, chores for clear "
             "mechanical tasks, step-up when the work struggles (stalls, retries, work redone); step back down once "
-            "the hard part is done. If you already run on the step-up model, step-up work is yours: a helper would "
-            "rebuild context you hold. Costly decisions go to consultants (colony consult)."
+            "the hard part is done. For a genuinely hard judgement, hand it to the step-up helper with a tight "
+            "brief, accepting that it rebuilds context; ordinary work stays yours. Costly decisions go to consultants (colony consult)."
             + (f" Each tier is a helper: {p.HELPER_CALL}." if named else "") + "\n" + "\n".join(lines))
 
 

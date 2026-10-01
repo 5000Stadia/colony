@@ -912,7 +912,7 @@ class GlanceTest(BoardBase):
         out = self.cli("notes", "--deliver", "--session").stdout
         self.assertIn("Your helpers (subagents) run at three tiers", out, "handed over at every session start")
         self.assertIn("routine: Opus 5.5 (claude-opus-5-5) at high effort, as the `colony-routine` helper (this project's choice)", out)
-        self.assertIn("step-up work is yours", out)
+        self.assertIn("hand it to the step-up helper with a tight brief", out)
         self.cli("models", "reset", "routine")
         self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         self.assertEqual(bench.ready_to_announce(), [], "the first look takes what's there as known")
