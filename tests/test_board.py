@@ -2598,6 +2598,20 @@ class MonitorUpkeepTest(BoardBase):
         self.assertIn("Bookflow's release held until Friday", monitor.brief_path().read_text(), "carried into its brief")
 
 
+class FollowsNewModelsTest(BoardBase):
+    def test_no_model_is_written_in_and_the_data_is_refreshed_weekly(self):
+        from colony import bench, project
+        from unittest.mock import patch
+        self.assertIsNone(project.DEFAULTS["model"])
+        self.assertEqual(project.strongest(), "opus", "no data: Claude Code's own alias for its newest Opus")
+        with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-new-6", "effort": "high"}}):
+            self.assertEqual(project.strongest(), "claude-new-6")
+        self.assertGreater(bench.days_since_fetch(), 7, "never fetched")
+        (board.home() / "bench").mkdir(parents=True, exist_ok=True)
+        (board.home() / "bench" / "fetched.json").write_text(json.dumps({"at": board.now()}))
+        self.assertLess(bench.days_since_fetch(), 1)
+
+
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
 

@@ -566,6 +566,17 @@ def refresh(opener=None):
     return out
 
 
+def days_since_fetch():
+    """Days since Artificial Analysis was last asked (a large number if never)."""
+    try:
+        at = json.loads((board.home() / "bench" / "fetched.json").read_text())["at"]
+    except (OSError, ValueError, KeyError):
+        return 1e9
+    import datetime
+    then = datetime.datetime.fromisoformat(at.replace("Z", "+00:00"))
+    return (datetime.datetime.now(datetime.timezone.utc) - then).total_seconds() / 86400
+
+
 def ready_to_announce():
     """Models in the lineup whose data has come and that haven't been announced: each is announced once. The
     first time the board looks, what's there is taken as known, not as news."""

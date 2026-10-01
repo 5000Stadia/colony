@@ -604,8 +604,8 @@ class Watcher:
         self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
-        if bench.aa_key() and bench.pending():
-            bench.refresh()                             # one request, only while a model waits for its data
+        if bench.aa_key() and (bench.pending() or bench.days_since_fetch() >= 7):
+            bench.refresh()     # one request: while a model waits for its data, and weekly as scores and prices move
         for p in board.projects():
             if p.exists():
                 bench.write_helpers(p)                  # the tiers follow the data: each project's helpers with them

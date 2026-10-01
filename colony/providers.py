@@ -167,7 +167,9 @@ class ClaudeCode:
         import tempfile
         env = dict(os.environ, **{self.TOKEN_ENV: token.strip()})
         try:
-            r = (run or subprocess.run)([self.program, "-p", "--model", "claude-haiku-4-5-20251001", "--setting-sources", "",
+            from . import bench
+            cheap = (bench.tiers_for("claude").get("chores") or {}).get("model")     # the cheapest worth its points
+            r = (run or subprocess.run)([self.program, "-p", *(["--model", cheap] if cheap else []), "--setting-sources", "",
                                          "--output-format", "json"], input="Reply with: ok", capture_output=True, text=True,
                                         env=env, cwd=tempfile.mkdtemp(prefix="colony-token-"), timeout=120)
             d = json.loads(r.stdout or "{}")
