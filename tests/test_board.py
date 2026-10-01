@@ -861,12 +861,12 @@ class GlanceTest(BoardBase):
         by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertIsNone(by[("claude-sonnet-5", "high")]["cost"], "another benchmark's cost is never compared")
         tiers = bench.tiers_for("claude")
-        self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "medium"),
-                         "the top model at its lowest effort within a few index points of its best (51 against 54)")
+        self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "max"),
+                         "the smartest model at max for rare judgement")
         self.assertEqual(tiers["chores"]["model"], "claude-haiku-4-5-20251001",
                          "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 51/$1.34)")
         self.assertEqual((tiers["routine"]["model"], tiers["routine"]["effort"]), ("claude-opus-5-5", "medium"),
-                         "the cheapest within reach of step-up: Haiku's 20 is too far below")
+                         "the smartest model at the estimated knee without a complete measured curve")
         self.assertIn("claude-sonnet-5", bench.unmeasured("claude"), "no index yet: shown as not measured, never picked")
         c = bench.card("claude-opus-5-5")
         self.assertIn("xhigh", c["untested"], "an effort level with no data is a gap, not an estimate")
@@ -891,7 +891,7 @@ class GlanceTest(BoardBase):
         self.assertFalse(any("agree your model plan" in n["text"] for n in board.notes(self.root)))
         chores = (self.root / ".claude" / "agents" / "colony-chores.md").read_text()
         self.assertIn("model: claude-haiku-4-5-20251001", chores)
-        self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
+        self.assertIn("effort: max", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
         claude_md = (self.root / "CLAUDE.md").read_text()
         self.assertIn("three tiers, routine, step-up and chores", " ".join(claude_md.split()))
         self.assertIn("it doesn't wait: carry on unless redirected", claude_md,
@@ -2281,7 +2281,7 @@ class ConsultTest(BoardBase):
         try:
             page = board.settings_page(board.registry())
             self.assertIn("Auto: claude-opus-5-5 at max", page)
-            self.assertIn("Auto picks the step-up model (the highest Intelligence Index here), at its best effort", page)
+            self.assertIn("Auto picks the smartest model; max for rare, pure judgement", page)
             post = lambda d: urllib.request.urlopen(urllib.request.Request(
                 f"http://127.0.0.1:{port}/consulting", data=urllib.parse.urlencode(d).encode()))
             post({"consult": "on", "consultant_claude": "claude-sonnet-5:medium", "consultant_codex": "auto"})
@@ -2314,7 +2314,7 @@ class ConsultTest(BoardBase):
         finally:
             bench.tiers_for, bench.best_effort = saved
         self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-opus-5-5", "max"), ("codex", "gpt-6-astra", "max")])
-        self.assertIn("step-up model", who[0][3])
+        self.assertIn("smartest model", who[0][3])
 
 
     def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
@@ -2562,8 +2562,8 @@ class MonitorUpkeepTest(BoardBase):
         try:
             with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5", "effort": "high"}}):
                 cmd = console.command("monitor", None, folder=monitor.home())
-                self.assertIn("--model claude-opus-5-5 --effort high --autocompact 150k", cmd)
-                self.assertIn("Auto: claude-opus-5-5 at high", board.settings_page(board.registry()))
+                self.assertIn("--model claude-opus-5-5 --effort xhigh --autocompact 150k", cmd)
+                self.assertIn("Auto: claude-opus-5-5 at xhigh", board.settings_page(board.registry()))
                 board.set_setting("monitor_model", "claude-sonnet-5:max")
                 self.assertIn("--model claude-sonnet-5 --effort max", console.command("monitor", None, folder=monitor.home()))
                 board.set_setting("monitor_model", "auto")
@@ -2601,7 +2601,7 @@ class FollowsNewModelsTest(BoardBase):
         from unittest.mock import patch
         self.assertIsNone(project.DEFAULTS["model"])
         self.assertEqual(project.strongest(), "claude-fable-5-1", "no data: a fixed catalog model, never an alias")
-        with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5", "effort": "high"}}):
+        with patch.object(bench, "tiers_for", lambda k, entries=None: {"routine": {"model": "claude-opus-5-5", "effort": "high"}}):
             from colony import selection
             selection.reconcile()
             self.assertEqual(project.strongest(), "claude-opus-5-5")

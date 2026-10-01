@@ -5,10 +5,21 @@ monitor and unattended runtime. Auto is an accepted, exact model and effort pair
 by provider and role. Model defaults and aliases are never passed through to a provider.
 Providers without effort controls have an explicit null effort.
 
-The existing benchmark algorithm is unchanged. Main agents, the monitor and runtime use
-the step-up recommendation. Consultants use that model at its best measured effort.
-Helpers use their named tier. Explicit choices remain pins. Colony helper defaults can
-be pinned in Settings, with a project's own helper choices taking precedence.
+Judgement roles use the family's smartest measured model. Step-up helpers and
+consultants run at max, the monitor at xhigh, and main agents, routine helpers and
+the unattended runtime at the AA fixed-task cost knee. Auto never selects Ultra
+(which enables delegation); unavailable levels map to the nearest supported level,
+with ties downward. Chores retain their value-based model selection. Pins remain
+unchanged, including an explicitly chosen Ultra.
+
+The knee is the effort immediately before the largest proportional increase in
+marginal USD per additional Intelligence Index point. It uses score and task-cost
+pairs from one AA source, benchmark version and date, retained even when the API
+supplies the current model ranking. Non-increasing, incomplete or missing curves
+fall back to the lowest effort within five points of the model's best score,
+labelled **Estimated knee** on Models. No colony-task telemetry or per-token price
+is substituted for AA task costs. Accepted choices retain the curve, version, date,
+computed marginal costs and policy revision for inspection and rollback.
 
 Settings has one adoption policy: switch automatically, or ask. New-model proposals
 appear in the board's Needs you area and on Models/Settings. They are not project gates

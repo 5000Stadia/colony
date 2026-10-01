@@ -1989,11 +1989,12 @@ def models_page(reg):
     # the helper tiers each family's projects run at by default, and why
     from . import providers as pv
     fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p)]
-    picks = {k: bench.tiers_for(k, entries) for k in fams}
+    roles = ('main', 'routine', 'step-up', 'chores', 'consultant', 'monitor', 'runtime')
+    picks = {k: {role: bench.role_pick(k, role, entries) for role in roles if role != 'runtime' or k == 'claude'} for k in fams}
     cell = lambda r: (f"<a href='#{e(r['model'])}'>{e(bench.name(r['model']))}</a>" + (f" at {e(r['effort'])}" if r["effort"] else "")
                       + f"<div class='muted'>{e(r['why'])}</div>") if r else "<span class='muted'>—</span>"
     best = ("<tr><th></th>" + "".join(f"<th>{e(pv.get(k).label)}</th>" for k in fams) + "</tr>" + "".join(
-        f"<tr><th>{e(t)}</th>" + "".join(f"<td>{cell(picks[k].get(t))}</td>" for k in fams) + "</tr>" for t in bench.TIERS)
+        f"<tr><th>{e(t)}</th>" + "".join(f"<td>{cell(picks[k].get(t))}</td>" for k in fams) + "</tr>" for t in roles)
         + "".join(f"<tr><td colspan='{len(fams) + 1}' class='muted'>Not yet measured, so not picked: "
                   f"{e(', '.join(bench.name(m) for m in bench.unmeasured(k, entries)))}</td></tr>" for k in fams if bench.unmeasured(k, entries)))
     # a domain column only where some model here has a score: the source adds scores to a new model over its first
@@ -2015,7 +2016,9 @@ def models_page(reg):
                  "and a domain none of these models has a score in isn't shown.</p>"
                  + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
                  + "</header><h2>Helper tiers</h2><div class='card'><p class='muted'>Chosen on the Intelligence Index alone: each "
-                 "project's default, which its settings can change.</p><table class='bench best'>" + best + "</table></div>"
+                 "project's default, which its settings can change. Judgement uses the smartest model: max for rare judgement, xhigh "
+                 "for the monitor, and the AA fixed-task cost knee for main agents and routine work. An estimated knee uses the "
+                 "five-point margin when a matched task-cost curve is missing. Auto never selects Ultra delegation.</p><table class='bench best'>" + best + "</table></div>"
                  "<h2>By domain</h2><div class='card'>" + table + "</div>"
                  "<h2>Score against price</h2><div class='card'>" + effort_chart(entries) + "</div>"
                  "<h2>Cards</h2>" + cards)

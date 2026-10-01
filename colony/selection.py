@@ -107,7 +107,6 @@ def recommendations(state):
     for family, provider in providers.PROVIDERS.items():
         if not providers.usable(provider):
             continue
-        tiers = bench.tiers_for(family, entries)
         for role in ROLES:
             if role == 'runtime' and family != 'claude':
                 continue  # PROVIDER: unattended runtime is currently Claude Code only
@@ -116,11 +115,7 @@ def recommendations(state):
             ident = key(family, role)
             blocked = state['blocked'].get(ident, [])
             usable = [e for e in entries if pair(e) not in blocked]
-            ranked = bench.tiers_for(family, usable) if blocked else tiers
-            chosen = ranked.get(role if role in bench.TIERS else 'step-up')
-            if chosen and role == 'consultant':
-                chosen = dict(chosen, effort=bench.best_effort(family, chosen['model'], usable) or chosen['effort'],
-                              why='the step-up model (the highest Intelligence Index here), at its best effort')
+            chosen = bench.role_pick(family, role, usable)
             chosen = concrete(family, chosen)
             if chosen and pair(chosen) not in blocked:
                 out[ident] = chosen
@@ -209,6 +204,7 @@ def reconcile():
         for ident, chosen in proposed.items():
             old = state['accepted'].get(ident)
             if same(old, chosen):
+                state['accepted'][ident] = dict(chosen)  # refresh evidence without inventing a launch change
                 continue
             model = chosen['model']
             if model in state['approved'] or policy == 'automatic':
