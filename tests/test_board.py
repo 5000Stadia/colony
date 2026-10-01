@@ -51,6 +51,9 @@ class BoardBase(unittest.TestCase):
         (self.root / ".claude" / "settings.json").write_text(json.dumps({"model": "x"}))
         (self.root / "ROADMAP.md").write_text(ROADMAP)
         self.commit("start")
+        # Most tests exercise an existing project's board behavior, after onboarding.
+        from colony import vision
+        vision.observe(self.root)
 
     def tearDown(self):
         for d in Path(self.tmp.name).iterdir():
@@ -107,13 +110,18 @@ class BoardTest(BoardBase):
         self.assertFalse((old / "ROADMAP.md").exists(), "no empty placeholder beside the project's own plan")
         [n] = board.notes(old)
         self.assertIn("bring the roadmap on board", n["text"])
+        self.assertLess(n['text'].index('have a conversation with me'), n['text'].index('Only then bring the roadmap'))
         board.track(old)
         self.assertEqual(len(board.notes(old)), 1, "asked once, however often it is added")
         fresh = Path(self.tmp.name) / "fresh"
         fresh.mkdir()
         board.track(fresh)
         self.assertTrue((fresh / "ROADMAP.md").exists())
-        self.assertEqual(board.notes(fresh), [], "a new project has nothing to bring over")
+        [intro] = board.notes(fresh)
+        self.assertIn('first piece of work is a conversation', intro['text'])
+        self.assertEqual(board.roadmap(fresh)['milestones'], [])
+        board.track(fresh)
+        self.assertEqual(len(board.notes(fresh)), 1)
 
     def test_what_waits_on_the_person_comes_first_and_caught_up_rides_a_newest_first_list(self):
         board.track(self.root)
@@ -1239,6 +1247,8 @@ class MonitorTest(BoardBase):
         fresh = self.root.parent / "fresh"
         self.assertTrue((fresh / "ROADMAP.md").exists())
         self.assertTrue(console.live(fresh))
+        self.assertEqual(board.roadmap(fresh)['milestones'], [])
+        self.assertIn('first piece of work is a conversation', board.notes(fresh)[0]['text'])
         console.stop(fresh)
         self.assertIn("helm is with the person", run("helm").stdout)
         self.assertIn("holds the helm", run("helm", "on").stdout)
@@ -1357,6 +1367,8 @@ class FoldersTest(BoardBase):
             self.post(port, "/new", within=str(shelf), name="fresh idea")
             self.assertTrue((shelf / "fresh idea" / "ROADMAP.md").exists())
             self.assertTrue(console.live(shelf / "fresh idea"))
+            self.assertEqual(board.roadmap(shelf / 'fresh idea')['milestones'], [])
+            self.assertIn('first piece of work is a conversation', board.notes(shelf / 'fresh idea')[0]['text'])
             console.stop(shelf / "fresh idea")
             self.post(port, "/roots", add=str(shelf))
             self.post(port, "/roots", default=str(shelf))
@@ -1951,6 +1963,7 @@ class SupportsTest(BoardBase):
         shop = Path(self.tmp.name) / "shop"
         shop.mkdir()
         board.track(shop)
+        board.deliver(shop)  # its opening conversation note has already reached the agent
         self.cli("posture", "plants", "--scout", "72", "--favour", "faster test runs")
         self.assertEqual(monitor.posture(self.root)["scout"], 72)
         self.assertEqual(monitor.posture(shop)["scout"], 24, "the others keep the default")

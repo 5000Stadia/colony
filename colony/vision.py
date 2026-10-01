@@ -185,7 +185,7 @@ def install(root):
             return
         providers.of(root).wire(board.workdir(root), board.protocol(root))
         text = section((root / 'ROADMAP.md').read_text())['text'] if (root / 'ROADMAP.md').exists() else ''
-        if not any(n.get('migration') == 'vision' for n in board.notes(root)):
+        if not any(n.get('migration') == 'vision' or n.get('onboarding') == 'vision' for n in board.notes(root)):
             draft = board.roadmap(root)['goal']
             message = ("Your existing ## Vision stays as written. Board saves now update it directly and notify you "
                        "with before and after; consider the effect on the work at hand and act, discussing anything "

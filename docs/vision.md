@@ -13,6 +13,13 @@ This routing is an agent responsibility; saving a form does not attempt to class
 
 ## Updating it
 
+A newly added project's first work is a vision conversation between its own agent and the person.
+The monitor's setup does not replace it. New projects start with an empty Vision section and no
+placeholder milestones. Joined projects can read their plans, specs and history first; their existing
+plans remain intact. The agent records the vision once clearly agreed, then lays the roadmap toward it.
+Tracking queues this opening conversation once, including for projects that already have a roadmap,
+so `colony new`, the add form, clones and shared-folder projects follow the same sequence.
+
 - The project's Vision box saves directly to the file and records a dated change. A nonquiet note gives
   the main agent the before and after. It considers the effect on current work, acts, and discusses
   unclear implications. There is no confirmation click, approval state or accepted snapshot.
@@ -40,7 +47,8 @@ Board startup installs the protocol and quietly offers existing projects a start
 legacy goal, to shape with the person in the next normal conversation. It does not publish that draft.
 Project discovery covers projects added after startup. The migration note is emitted once, including
 across restarts, and never wakes the agent on its own. Existing visions are left intact; those projects
-receive a quiet explanation of the editing flow without being asked to redraft them.
+receive a quiet explanation of the editing flow without being asked to redraft them. Newly added
+projects already receive their opening conversation note and do not also receive the migration note.
 
 Vision writes and observation serialize per root. File replacement is atomic. Forms compare the
 previous text directly, normalizing browser line endings, so an old editor cannot overwrite a newer
