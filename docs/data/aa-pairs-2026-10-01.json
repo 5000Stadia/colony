@@ -1,0 +1,182 @@
+[
+  {
+    "model": "claude-sonnet-5-5",
+    "effort": "low",
+    "score": null,
+    "cost": null,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low"
+  },
+  {
+    "model": "claude-sonnet-5-5",
+    "effort": "medium",
+    "score": 40.7386909594307,
+    "cost": 0.5861822401191022,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium"
+  },
+  {
+    "model": "claude-sonnet-5-5",
+    "effort": "high",
+    "score": 46.7356921799024,
+    "cost": 1.079758672715514,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high"
+  },
+  {
+    "model": "claude-sonnet-5-5",
+    "effort": "xhigh",
+    "score": 51.8522867021152,
+    "cost": 2.742576603824205,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh"
+  },
+  {
+    "model": "claude-sonnet-5-5",
+    "effort": "max",
+    "score": 55.9779549012591,
+    "cost": 7.62064302108643,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5"
+  },
+  {
+    "model": "claude-opus-5-5",
+    "effort": "low",
+    "score": 42.3077781466168,
+    "cost": 0.551180473909146,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-opus-5-5-low"
+  },
+  {
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "score": 51.2434931792768,
+    "cost": 1.3360093438976588,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-opus-5-5-medium"
+  },
+  {
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "score": 53.5831959822067,
+    "cost": 1.822504718771704,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-opus-5-5-high"
+  },
+  {
+    "model": "claude-opus-5-5",
+    "effort": "xhigh",
+    "score": 55.9873505840139,
+    "cost": 3.459110175822289,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh"
+  },
+  {
+    "model": "claude-opus-5-5",
+    "effort": "max",
+    "score": 57.6223698102963,
+    "cost": 5.982012019521066,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/claude-opus-5-5"
+  },
+  {
+    "model": "gpt-6.1-sol",
+    "effort": "low",
+    "score": 42.0835618555848,
+    "cost": 0.13075190869859377,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-low"
+  },
+  {
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
+    "score": 47.7833271274065,
+    "cost": 0.21370088267875537,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-medium"
+  },
+  {
+    "model": "gpt-6.1-sol",
+    "effort": "high",
+    "score": 50.2377777519769,
+    "cost": 0.31914442375664703,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-high"
+  },
+  {
+    "model": "gpt-6.1-sol",
+    "effort": "xhigh",
+    "score": 51.0377679093761,
+    "cost": 0.39286117158850653,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-1-sol-xhigh"
+  },
+  {
+    "model": "gpt-6.1-sol",
+    "effort": "max",
+    "score": 51.8332597011541,
+    "cost": 0.7241670655535033,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-1-sol"
+  },
+  {
+    "model": "gpt-6-astra",
+    "effort": "low",
+    "score": 45.7819243120341,
+    "cost": 0.8175139285656057,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-astra-low"
+  },
+  {
+    "model": "gpt-6-astra",
+    "effort": "medium",
+    "score": 49.5704363034369,
+    "cost": 1.5406493220021167,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-astra-medium"
+  },
+  {
+    "model": "gpt-6-astra",
+    "effort": "high",
+    "score": 50.9191471636152,
+    "cost": 1.7252530861048456,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-astra-high"
+  },
+  {
+    "model": "gpt-6-astra",
+    "effort": "xhigh",
+    "score": 52.3863277108782,
+    "cost": 2.308795912269076,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-astra-xhigh"
+  },
+  {
+    "model": "gpt-6-astra",
+    "effort": "max",
+    "score": 52.673669395513,
+    "cost": 3.2575003134834164,
+    "version": "v4.3.2",
+    "date": "2026-10-01",
+    "url": "https://artificialanalysis.ai/models/gpt-6-astra"
+  }
+]

@@ -1,5 +1,5 @@
 """Each agent program's usage limits (its 5-hour and weekly windows), read without spending a token, and the
-safe pause colony calls when one runs low, so no work is cut off mid-task by the limit itself: at the threshold (97% by default, the person's call; per project too) each
+safe pause colony calls when one runs low, so no work is cut off mid-task by the limit itself: at the threshold (98% by default, the person's call; per project too) each
 project on that program is told on its next turn, not woken, to wind down and tell the person where things stand
 and their options; once the window resets, it is woken to carry on.
 
@@ -14,6 +14,7 @@ from . import board
 
 WINDOWS = {300: "5-hour", 10080: "weekly"}
 NAMES = {"five_hour": "5-hour", "seven_day": "weekly"}
+RESUME_MARGIN = 2                         # percentage points; ignore rounding near the pause threshold
 
 
 def folder():
@@ -126,7 +127,7 @@ def paused():
 
 
 def check():
-    """Pause each project whose program has passed its threshold, and resume it when the window resets. Returns
+    """Pause at the threshold; resume after reset or a clear drop in every blocking window. Returns
     what changed, as (project, "paused"|"resumed")."""
     from . import providers
     was, now, changed = paused(), {}, []
@@ -135,21 +136,41 @@ def check():
             continue
         prov = providers.of(p)
         key, t = providers.key(prov), threshold(p)
-        hit = over(key, t) if t else None
-        if hit:
-            window, v = hit
-            now[str(p)] = {"provider": key, "window": window, "resets_at": v.get("resets_at")}
-            if str(p) not in was:
+        previous = was.get(str(p))
+        held = (previous.get('windows') or {previous['window']: {'resets_at': previous.get('resets_at')}}
+                if previous and previous['provider'] == key else {})
+        raw, clock = read(key, raw=True), time.time()
+
+        def reset(value):
+            return bool(value.get('resets_at') and value['resets_at'] <= clock)
+
+        blocking = {w: v for w, v in raw.items() if t and not reset(v) and v['used'] >= t}
+        if t:
+            for window, saved in held.items():
+                latest = raw.get(window, {})
+                # Missing telemetry or a missing reset timestamp is not evidence of a reset.
+                if reset(saved) or reset(latest):
+                    continue
+                if latest.get('used') is not None and latest['used'] <= max(0, t - RESUME_MARGIN):
+                    continue
+                retained = dict(saved, **latest)
+                retained['resets_at'] = latest.get('resets_at') or saved.get('resets_at')
+                blocking.setdefault(window, retained)
+        if blocking:
+            window, v = max(blocking.items(), key=lambda x: x[1].get('resets_at') or 0)
+            now[str(p)] = {"provider": key, "window": window, "resets_at": v.get("resets_at"),
+                           "windows": blocking}
+            if not previous or previous['provider'] != key:
                 others = [(k, x) for k, x in providers.PROVIDERS.items() if k != key and providers.usable(x)]
                 board.add_note(p, None, wind_down(p, prov, window, v, others), author="colony", quiet=True)
                 changed.append((p, "paused"))
-        elif str(p) in was:
-            w = was[str(p)]
-            latest = read(key, raw=True).get(w["window"]) or {}
-            turned = min(w.get("resets_at") or 0, latest.get("resets_at") or w.get("resets_at") or 0) <= time.time()
-            why = (f"{prov.label}'s {w['window']} usage limit has reset" if turned
-                   else f"{prov.label} is back under this project's pause threshold ({t:g}%)" if t
-                   else "this project no longer pauses at a usage limit")
+        elif previous:
+            turned = held and all(reset(v) or reset(raw.get(w, {})) for w, v in held.items())
+            why = ("this project no longer pauses at a usage limit" if not t
+                   else f"this project now uses {prov.label}" if previous['provider'] != key
+                   else f"{prov.label}'s usage limit has reset" if turned
+                   else f"{prov.label}'s blocking usage windows have reset or fallen to {max(0, t - RESUME_MARGIN):g}% "
+                        f"or less, below this project's pause threshold ({t:g}%)")
             board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped.", author="colony")
             changed.append((p, "resumed"))
     if now != was:
