@@ -537,7 +537,7 @@ class Codex:
     @staticmethod
     def config_home():
         import os
-        return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        return Path(os.environ.get("COLONY_CODEX_SOURCE_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
     def version(self):
         return _run([self.program, "--version"])
@@ -696,8 +696,17 @@ class Codex:
         return changed
 
     def command(self, label, s, resume=None, root=None):
+        if root:
+            parts = [sys.executable, '-m', 'colony.codex_remote', 'launch', '--project', str(root),
+                     '--settings', json.dumps(s, sort_keys=True)]
+            if resume:
+                parts += ['--resume', resume]
+            return shlex.join(parts)
+        return self.local_command(label, s, resume, root)
+
+    def local_command(self, label, s, resume=None, root=None):
         """The person's own `codex`: inline, so its console keeps scrollback, without the update question at
-        start; the project's permissions, model and effort. Remote Control has no Codex equivalent here."""
+        start; the project's permissions, model and effort. Remote lifecycle lives in codex_remote."""
         from .board import home
         parts = ["codex", "--no-alt-screen", "-c", "check_for_update_on_startup=false"]
         perms = self.permissions.get(s.get("permissions") or "ask", [])

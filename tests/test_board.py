@@ -543,7 +543,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(board.asks(self.root), [])
         saved, console.COMMAND = console.COMMAND, None
         try:
-            self.assertEqual(shlex.split(console.command("plants", self.root))[-2:], ["resume", "codex-session"])
+            self.assertEqual(shlex.split(console.command("plants", self.root))[-2:], ["--resume", "codex-session"])
             transcript.unlink()
             self.assertNotIn("resume", shlex.split(console.command("plants", self.root)))
         finally:
@@ -2345,7 +2345,10 @@ class HelperTierTest(BoardBase):
         self.assertIn('model = "gpt-5.6-luna"', chores)
         self.assertIn('model_reasoning_effort = "low"', chores)
         self.assertEqual(codex.write_helpers(self.root, tiers), [], "unchanged: nothing rewritten")
-        args = shlex.split(codex.command("plants", {}, root=self.root))
+        launch = shlex.split(codex.command("plants", {}, root=self.root))
+        self.assertIn('colony.codex_remote', launch)
+        self.assertEqual(launch[launch.index('--project') + 1], str(self.root))
+        args = shlex.split(codex.local_command("plants", {}, root=self.root))
         overlay = str(self.root / ".codex" / "agents" / "colony-chores.toml")
         self.assertIn(f"agents.colony-chores.config_file={json.dumps(overlay)}", args)
         self.assertFalse(any("colony-stepup" in a for a in args), "a tier with no file isn't registered")

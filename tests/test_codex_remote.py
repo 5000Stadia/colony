@@ -1,0 +1,291 @@
+"""Native Codex integration with a local Responses fixture: no account or model calls."""
+from contextlib import contextmanager
+import json
+import base64
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import patch
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from colony import board, bench, console, codex_remote as remote
+from colony.codex_rpc import Client
+from colony.codex_transfer import transfer, TransferError, writers
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+class Responses(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
+        if self.path == '/token':
+            with self.server.auth_lock:
+                requested = json.loads(body)['refresh_token']
+                valid = requested == 'fixture-refresh-' + str(self.server.refreshes)
+                if valid:
+                    self.server.refreshes += 1
+                    result = dict(access_token=self.server.jwt(self.server.refreshes),
+                                  refresh_token='fixture-refresh-' + str(self.server.refreshes),
+                                  id_token=self.server.jwt(0))
+                else:
+                    result = {'error': {'code': 'refresh_token_reused', 'message': 'fixture rotation'}}
+            data = json.dumps(result).encode()
+            self.send_response(200 if valid else 400)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.server.requests.append(body)
+        self.server.entered.set()
+        self.server.release.wait(20)
+        events = [{'type': 'response.created', 'response': {'id': 'resp'}}]
+        if self.server.question:
+            self.server.question = False
+            item = dict(type='function_call', name='request_user_input', call_id='color-call',
+                        arguments=json.dumps({'questions': [{'id': 'color', 'header': 'Color',
+                                                               'question': 'Which color?',
+                                                               'options': [{'label': 'Blue', 'description': 'Blue paint'},
+                                                                           {'label': 'Red', 'description': 'Red paint'}]}]}))
+        else:
+            item = dict(type='message', role='assistant', id='message',
+                        content=[dict(type='output_text', text=self.server.answer)])
+        events += [{'type': 'response.output_item.done', 'item': item},
+                   {'type': 'response.completed', 'response': {'id': 'resp', 'usage': {
+                       'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0}}}]
+        data = ''.join('data: ' + json.dumps(e) + '\n\n' for e in events).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def installed():
+    return shutil.which('codex') and '0.159.3' in subprocess.run(
+        ['codex', '--version'], capture_output=True, text=True).stdout
+
+
+@unittest.skipUnless(installed(), 'native checks require Codex 0.159.3')
+class NativeRemoteTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='colony-remote-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.source = self.base / 'source'
+        self.source.mkdir()
+        env = {k: v for k, v in os.environ.items() if not k.startswith(('COLONY_', 'OPENAI_', 'CODEX_'))}
+        env.update(COLONY_BOARD_HOME=str(self.base / 'board'), CODEX_HOME=str(self.source), PYTHONPATH=str(REPO))
+        self.environment = patch.dict(os.environ, env, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Responses)
+        self.server.requests, self.server.question = [], False
+        self.server.entered, self.server.release = threading.Event(), threading.Event()
+        self.server.release.set()
+        self.server.answer = 'The probe passed. Which color would you like?'
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        self.source.joinpath('auth.json').write_text('{}')
+        self.source.joinpath('config.toml').write_text(
+            'model_provider="fixture"\n[model_providers.fixture]\nname="Fixture"\n'
+            f'base_url="http://127.0.0.1:{self.server.server_port}"\n'
+            'wire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n')
+        board.save_registry({'roots': [], 'settings': {'messaging': False, 'provider': 'codex', 'trust': True}})
+        self.work = self.base / 'work'
+        self.work.mkdir()
+        self.roots = [self.base / name for name in ('first', 'second')]
+        for root in self.roots:
+            (root / '.board').mkdir(parents=True)
+            (root / '.board' / 'settings.json').write_text(json.dumps({'provider': 'codex', 'workdir': str(self.work)}))
+            (root / 'ROADMAP.md').write_text('# Test\n\n## M1 — Test\n\n- [~] R1 Test\n')
+        self.settings = [dict(model='gpt-6-astra', effort='high', permissions='all', remote=True),
+                         dict(model='gpt-5.6-luna', effort='low', permissions='plan', remote=True)]
+        for root, settings in zip(self.roots, self.settings):
+            bench.set_plan(root, 'routine', settings['model'], settings['effort'])
+
+    @contextmanager
+    def native(self, root, settings, home=None, prepare=True):
+        home = home or remote.home_for(root)
+        config = remote.overrides(root, home, settings)
+        if prepare:
+            remote.prepare_home(root, home, self.source)
+        with Client(command=['codex', 'app-server', '--stdio', *remote.flags(config)],
+                    env=remote.environment(root, home, self.source), cwd=self.work) as client:
+            remote.trust_hooks(client, root, config)
+            yield client, config, home
+
+    def turn(self, client, tid, text, **params):
+        result = client.call('turn/start', dict(threadId=tid, input=[dict(type='text', text=text, text_elements=[])], **params))
+        deadline = time.monotonic() + 30
+        while True:
+            event = client.receive(deadline)
+            if event.get('method') == 'turn/completed':
+                self.assertEqual(event['params']['turn']['status'], 'completed')
+                return result['turn']['id']
+
+    def test_two_projects_same_folder_keep_settings_hooks_and_cold_resume(self):
+        ids = []
+        for root, settings in zip(self.roots, self.settings):
+            board.add_note(root, None, 'Private note for ' + root.name)
+            with self.native(root, settings) as (client, config, home):
+                tid = remote.attach(client, root, config, None)
+                ids.append(tid)
+                self.turn(client, tid, 'App words for ' + root.name)
+                self.assertEqual(board.read(root, 'said.jsonl')[0]['text'], 'App words for ' + root.name)
+                self.assertIn('probe passed', board.read(root, 'said.jsonl')[-1]['reply'])
+                self.assertTrue(board.asks(root), 'final question reaches the board')
+                self.assertTrue(board.notes(root)[0]['delivered_at'])
+                overlay = Path(config['agents.colony-routine.config_file']).read_text()
+                self.assertIn(settings['model'], overlay)
+                self.assertIn(settings['effort'], overlay)
+            with self.native(root, settings) as (client, config, home):
+                self.assertEqual(remote.attach(client, root, config, tid), tid)
+                self.turn(client, tid, 'After cold resume ' + root.name)
+                texts = [r['text'] for r in board.read(root, 'said.jsonl') if 'text' in r]
+                self.assertEqual(texts, ['App words for ' + root.name, 'After cold resume ' + root.name])
+        self.assertNotEqual(ids[0], ids[1])
+        for i, request in enumerate(self.server.requests):
+            own = 'first' if i < 2 else 'second'
+            self.assertIn(('Private note for ' + own).encode(), request)
+            self.assertNotIn(('Private note for ' + ('second' if own == 'first' else 'first')).encode(), request)
+
+    def test_transfer_preserves_id_and_original_history_and_excludes_another_project(self):
+        root, settings = self.roots[0], self.settings[0]
+        original = remote.home_for(root)
+        with self.native(root, settings) as (client, config, home):
+            tid = remote.attach(client, root, config, None)
+            self.turn(client, tid, 'History to keep')
+            path = Path(client.call('thread/read', {'threadId': tid})['thread']['path'])
+            unrelated = remote.attach(client, root, config, None)
+            self.turn(client, unrelated, 'Other project words')
+            with self.assertRaisesRegex(TransferError, 'writer'):
+                transfer(home, self.base / 'blocked', tid)
+        history = path.read_bytes()
+        destination = self.base / 'transferred'
+        remote.prepare_home(root, destination, self.source)
+        transfer(original, destination, tid)
+        transfer(original, destination, tid)          # retry is a no-op, never copies an older source again
+        # Source history is temporarily unavailable; the new runtime must be independent.
+        parked = original / 'sessions-parked'
+        (original / 'sessions').rename(parked)
+        try:
+            with self.native(root, settings, destination) as (client, config, home):
+                self.assertEqual(remote.attach(client, root, config, tid), tid)
+                self.turn(client, tid, 'After migration')
+                all_threads = client.call('thread/list', {})['data']
+                self.assertNotIn(unrelated, [t['id'] for t in all_threads])
+                self.assertIn(b'History to keep', self.server.requests[-1])
+        finally:
+            parked.rename(original / 'sessions')
+        self.assertEqual(path.read_bytes(), history, 'destination turn never writes original rollout')
+        with self.native(root, settings) as (client, config, home):
+            with self.assertRaisesRegex(Exception, 'archived'):
+                remote.attach(client, root, config, tid)
+
+    def test_live_interactive_question_reaches_board_before_stop(self):
+        root, settings = self.roots[0], self.settings[0]
+        self.server.question, self.server.answer = True, 'Paint selected.'
+        with self.native(root, settings) as (client, config, home):
+            tid = remote.attach(client, root, config, None)
+            client.call('turn/start', {'threadId': tid, 'input': [dict(type='text', text='Choose paint', text_elements=[])],
+                                      'collaborationMode': {'mode': 'plan', 'settings': {
+                                          'model': settings['model'], 'reasoning_effort': settings['effort'],
+                                          'developer_instructions': None}}})
+            deadline = time.monotonic() + 30
+            while True:
+                event = client.receive(deadline)
+                if event.get('method') == 'item/tool/requestUserInput':
+                    self.assertIn('Which color?', board.asks(root)[0]['text'])
+                    client.send({'id': event['id'], 'result': {'answers': {'color': {'answers': ['Blue']}}}})
+                if event.get('method') == 'turn/completed':
+                    break
+            self.assertFalse(board.asks(root))
+            self.assertTrue(any('Blue' in r.get('text', '') for r in board.read(root, 'said.jsonl')))
+
+    def test_owned_daemon_keeps_active_app_work_and_drains_only_after_completion(self):
+        root, settings = self.roots[0], self.settings[0]
+        home = remote.home_for(root)
+        config = remote.overrides(root, home, settings)
+        remote.prepare_home(root, home, self.source)
+        self.server.release.clear()
+        try:
+            client = remote.start(root, home, self.source, config)
+        except Exception:
+            Path('/tmp/r66-daemon-failure.log').write_text((home / 'colony-daemon.log').read_text())
+            record = remote.read_json(home / 'colony-daemon.json')
+            if remote.alive(home):
+                import signal
+                os.kill(record['pid'], signal.SIGHUP)
+            raise
+        try:
+            remote.trust_hooks(client, root, config)
+            tid = remote.attach(client, root, config, None)
+            client.call('turn/start', {'threadId': tid, 'input': [dict(type='text', text='Work from app', text_elements=[])]})
+            self.assertTrue(self.server.entered.wait(10))
+            self.assertFalse(remote.drain(home, timeout=1))
+            self.assertTrue(remote.alive(home))
+            self.assertEqual(sum(s['running'] for s in remote.statuses()), 1)
+            self.server.release.set()
+            deadline = time.monotonic() + 30
+            while client.receive(deadline).get('method') != 'turn/completed':
+                pass
+            self.assertTrue(remote.drain(home))
+            self.assertFalse(remote.alive(home))
+            with self.native(root, dict(settings, remote=False)) as (local, config, _):
+                self.assertEqual(remote.attach(local, root, config, tid), tid)
+                self.turn(local, tid, 'Continue locally after remote off')
+                self.assertIn(b'Work from app', self.server.requests[-1])
+        finally:
+            self.server.release.set()
+            client.close()
+            remote.drain(home)
+
+    def test_shared_auth_refresh_keeps_links_and_original_home_usable(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from contextlib import ExitStack
+        self.server.auth_lock, self.server.refreshes = threading.Lock(), 0
+        def jwt(number):
+            payload = {'email': 'fixture@example.invalid', 'exp': int(time.time()) + 86400,
+                       'jti': str(number), 'https://api.openai.com/auth': {
+                           'chatgpt_account_id': 'fixture-account', 'chatgpt_plan_type': 'plus'}}
+            return 'e30.' + base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=') + '.fixture'
+        self.server.jwt = jwt
+        auth = dict(auth_mode='chatgpt', tokens=dict(id_token=jwt(0), access_token=jwt(0),
+                    refresh_token='fixture-refresh-0', account_id='fixture-account'),
+                    last_refresh=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()))
+        (self.source / 'auth.json').write_text(json.dumps(auth))
+        config_path = self.source / 'config.toml'
+        config_path.write_text(config_path.read_text().replace('requires_openai_auth=false', 'requires_openai_auth=true'))
+        endpoint = f'http://127.0.0.1:{self.server.server_port}/token'
+        with patch.dict(os.environ, CODEX_REFRESH_TOKEN_URL_OVERRIDE=endpoint), ExitStack() as stack:
+            clients = []
+            for root, settings in zip(self.roots, self.settings):
+                client, _, home = stack.enter_context(self.native(root, settings))
+                clients.append(client)
+                self.assertTrue((home / 'auth.json').is_symlink())
+            original = stack.enter_context(Client(command=['codex', 'app-server', '--stdio'],
+                                                    env=dict(os.environ, CODEX_HOME=str(self.source)), cwd=self.work))
+            clients.append(original)
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                list(pool.map(lambda c: c.call('getAuthStatus', {'refreshToken': True, 'includeToken': False}), clients))
+            for client in clients:
+                self.assertEqual(client.call('getAuthStatus', {'refreshToken': True, 'includeToken': False})['authMethod'], 'chatgpt')
+            for root in self.roots:
+                self.assertTrue((remote.home_for(root) / 'auth.json').is_symlink(), 'native refresh writes through the link')
+            saved = json.loads((self.source / 'auth.json').read_text())
+            self.assertEqual(saved['tokens']['refresh_token'], 'fixture-refresh-' + str(self.server.refreshes))
+            self.assertGreater(self.server.refreshes, 0)
+
+
+if __name__ == '__main__':
+    unittest.main()

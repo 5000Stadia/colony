@@ -516,7 +516,7 @@ def cmd_doctor(a):
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
-        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort"], cwd=home,
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote"], cwd=home,
                            capture_output=True, text=True)
         (print("ok    the test suite passes") if r.returncode == 0
          else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
@@ -757,7 +757,12 @@ def cmd_turn(a):
         return 0
     if not (root / ".board").exists():
         return 0
-    key, text = providers.of(root).turn_text(_hook_input())
+    payload = _hook_input()
+    if a.console == 'codex':
+        from . import codex_remote
+        if not codex_remote.accepts_hook(root, payload):
+            return 0
+    key, text = providers.of(root).turn_text(payload)
     board.record_ask(root, key, text)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     return 0
@@ -775,6 +780,10 @@ def cmd_notes(a):
         # Printed for the provider to put in the agent's context: Claude Code's hooks do (providers.py wire()).
         from . import mail, console, providers
         payload = _hook_input()
+        if a.console == 'codex':
+            from . import codex_remote
+            if not codex_remote.accepts_hook(root, payload):
+                return 0
         seen = getattr(providers.of(root), "conversation", None)
         if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here
             console.remember(root, *seen(payload))
