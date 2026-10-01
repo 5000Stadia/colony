@@ -364,7 +364,7 @@ def tick(root):
         st = read(file(root)) or dict(last=now)
         job = st.get('job') or {}
         if job and job.get('session') != s['id']:
-            st.pop('job', None)
+            st = dict(last=now)  # A deliberately new conversation has its own cursor and transient state.
             job = {}
         phase = job.get('phase')
         if phase == 'emitted' and job['id'] in snap['markers']:

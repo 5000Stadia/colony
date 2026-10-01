@@ -192,3 +192,12 @@ class ContextTest(unittest.TestCase):
         with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into') as typed:
             context.tick(self.root); context.tick(self.root); typed.assert_not_called()
         self.assertIn('ineffective', context.read(context.file(self.root)))
+
+    def test_deliberately_new_session_does_not_inherit_old_usage_guard_or_carry(self):
+        st = self.state('restored')
+        st.update(await_usage=999999, ineffective='old session', carry=dict(text='old intent', at='yesterday'))
+        atomic_json(context.file(self.root), st)
+        atomic_json(context.file(self.root, 'context-session.json'), dict(self.s, id='new-session'))
+        with patch.object(context, 'safe', return_value=True):
+            context.tick(self.root)
+        self.assertEqual(set(context.read(context.file(self.root))), {'last'})
