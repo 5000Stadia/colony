@@ -48,6 +48,13 @@ def command(label, root=None, folder=None):
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
+    if label == "monitor" and not root:
+        from . import monitor
+        model, effort, _ = monitor.choice()
+        s = dict(s, **({"model": model} if model else {}), **({"effort": effort} if effort else {}),
+                 autocompact=monitor.CONTEXT_CAP)
+        if monitor.fresh_flag().exists():
+            folder = None                               # a fresh start: no conversation to resume
     if not root and folder and hasattr(providers.of(None), "latest_conversation"):
         resume = providers.of(None).latest_conversation(folder)
     return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))

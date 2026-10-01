@@ -284,8 +284,40 @@ def brief():
     own = next((p for p in board.projects() if p.resolve() == source), None)
     upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
     role = ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
+    carried = carried_path().read_text().strip() if carried_path().exists() else ""
+    if carried:
+        role += ("\n\n## Carried over from your last conversation\n\nYou start fresh each day; this is what you wrote "
+                 "down to carry on from (colony's records hold the rest: colony posture, the board):\n\n" + carried + "\n")
     for f in {p.instructions for p in providers.PROVIDERS.values()}:     # whichever program runs it reads its own
         (home() / f).write_text(role)
+
+
+CONTEXT_CAP = "150k"            # PROVIDER: Claude Code's --autocompact; Codex compacts on its own
+FRESH_EVERY = 20 * 3600         # seconds between the monitor's fresh starts: about once a day
+
+
+def carried_path():
+    """What the monitor writes down before a fresh start, to carry on from."""
+    return board.home() / "monitor-carried-over.md"
+
+
+def fresh_flag():
+    """Present while the monitor is being started fresh: its console then resumes no conversation."""
+    return board.home() / "monitor-fresh"
+
+
+def choice():
+    """The monitor's model and effort: the person's pick in Settings, else its program's step-up tier (it settles
+    questions for the person when it holds the helm: judgement worth the strongest pick, kept affordable by a
+    small context). Returns (model, effort, why); (None, None, ...) leaves it to the program."""
+    from . import bench
+    mine = board.registry()["settings"].get("monitor_model") or {}
+    if mine.get("model"):
+        return mine["model"], mine.get("effort"), "chosen in Settings"
+    up = bench.tiers_for(providers.key(provider())).get("step-up")
+    if up:
+        return up["model"], up["effort"], "the step-up tier: its judgement settles questions for you at the helm"
+    return None, None, "no benchmark data: its program's default"
 
 
 def provider():
@@ -623,10 +655,52 @@ class Watcher:
                 with (board.home() / "reloads.jsonl").open("a") as fh:
                     fh.write(json.dumps({"at": board.now(), "console": nm, "why": why}) + "\n")
 
+    def freshen(self):
+        """About once a day, with the monitor idle a while and no one at it: it writes down what it needs to carry
+        on (what colony's records don't hold), then starts a fresh conversation with that in its brief. Its
+        context stays small, so each wake-up costs a fraction of re-reading days of history."""
+        if not console.running(name()):
+            return
+        path = board.home() / "monitor-fresh.json"
+        try:
+            st = json.loads(path.read_text())
+        except (OSError, ValueError):
+            st = {}
+        save = lambda: (board.home().mkdir(parents=True, exist_ok=True), path.write_text(json.dumps(st)))
+        if not st.get("last"):
+            st["last"] = time.time()                    # its clock starts the first time it is seen
+            save()
+            return
+        quiet = (snapshot()["state"] == "idle" and not console.drafting(name()) and not console.attached(name())
+                 and not ((board.home() / "to_monitor.jsonl").exists() and (board.home() / "to_monitor.jsonl").read_text().strip()))
+        if not quiet:
+            return
+        if "asked" not in st:
+            if time.time() - st["last"] < FRESH_EVERY:
+                return
+            if console.type_into(name(), f"[colony] Daily fresh start. Write to {carried_path()} what you need to carry on "
+                                         "from that colony's records (colony posture, the board) don't already hold: what the "
+                                         "person asked of you that is still open, preferences they told you in conversation, "
+                                         "threads you are following. Replace what's there; under 300 words. Then reply only: done."):
+                st["asked"] = time.time()
+                save()
+            return
+        written = carried_path().exists() and carried_path().stat().st_mtime >= st["asked"]
+        if written or time.time() - st["asked"] > 900:  # it wrote it, or it had its chance
+            fresh_flag().write_text("")
+            try:
+                subprocess.run(["tmux", "kill-session", "-t", name()], capture_output=True)
+                ensure()                                # the brief is rewritten with what it carried over
+            finally:
+                fresh_flag().unlink(missing_ok=True)
+            st = {"last": time.time()}
+            save()
+
     def tick(self):
         self.models()
         self.usage()
         self.current()
+        self.freshen()
         me = snapshot()
         if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)

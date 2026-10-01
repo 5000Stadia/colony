@@ -2554,6 +2554,50 @@ class SignInTest(BoardBase):
         self.assertNotIn("signed out since", board.settings_page(board.registry()))
 
 
+class MonitorUpkeepTest(BoardBase):
+    """The monitor on its program's step-up tier unless the person picks, its conversation capped, and a fresh
+    start each day from what it wrote down to carry on."""
+
+    def test_its_model_is_the_step_up_tier_or_the_persons_pick_and_its_context_is_capped(self):
+        from colony import bench
+        from unittest.mock import patch
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5", "effort": "high"}}):
+                cmd = console.command("monitor", None, folder=monitor.home())
+                self.assertIn("--model claude-opus-5-5 --effort high --autocompact 150k", cmd)
+                self.assertIn("Auto: claude-opus-5-5 at high", board.settings_page(board.registry()))
+                board.set_setting("monitor_model", "claude-sonnet-5-5:max")
+                self.assertIn("--model claude-sonnet-5-5 --effort max", console.command("monitor", None, folder=monitor.home()))
+                board.set_setting("monitor_model", "auto")
+                self.assertEqual(board.registry()["settings"]["monitor_model"], {})
+        finally:
+            console.COMMAND = saved
+
+    def test_once_a_day_it_writes_what_to_carry_on_and_starts_fresh_with_it(self):
+        from unittest.mock import patch
+        monitor.ensure()
+        w = monitor.Watcher(quiet=0)
+        typed = []
+        with patch.object(console, "type_into", lambda n, text: typed.append(text) or True), \
+                patch.object(monitor, "snapshot", lambda: {"state": "idle", "lines": []}), \
+                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False):
+            w.freshen()
+            self.assertEqual(typed, [], "its clock starts the first time it is seen")
+            st = board.home() / "monitor-fresh.json"
+            st.write_text(json.dumps({"last": time.time() - monitor.FRESH_EVERY - 1}))
+            w.freshen()
+            self.assertIn("Daily fresh start", typed[0])
+            monitor.carried_path().write_text("The person wants Bookflow's release held until Friday.")
+            started = []
+            with patch.object(monitor, "ensure", lambda: started.append(console.command("monitor", None, folder=monitor.home()))):
+                w.freshen()
+            self.assertEqual(len(started), 1)
+            self.assertFalse(monitor.fresh_flag().exists())
+        monitor.brief()
+        self.assertIn("Bookflow's release held until Friday", monitor.brief_path().read_text(), "carried into its brief")
+
+
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
 

@@ -96,6 +96,8 @@ class ClaudeCode:
             parts += ["--model", shlex.quote(s["model"])]
         if s.get("effort"):
             parts += ["--effort", shlex.quote(s["effort"])]
+        if s.get("autocompact"):
+            parts += ["--autocompact", shlex.quote(s["autocompact"])]     # how large its conversation may grow
         return " ".join(parts)
 
     def wire(self, root, protocol):

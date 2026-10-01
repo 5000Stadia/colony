@@ -147,7 +147,7 @@ def registry():
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
-                    "safe_pause": 98, "auto_update": True}
+                    "safe_pause": 98, "auto_update": True, "monitor_model": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -166,6 +166,7 @@ SETTING_HELP = {
     "model": "model for new project sessions (blank: the provider's default)",
     "effort": "effort for new project sessions (blank: the provider's default)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
+    "monitor_model": "the monitor's model, as MODEL:EFFORT (blank: its program's step-up tier)",
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
@@ -194,6 +195,9 @@ def set_setting(key, value):
             if not 0 < n <= 100:
                 raise KeyError(key)
             reg["settings"][key] = int(n) if n.is_integer() else n
+    elif key == "monitor_model":
+        model, _, effort = str(value).strip().rpartition(":") if ":" in str(value) else (str(value).strip(), "", "")
+        reg["settings"][key] = {"model": model, "effort": effort or None} if model and model != "auto" else {}
     elif key == "consultants":
         from .providers import PROVIDERS
         chosen = {}
@@ -2107,6 +2111,21 @@ def settings_page(reg):
                   + ("".join(seat(k) for k in fams) or "<p class='muted'>No program that can consult is on.</p>")
                   + ("<p class='muted'>Only one model family is on, so one consultant.</p>" if len(fams) == 1 else "")
                   + "<button>Save</button></form>")
+    from . import monitor as mon
+    mp = mon.provider()
+    mm, me, mwhy = mon.choice()
+    mine = s.get("monitor_model") or {}
+    opts = [f"<option value='auto'{'' if mine else ' selected'}>Auto: {e(mm or 'its default') if not mine else 'step-up tier'}"
+            + (f" at {e(me)}" if me and not mine else "") + "</option>"]
+    for mid, label in pv.available(mp):
+        opts.append(f"<optgroup label='{e(label)}'>" + "".join(
+            f"<option value='{e(mid)}:{e(x)}'{' selected' if mine and (mine.get('model'), mine.get('effort') or '') == (mid, x) else ''}>"
+            f"{e(label)} at {e(x)}</option>" for x in pv.efforts_of(mp, mid)) + "</optgroup>")
+    monitor_card = (f"<form method='post' action='/monitor-model' class='options'><label>Model <select name='monitor_model'>{''.join(opts)}</select></label>"
+                    f"<p class='muted'>Now: {e(mm or 'its program default')}" + (f" at {e(me)}" if me else "") + f" ({e(mwhy)}). "
+                    f"Its conversation is kept small so each wake-up stays cheap: capped at {mon.CONTEXT_CAP} tokens, and about once a "
+                    f"day it writes down what to carry on from and starts fresh, when it's idle and no one is at it.</p>"
+                    f"<button>Save</button></form>")
     claude = pv.get("claude")
     signin = ""
     if pv.installed(claude) and pv.enabled(claude):
@@ -2119,7 +2138,7 @@ def settings_page(reg):
                   f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
                   + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
     body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>{signin}"
-            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+            f"<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Monitor</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
@@ -2323,6 +2342,13 @@ class Handler(BaseHTTPRequestHandler):
                 bench.set_key(form["key"])
             if form.get("do") in ("save", "fetch") and bench.aa_key():
                 bench.refresh()                           # check the key by using it: fetch, keep, say what came
+            self.send_response(303)
+            self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/monitor-model":
+            set_setting("monitor_model", form.get("monitor_model", "auto"))
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")
