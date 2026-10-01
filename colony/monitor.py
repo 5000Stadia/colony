@@ -655,7 +655,7 @@ class Watcher:
             path.write_text(json.dumps(now))
 
     def models_daily(self):
-        from . import bench
+        from . import bench, intelligence
         board.rewire_projects()
         if board.registry()["settings"]["auto_update"]:
             for p in providers.PROVIDERS.values():
@@ -664,8 +664,10 @@ class Watcher:
         self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
-        if bench.aa_key() and (bench.pending() or bench.days_since_fetch() >= 7):
-            bench.refresh()     # one request: while a model waits for its data, and weekly as scores and prices move
+        if bench.aa_key():
+            bench.refresh()     # one request each daily upkeep, as the person requested
+        if intelligence.refresh_due():
+            intelligence.refresh()
         from . import selection
         selection.reconcile()
         for p in board.projects():

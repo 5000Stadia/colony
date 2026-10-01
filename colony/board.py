@@ -189,12 +189,13 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "runtime_model": {}, "helper_models": {}}
+                    "runtime_model": {}, "helper_models": {}, "auto_balance": 3}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
 PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
+    "auto_balance": "Auto intelligence/cost balance: 0 Intelligence, 3 Balanced, 6 Economy; intermediate steps 1, 2, 4, 5",
     "providers": "the agent programs colony uses: claude, codex (comma-separated; all by default)",
     "provider": "which CLI runs new projects' agents (colony knows: claude, codex)",
     # PROVIDER: Claude uses Remote Control; Codex uses an isolated app-server host.
@@ -222,7 +223,13 @@ def set_setting(key, value):
         from . import selection
         selection.migrate()
     reg = registry()
-    if key == "model_adoption":
+    if key == 'auto_balance':
+        from . import intelligence
+        try:
+            reg['settings'][key] = intelligence.position(value)
+        except ValueError:
+            raise KeyError(key)
+    elif key == "model_adoption":
         if value not in ("automatic", "ask"):
             raise KeyError(key)
         reg["settings"][key] = value
@@ -288,10 +295,13 @@ def set_setting(key, value):
     else:
         raise KeyError(key)
     save_registry(reg)
+    if key == 'auto_balance':
+        from . import selection
+        selection.reconcile()
     return reg
 
 
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause")
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance")
 
 
 def project_settings(root, changes=None):
@@ -309,6 +319,12 @@ def project_settings(root, changes=None):
                 raise KeyError(k)
             if v in ("", None, "default"):
                 own.pop(k, None)
+            elif k == 'auto_balance':
+                from . import intelligence
+                try:
+                    own[k] = intelligence.position(v)
+                except ValueError:
+                    raise KeyError(k)
             elif k == "remote":
                 own[k] = str(v).lower() in ("on", "true", "yes", "1")
             elif k == "permissions" and v not in PERMISSIONS:
@@ -319,6 +335,8 @@ def project_settings(root, changes=None):
                 own[k] = v
         path.parent.mkdir(exist_ok=True)
         path.write_text(json.dumps(own, indent=2) + "\n")
+        if 'auto_balance' in changes:
+            selection.reconcile()
     merged = {k: registry()["settings"][k] for k in PROJECT_KEYS}
     merged.update(own)
     return merged, own
@@ -1475,7 +1493,49 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
-            + (tier_fields(root) if root else "") + f"<button>Save</button></form>")
+            + (auto_balance_fields(root) + tier_fields(root) if root else "") + f"<button>Save</button></form>")
+
+
+def auto_balance_fields(root=None):
+    from . import bench, intelligence, providers, selection
+    settings = registry()['settings']
+    own = project_settings(root)[1] if root else {}
+    inherited = root is not None and 'auto_balance' not in own
+    selected = int(own.get('auto_balance', settings.get('auto_balance', 3)))
+    entries, state = bench.standings(), selection.read()
+    ceiling = max((p['score'] for p in intelligence.pairs(entries)), default=None)
+    eligible = [x for x in entries if x['model'] not in state['rejected']]
+    families = list(dict.fromkeys([providers.key(providers.of(root)), 'claude'])) if root else [k for k, p in providers.PROVIDERS.items() if providers.usable(p)]
+    roles = ('main', *bench.TIERS, 'runtime') if root else selection.ROLES
+    panels = []
+    def describe(value):
+        return value['model'] + (' at ' + value['effort'] if value.get('effort') else '') if value else 'No accepted pick'
+    for level, label in enumerate(intelligence.POSITIONS):
+        rows = []
+        for family in families:
+            for role in roles:
+                if root and role != 'runtime' and family != providers.key(providers.of(root)):
+                    continue
+                if role == 'runtime' and family != 'claude':
+                    continue
+                ident = selection.key(family, role, root)
+                pick = bench.role_pick(family, role, eligible, balance=level, ceiling=ceiling, blocked=state['blocked'].get(ident, []))
+                held = state['accepted'].get(ident) or state['accepted'].get(selection.key(family, role))
+                waiting = bool(pick and settings['model_adoption'] == 'ask' and pick['model'] not in state['approved'])
+                text = (describe(pick) + (' · approval required' if waiting else '') + '. ' + pick['why']) if pick else 'Missing comparable evidence; retain accepted pick.'
+                rows.append(f"<tr><th>{e(family)} · {e(role)}</th><td>{e(text)}<div class='muted'>Accepted: {e(describe(held))}</div></td></tr>")
+        panels.append(f"<div data-balance='{level}'{' hidden' if level != selected else ''}><p><strong>{e(label)}</strong></p><table class='bench'>{''.join(rows)}</table></div>")
+    toggle = ("<label><input type='checkbox'" + (' checked' if inherited else '') +
+              " onchange=\"const r=this.closest('.auto-balance').querySelector('input[type=range]');r.disabled=this.checked;"
+              f"if(this.checked){{r.value='{settings.get('auto_balance', 3)}';r.dispatchEvent(new Event('input'))}}\"> Use colony setting</label>") if root else ''
+    return ("<div class='auto-balance'><label>Auto: Intelligence → Balanced → Economy "
+            f"<input type='range' name='auto_balance' min='0' max='6' step='1' value='{selected}'{' disabled' if inherited else ''} "
+            "oninput=\"for(const p of this.closest('.auto-balance').querySelectorAll('[data-balance]')){p.hidden=p.dataset.balance!==this.value;if(!p.hidden)this.closest('.auto-balance').querySelector('output').textContent=p.querySelector('strong').textContent}\">"
+            f"<output>{e(intelligence.POSITIONS[selected])}</output></label>"
+            + toggle + "<p class='muted'>Higher intelligence keeps goals near the shared ceiling. Economy lowers the goals so cheaper pairs qualify. "
+            "Usage never moves this slider. Chores keep their value pick. Explicit model pins stay in effect.</p>"
+            "<details><summary>What each position picks today</summary>" + ''.join(panels) +
+            "</details><p class='muted'>Preview only until saved; new models follow your adoption setting. Missing evidence keeps the accepted choice.</p></div>")
 
 
 def folder_browser(reg, current, purpose):
@@ -2006,14 +2066,22 @@ def model_changes(pending_only=False):
     def describe(value):
         return (value['model'] + (f" at {value['effort']}" if value.get('effort') else '')) if value else 'no previous pick'
     def cost(prices):
+        task = prices.get('task') or {}
+        task_note = ''
+        if task:
+            describe = lambda value: f'${value:.4g}' if value is not None else 'unknown'
+            task_note = f"Benchmark USD/task: {describe(task.get('before'))} → {describe(task.get('after'))}"
+            if task.get('before') and task.get('after') is not None:
+                task_note += f" ({(task['after'] / task['before'] - 1) * 100:+.1f}%)"
+            task_note += (' (includes estimates). ' if prices.get('task_estimated') else '. ')
         before, after = prices.get('before'), prices.get('after')
         if before is None or after is None:
-            return 'Token-price change unknown (missing price data).'
+            return task_note + 'Token-price change unknown (missing price data).'
         parts = []
         for label, old, new in zip(('input', 'output'), before, after):
             relative = f', {(new / old - 1) * 100:+.0f}%' if old else ''
             parts.append(f'{label}: ${old:g} → ${new:g} ({new-old:+g}{relative})')
-        return 'USD per million tokens: ' + '; '.join(parts) + '.'
+        return task_note + 'USD per million tokens: ' + '; '.join(parts) + '.'
     def row(label, before, after, prices, pinned=False):
         return (f"<li><strong>{e(label)}</strong>: {e(describe(before))} → {e(describe(after))}"
                 + (' <strong>Your pin stays until you choose Auto in Settings.</strong>' if pinned else '')
@@ -2050,7 +2118,7 @@ def model_changes(pending_only=False):
                 out.append("<form method='post' action='/model-decision'><input type='hidden' name='action' value='rollback'>"
                            f"<input type='hidden' name='event' value='{e(event['id'])}'>"
                            "<button>Return to previous choice</button></form>")
-    out.append("<p class='muted'>These are token rates, not a task-cost estimate. Effort and tokens used affect total spend. "
+    out.append("<p class='muted'>Benchmark task costs and token rates are separate evidence; actual project spend varies. "
                "Changes take effect when a console reloads while idle.</p></section>")
     return ''.join(out)
 
@@ -2064,52 +2132,34 @@ def needs_you(reg):
 
 
 def models_page(reg):
-    """What the evidence says about every model the board can run: the best for each role, every model and effort
-    level by domain, what each effort level costs against what it scores, and a card per model."""
-    from . import bench
+    from . import bench, intelligence, providers
     entries = bench.standings()
-    shade = lambda s: (f"<td class='sc' style='--s:{s / 100:.2f}'>{s}</td>" if s is not None else "<td class='gap'>—</td>")
-    usd = lambda r: f"${r['value']:.2f}" if r and r["unit"] == "usd" else (f"{r['value']:g} {r['unit']}" if r else "—")
-    cost_head = next((bench.cost_label(x["cost"]) for x in entries if x["cost"]), "price per 1M tokens")
-    secs = lambda r: f"{r['value']:g} s" if r and r["unit"] == "s" else "—"
-    # the best for each role, at a glance
-    # the helper tiers each family's projects run at by default, and why
-    from . import providers as pv
-    fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p)]
-    roles = ('main', 'routine', 'step-up', 'chores', 'consultant', 'monitor', 'runtime')
-    picks = {k: {role: bench.role_pick(k, role, entries) for role in roles if role != 'runtime' or k == 'claude'} for k in fams}
-    cell = lambda r: (f"<a href='#{e(r['model'])}'>{e(bench.name(r['model']))}</a>" + (f" at {e(r['effort'])}" if r["effort"] else "")
-                      + f"<div class='muted'>{e(r['why'])}</div>") if r else "<span class='muted'>—</span>"
-    best = ("<tr><th></th>" + "".join(f"<th>{e(pv.get(k).label)}</th>" for k in fams) + "</tr>" + "".join(
-        f"<tr><th>{e(t)}</th>" + "".join(f"<td>{cell(picks[k].get(t))}</td>" for k in fams) + "</tr>" for t in roles)
-        + "".join(f"<tr><td colspan='{len(fams) + 1}' class='muted'>Not yet measured, so not picked: "
-                  f"{e(', '.join(bench.name(m) for m in bench.unmeasured(k, entries)))}</td></tr>" for k in fams if bench.unmeasured(k, entries)))
-    # a domain column only where some model here has a score: the source adds scores to a new model over its first
-    # weeks, and some benchmarks it no longer runs on current models (math, for one)
-    shown = [x for x in entries if x["comparable"]]
-    doms = ["overall"] + [d for d in bench.DOMAINS if d != "overall" and any(d in x["domains"] for x in shown)]
-    rows = "".join(f"<tr><th><a href='#{e(x['model'])}'>{e(bench.entry_name(x))}</a></th>{shade(x['overall'])}"
-                   + "".join(shade(x["domains"].get(d)) for d in doms[1:])
-                   + f"<td>{usd(x['cost'])}</td><td>{secs(x['time'])}</td></tr>"
-                   for x in entries if x["comparable"])
-    table = (f"<div class='mapwrap'><table class='bench'><tr><th>Model · effort</th>"
-             + "".join(f"<th>{e(d)}</th>" for d in doms) + f"<th>{e(cost_head)}</th><th>time</th></tr>" + rows + "</table></div>")
-    cards = "".join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
-    pend = bench.pending()
-    return shell(reg, -2, model_changes() + "<header><h1>Models</h1><p class='muted'>From Artificial Analysis, an independent evaluator, checked daily "
-                 "for the models your agent programs can run. Each score is put on one scale across today's lineup, 0 the "
-                 "lowest measured and 100 the highest, within its own benchmark and version; <b>overall</b> averages the "
-                 "headline scores. A dash is a gap: Artificial Analysis adds a new model's scores over its first weeks, "
-                 "and a domain none of these models has a score in isn't shown.</p>"
-                 + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
-                 + "</header><h2>Helper tiers</h2><div class='card'><p class='muted'>Chosen on the Intelligence Index alone: each "
-                 "project's default, which its settings can change. Judgement uses the smartest model: max for rare judgement, xhigh "
-                 "for the monitor, and the AA fixed-task cost knee for main agents. Routine keeps the cheapest model within "
-                 "R61's reach, at that model's knee. An estimated knee uses the "
-                 "five-point margin when a matched task-cost curve is missing. Auto never selects Ultra delegation.</p><table class='bench best'>" + best + "</table></div>"
-                 "<h2>By domain</h2><div class='card'>" + table + "</div>"
-                 "<h2>Score against price</h2><div class='card'>" + effort_chart(entries) + "</div>"
-                 "<h2>Cards</h2>" + cards)
+    points = intelligence.pairs(entries)
+    ceiling = max((p['score'] for p in points), default=None)
+    families = [k for k, provider in providers.PROVIDERS.items() if providers.usable(provider)]
+    from . import selection
+    state = selection.read()
+    eligible = [x for x in entries if x['model'] not in state['rejected']]
+    rows = []
+    for family in families:
+        for role in selection.ROLES:
+            if role == 'runtime' and family != 'claude':
+                continue
+            pick = bench.role_pick(family, role, eligible, ceiling=ceiling,
+                                   blocked=state['blocked'].get(selection.key(family, role), []))
+            held = state['accepted'].get(selection.key(family, role))
+            desc = (pick['model'] + ' at ' + str(pick['effort']) + ': ' + pick['why']) if pick else 'Missing comparable evidence; retain accepted choice.'
+            accepted = (held['model'] + ' at ' + str(held['effort'])) if held else 'No accepted choice yet'
+            rows.append(f"<tr><th>{e(family)} · {e(role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
+    cards = ''.join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
+    title = f'{ceiling:.2f}' if ceiling is not None else 'unavailable'
+    return shell(reg, -2, model_changes() + "<header><h1>Models</h1><p>Artificial Analysis Intelligence Index and cost per benchmark task. "
+                 f"Shared runnable intelligence ceiling: <strong>{title}</strong>. "
+                 "Scores within one point count as equal; the cheaper pair wins. Estimates are labelled and can participate. "
+                 "Usage never lowers an Auto goal. <a href='/settings'>Change the Auto slider in Settings</a>.</p></header>"
+                 "<h2>Auto roles</h2><div class='card'><table class='bench'>" + ''.join(rows) + "</table></div>"
+                 "<h2>Intelligence against task cost</h2><div class='card'>" + effort_chart(entries) + "</div>"
+                 "<h2>Model evidence</h2>" + cards)
 
 
 def once(ranked):
@@ -2123,29 +2173,26 @@ def once(ranked):
 
 
 def model_card(c):
-    """One model's card: each effort level its own row, what it's good and poor at, where effort pays, the gaps."""
-    from . import bench
-    rows = "".join(
-        f"<tr><th>{e(x['variant'])}</th><td>{x['overall'] if x['overall'] is not None else '—'}</td>"
-        f"<td>{e(', '.join(f'{d} {s}' for d, s in x['domains'].items() if d != 'overall')) or '—'}</td>"
-        f"<td>{('$%.2f' % x['cost']['value'] + (' / 1M tokens' if bench.pricing(x['cost']) else ' / task')) if x['cost'] and x['cost']['unit'] == 'usd' else '—'}</td></tr>"
-        for x in c["entries"] if x["comparable"])
-    unstated = [r for x in c["entries"] if not x["comparable"] for r in x["raw"]]
-    rows += ("<tr><th>effort not stated</th><td colspan='3' class='muted'>" + e("; ".join(
-        f"{r['source']} {r['benchmark']}: {r['value']:g} {r['unit']}" for r in unstated))
-        + " (the source names no effort level, so this isn't ranked against the rows above)</td></tr>" if unstated else "")
-    raw = "".join(f"<li>{e(bench.entry_name(x))}: {e(r['source'])} {e(r['benchmark'])} {e(r['version'] or '')}: "
-                  f"<b>{r['value']:g}</b> {e(r['unit'])} <span class='muted'>({e(r['kind'])}, {e(r['date'])})</span> "
-                  f"<a href='{e(r['url'])}' rel='noopener' target='_blank'>source</a></li>"
-                  for x in c["entries"] for r in x["raw"] + x["measures"])
-    return (f"<div class='card' id='{e(c['model'])}'><div class='titlerow'><h3>{e(c['name'])}</h3>"
-            f"<span class='muted'>{e(c['model'])}</span>{'<span class=badge>pending</span>' if c['pending'] else ''}</div>"
-            + (f"<div class='mapwrap'><table class='bench'><tr><th>effort</th><th>overall</th><th>by domain</th><th>cost</th></tr>{rows}</table></div>"
-               if c["entries"] else "<p class='muted'>No independent scores yet: this card waits for its research check.</p>")
-            + (f"<p class='muted'>No independent data at: {e(', '.join(c['untested']))}.</p>" if c["untested"] else "")
-            + ("<ul>" + "".join(f"<li>{e(n)}</li>" for n in c["notes"]) + "</ul>" if c["notes"] else "")
-            + (f"<details><summary class='muted'>Every score, with its source</summary><ul>{raw}</ul></details>" if raw else "")
-            + "</div>")
+    rows = []
+    for entry in c['entries']:
+        point = entry.get('pair')
+        if not point:
+            continue
+        cost = f"${point['cost']:.4g}" if point['cost'] is not None else 'Unknown'
+        kind = 'Estimated' if point['estimated'] else 'Measured'
+        sources = []
+        for metric, evidence in point['evidence'].items():
+            if not evidence:
+                continue
+            if evidence.get('estimated'):
+                sources.append(f"<li>{e(metric)}: {e(json.dumps(evidence['derivation'], ensure_ascii=False))}</li>")
+            else:
+                sources.append(f"<li>{e(metric)}: <a href='{e(evidence['url'])}' rel='noopener' target='_blank'>Artificial Analysis</a>, {e(evidence['date'])}</li>")
+        rows.append(f"<tr><th>{e(entry['variant'])}</th><td>{point['score']:.2f}</td><td>{cost}</td>"
+                    f"<td>{kind}<details><summary>Evidence · {e(point['version'])}</summary><ul>{''.join(sources)}</ul></details></td></tr>")
+    table = ("<table class='bench'><tr><th>Effort</th><th>Intelligence Index</th><th>USD/task</th><th>Evidence</th></tr>"
+             + ''.join(rows) + '</table>') if rows else '<p>No comparable Intelligence Index evidence yet; retain accepted choices.</p>'
+    return f"<div class='card' id='{e(c['model'])}'><h3>{e(c['name'])}</h3>{table}</div>"
 
 
 def effort_chart(entries):
@@ -2153,9 +2200,10 @@ def effort_chart(entries):
     (up), joined in order: where the line climbs, more effort pays; where it runs flat, it only costs more."""
     import math
     from . import bench
-    pts = [x for x in entries if x["comparable"] and x["overall"] is not None and x["cost"] and x["cost"]["value"] > 0]
+    pts = [dict(x, overall=x['pair']['score'], cost=dict(value=x['pair']['cost'], unit='usd', benchmark='Cost per Intelligence Index task'))
+           for x in entries if x.get('pair') and x['pair']['cost'] is not None and x['pair']['cost'] > 0]
     if not pts:
-        return "<p class='muted'>No model has both an overall score and a cost per task yet.</p>"
+        return "<p class='muted'>No model has both a comparable Intelligence Index and cost per task yet.</p>"
     W, H, L, B = 640, 300, 44, 34
     lo, hi = math.log2(min(x["cost"]["value"] for x in pts)), math.log2(max(x["cost"]["value"] for x in pts))
     X = lambda v: L + (W - L - 12) * ((math.log2(v) - lo) / ((hi - lo) or 1))
@@ -2168,7 +2216,7 @@ def effort_chart(entries):
         out.append(f"<polyline fill='none' stroke='{col}' stroke-width='2' points='"
                    + " ".join(f"{X(x['cost']['value']):.0f},{Y(x['overall']):.0f}" for x in mine) + "'/>")
         out += [f"<circle cx='{X(x['cost']['value']):.0f}' cy='{Y(x['overall']):.0f}' r='4' fill='{col}'><title>"
-                f"{e(bench.entry_name(x))}: overall {x['overall']}, ${x['cost']['value']:.2f} {bench.cost_label(x['cost'])}</title></circle>"
+                f"{e(bench.entry_name(x))}: Intelligence Index {x['overall']}, ${x['cost']['value']:.2f} {bench.cost_label(x['cost'])}</title></circle>"
                 + f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['variant'])}</text>"
                 for x in mine]
         legend.append(f"<span><i style='background:{col}'></i>{e(bench.name(mid))}</span>")
@@ -2177,7 +2225,7 @@ def effort_chart(entries):
     xt = "".join(f"<text x='{X(2 ** k):.0f}' y='{H - 12}' text-anchor='middle'>${2 ** k:g}</text>"
                  for k in range(math.floor(lo), math.ceil(hi) + 1, step) if lo <= k <= hi)
     return (f"<div class='mapwrap'><svg class='chart' viewBox='0 0 {W} {H}' width='{W}' height='{H}'>{ticks}{xt}"
-            f"<text x='{L + 8}' y='12' class='axis'>overall (0–100)</text><text x='{W - 12}' y='{H - 2}' text-anchor='end' class='axis'>"
+            f"<text x='{L + 8}' y='12' class='axis'>Intelligence Index (0–100)</text><text x='{W - 12}' y='{H - 2}' text-anchor='end' class='axis'>"
             f"{bench.cost_label(pts[0]['cost'])}, doubling each step</text>{''.join(out)}</svg></div><div class='legend chartkey'>{''.join(legend)}</div>"
             + ("<p class='muted'>A model's effort levels share its price per token, so they stack at one price: "
                "higher effort spends more tokens a task, which this data doesn't give.</p>" if bench.pricing(pts[0]["cost"]) else ""))
@@ -2349,7 +2397,7 @@ def settings_page(reg):
                f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> % "
                f"of a program's 5-hour or weekly limit <span class='muted'>(its projects land what's in flight, save their "
                f"work and tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset)</span></label>"
-               f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
+               + auto_balance_fields() + f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
                f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
@@ -2753,6 +2801,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/options":
+            if 'auto_balance' in form:
+                try:
+                    set_setting('auto_balance', form['auto_balance'])
+                except KeyError:
+                    return self._send(400, b'Auto balance must be from 0 to 6')
             set_setting("remote", form.get("remote", "off"))
             set_setting("monitor", form.get("monitor", "off"))
             set_setting("lan", form.get("lan", "off"))
@@ -2811,7 +2864,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/project-settings":
             root = projects(reg)[int(form.get("p", "0"))]
-            project_settings(root, {k: form.get(k, "") for k in PROJECT_KEYS})
+            try:
+                project_settings(root, {k: form.get(k, "") for k in PROJECT_KEYS})
+            except KeyError:
+                return self._send(400, b'Invalid project setting')
             from . import bench
             own = bench.plan(root)
             for t in bench.TIERS:

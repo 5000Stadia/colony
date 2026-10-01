@@ -32,9 +32,6 @@ INDEX = "intelligence index"                # the overall benchmark whose cost a
 # Index, in its own points. A new model gets it first and it covers every domain roughly enough; domains stay on
 # the Models page as information and play no part in the choice (the person's call).
 TIERS = ("routine", "step-up", "chores")
-NEAR = 5                                    # index points more effort must add to be worth its extra tokens
-REACH = 10                                  # how far below the step-up pick routine work may score
-ROUTINE_TOP = "high"                        # xhigh and max are kept for hard problems (GUIDE.md)
 
 
 def path():
@@ -45,7 +42,8 @@ def records():
     """Researched records, and the latest Artificial Analysis snapshot read as records."""
     p = path()
     kept = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
-    return kept + api_records()
+    from . import intelligence
+    return intelligence.bundled_records() + kept + api_records()
 
 
 def snapshots_dir():
@@ -178,6 +176,8 @@ def standings(rows=None):
     """Every entry (model, effort) the records know for the lineup, with its domain scores on one scale and
     its overall score, relative to the lineup. Only independent scores are scaled and averaged."""
     rows = records() if rows is None else rows
+    from . import intelligence
+    pair_points = intelligence.candidates(rows, lineup())
     curves = task_curves(rows)
     models = {mid for _, mid, _, _ in lineup()}
     rows = [r for r in rows if r["model"] in models]
@@ -225,7 +225,13 @@ def standings(rows=None):
         e["index"] = next((r["value"] for r in e["raw"] if r["domain"] == "overall" and r["kind"] == "independent"
                            and INDEX in r["benchmark"].lower() and r["source"].startswith("Artificial Analysis")), None)
         e["pending"] = not any(r["domain"] in ("overall", "preference") and r["kind"] == "independent" for r in e["raw"])
-    return sorted(entries.values(), key=lambda e: (not e["comparable"], e["overall"] is None, -(e["overall"] or 0)))
+    for point in pair_points:
+        ident = (point['model'], point['effort'])
+        e = entries.setdefault(ident, dict(model=point['model'], variant=point['effort'] or 'default', effort=point['effort'],
+            comparable=True, scaled={}, raw=[], measures=[], domains={}, overall=None, headline=[], sources=[],
+            cost=None, time=None, index=point['score'], pending=False, task_curve=curves.get(point['model'], [])))
+        e['pair'] = point
+    return sorted(entries.values(), key=lambda e: (not e['comparable'], e.get('index') is None, -(e.get('index') or 0)))
 
 
 def pricing(r):
@@ -260,7 +266,7 @@ def card(model, entries=None):
     entries = standings() if entries is None else entries
     mine = [e for e in entries if e["model"] == model]
     efforts = next((eff for _, mid, _, eff in lineup() if mid == model), [])
-    measured = {e["effort"] for e in mine}
+    measured = {e["effort"] for e in mine if e['raw']}
     out = {"model": model, "name": name(model), "entries": mine,
            "untested": [x for x in efforts if x not in measured],
            "pending": not any(e["comparable"] and not e["pending"] for e in mine), "notes": []}
@@ -355,91 +361,17 @@ def nearest_effort(key, model, target):
     return min(supported, key=lambda e: (abs(EFFORT_ORDER.get(e, 0) - position), EFFORT_ORDER.get(e, 0)))
 
 
-def knee(key, model, entries):
-    """Last effort before the largest proportional jump in marginal AA task cost/point."""
-    supported = {e['effort'] for e in entries}
-    curve = next((e.get('task_curve') for e in entries if e.get('task_curve')), [])
-    curve = [e for e in curve if e['effort'] != 'ultra']
-    usable = len(curve) >= 3 and all(e['effort'] in supported for e in curve)
-    slopes = []
-    if usable:
-        for a, b in zip(curve, curve[1:]):
-            gain, cost = b['score'] - a['score'], b['cost'] - a['cost']
-            if gain <= 0 or cost <= 0:
-                usable = False       # a flat/dominated/noisy curve does not justify an invented bend
-                break
-            slopes.append(cost / gain)
-    if usable:
-        jumps = [(slopes[i] / slopes[i - 1], i) for i in range(1, len(slopes))]
-        ratio, index = max(jumps, key=lambda item: (item[0], -item[1]))
-        if ratio > 1 + 1e-9:
-            chosen = curve[index]
-            effort = nearest_effort(key, model, chosen['effort'])
-            if effort == chosen['effort']:
-                return dict(model=model, effort=effort, estimated=False, policy='role-effort-v1',
-                            evidence=dict(curve=curve, marginal_cost_per_point=slopes, jump_ratio=ratio),
-                            why=f"AA fixed-task cost knee: {effort}, before a {ratio:.2f}× jump in cost per extra Intelligence Index point "
-                                f"({chosen['version']}, {chosen['date']}; ${chosen['cost']:g} per task)")
-    best = max(e['index'] for e in entries)
-    chosen = next(e for e in entries if e['index'] >= best - NEAR)
-    return dict(model=model, effort=nearest_effort(key, model, chosen['effort'] or 'medium'), estimated=True,
-                policy='role-effort-v1', evidence=dict(index=chosen['index'], best_index=best, margin=NEAR),
-                why=f"Estimated knee: lowest effort within {NEAR} Intelligence Index points of this model's best "
-                    f"({chosen['index']:g} of {best:g}); no comparable AA fixed-task cost knee")
-
-
 def tiers_for(key, entries=None):
-    """Judgement uses the smartest model; ordinary helpers retain R61's cheaper model rule.
-    Routine effort uses that model's knee; chores keep their existing value rule.
-    """
-    by = scored(key, entries)
-    if not by:
-        return {}
-    top_model = max(by, key=lambda m: max(e['index'] for e in by[m]))
-    best = max(e['index'] for e in by[top_model])
-    effort = nearest_effort(key, top_model, 'max')
-    out = {'step-up': dict(model=top_model, effort=effort, policy='role-effort-v1',
-                          evidence=dict(best_index=best, target_effort='max'),
-                          why=f"the highest Intelligence Index here ({best:g}); {effort} for rare judgement")}
-    price = lambda e: e['cost']['value'] if e['cost'] else None
-    # Keep R61's reach reference independent of rare judgement's new max effort.
-    reference = next(e for e in by[top_model] if e['index'] >= best - NEAR)
-    bar = reference['index'] - REACH
-    fits = [(m, next((e for e in es if e['index'] >= bar
-                     and EFFORT_ORDER.get(e['effort'], 0) <= EFFORT_ORDER[ROUTINE_TOP]), None))
-            for m, es in by.items()]
-    fits = [(m, e) for m, e in fits if e and price(e) is not None]
-    if fits:
-        model, entry = min(fits, key=lambda pair: (price(pair[1]), EFFORT_ORDER.get(pair[1]['effort'], 0)))
-        pick = knee(key, model, by[model])
-        pick['why'] = (f"the cheapest model within {REACH} points of R61's step-up reference "
-                       f"({entry['index']:g} at ${price(entry):g} {cost_label(entry['cost'])}); " + pick['why'])
-        pick['evidence']['model_reach_reference'] = reference['index']
-        out['routine'] = pick
-    value = [(es[0]['index'] / price(es[0]), m, es[0]) for m, es in by.items() if price(es[0])]
-    if value:
-        v, m, e = max(value, key=lambda x: x[0])
-        out['chores'] = dict(model=m, effort=e['effort'],
-                            why=f"the most Intelligence Index points per dollar ({e['index']:g} at ${price(e):g} {cost_label(e['cost'])}), "
-                                "at its lowest effort")
-    return {t: out[t] for t in TIERS if t in out}
+    entries = standings() if entries is None else entries
+    return {role: choice for role in TIERS if (choice := role_pick(key, role, entries))}
 
 
-def role_pick(key, role, entries=None):
-    if role in ('main', 'runtime'):
-        by = scored(key, entries)
-        if not by:
-            return None
-        model = max(by, key=lambda m: max(e['index'] for e in by[m]))
-        return knee(key, model, by[model])
-    tiers = tiers_for(key, entries)
-    chosen = tiers.get(role if role in TIERS else 'step-up')
-    if chosen and role in ('consultant', 'monitor'):
-        target = 'max' if role == 'consultant' else 'xhigh'
-        chosen = dict(chosen, effort=nearest_effort(key, chosen['model'], target), policy='role-effort-v1',
-                      why=f"the smartest model; {target} for " + ('rare, pure judgement' if role == 'consultant' else 'frequent judgement at the helm'),
-                      evidence=dict(chosen.get('evidence') or {}, target_effort=target))
-    return chosen
+def role_pick(key, role, entries=None, *, balance=None, ceiling=None, blocked=()):
+    from . import intelligence
+    entries = standings() if entries is None else entries
+    if balance is None:
+        balance = board.registry()['settings'].get('auto_balance', 3)
+    return intelligence.pick(key, role, intelligence.pairs(entries), balance, ceiling, blocked)
 
 
 def best_effort(key, model, entries=None):

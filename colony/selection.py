@@ -8,6 +8,7 @@ import contextlib
 import copy
 import fcntl
 import json
+import hashlib
 import os
 import secrets
 import threading
@@ -31,8 +32,13 @@ def same(a, b):
     return pair(a) == pair(b)
 
 
-def key(family, role):
-    return family + ':' + role
+def key(family, role, root=None):
+    suffix = '@' + hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:16] if root else ''
+    return family + ':' + role + suffix
+
+
+def scope(root):
+    return root if root and 'auto_balance' in board.project_settings(root)[1] else None
 
 
 def empty():
@@ -102,21 +108,29 @@ def concrete(family, value):
 
 def recommendations(state):
     """Rank eligible evidence without changing the ledger; a rejection applies to all roles."""
-    entries = [e for e in bench.standings() if e['model'] not in state['rejected']]
+    from . import intelligence
+    all_entries = bench.standings()
+    ceiling = max((p['score'] for p in intelligence.pairs(all_entries)), default=None)
+    entries = [e for e in all_entries if e['model'] not in state['rejected']]
+    settings = board.registry()['settings']
+    scopes = [(None, settings.get('auto_balance', 3))]
+    scopes += [(root, board.project_settings(root)[1]['auto_balance']) for root in project_roots()
+               if root.exists() and scope(root)]
     out = {}
-    for family, provider in providers.PROVIDERS.items():
-        if not providers.usable(provider):
-            continue
-        for role in ROLES:
-            # The ledger holds every family's role, including inactive seats.
-            # Keep their evidence current too; launchers decide which family runs.
-            ident = key(family, role)
-            blocked = state['blocked'].get(ident, [])
-            usable = [e for e in entries if pair(e) not in blocked]
-            chosen = bench.role_pick(family, role, usable)
-            chosen = concrete(family, chosen)
-            if chosen and pair(chosen) not in blocked:
-                out[ident] = chosen
+    for root, balance in scopes:
+        for family, provider in providers.PROVIDERS.items():
+            if not providers.usable(provider):
+                continue
+            for role in ROLES:
+                if root and (role in ('consultant', 'monitor') or
+                             (family != 'claude' if role == 'runtime' else providers.key(providers.of(root)) != family)):
+                    continue
+                ident = key(family, role, root)
+                blocked = state['blocked'].get(ident, [])
+                chosen = bench.role_pick(family, role, entries, balance=balance, ceiling=ceiling, blocked=blocked)
+                chosen = concrete(family, chosen)
+                if chosen and pair(chosen) not in blocked:
+                    out[ident] = dict(chosen, scope=str(root)) if root else chosen
     return out
 
 
@@ -138,7 +152,11 @@ def price_change(before, after):
     def price(value):
         return bench.token_price(value['model']) if value else None
     old, new = price(before), price(after)
-    return {'before': list(old) if old is not None else None, 'after': list(new) if new is not None else None}
+    result = {'before': list(old) if old is not None else None, 'after': list(new) if new is not None else None}
+    if any((v or {}).get('policy') == 'intelligence-goal-v2' for v in (before, after)):
+        result['task'] = {label: (value or {}).get('evidence', {}).get('cost') for label, value in (('before', before), ('after', after))}
+        result['task_estimated'] = any((v or {}).get('estimated') for v in (before, after))
+    return result
 
 
 def switch(state, ident, chosen, reason):
@@ -176,6 +194,15 @@ def reconcile():
                         switch(state, ident, choice, 'Initial concrete choice')
                         if choice['model'] not in state['approved']:
                             state['approved'].append(choice['model'])
+        for root in project_roots():
+            if not root.exists() or not scope(root):
+                continue
+            for role in ('main', *bench.TIERS, 'runtime'):
+                family = 'claude' if role == 'runtime' else providers.key(providers.of(root))
+                ident = key(family, role, root)
+                inherited = state['accepted'].get(key(family, role))
+                if ident not in state['accepted'] and inherited:
+                    switch(state, ident, dict(inherited, scope=str(root)), 'Project inherits accepted choice before adoption')
         pending = {m: p for m, p in state['pending'].items() if p.get('emergency')}
         for ident, held in list(state['accepted'].items()):
             family = ident.split(':', 1)[0]
@@ -221,9 +248,9 @@ def reconcile():
         return copy.deepcopy(state)
 
 
-def auto(family, role):
+def auto(family, role, root=None):
     state = read()
-    ident = key(family, role)
+    ident = key(family, role, scope(root))
     if state.get('recovery') or ident not in state['accepted'] or not concrete(family, state['accepted'].get(ident)):
         state = reconcile()
     chosen = concrete(family, state['accepted'].get(ident))
@@ -232,13 +259,13 @@ def auto(family, role):
     return dict(chosen, own=False, why=chosen.get('why') or 'Benchmark recommendation')
 
 
-def resolve(family, role, pin=None):
+def resolve(family, role, pin=None, root=None):
     if pin and pin.get('model'):
         chosen = concrete(family, pin)
         if not chosen:
             raise Unavailable(f"The chosen model or effort is unavailable for {family}: {pin['model']}")
         return dict(chosen, own=True, why='Chosen by you')
-    return auto(family, role)
+    return auto(family, role, root)
 
 
 def decide(model, proposal_id, action):
@@ -359,14 +386,14 @@ def main(root=None):
     family = providers.key(providers.of(root))
     own = board.project_settings(root)[1] if root else {}
     pin = own if own.get('model') else settings if family == settings['provider'] else (settings.get('main_models') or {}).get(family)
-    return resolve(family, 'main', pin)
+    return resolve(family, 'main', pin, root)
 
 
 def helper(root, role):
     migrate(root)
     family = providers.key(providers.of(root))
     pin = bench.plan(root).get(role) or (board.registry()['settings'].get('helper_models') or {}).get(key(family, role))
-    value = resolve(family, role, pin)
+    value = resolve(family, role, pin, root)
     value['own'] = role in bench.plan(root)
     if pin and not value['own']:
         value['why'] = 'Colony helper choice in Settings'
@@ -390,7 +417,7 @@ def runtime(root=None, pin=None):
     # PROVIDER: the unattended runtime currently executes through Claude Code only.
     if pin and alias(pin.get('model')):
         pin = None
-    return resolve('claude', 'runtime', pin or board.registry()['settings'].get('runtime_model'))
+    return resolve('claude', 'runtime', pin or board.registry()['settings'].get('runtime_model'), root)
 
 
 def project_roots():
@@ -406,25 +433,30 @@ def project_roots():
 
 def role_label(ident):
     family, role = ident.split(':', 1)
+    role, _, project = role.partition('@')
+    project_name = next((r.name for r in project_roots() if key(family, role, r) == ident), project)
     label = {'main': 'main agents', 'runtime': 'unattended runtime'}.get(role, role)
     if role in bench.TIERS:
         label += ' helpers'
-    return providers.get(family).label + ' · ' + label
+    return providers.get(family).label + ' · ' + label + (' · ' + project_name if project else '')
 
 
 def affected(ident, before, after):
     """Expand a default role into its seats, retaining explicit pins as comparisons only."""
     family, role = ident.split(':', 1)
+    role = role.split('@', 1)[0]
     out = []
     settings = board.registry()['settings']
     for root in project_roots():
-        if not root.exists() or providers.key(providers.of(root)) != family:
+        if not root.exists() or (role != 'runtime' and providers.key(providers.of(root)) != family):
+            continue
+        if key(family, role, scope(root)) != ident:
             continue
         if role == 'main':
             own = board.project_settings(root)[1]
             pin = own if own.get('model') else settings if family == settings['provider'] else (settings.get('main_models') or {}).get(family) or {}
         elif role in bench.TIERS:
-            pin = bench.plan(root).get(role) or (settings.get('helper_models') or {}).get(ident) or {}
+            pin = bench.plan(root).get(role) or (settings.get('helper_models') or {}).get(key(family, role)) or {}
         elif role == 'runtime':
             path = root / '.colony' / 'config.json'
             if family != 'claude' or not path.exists():
