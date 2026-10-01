@@ -2601,7 +2601,7 @@ class FollowsNewModelsTest(BoardBase):
         from unittest.mock import patch
         self.assertIsNone(project.DEFAULTS["model"])
         self.assertEqual(project.strongest(), "claude-fable-5-1", "no data: a fixed catalog model, never an alias")
-        with patch.object(bench, "tiers_for", lambda k, entries=None: {"routine": {"model": "claude-opus-5-5", "effort": "high"}}):
+        with patch.object(bench, "role_pick", lambda k, role, entries=None: {"model": "claude-opus-5-5", "effort": "high"}):
             from colony import selection
             selection.reconcile()
             self.assertEqual(project.strongest(), "claude-opus-5-5")

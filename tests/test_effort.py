@@ -30,6 +30,18 @@ class EffortPolicyTest(unittest.TestCase):
             self.assertEqual(pick['effort'],'high')
             self.assertIn('Estimated',pick['why'])
 
+    def test_routine_keeps_cheaper_model_in_reach_while_main_uses_smartest(self):
+        other = 'claude-sonnet-5-5'
+        entries = self.entries + [dict(self.entries[0], model=other, effort=e, variant=e,
+                                      index=s, task_curve=[], cost={'value': 1, 'benchmark': 'Price per 1M tokens', 'unit': 'usd'})
+                                 for e, s in [('medium',40.7),('high',46.7),('xhigh',51.9),('max',56)]]
+        lineup = [('claude', self.model, '', []), ('claude', other, '', [])]
+        with patch.object(bench, 'lineup', return_value=lineup):
+            routine = bench.role_pick('claude', 'routine', entries)
+            self.assertEqual(routine['model'], other)
+            self.assertEqual(routine['effort'], 'xhigh', 'apply the knee after choosing the R61 model')
+            self.assertEqual(bench.role_pick('claude', 'main', entries)['model'], self.model)
+
     def test_ultra_cannot_change_the_smartest_auto_model_and_nearest_ties_round_down(self):
         entries=self.entries+[dict(self.entries[-1],model='gpt-6-astra',effort='ultra',variant='ultra',index=1000)]
         with patch.object(providers,'efforts_of',return_value=['low','high','xhigh','ultra']):

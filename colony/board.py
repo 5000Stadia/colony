@@ -2017,7 +2017,8 @@ def models_page(reg):
                  + (f"<p class='muted'>Waiting for their research check: {e(', '.join(bench.name(m) for m in pend))}.</p>" if pend else "")
                  + "</header><h2>Helper tiers</h2><div class='card'><p class='muted'>Chosen on the Intelligence Index alone: each "
                  "project's default, which its settings can change. Judgement uses the smartest model: max for rare judgement, xhigh "
-                 "for the monitor, and the AA fixed-task cost knee for main agents and routine work. An estimated knee uses the "
+                 "for the monitor, and the AA fixed-task cost knee for main agents. Routine keeps the cheapest model within "
+                 "R61's reach, at that model's knee. An estimated knee uses the "
                  "five-point margin when a matched task-cost curve is missing. Auto never selects Ultra delegation.</p><table class='bench best'>" + best + "</table></div>"
                  "<h2>By domain</h2><div class='card'>" + table + "</div>"
                  "<h2>Score against price</h2><div class='card'>" + effort_chart(entries) + "</div>"

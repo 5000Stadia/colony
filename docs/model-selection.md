@@ -12,6 +12,11 @@ the unattended runtime at the AA fixed-task cost knee. Auto never selects Ultra
 with ties downward. Chores retain their value-based model selection. Pins remain
 unchanged, including an explicitly chosen Ultra.
 
+Routine helpers retain R61's model rule: the cheapest model reaching within ten
+points of the smartest model's lowest effort within five of its best, at high or
+below. Their effort then uses that chosen model's knee. Main agents and runtime
+use the smartest model at its knee; routine helpers need not use the same model.
+
 The knee is the effort immediately before the largest proportional increase in
 marginal USD per additional Intelligence Index point. It uses score and task-cost
 pairs from one AA source, benchmark version and date, retained even when the API
