@@ -71,11 +71,11 @@ class Responses(BaseHTTPRequestHandler):
 
 
 def installed():
-    return shutil.which('codex') and '0.159.3' in subprocess.run(
-        ['codex', '--version'], capture_output=True, text=True).stdout
+    return shutil.which('codex') and any(v in subprocess.run(
+        ['codex', '--version'], capture_output=True, text=True).stdout for v in ('0.159.3', '0.160.0'))
 
 
-@unittest.skipUnless(installed(), 'native checks require Codex 0.159.3')
+@unittest.skipUnless(installed(), 'native checks require Codex 0.159.3 or 0.160.0')
 class NativeRemoteTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='colony-remote-test-')
@@ -350,6 +350,12 @@ if __name__ == '__main__':
 
 
 class ConsoleConfigTest(unittest.TestCase):
+    def test_remote_version_gate_allows_only_checked_releases(self):
+        self.assertTrue(remote.supported_version('codex-cli 0.160.0'))
+        self.assertTrue(remote.supported_version('codex-cli 0.159.3'))
+        self.assertFalse(remote.supported_version('codex-cli 0.160.1'))
+        self.assertFalse(remote.supported_version('codex-cli 0.159.30'))
+
     def test_the_attached_console_is_not_given_workspace_roots_the_server_already_has(self):
         from colony import codex_remote
         config = {"model": "gpt-6-astra", "sandbox_workspace_write.writable_roots": ["/x"], "hooks.Stop": [],
