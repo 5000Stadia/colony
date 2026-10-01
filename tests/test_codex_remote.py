@@ -294,5 +294,6 @@ if __name__ == '__main__':
 class ConsoleConfigTest(unittest.TestCase):
     def test_the_attached_console_is_not_given_workspace_roots_the_server_already_has(self):
         from colony import codex_remote
-        config = {"model": "gpt-6-astra", "sandbox_workspace_write.writable_roots": ["/x"], "hooks.Stop": []}
+        config = {"model": "gpt-6-astra", "sandbox_workspace_write.writable_roots": ["/x"], "hooks.Stop": [],
+                  "sandbox_mode": "danger-full-access", "approval_policy": "never"}
         self.assertEqual(sorted(codex_remote.console_config(config)), ["hooks.Stop", "model"])

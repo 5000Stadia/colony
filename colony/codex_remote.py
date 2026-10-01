@@ -190,10 +190,15 @@ def overrides(root, home, settings):
     return config
 
 
+SERVER_ONLY = ('sandbox_workspace_write.', 'sandbox_mode', 'approval_policy')
+
+
 def console_config(config):
-    """What the console attached with --remote may be given: Codex 0.159.3 refuses workspace-root overrides there
-    ("configure additional workspace roots on the server"), and the server already has them from the same config."""
-    return {k: v for k, v in config.items() if not k.startswith('sandbox_workspace_write.')}
+    """What the console attached with --remote may be given. Codex 0.159.3 refuses workspace roots there
+    ("configure additional workspace roots on the server") and permissions when it resumes ("permission
+    overrides are not supported when resuming a remote task"); the server already has both from the same
+    config, and attach() checks the thread reports them."""
+    return {k: v for k, v in config.items() if not k.startswith(SERVER_ONLY)}
 
 
 def flags(config):
