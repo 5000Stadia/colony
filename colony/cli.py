@@ -754,6 +754,7 @@ def cmd_turn(a):
         return 0
     key, text = providers.of(root).turn_text(_hook_input())
     board.record_ask(root, key, text)
+    board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     return 0
 
 
@@ -775,6 +776,7 @@ def cmd_notes(a):
         prompt = str(payload.get("prompt") or "")
         if prompt and not prompt.startswith("[colony]"):
             board.answer_asks(root, "in the console")        # the person answered there themselves
+            board.said(root, prompt)                         # their own words, for the monitor to catch up on
         from . import bench
         standing = bench.plan_text(root) if a.session else ""       # the helper tiers, every session
         fresh, still = board.deliver(root, session=a.session)
@@ -836,12 +838,39 @@ def cmd_peek(a):
     return 0
 
 
+def _caught_up(root):
+    """Run by the monitor's own console: if the person has spoken to this project directly since the monitor last
+    caught up, nothing is sent; their words are shown instead, so the monitor never acts on a stale picture of
+    what they want. True when it may go on."""
+    from . import console, monitor
+    if os.environ.get("COLONY_CONSOLE") != monitor.name():
+        return True
+    words = monitor.catch_up(root)
+    if not words:
+        return True
+    print(f"Nothing was sent. The person has spoken to {root.name} directly since you last caught up:\n{words}\n"
+          "If what you were doing still fits what they said there, run it again; if not, or if you can't tell, "
+          "bring it to them instead.")
+    return False
+
+
+def cmd_said(a):
+    """What the person has said to a project directly (in its console, or in a note on the board) since the
+    monitor last caught up on it: their own words only."""
+    from . import monitor
+    words = monitor.catch_up(_project(a.name))
+    print(words or f"Nothing new from the person in {a.name} since you last caught up.")
+    return 0
+
+
 def cmd_tell(a):
     """The monitor speaks for the person: as a note from them, delivered through the hooks into the agent's own
     context (typed text arrives as a paste, which an agent rightly doesn't take as the person's word), and a
     one-line nudge if the session is idle. It shows on the board like any note."""
     from . import board, console
     root = _project(a.name)
+    if not _caught_up(root):
+        return 3
     board.add_note(root, None, a.text, author="monitor")
     name = console.ensure(root)
     if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
@@ -901,6 +930,8 @@ def cmd_choose(a):
     `colony tell` would type the text and press Enter on whatever is highlighted."""
     from . import console, providers
     root = _project(a.name)
+    if not _caught_up(root):
+        return 3
     name = console.session_name(root)
     keys = providers.of(root).choose(console.screen(name), a.option)
     if not keys:
@@ -1052,6 +1083,8 @@ def cmd_supports(a):
 
 def cmd_decided(a):
     from . import monitor
+    if not _caught_up(_project(a.name)):
+        return 3
     monitor.decided(_project(a.name), a.text)
     print(f"recorded for {a.name}")
     return 0
@@ -1104,6 +1137,8 @@ def main(argv=None):
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
+    p = sub.add_parser("said", help="(monitor) what the person said to a project directly since you last caught up")
+    p.add_argument("name"); p.set_defaults(fn=cmd_said)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
     p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")

@@ -780,6 +780,23 @@ def delete_project(root):
     return dest
 
 
+def said(root, text):
+    """The person's own words to a project's agent, typed in its console: kept (each up to 1,000 characters) so
+    the monitor can catch up on direction given without it."""
+    append(root, "said.jsonl", {"at": now(), "text": text.strip()[:1000]})
+
+
+def said_reply(root, text):
+    """The agent's answer to the person's last direct words: its closing lines (up to 600 characters), where it
+    says what it did, or why it pushed back. Context the monitor needs beside their words: an agent may have
+    shown a request cut against the project's own principles, and the person changed course."""
+    rows = read(root, "said.jsonl")
+    if not text.strip() or not rows or "reply" in rows[-1]:
+        return                                      # they didn't speak directly, or this turn's answer is kept
+    tail = text.strip()
+    append(root, "said.jsonl", {"at": now(), "reply": ("…" + tail[-600:]) if len(tail) > 600 else tail})
+
+
 def add_note(root, anchor, text, author="person", quiet=False):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,

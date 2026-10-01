@@ -2612,6 +2612,42 @@ class FollowsNewModelsTest(BoardBase):
         self.assertLess(bench.days_since_fetch(), 1)
 
 
+class CatchUpTest(BoardBase):
+    """The person steers projects directly too; the monitor catches up on their own words before it acts."""
+
+    def test_the_monitor_sees_what_the_person_said_directly_before_it_acts(self):
+        board.track(self.root)
+        env = dict(os.environ, PYTHONPATH=str(ROOT), COLONY_CONSOLE=monitor.name())
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True, env=env)
+        payload = json.dumps({"prompt": "Hold the reminders feature until the person has tried it"})
+        subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver"], cwd=self.root, input=payload, capture_output=True,
+                       text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertTrue(monitor.unseen(self.root), "their own words, kept")
+        board.said_reply(self.root, "Held it: reminders would break the offline-first rule in the spine, so I kept them local.")
+        self.assertIn("its agent answered: Held it", monitor.unseen(self.root)[-1][2], "the exchange, not their words alone")
+        w = monitor.Watcher(quiet=0)
+        w.states[str(self.root)] = "working"
+        from unittest.mock import patch
+        with patch.object(console, "snapshot", lambda *a, **k: {"state": "idle", "lines": ["done"]}), \
+                patch.object(monitor, "helm_for", lambda p: True):
+            w.events()                                       # a finished turn reads twice before it counts
+            [event] = [x for x in w.events() if x[1] is None]
+        self.assertIn("colony said plants before you settle anything there", event[2])
+        r = run("decided", "plants", "go ahead with reminders")
+        self.assertEqual(r.returncode, 3, "nothing acted on")
+        self.assertIn("Hold the reminders feature", r.stdout)
+        self.assertFalse(monitor.unseen(self.root), "now caught up")
+        self.assertEqual(run("decided", "plants", "held reminders, as they said").returncode, 0)
+        self.assertIn("Nothing new from the person", run("said", "plants").stdout)
+        time.sleep(1.1)                                      # records are to the second
+        board.add_note(self.root, None, "Actually ship reminders on Friday")
+        self.assertIn("in a note on the board: Actually ship reminders", run("said", "plants").stdout)
+        r = subprocess.run([sys.executable, "-m", "colony", "decided", "plants", "x"], cwd=self.root, capture_output=True,
+                           text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertEqual(r.returncode, 0, "only the monitor's own console is held to it")
+        self.assertIn("colony said NAME", monitor.ROLE)
+
+
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
 

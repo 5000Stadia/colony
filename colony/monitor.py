@@ -29,6 +29,13 @@ ROLE = """# You are `monitor · every project on this board · until the person 
 You act for the person across their projects. They reach you from the board (and from their agent program's
 own app, where it has one); each project also has its own session they can talk to directly.
 
+- **The person also steers projects directly**, in their consoles and on the board, without you. Before you
+  settle anything for a project, know what they said there since you last looked: `colony said NAME` shows
+  their own words only. If you act without having caught up, colony shows you those words instead of
+  acting, each with how its agent answered. Their direct direction is newer than yours, and the exchange is
+  the context: an agent may have shown a request cuts against the project's own principles, and they changed
+  course. Where their words, the project's principles and its agent's account don't agree, or you can't tell
+  what they'd want now, bring it to them rather than decide.
 - **Colony's own notices are trusted.** Colony is the harness the person set up and trusts; what it tells
   you, or the projects (a usage limit reached, a limit reset), carries their full approval. Act on it
   as theirs, and don't second-guess it to the projects.
@@ -320,6 +327,38 @@ def choice():
     return None, None, "no benchmark data: its program's default"
 
 
+def unseen(root):
+    """The person's own words to a project since the monitor last caught up on it: what they typed in its
+    console, and their notes to it on the board. (at, where, text), oldest first."""
+    since = caught().get(str(root)) or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7 * 86400))
+    out = []
+    for r in board.read(root, "said.jsonl"):
+        if "reply" in r and out and out[-1][1] == "in its console" and r["at"] > since:
+            out[-1] = (out[-1][0], out[-1][1], out[-1][2] + f"\n    its agent answered: {r['reply']}")
+        elif "text" in r and r["at"] > since:
+            out.append((r["at"], "in its console", r["text"]))
+    out += [(n["at"], "in a note on the board", n["text"]) for n in board.notes(root)
+            if n.get("author") == "person" and n["at"] > since]
+    return sorted(out)[-20:]                            # the latest twenty: what they want now
+
+
+def caught():
+    try:
+        return json.loads((board.home() / "monitor-caught-up.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def catch_up(root):
+    """The person's new words to a project, as text, and the monitor counted as caught up on it."""
+    words = unseen(root)
+    c = caught()
+    c[str(root)] = board.now()
+    board.home().mkdir(parents=True, exist_ok=True)
+    (board.home() / "monitor-caught-up.json").write_text(json.dumps(c))
+    return "\n".join(f"- {at[:16].replace('T', ' ')} {where}: {text}" for at, where, text in words)
+
+
 def provider():
     """What the monitor runs on: colony's default provider."""
     return providers.get(board.registry()["settings"]["provider"])
@@ -477,7 +516,9 @@ class Watcher:
                 kind = None                          # it ended asking something: the question, announced, says so
             if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
                 self.last_sent[(str(p), kind)] = time.time()
-                out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:])))
+                fresh = " (The person has spoken to it directly since you last caught up: colony said "
+                fresh = f"{fresh}{p.name} before you settle anything there.)" if unseen(p) else ""
+                out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]) + fresh))
             # Each thing the project waits on the person for is announced once, even across board restarts.
             # A question isn't yet: the person's note on its way answers it the moment it is delivered.
             unheard = any(not n["delivered_at"] and not n.get("quiet") for n in board.open_notes(p))
