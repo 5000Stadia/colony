@@ -1,6 +1,18 @@
 # Model-and-effort pair research (R69)
 
-Current estimation direction (person via colony, mf62c10): use the nearest model from the **same provider** that has the missing effort measured, using its average effort steps. Never fall back across providers; if none qualifies, leave the value unmeasured. Label provenance and replace estimates with measured values on refresh through normal adoption. This supersedes the earlier broad donor average in fact 9 below. The formal first consultation had already started when these refinements arrived.
+## Current direction (2026-10-01)
+
+The person's goal-first direction (m6ac2f1) supersedes the frontier-knee role policy below. Use only Intelligence Index, with one ceiling across runnable pairs from all usable providers. Each role's goal is an offset below that ceiling. Within a provider select the cheapest task-cost pair meeting the goal; otherwise its highest-scoring pair, with the shortfall shown. Usage never reduces the pick. Proposed offsets to check are judgement 0, monitor 2, main/runtime 4, routine 10; chores remain a value pick. No domain categories or R70.
+
+Final estimate rule (md3ecb7, confirmed by m3dbe3e): with at least two measured efforts, use the model's own average adjacent score gap from its nearest measured effort. With exactly one, choose the same-provider donor whose score at that effort is closest and apply its percentage spreads. Otherwise there is no estimate and the missing pair does not participate. Costs use positive proportional steps. Qualifying estimates participate under the existing adoption switch, with provenance, and give way to measurements on refresh. Sonnet 5.5's own measured score gaps average about 5.1 points, giving low about 35.6. Earlier cross-model dollar-difference examples below concern superseded estimators.
+
+Gate g835a7b was initially marked superseded, then reopened after m3dbe3e clarified the one-point tolerance is still unanswered. It now asks only whether such a tolerance may select a cheaper pair slightly below the goal or highest-score fallback. No tolerance has been accepted or implemented. The knee and separate estimate-approval proposals are obsolete. Consultation c8aafb9 is round one; the revised direction is recorded, but the checking round has not run. No live choices changed.
+
+## Historical research and earlier proposals
+
+The following records the earlier directions and their chronology; the current direction above controls.
+
+Earlier estimation direction (person via colony, mf62c10): use the nearest model from the **same provider** that has the missing effort measured, using its average effort steps. Never fall back across providers; if none qualifies, leave the value unmeasured. Label provenance and replace estimates with measured values on refresh through normal adoption. This superseded the earlier broad donor average in fact 9 below, and was itself superseded by md3ecb7. The formal first consultation had already started when these refinements arrived.
 
 Even with Opus as the sole donor, literal average adjacent dollar steps give Sonnet low a negative cost: $0.586182 − (($5.982012 − $0.551180) / 4) = −$0.771526. The corresponding score estimate is 36.910043. No such invalid cost has been entered into the ranking or live records.
 
@@ -35,7 +47,7 @@ Sources: https://artificialanalysis.ai/models/claude-sonnet-5-5 ; https://artifi
 
 A measured-only [frontier plot](data/model-pair-frontiers.svg) shows the current runnable pairs using the new snapshot and retained v4.3.2 curves. It does not select roles or include estimates. Hover a point for its model, effort and values.
 
-## Consultation and pending decision
+## Original consultation and gate (superseded scope)
 
 First consultation c8aafb9 cost $2.72 (Opus $2.39, Astra $0.33). Both identified tiny score differences and insertion-sensitive marginal-cost knees as consequential. Opus proposed an outer convex-hull knee and proportional cost steps; Astra stressed explicit policy tolerance and eligibility/pins/rollback before role assignment. Their other suggestions are not implicitly adopted.
 
