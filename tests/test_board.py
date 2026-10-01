@@ -1245,6 +1245,57 @@ class MonitorTest(BoardBase):
         self.assertTrue(monitor.helm())
 
 
+class CodexPairingTest(BoardBase):
+    def test_pairing_routes_validate_project_origin_and_keep_codes_out_of_settings(self):
+        from unittest.mock import patch
+        from colony import codex_remote
+        board.track(self.root)
+        board.set_setting('provider', 'codex')
+        with patch.object(codex_remote, 'alive', return_value=True), \
+                patch.object(codex_remote, 'pair') as pair:
+            options = board.codex_pairing_options(board.registry())
+            self.assertIn('Pair with ChatGPT', options)
+            pair.assert_not_called()
+            pair.return_value = dict(manualPairingCode='TEST-CODE', expiresAt=int(time.time()) + 180)
+            httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            base = f'http://127.0.0.1:{httpd.server_address[1]}'
+            def post(path, project=None, origin=None, **values):
+                data = urllib.parse.urlencode(dict(project=project or str(self.root), **values)).encode()
+                return urllib.request.urlopen(urllib.request.Request(base + path, data=data,
+                    headers={'Origin': origin or base}))
+            try:
+                response = post('/codex-pair')
+                page = response.read().decode()
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+                self.assertIn('TEST-CODE', page)
+                self.assertIn('Expires at', page)
+                pair.assert_called_once_with(self.root, None)
+                self.assertNotIn('TEST-CODE', board.codex_pairing_options(board.registry()))
+                pair.return_value = {'claimed': True}
+                checked = post('/codex-pair/status', code='TEST-CODE')
+                self.assertEqual(checked.headers['Content-Type'], 'application/json')
+                self.assertEqual(json.load(checked), {'claimed': True})
+                pair.assert_called_with(self.root, 'TEST-CODE')
+                pair.reset_mock()
+                for kwargs, expected in [({'project': '/not-registered'}, 404),
+                                         ({'origin': 'https://elsewhere.example'}, 403)]:
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        post('/codex-pair', **kwargs)
+                    self.assertEqual(caught.exception.code, expected)
+                pair.assert_not_called()
+                board.set_setting('provider', 'claude')
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    post('/codex-pair')
+                self.assertEqual(caught.exception.code, 404)
+                pair.assert_not_called()
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                thread.join()
+
+
 class FoldersTest(BoardBase):
     def post(self, port, url, **form):
         req = urllib.request.Request(f"http://127.0.0.1:{port}{url}", data=urllib.parse.urlencode(form).encode())
@@ -1355,7 +1406,7 @@ class ProjectSettingsTest(BoardBase):
         codex = providers.get("codex")
         folder = Path(self.tmp.name) / "codex-config"
         folder.mkdir()
-        with patch.dict(os.environ, {"CODEX_HOME": str(folder)}):
+        with patch.dict(os.environ, {"CODEX_HOME": str(folder), "COLONY_CODEX_SOURCE_HOME": str(folder)}):
             baseline = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]
             self.assertEqual([m[0] for m in codex.models], baseline)
             self.assertEqual(codex.own_defaults(), {"model": None, "effort": None})

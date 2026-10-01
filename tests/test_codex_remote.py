@@ -297,3 +297,36 @@ class ConsoleConfigTest(unittest.TestCase):
         config = {"model": "gpt-6-astra", "sandbox_workspace_write.writable_roots": ["/x"], "hooks.Stop": [],
                   "sandbox_mode": "danger-full-access", "approval_policy": "never"}
         self.assertEqual(sorted(codex_remote.console_config(config)), ["hooks.Stop", "model"])
+
+
+class PairingTest(unittest.TestCase):
+    def test_pair_and_check_use_existing_project_socket_and_only_return_manual_code(self):
+        with patch.object(remote, 'home_for', return_value=Path('/owned/project')), \
+                patch.object(remote, 'alive', return_value=True), patch.object(remote, 'Client') as client:
+            rpc = client.return_value.__enter__.return_value
+            expiry = int(time.time()) + 180
+            rpc.call.return_value = dict(manualPairingCode='TEST-CODE', pairingCode='opaque-secret',
+                                         expiresAt=expiry, environmentId='not-for-browser')
+            self.assertEqual(remote.pair('/project'), dict(manualPairingCode='TEST-CODE', expiresAt=expiry))
+            client.assert_called_with(remote.socket_for('/owned/project'), timeout=40)
+            rpc.call.assert_called_once_with('remoteControl/pairing/start', {'manualCode': True})
+            rpc.call.reset_mock()
+            rpc.call.return_value = {'claimed': True}
+            self.assertEqual(remote.pair('/project', 'TEST-CODE'), {'claimed': True})
+            rpc.call.assert_called_once_with('remoteControl/pairing/status', {'manualPairingCode': 'TEST-CODE'})
+
+    def test_unstarted_host_and_bad_results_do_not_create_a_daemon_or_leak_native_errors(self):
+        with patch.object(remote, 'alive', return_value=False), patch.object(remote, 'Client') as client:
+            with self.assertRaisesRegex(remote.RemoteError, 'Open this project'):
+                remote.pair('/project')
+            client.assert_not_called()
+        with patch.object(remote, 'alive', return_value=True), patch.object(remote, 'Client') as client:
+            rpc = client.return_value.__enter__.return_value
+            for result in ({}, {'manualPairingCode': 'OLD', 'expiresAt': 1}):
+                rpc.call.return_value = result
+                with self.assertRaisesRegex(remote.RemoteError, 'usable pairing code'):
+                    remote.pair('/project')
+            rpc.call.side_effect = remote.RPCError('upstream body: private-code')
+            with self.assertRaisesRegex(remote.RemoteError, '^Could not reach Codex pairing') as caught:
+                remote.pair('/project')
+            self.assertNotIn('private-code', str(caught.exception))

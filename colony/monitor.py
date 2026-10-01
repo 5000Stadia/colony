@@ -84,7 +84,12 @@ own app, where it has one); each project also has its own session they can talk 
   4. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
      permissions (ask, edits, all, plan).
   5. Where new projects go (`colony settings new-folder PATH`).
-  6. Access: opening the board from their phone on the home network (lan); Remote Control (Claude Code only).
+  6. Access: opening the board from their phone on the home network (lan); Remote Control in Claude or ChatGPT.
+     If they use Codex with Remote Control, open the first project's console, then direct them to Settings →
+     Agent programs → Pair with ChatGPT for that project. They enter the fresh code in the ChatGPT app's
+     Remote pairing screen, signed in to the same account as Codex; the page shows expiry and confirms pairing.
+     Each Codex project needs its own pairing once. New projects offer the same button there. Pairing does
+     not interrupt a console, and an unpaired project's console still works locally. Never paste codes into notes.
   7. Start-up questions: whether new consoles answer them themselves (trust).
   8. The helm: whether you settle routine questions for them.
 - Keep your messages to the person short: they are often on a phone.

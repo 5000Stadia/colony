@@ -2122,6 +2122,75 @@ def signed_out():
         return {}
 
 
+def codex_pairing_options(reg):
+    from . import codex_remote
+    roots = [root for root in projects(reg) if root.exists() and providers.of(root) is providers.get('codex')]
+    if not roots:
+        return ''
+    rows = []
+    for root in roots:
+        ready = codex_remote.alive(codex_remote.home_for(root))
+        rows.append(f"<li><b>{e(root.name)}</b> "
+                    + (f"<form method='post' action='/codex-pair'><input type='hidden' name='project' value='{e(str(root))}'>"
+                       "<button>Pair with ChatGPT</button></form>" if ready else
+                       "<span class='muted'>Open its console with Remote Control on to pair it.</span>") + '</li>')
+    return ("<h3>Codex in ChatGPT</h3><p>Pair each project once with your ChatGPT app. "
+            "Sign in to the same account as Codex, then enter its fresh code in ChatGPT’s Remote pairing screen. "
+            "You can pair another device here later.</p><ul class='folders'>" + ''.join(rows) + '</ul>')
+
+
+def codex_pairing_page(reg, root, result):
+    from datetime import datetime, timezone
+    expiry = datetime.fromtimestamp(result['expiresAt'], timezone.utc).strftime('%H:%M:%S UTC')
+    body = (f"<header><h1>Pair {e(root.name)} with ChatGPT</h1></header><div class='card'>"
+            "<p>In the ChatGPT app, sign in to the same account as Codex. Open Remote’s pairing screen and enter:</p>"
+            f"<p><strong id='pair-code' style='font-size:2em;letter-spacing:.12em'>{e(result['manualPairingCode'])}</strong></p>"
+            "<p id='pair-state' role='status'>Enter this code in ChatGPT to pair.</p>"
+            f"<p id='pair-expiry' data-expiry='{result['expiresAt']}'>Expires at {expiry}.</p>"
+            f"<form id='pair-again' method='post' action='/codex-pair'><input id='pair-project' type='hidden' name='project' value='{e(str(root))}'>"
+            "<button>Get a fresh code</button></form>"
+            "<p>Once paired, choose the machine host in Remote, then this project’s named conversation.</p>"
+            "<p><a href='/settings'>Back to Settings</a></p></div>" + r"""
+<script>(() => {
+  const code = document.getElementById('pair-code'), state = document.getElementById('pair-state');
+  const expiry = document.getElementById('pair-expiry'), project = document.getElementById('pair-project').value;
+  const value = code.textContent, deadline = Number(expiry.dataset.expiry) * 1000;
+  let finished = false;
+  function finish(message) {
+    finished = true; code.textContent = ''; expiry.hidden = true; state.textContent = message;
+  }
+  function tick() {
+    if (finished) return;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    if (left <= 0) { finish('This code has expired. Get a fresh code to pair.'); return; }
+    expiry.textContent = 'Expires in ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + '.';
+    setTimeout(tick, 1000);
+  }
+  async function check() {
+    if (finished) return;
+    try {
+      const response = await fetch('/codex-pair/status', {method: 'POST',
+        body: new URLSearchParams({project, code: value})});
+      if (!response.ok) throw new Error();
+      const result = await response.json();
+      if (finished) return;
+      if (result.claimed) {
+        finish('Paired with ChatGPT. Open this project’s conversation in Remote.');
+        document.getElementById('pair-again').hidden = true;
+        return;
+      }
+      state.textContent = 'Waiting for you to enter the code in ChatGPT.';
+    } catch (_) {
+      if (!finished) state.textContent = 'Could not check pairing yet. Retrying; you can still enter this code before it expires.';
+    }
+    if (!finished) setTimeout(check, 5000);
+  }
+  state.textContent = 'Waiting for you to enter the code in ChatGPT.';
+  tick(); setTimeout(check, 5000);
+})();</script>""")
+    return shell(reg, -2, body)
+
+
 def settings_page(reg):
     from . import selection
     selection.migrate()
@@ -2252,7 +2321,7 @@ def settings_page(reg):
                   f"<label>Token <input type='password' name='token' autocomplete='off' placeholder='{'Paste a new token to replace it' if tok else 'Paste the token'}'></label>"
                   f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
                   + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
-    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}</div>{signin}"
+    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}{codex_pairing_options(reg)}</div>{signin}"
             f"{model_changes()}{global_role_fields()}<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Monitor</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
             f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
@@ -2452,6 +2521,25 @@ class Handler(BaseHTTPRequestHandler):
             form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path in ('/codex-pair', '/codex-pair/status'):
+            from . import codex_remote
+            root = next((r for r in projects(reg) if str(r) == form.get('project')), None)
+            if root is None or not root.exists() or providers.of(root) is not providers.get('codex'):
+                return self._send(404, b'Codex project not found on this board')
+            try:
+                result = codex_remote.pair(root, form.get('code', '') if path.endswith('/status') else None)
+            except codex_remote.RemoteError as err:
+                return self._send(409, shell(reg, -2, f"<h1>Pair with ChatGPT</h1><p>{e(str(err))}</p>"
+                                            "<p><a href='/settings'>Back to Settings</a></p>").encode())
+            if path.endswith('/status'):
+                body = json.dumps(result).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                return self.wfile.write(body)
+            return self._send(200, codex_pairing_page(reg, root, result).encode())
         if path == '/model-decision':
             from . import selection
             try:
