@@ -190,6 +190,12 @@ def overrides(root, home, settings):
     return config
 
 
+def console_config(config):
+    """What the console attached with --remote may be given: Codex 0.159.3 refuses workspace-root overrides there
+    ("configure additional workspace roots on the server"), and the server already has them from the same config."""
+    return {k: v for k, v in config.items() if not k.startswith('sandbox_workspace_write.')}
+
+
 def flags(config):
     return [arg for k, v in config.items() for arg in ('-c', k + '=' + toml(v))]
 
@@ -341,7 +347,7 @@ def launch(root, settings, resume=None):
         mode = 'connected' if remote_state['status'] == 'connected' else 'connecting'
         report(home, root, mode, server=remote_state.get('serverName'), thread=resume)
         args = ['codex', '--remote', 'unix://' + str(socket_for(home)), '--no-alt-screen',
-                *flags(config), 'resume', resume]
+                *flags(console_config(config)), 'resume', resume]
         os.execvpe(args[0], args, environment(root, home, source))
     except (RemoteError, RPCError, TransferError, OSError, ValueError, KeyError, sqlite3.Error, ImportError) as error:
         reason = str(error)
