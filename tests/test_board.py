@@ -2535,6 +2535,66 @@ class UsageTest(BoardBase):
         (board.home() / "board.json").write_text(json.dumps(reg))
         self.assertEqual(board.registry()["settings"]["safe_pause"], 95, "an old setting carries over")
 
+    def test_pause_ignores_threshold_flapping_until_a_clear_drop(self):
+        from colony import usage
+        board.track(self.root)
+        board.set_setting('safe_pause', '99')
+        self.claude_at(99)
+        self.assertEqual([s for _, s in usage.check()], ['paused'])
+        for used in (98.9, 99, 98, 97.1):
+            self.claude_at(used)
+            self.assertEqual(usage.check(), [], f'{used}% must not wake the project')
+            self.assertIn(str(self.root), usage.paused())
+        self.claude_at(97)
+        self.assertEqual([s for _, s in usage.check()], ['resumed'])
+        self.assertEqual(usage.check(), [], 'resume only once')
+
+    def test_pause_keeps_both_blocking_windows_until_each_clears(self):
+        from colony import usage
+        board.track(self.root)
+        def readings(weekly, short, short_reset=600):
+            usage.record_claude({'rate_limits': {
+                'seven_day': {'used_percentage': weekly, 'resets_at': time.time() + 3600},
+                'five_hour': {'used_percentage': short, 'resets_at': time.time() + short_reset}}})
+        readings(98, 98)
+        self.assertEqual([s for _, s in usage.check()], ['paused'])
+        readings(97.9, 98, -1)
+        self.assertEqual(usage.check(), [], 'five-hour reset cannot clear a held weekly pause')
+        readings(96, 98, -1)
+        self.assertEqual([s for _, s in usage.check()], ['resumed'])
+
+    def test_missing_reading_or_reset_does_not_release_a_legacy_pause(self):
+        from colony import usage
+        board.track(self.root)
+        usage.folder().mkdir(parents=True, exist_ok=True)
+        (usage.folder() / 'paused.json').write_text(json.dumps({str(self.root): {
+            'provider': 'claude', 'window': 'weekly', 'resets_at': None}}))
+        self.assertEqual(usage.check(), [], 'no reading is not a reset')
+        usage.record_claude({'rate_limits': {'seven_day': {'used_percentage': 97.9, 'resets_at': None}}})
+        self.assertEqual(usage.check(), [], 'no reset time is not a reset')
+        board.project_settings(self.root, {'safe_pause': 'off'})
+        self.assertEqual([s for _, s in usage.check()], ['resumed'])
+        self.assertIn('no longer pauses', board.notes(self.root)[-1]['text'])
+
+    def test_a_known_reset_releases_a_pause_without_fresh_telemetry(self):
+        from colony import usage
+        board.track(self.root)
+        usage.folder().mkdir(parents=True, exist_ok=True)
+        (usage.folder() / 'paused.json').write_text(json.dumps({str(self.root): {
+            'provider': 'claude', 'window': 'weekly', 'resets_at': time.time() - 1}}))
+        self.assertEqual([s for _, s in usage.check()], ['resumed'])
+        self.assertIn('has reset', board.notes(self.root)[-1]['text'])
+
+    def test_changing_provider_does_not_keep_the_old_providers_pause(self):
+        from unittest.mock import patch
+        from colony import usage
+        board.track(self.root)
+        self.claude_at(98)
+        self.assertEqual([s for _, s in usage.check()], ['paused'])
+        with patch.object(providers, 'of', return_value=providers.get('codex')), patch.object(usage, 'read', return_value={}):
+            self.assertEqual([s for _, s in usage.check()], ['resumed'])
+        self.assertIn('now uses Codex', board.notes(self.root)[-1]['text'])
+
     def test_the_status_line_records_the_limits_and_shows_them(self):
         payload = {"model": {"display_name": "Opus 5.5"},
                    "rate_limits": {"seven_day": {"used_percentage": 61, "resets_at": time.time() + 3600}}}
