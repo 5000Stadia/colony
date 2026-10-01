@@ -16,4 +16,4 @@ colony = "colony.cli:main"
 packages = ["colony"]
 
 [tool.setuptools.package-data]
-colony = ["prompts/*.md"]
+colony = ["prompts/*.md", "data/*.json"]

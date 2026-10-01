@@ -34,6 +34,14 @@ A tool for my plants.
 
 class BoardBase(unittest.TestCase):
     def setUp(self):
+        from unittest.mock import patch
+        from colony import intelligence
+        evidence = patch.object(intelligence, 'bundled_records', return_value=[])
+        evidence.start()
+        self.addCleanup(evidence.stop)  # each test supplies its own evidence, independent of shipped snapshots
+        refresh = patch.object(intelligence, 'refresh_due', return_value=False)
+        refresh.start()
+        self.addCleanup(refresh.stop)
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
@@ -872,6 +880,11 @@ class GlanceTest(BoardBase):
 
     def test_benchmark_cards_rank_the_lineup_and_set_each_projects_helper_tiers(self):
         from colony import bench
+        from unittest.mock import patch
+        original_efforts = providers.efforts_of
+        effort_patch = patch.object(providers, 'efforts_of', side_effect=lambda p, m: [] if m == 'claude-haiku-4-5-20251001' else original_efforts(p, m))
+        effort_patch.start()
+        self.addCleanup(effort_patch.stop)
         rec = lambda model, effort, value, domain="overall", source="Artificial Analysis", bench_="Intelligence Index", ver="v4", unit="points", kind="independent": dict(
             model=model, effort=effort, source=source, kind=kind, benchmark=bench_, version=ver, domain=domain,
             value=value, unit=unit, date="2026-09-28", url="https://example.com/x", note="")
@@ -910,16 +923,16 @@ class GlanceTest(BoardBase):
         self.assertEqual(tiers["chores"]["model"], "claude-haiku-4-5-20251001",
                          "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 51/$1.34)")
         self.assertEqual((tiers["routine"]["model"], tiers["routine"]["effort"]), ("claude-opus-5-5", "medium"),
-                         "the smartest model at the estimated knee without a complete measured curve")
+                         "the cheapest pair meeting the routine intelligence goal")
         self.assertIn("claude-sonnet-5", bench.unmeasured("claude"), "no index yet: shown as not measured, never picked")
         c = bench.card("claude-opus-5-5")
-        self.assertIn("xhigh", c["untested"], "an effort level with no data is a gap, not an estimate")
+        self.assertIn("xhigh", c["untested"], "estimated efforts are still labelled as not directly measured")
         self.assertTrue(any("high over medium" in n for n in c["notes"]), "where more effort pays")
         self.assertIn("claude-sonnet-5", bench.pending())
         self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
         page = board.models_page(board.registry())
-        for want in ("Helper tiers", "By domain", "Score against price", "id='claude-opus-5-5'", "<polyline", "No independent data at:",
-                     "isn't ranked against the rows above", "Not yet measured, so not picked"):
+        for want in ("Auto roles", "Intelligence against task cost", "id='claude-opus-5-5'", "<polyline", "Estimated",
+                     "No comparable Intelligence Index evidence yet"):
             self.assertIn(want, page)
         self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison")
         head = re.search(r"<table class='bench'><tr>(.*?)</tr>", page).group(1)
@@ -960,7 +973,7 @@ class GlanceTest(BoardBase):
             monitor.Watcher(quiet=0).models_daily()
             stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
             self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
-            bench.add([rec("claude-new-6", "high", 58)])                     # Artificial Analysis now has it
+            bench.add([rec("claude-new-6", "max", 70), rec("claude-new-6", "max", 1, "cost", bench_="Cost per Intelligence Index task", unit="usd")])                     # Artificial Analysis now has it
             monitor.Watcher(quiet=0).models_daily()
             self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
             self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
@@ -2384,16 +2397,15 @@ class ConsultTest(BoardBase):
     def test_settings_show_the_auto_pick_and_the_person_can_change_or_restore_it(self):
         board.set_setting("consultants", "")
         from colony import bench
-        saved = bench.tiers_for, bench.best_effort
-        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5" if k == "claude" else "gpt-6-astra", "effort": "high", "why": ""}}
-        bench.best_effort = lambda k, m, entries=None: "max"
+        saved = bench.role_pick
+        bench.role_pick = lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5" if k == "claude" else "gpt-6-astra", "effort": "max", "why": "the intelligence goal for judgement"}
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         try:
             page = board.settings_page(board.registry())
             self.assertIn("Auto: claude-opus-5-5 at max", page)
-            self.assertIn("Auto picks the smartest model; max for rare, pure judgement", page)
+            self.assertIn("Auto picks the intelligence goal for judgement", page)
             post = lambda d: urllib.request.urlopen(urllib.request.Request(
                 f"http://127.0.0.1:{port}/consulting", data=urllib.parse.urlencode(d).encode()))
             post({"consult": "on", "consultant_claude": "claude-sonnet-5:medium", "consultant_codex": "auto"})
@@ -2403,7 +2415,7 @@ class ConsultTest(BoardBase):
             s = board.registry()["settings"]
             self.assertEqual((s["consult"], s["consultants"]), (False, {}))
         finally:
-            bench.tiers_for, bench.best_effort = saved
+            bench.role_pick = saved
             httpd.shutdown()
             httpd.server_close()
 
@@ -2418,15 +2430,14 @@ class ConsultTest(BoardBase):
     def test_without_a_choice_each_family_takes_its_step_up_model_at_its_best_effort(self):
         from colony import bench
         board.set_setting("consultants", "")
-        saved = bench.tiers_for, bench.best_effort
-        bench.tiers_for = lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5" if k == "claude" else "gpt-6-astra", "effort": "high", "why": ""}}
-        bench.best_effort = lambda k, m, entries=None: "max"
+        saved = bench.role_pick
+        bench.role_pick = lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5" if k == "claude" else "gpt-6-astra", "effort": "max", "why": "the intelligence goal for judgement"}
         try:
             who, _ = self.consult.consultants()
         finally:
-            bench.tiers_for, bench.best_effort = saved
+            bench.role_pick = saved
         self.assertEqual([(k, m, e) for k, m, e, _ in who], [("claude", "claude-opus-5-5", "max"), ("codex", "gpt-6-astra", "max")])
-        self.assertIn("smartest model", who[0][3])
+        self.assertIn("intelligence goal", who[0][3])
 
 
     def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
@@ -2736,7 +2747,7 @@ class MonitorUpkeepTest(BoardBase):
         from unittest.mock import patch
         saved, console.COMMAND = console.COMMAND, None
         try:
-            with patch.object(bench, "tiers_for", lambda k, entries=None: {"step-up": {"model": "claude-opus-5-5", "effort": "high"}}):
+            with patch.object(bench, "role_pick", lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5", "effort": "xhigh", "why": "Goal for the monitor"}):
                 cmd = console.command("monitor", None, folder=monitor.home())
                 self.assertIn("--model claude-opus-5-5 --effort xhigh --autocompact 150k", cmd)
                 self.assertIn("Auto: claude-opus-5-5 at xhigh", board.settings_page(board.registry()))
@@ -2762,7 +2773,7 @@ class FollowsNewModelsTest(BoardBase):
         from unittest.mock import patch
         self.assertIsNone(project.DEFAULTS["model"])
         self.assertEqual(project.strongest(), "claude-fable-5-1", "no data: a fixed catalog model, never an alias")
-        with patch.object(bench, "role_pick", lambda k, role, entries=None: {"model": "claude-opus-5-5", "effort": "high"}):
+        with patch.object(bench, "role_pick", lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5", "effort": "high"}):
             from colony import selection
             selection.reconcile()
             self.assertEqual(project.strongest(), "claude-opus-5-5")

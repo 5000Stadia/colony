@@ -130,7 +130,7 @@ from tests.test_board import BoardBase
 class IntegrationTest(BoardBase):
     def test_inactive_codex_roles_reconcile_without_changing_the_running_provider(self):
         board.set_setting('provider', 'claude')
-        def picked(family, role, entries):
+        def picked(family, role, entries, **kwargs):
             return {'model': 'gpt-6-astra' if family == 'codex' else 'claude-opus-5-5',
                     'effort': 'xhigh' if role == 'monitor' else 'high', 'why': 'Fixture role policy'}
         with patch.object(providers, 'usable', return_value=True), \
@@ -281,3 +281,93 @@ class IntegrationTest(BoardBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class GoalSliderTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        from colony import bench, intelligence
+        self.bench = bench
+        rows = intelligence.records(json.loads(Path(bench.__file__).with_name('data').joinpath('aa-pairs.json').read_text()))
+        models = [('claude','claude-opus-5-5'), ('claude','claude-sonnet-5-5'),
+                  ('codex','gpt-6-astra'), ('codex','gpt-6.1-sol')]
+        levels = ['low','medium','high','xhigh','max']
+        lineup = [(f,m,m,levels) for f,m in models]
+        for obj,name,value in [(bench,'records',lambda: rows), (bench,'lineup',lambda: lineup),
+                               (providers,'available',lambda p: [(m,m) for f,m in models if f==providers.key(p)]),
+                               (providers,'efforts_of',lambda p,m: levels)]:
+            patcher=patch.object(obj,name,value);patcher.start();self.addCleanup(patcher.stop)
+        board.track(self.root)
+        board.project_settings(self.root, {'provider':'codex'})
+        self.other=Path(self.tmp.name)/'other'
+        self.other.mkdir()
+        board.track(self.other)
+        board.project_settings(self.other, {'provider':'codex'})
+        for root in (self.root,self.other):
+            (root/'.colony').mkdir()
+            (root/'.colony'/'config.json').write_text('{}')
+        selection.reconcile()
+
+    def test_project_slider_changes_main_helpers_and_claude_runtime_only_for_that_project(self):
+        self.assertEqual(selection.main(self.root)['effort'],'max')
+        board.project_settings(self.root, {'auto_balance':'6'})
+        self.assertEqual(selection.main(self.root)['effort'],'medium')
+        self.assertEqual(selection.main(self.other)['effort'],'max')
+        self.assertEqual(selection.runtime(self.root)['model'],'claude-sonnet-5-5')
+        self.assertEqual(selection.runtime(self.other)['model'],'claude-opus-5-5')
+        ident=selection.key('claude','runtime',self.root)
+        affected=selection.affected(ident, None, selection.runtime(self.root))
+        self.assertEqual([s['root'] for s in affected],[str(self.root)])
+        board.project_settings(self.root, {'auto_balance':''})
+        self.assertEqual(selection.main(self.root)['effort'],'max')
+        self.assertEqual(selection.runtime(self.root)['model'],'claude-opus-5-5')
+
+    def test_slider_keeps_pins_and_scopes_effort_rollback(self):
+        board.project_settings(self.root, {'model':'gpt-6-astra','effort':'max','auto_balance':'6'})
+        self.assertEqual(selection.main(self.root)['model'],'gpt-6-astra')
+        board.project_settings(self.root, {'model':'','effort':''})
+        ident=selection.key('codex','main',self.root)
+        event=next(e for e in reversed(selection.read()['history']) if e['role']==ident)
+        selection.rollback(event['id'])
+        self.assertNotEqual(selection.main(self.root)['effort'],'medium')
+        self.assertEqual(selection.main(self.other)['effort'],'max')
+        self.assertIn({'model':'gpt-6.1-sol','effort':'medium'},selection.read()['blocked'][ident])
+
+    def test_preview_has_seven_positions_and_does_not_change_accepted_choices(self):
+        before=selection.read()
+        page=board.auto_balance_fields(self.root)
+        self.assertEqual(page.count('data-balance='),7)
+        self.assertIn('Use colony setting',page)
+        self.assertIn('adoption',page)
+        self.assertEqual(selection.read(),before)
+        models=board.models_page(board.registry())
+        self.assertNotIn('By domain',models)
+        self.assertIn('Shared runnable intelligence ceiling',models)
+        for value in ('-1','7','1.5','nan'):
+            with self.assertRaises(KeyError):board.set_setting('auto_balance',value)
+
+    def test_global_balance_changes_inherited_but_not_overridden_projects(self):
+        board.project_settings(self.root, {'auto_balance':'0'})
+        board.set_setting('auto_balance','6')
+        self.assertEqual(selection.main(self.root)['effort'],'max')
+        self.assertEqual(selection.main(self.other)['effort'],'medium')
+        self.assertEqual(selection.read()['accepted']['codex:main']['evidence']['balance'],6)
+
+    def test_scoped_new_model_approval_is_invalidated_when_slider_changes(self):
+        board.set_setting('model_adoption','ask')
+        with selection.transaction() as state:
+            state['approved'].remove('claude-sonnet-5-5')
+            held=state['accepted']['claude:main']
+            for ident,value in list(state['accepted'].items()):
+                if value['model']=='claude-sonnet-5-5':state['accepted'][ident]=copy.deepcopy(held)
+        board.project_settings(self.root, {'auto_balance':'6'})
+        state=selection.read()
+        proposal=state['pending']['claude-sonnet-5-5']
+        ident=selection.key('claude','runtime',self.root)
+        self.assertIn(ident,proposal['roles'])
+        self.assertEqual(selection.runtime(self.root)['model'],'claude-opus-5-5')
+        old=proposal['id']
+        board.project_settings(self.root, {'auto_balance':'5'})
+        with self.assertRaisesRegex(ValueError,'changed'):
+            selection.decide('claude-sonnet-5-5',old,'approve')
+        self.assertEqual(selection.runtime(self.other)['effort'],'high')

@@ -655,7 +655,7 @@ class Watcher:
             path.write_text(json.dumps(now))
 
     def models_daily(self):
-        from . import bench
+        from . import bench, intelligence
         board.rewire_projects()
         if board.registry()["settings"]["auto_update"]:
             for p in providers.PROVIDERS.values():
@@ -666,6 +666,8 @@ class Watcher:
         bench.lineup_changed()
         if bench.aa_key() and bench.days_since_fetch() >= 0.9:
             bench.refresh()     # one request a day (the free API allows 1,000): new scores, filled gaps, prices
+        if intelligence.refresh_due():
+            intelligence.refresh()
         from . import selection
         selection.reconcile()
         for p in board.projects():
