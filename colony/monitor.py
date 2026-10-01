@@ -312,24 +312,18 @@ def brief():
     role = ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
     carried = carried_path().read_text().strip() if carried_path().exists() else ""
     if carried:
-        role += ("\n\n## Carried over from your last conversation\n\nYou start fresh each day; this is what you wrote "
+        role += ("\n\n## Carried over from your last conversation\n\nThese are legacy notes from an earlier daily refresh; this is what you wrote "
                  "down to carry on from (colony's records hold the rest: colony posture, the board):\n\n" + carried + "\n")
     for f in {p.instructions for p in providers.PROVIDERS.values()}:     # whichever program runs it reads its own
         (home() / f).write_text(role)
 
 
 CONTEXT_CAP = "150k"            # PROVIDER: Claude Code's --autocompact; Codex compacts on its own
-FRESH_EVERY = 20 * 3600         # seconds between the monitor's fresh starts: about once a day
 
 
 def carried_path():
     """What the monitor writes down before a fresh start, to carry on from."""
     return board.home() / "monitor-carried-over.md"
-
-
-def fresh_flag():
-    """Present while the monitor is being started fresh: its console then resumes no conversation."""
-    return board.home() / "monitor-fresh"
 
 
 def choice():
@@ -460,6 +454,9 @@ def helm(value=None):
 
 def ensure():
     brief()
+    (home() / ".board").mkdir(exist_ok=True)
+    if providers.key(provider()) == "claude":
+        provider().wire(home(), "")
     return console.ensure(home(), name(), "monitor")
 
 
@@ -720,56 +717,20 @@ class Watcher:
                     fh.write(json.dumps({"at": board.now(), "console": nm, "why": why}) + "\n")
 
     def freshen(self):
-        """About once a day, with the monitor idle a while and no one at it: it writes down what it needs to carry
-        on (what colony's records don't hold), then starts a fresh conversation with that in its brief. Its
-        context stays small, so each wake-up costs a fraction of re-reading days of history."""
-        if not console.running(name()):
-            return
-        path = board.home() / "monitor-fresh.json"
-        try:
-            st = json.loads(path.read_text())
-        except (OSError, ValueError):
-            st = {}
-        save = lambda: (board.home().mkdir(parents=True, exist_ok=True), path.write_text(json.dumps(st)))
-        if not st.get("last"):
-            st["last"] = time.time()                    # its clock starts the first time it is seen
-            save()
-            return
-        quiet = (snapshot()["state"] == "idle" and not console.drafting(name()) and not console.attached(name())
-                 and not ((board.home() / "to_monitor.jsonl").exists() and (board.home() / "to_monitor.jsonl").read_text().strip()))
-        if not quiet:
-            return
-        if "asked" not in st:
-            if time.time() - st["last"] < FRESH_EVERY:
-                return
-            if console.type_into(name(), f"[colony] Daily fresh start. Write to {carried_path()} what you need to carry on "
-                                         "from that colony's records (colony posture, the board) don't already hold: what the "
-                                         "person asked of you that is still open, preferences they told you in conversation, "
-                                         "threads you are following. Replace what's there; under 300 words. Then reply only: done."):
-                st["asked"] = time.time()
-                save()
-            return
-        written = carried_path().exists() and carried_path().stat().st_mtime >= st["asked"]
-        if written or time.time() - st["asked"] > 900:  # it wrote it, or it had its chance
-            fresh_flag().write_text("")
-            try:
-                subprocess.run(["tmux", "kill-session", "-t", name()], capture_output=True)
-                ensure()                                # the brief is rewritten with what it carried over
-            finally:
-                fresh_flag().unlink(missing_ok=True)
-            st = {"last": time.time()}
-            save()
+        """Daily and occupancy refreshes preserve each provider conversation."""
+        from . import context
+        context.tick_all()
 
     def tick(self):
         from . import vision
         vision.observe_all()
+        self.freshen()
         if not self.enabled:
             self.mail()  # project delivery is independent of the monitor agent
             return
         self.models()
         self.usage()
         self.current()
-        self.freshen()
         me = snapshot()
         if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)

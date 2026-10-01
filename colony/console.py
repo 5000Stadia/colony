@@ -52,12 +52,13 @@ def command(label, root=None, folder=None):
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
     if label == "monitor" and not root:
-        from . import monitor
+        from . import monitor, context
         model, effort, _ = monitor.choice()
         s = dict(s, model=model, effort=effort, autocompact=monitor.CONTEXT_CAP)
-        if monitor.fresh_flag().exists():
-            folder = None                               # a fresh start: no conversation to resume
-    if not root and folder and hasattr(providers.of(None), "latest_conversation"):
+        known = context.session(monitor.home())
+        if known and known['provider'] == providers.key(providers.of(None)) and Path(known['path']).exists():
+            resume = known['id']
+    if not resume and not root and folder and hasattr(providers.of(None), "latest_conversation"):
         resume = providers.of(None).latest_conversation(folder)
     return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
 

@@ -78,7 +78,7 @@ class ClaudeCode:
     # Shown on screen while its view is scrolled up from the latest; the console's ↓ follows it.
     scrolled_marker = "Jump to bottom"
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
-             "Stop": "colony turn"}
+             "Stop": "colony turn", "PreCompact": "colony context --hook before --console claude"}
 
     def command(self, label, s, resume=None, root=None):
         """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort;
@@ -116,10 +116,12 @@ class ClaudeCode:
         settings = root / ".claude" / "settings.json"
         settings.parent.mkdir(exist_ok=True)
         cfg = json.loads(settings.read_text()) if settings.exists() else {}
-        for event, command in self.hooks.items():
+        for event, wanted in hook_entries(self).items():
             entries = cfg.setdefault("hooks", {}).setdefault(event, [])
-            if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
-                entries.append({"hooks": [{"type": "command", "command": command}]})
+            for entry in wanted:
+                command = entry["hooks"][0]["command"]
+                if not any(h.get("command") == command for e in entries for h in e.get("hooks", [])):
+                    entries.append(entry)
         # PROVIDER: Claude Code hands its usage limits only to its status line; colony's records them and shows
         # the person's own status line, if they set one. A project that set its own keeps it.
         cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
@@ -424,7 +426,7 @@ class ClaudeCode:
         settings = root / ".claude" / "settings.json"
         hooks = json.dumps(json.loads(settings.read_text()).get("hooks", {})) if settings.exists() else ""
         return ("## This project is part of a colony" in (claude_md.read_text() if claude_md.exists() else "")
-                and all(c in hooks for c in self.hooks.values()))
+                and all(h['command'] in hooks for entries in hook_entries(self).values() for e in entries for h in e['hooks']))
 
     def classify(self, screen):
         """Claude Code shows "esc to interrupt" while it works and a numbered choice when it asks permission;
@@ -635,7 +637,8 @@ class Codex:
                     "Stop": "colony turn && printf '{}\\n'"}
     hooks = {"SessionStart": "colony notes --deliver --session --console codex",
              "UserPromptSubmit": "colony notes --deliver --console codex",
-             "Stop": "colony turn --console codex && printf '{}\\n'"}  # Stop requires JSON output
+             "Stop": "colony turn --console codex && printf '{}\\n'",
+             "PreCompact": "colony context --hook before --console codex"}  # Stop requires JSON output
     # colony's permission choices, in Codex's terms
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
@@ -722,8 +725,9 @@ class Codex:
             parts += ["-c", shlex.quote(f"model_reasoning_effort={s['effort']}")]
         # Codex 0.154 discovers project hook files in the main checkout even when cwd is a linked worktree.
         # Session flags work for both fresh and resumed consoles, without editing another checkout or user config.
-        for event, command in self.hooks.items():
-            value = f'hooks.{event}=[{{hooks=[{{type="command",command={json.dumps(command)}}}]}}]'
+        for event, entries in hook_entries(self).items():
+            from .codex_remote import toml
+            value = f'hooks.{event}={toml(entries)}'
             parts += ["-c", shlex.quote(value)]
         # the helper tiers, registered for this session (a project file would need the project trusted first);
         # each overlay holds its tier's model and effort (write_helpers)
@@ -967,3 +971,15 @@ def of(root):
     """The provider a project's settings name, else the global one."""
     from . import board
     return get(board.project_settings(root)[0].get("provider") if root else board.registry()["settings"]["provider"])
+
+
+def hook_entries(provider):
+    """Restoration has its own output budget, separate from notes and tier briefings."""
+    result = {event: [{"hooks": [{"type": "command", "command": command}]}]
+              for event, command in provider.hooks.items()}
+    for event in ('SessionStart', 'UserPromptSubmit'):
+        hook = dict(type='command', command=f'colony context --hook restore --console {key(provider)}')
+        if key(provider) == 'codex':
+            hook['additionalContextLimit'] = 12_000
+        result[event].insert(0, dict(hooks=[hook]))
+    return result
