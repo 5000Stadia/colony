@@ -517,7 +517,7 @@ def cmd_doctor(a):
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
-        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context"], cwd=home,
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog"], cwd=home,
                            capture_output=True, text=True)
         (print("ok    the test suite passes") if r.returncode == 0
          else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
