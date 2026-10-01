@@ -68,6 +68,24 @@ class CatalogTest(unittest.TestCase):
         codex_remote.prepare_home(self.base, host, self.source)
         self.assertEqual(json.loads((host / 'models_cache.json').read_text())['client_version'], '0.154.0')
 
+    def test_account_change_does_not_reuse_old_identity_catalog(self):
+        host = board.home() / 'codex-remote' / 'owned'
+        self.catalog(self.source, '0.160.0', ['previous-account'])
+        path = self.source / 'models_cache.json'
+        data = json.loads(path.read_text())
+        data['identity'] = 'old-account'
+        path.write_text(json.dumps(data))
+        providers.discover(calls=False)
+        self.catalog(host, '0.160.0', ['previous-account'])
+        (host / 'auth.json').symlink_to(self.source / 'auth.json')
+        (host / 'models_cache.json').write_text(json.dumps(data))
+        self.catalog(self.source, '0.159.3', ['new-account'])
+        data = json.loads(path.read_text())
+        data['identity'] = 'new-account'
+        path.write_text(json.dumps(data))
+        providers.discover(calls=False)
+        self.assertEqual(list(dict(providers.available(self.codex))), ['new-account'])
+
 
 if __name__ == '__main__':
     unittest.main()

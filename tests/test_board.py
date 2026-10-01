@@ -881,10 +881,24 @@ class GlanceTest(BoardBase):
     def test_benchmark_cards_rank_the_lineup_and_set_each_projects_helper_tiers(self):
         from colony import bench
         from unittest.mock import patch
-        original_efforts = providers.efforts_of
-        effort_patch = patch.object(providers, 'efforts_of', side_effect=lambda p, m: [] if m == 'claude-haiku-4-5-20251001' else original_efforts(p, m))
-        effort_patch.start()
-        self.addCleanup(effort_patch.stop)
+        board.set_setting('auto_update', 'off')  # discovery must not update installed CLIs during this fixture
+        # SessionStart runs discovery in a subprocess: in-process mocks cannot
+        # isolate its catalog, and a saved catalog overrides provider.models.
+        config = Path(self.tmp.name) / 'claude-config'
+        menu = config / 'cache' / 'model-catalog' / 'fixture-cc.json'
+        menu.parent.mkdir(parents=True)
+        codex_config = Path(self.tmp.name) / 'codex-config'
+        homes = patch.dict(os.environ, CLAUDE_CONFIG_DIR=str(config), CODEX_HOME=str(codex_config),
+                           COLONY_CODEX_SOURCE_HOME=str(codex_config))
+        homes.start()
+        self.addCleanup(homes.stop)
+        models = [dict(id=model, name=label, section='main', thinking={'effort_options': [
+            {'id': effort} for effort in ([] if model == 'claude-haiku-4-5-20251001' else providers.get('claude').efforts)]})
+            for model, label in providers.get('claude').models]
+        def save_catalog():
+            menu.write_text(json.dumps({'catalog': {'config': {'models': models}}}))
+        save_catalog()
+        providers.discover(calls=False, only='claude')
         rec = lambda model, effort, value, domain="overall", source="Artificial Analysis", bench_="Intelligence Index", ver="v4", unit="points", kind="independent": dict(
             model=model, effort=effort, source=source, kind=kind, benchmark=bench_, version=ver, domain=domain,
             value=value, unit=unit, date="2026-09-28", url="https://example.com/x", note="")
@@ -965,21 +979,19 @@ class GlanceTest(BoardBase):
         self.cli("models", "reset", "routine")
         self.assertIn("effort: medium", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         self.assertEqual(bench.ready_to_announce(), [], "the first look takes what's there as known")
-        providers.get("claude").models.append(("claude-new-6", "New 6"))
-        from unittest.mock import patch
-        stop = patch.object(providers, "discover", lambda **kw: [])    # this machine's real menus stay out of it
-        stop.start()
-        try:
-            monitor.Watcher(quiet=0).models_daily()
-            stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
-            self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
-            bench.add([rec("claude-new-6", "max", 70), rec("claude-new-6", "max", 1, "cost", bench_="Cost per Intelligence Index task", unit="usd")])                     # Artificial Analysis now has it
-            monitor.Watcher(quiet=0).models_daily()
-            self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
-            self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
-        finally:
-            stop.stop()
-            providers.get("claude").models.pop()
+        self.assertNotIn('claude-new-6', dict(providers.available(providers.get('claude'))))
+        models.append(dict(id='claude-new-6', name='New 6', section='main',
+                           thinking={'effort_options': [{'id': 'max'}]}))
+        save_catalog()
+        monitor.Watcher(quiet=0).models_daily()
+        self.assertIn('claude-new-6', dict(providers.available(providers.get('claude'))),
+                      'daily discovery reads the new native catalog after session-start discovery')
+        stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
+        self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
+        bench.add([rec("claude-new-6", "max", 70), rec("claude-new-6", "max", 1, "cost", bench_="Cost per Intelligence Index task", unit="usd")])
+        monitor.Watcher(quiet=0).models_daily()
+        self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
+        self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
 
     def test_peek_reads_back_past_the_screen(self):
         board.track(self.root)

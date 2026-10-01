@@ -820,6 +820,8 @@ def cmd_notes(a):
         from . import vision, context
         payload.setdefault("hook_event_name", "SessionStart" if a.session else "UserPromptSubmit")
         context.register(root, a.console or providers.key(context.program(root)), payload)
+        if a.session and payload.get('source') != 'compact':
+            providers.discover(calls=False, only=a.console or providers.key(context.program(root)))
         vision.observe(root)
         seen = getattr(providers.of(root), "conversation", None)
         if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here

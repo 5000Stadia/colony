@@ -621,11 +621,16 @@ class Codex:
             if auth.is_symlink() and auth.resolve() == (source / 'auth.json').resolve():
                 paths.append(host / 'models_cache.json')
         snapshots = []
+        source_identity = None
         for path in paths:
             try:
                 catalog = json.loads(path.read_text())
                 if not isinstance(catalog.get('models'), list):
                     continue
+                if path == paths[0]:
+                    source_identity = catalog.get('identity')
+                elif source_identity and catalog.get('identity') and catalog['identity'] != source_identity:
+                    continue                   # a shared auth link can outlive an account change
                 version = tuple(map(int, re.findall(r'\d+', catalog.get('client_version') or '')[:3]))
                 snapshots.append((version, catalog.get('fetched_at') or '', str(path), catalog))
             except (OSError, ValueError, AttributeError, TypeError):
@@ -638,7 +643,7 @@ class Codex:
         found = [(m["slug"], name(m),
                  [x["effort"] if isinstance(x, dict) else x for x in m.get("supported_reasoning_levels") or []] or list(self.efforts))
                 for m in catalog.get("models", []) if m.get("visibility") == "list" and m.get("slug")]
-        return found, dict(source=str(source.resolve()), path=path, client_version=catalog.get('client_version'),
+        return found, dict(source=str(source.resolve()), path=path, identity=catalog.get('identity'), client_version=catalog.get('client_version'),
                            fetched_at=catalog.get('fetched_at'))
 
     @property
@@ -924,13 +929,15 @@ def _discovered():
         return {}
 
 
-def discover(force=False, run=None, calls=True):
+def discover(force=False, run=None, calls=True, only=None):
     """Find the models each ticked, installed provider can run and keep them. calls=False reads only what each
     program keeps on disk (the daily check: no tokens); a provider whose list isn't on disk is then left as it
     was. Returns the providers that were looked at."""
     from . import board
     have, looked = _discovered(), []
     for k, p in PROVIDERS.items():
+        if only and k != only:
+            continue
         if not usable(p) or not hasattr(p, "discover"):
             continue
         ver = p.version() if run is None else "test"
@@ -944,7 +951,8 @@ def discover(force=False, run=None, calls=True):
             writer = version(catalog.get('client_version'))
             prior_writer = version(prior.get('client_version') or previous.get('version'))
             same_source = not prior.get('source') or prior['source'] == catalog.get('source')
-            if same_source and writer and prior_writer and writer < prior_writer:
+            same_identity = not prior.get('identity') or not catalog.get('identity') or prior['identity'] == catalog['identity']
+            if same_source and same_identity and writer and prior_writer and writer < prior_writer:
                 continue                 # an older still-running CLI overwrote the shared cache
             if not found:
                 continue
