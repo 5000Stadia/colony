@@ -15,6 +15,7 @@ located signals and a project memory.
     colony gate "QUESTION" [--item R4] [--why ...]   put a decision in the person's hands
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
     colony noted ID "TEXT"          mark a note as acted on, with what was done
+    colony vision [--history]       read this project's vision or its dated changes
     colony restart                  reload the board with its code as it is now (consoles keep running)
     colony stop                     end the board, the monitor and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
@@ -516,7 +517,7 @@ def cmd_doctor(a):
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
-        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote"], cwd=home,
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision"], cwd=home,
                            capture_output=True, text=True)
         (print("ok    the test suite passes") if r.returncode == 0
          else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
@@ -784,6 +785,8 @@ def cmd_notes(a):
             from . import codex_remote
             if not codex_remote.accepts_hook(root, payload):
                 return 0
+        from . import vision
+        vision.observe(root)
         seen = getattr(providers.of(root), "conversation", None)
         if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here
             console.remember(root, *seen(payload))
@@ -794,18 +797,19 @@ def cmd_notes(a):
         from . import bench
         standing = bench.plan_text(root) if a.session else ""       # the helper tiers, every session
         fresh, still = board.deliver(root, session=a.session)
-        if any(not n.get("quiet") and not n["anchor"] for n in fresh):
+        if any(not n.get("quiet") and not n["anchor"] and n.get('author') != 'observation' for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
             standing,
-            board.render_notes([n for n in fresh if n.get("author") != "colony"], "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
+            board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
             mail.render(new_mail, "Mail from other projects in the colony:"),
             mail.render(open_asks, "Questions from the colony you haven't answered yet:")]))
     else:
-        text = board.render_notes(board.open_notes(root, a.item), "Open notes from the person:") or "No open notes."
+        text = board.render_notes(board.open_notes(root, a.item), "Open notes:") or "No open notes."
     if text:
         print(text)
     return 0
@@ -839,7 +843,7 @@ def cmd_projects(a):
     for p in board.projects():
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
         waiting = len(board.moments(p))
-        goal = board.roadmap(p)["goal"] if p.exists() else ""
+        goal = ' '.join(board.roadmap(p)["goal"].split()) if p.exists() else ""
         print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' waiting on you' if waiting else '':16} {goal[:90]}")
     return 0
 
@@ -1022,12 +1026,33 @@ def cmd_posture(a):
         f, pos = board.focus(p), monitor.posture(p)
         print(f"{p.name}: helm {'on' if monitor.helm_for(p) else 'off'}{' (left out of the helm)' if pos['helm'] is False else ''}")
         print(f"  direction: {pos['direction'] or '(none given)'}")
+        print('  vision: ' + (board.roadmap(p)['goal'] or '(not shaped yet)').replace('\n', '\n    '))
         print(f"  scouting: " + (f"every {pos['scout']} hours if worked on" if pos["scout"] and pos["scouting"] else "off")
               + (f"; favour: {pos['scout_note']}" if pos["scout_note"] else ""))
         print(f"  focus: {f['milestone'] or '(no roadmap)'}")
         for label in ("doing", "verify", "next"):
             if f[label]:
                 print(f"    {label}: " + "; ".join(f[label]))
+    return 0
+
+
+def cmd_vision(a):
+    from . import board, vision
+    root = board.root_of()
+    if a.file:
+        text = sys.stdin.read() if a.file == '-' else Path(a.file).expanduser().read_text()
+        try:
+            event = vision.save(root, text, how='conversation', words=a.words or '')
+        except ValueError as err:
+            raise SystemExit(str(err))
+        print('Vision updated from the agreed conversation.' if event else 'Vision is unchanged.')
+    else:
+        vision.observe(root)
+        if a.history:
+            for event in vision.history(root):
+                print(f"{event['at']} · {event['how']}\n{event['text']}\n{event.get('words', '')}\n")
+        else:
+            print(board.roadmap(root)['goal'] or 'Shape the vision with the person.')
     return 0
 
 
@@ -1195,6 +1220,10 @@ def main(argv=None):
     p.add_argument("--scout", help="every how many hours to look for supports here (0: never)")
     p.add_argument("--favour", help="what scouting here should favour")
     p.add_argument("--scouting", choices=("on", "off"), help="scout for this project at all"); p.set_defaults(fn=cmd_posture)
+    p = sub.add_parser('vision', help='read the vision or record a clearly agreed conversation change')
+    p.add_argument('--file', help='new vision text (- reads stdin)')
+    p.add_argument('--words', help='the person’s words agreeing the change; required with --file')
+    p.add_argument('--history', action='store_true'); p.set_defaults(fn=cmd_vision)
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)

@@ -77,9 +77,10 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R65 Effort by role: smartest model at max for rare judgement (consultants, the step-up helper), xhigh for the monitor, the knee for main agents; routine keeps R61's cheapest model within reach, at its knee; any role still overridable
   Inactive provider seats also refresh their accepted effort; this leaves the running monitor and runtime provider unchanged.
 - [?] R66 Codex consoles reachable from the ChatGPT app, as Claude Code's are through Remote Control: on by default, set up by colony
-- [~] R67 Vision, path and next step: every project steers toward a vision (## Vision atop ROADMAP.md, the person's words, sharpened by its main agent with them, settled when the work reaches what depends on it); the path re-checked at every stone; each step built to fit the vision and ease the next. Built by colony-codex
-  Mechanics consulted in cc9948d. Gate g9fd35d asks how the person confirms direct file edits, which cannot otherwise be distinguished from agent drafts; implementation follows that decision.
   Live and confirmed reachable in ChatGPT for colony-codex. First connection offers pairing through either monitor provider; Yes generates the fresh code with Codex → Add manually instructions, Not now remembers the choice. Board pairing includes expiry and acceptance checks; awaiting deployment and the person's check of the pairing flow.
+- [?] R67 Vision, path and next step: every project steers toward a vision (## Vision atop ROADMAP.md, the person's words, sharpened by its main agent with them, settled when the work reaches what depends on it); the path re-checked at every stone; each step built to fit the vision and ease the next. Built by colony-codex
+  The person settled g9fd35d: direct board saves, clearly agreed conversation updates, and observed file changes with before/after notes; no confirmation clicks or approval machinery. Details affecting only a few items belong in those descriptions or specifications, including details entered through the Vision box. Consulted in cc9948d and checked in c21b5b3; implementation and rollout notes in docs/vision.md.
+  Built with isolated checks: full 203-test regression suite passed, then all 14 vision tests passed after the final migration refinement. Ready for merge/deployment by colony and the person's review of the Vision box and agent response.
 
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar

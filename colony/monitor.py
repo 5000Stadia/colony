@@ -55,7 +55,14 @@ own app, where it has one); each project also has its own session they can talk 
 - **Check before you report.** After acting on a project, look (`colony choose` prints the result; else
   `colony peek NAME`) and tell the person what actually happened, not what you meant to happen.
 - **The helm, project by project.** `colony posture` shows, for each project, whether you hold its
-  helm, the person's direction for it, and its current focus from its roadmap. When the person gives you
+  helm, its shared vision, the person's direction for it, and its current focus from its roadmap. Judge
+  routine work against that vision and current scope. A distant possibility does not authorize building
+  it now. The main agent shapes the vision with the person; brainstorming never changes it. Board edits
+  and clearly agreed conversation changes are direction to act on, with unclear effects discussed.
+  The vision describes the whole finished product and its feel; details for only a few items belong in
+  those items' descriptions or specifications. The main agent routes such details there, including ones
+  entered through the Vision box, and tells the person where they went.
+  Leave unresolved details alone until upcoming work depends on them. When the person gives you
   the helm or takes it back, run `colony helm on|off`: you hold the helm of every project included in it.
   To include or leave out one project, `colony helm on|off --project X`. A
   direction they give you for a project goes in with `colony posture X --direction "..."`. Where the
@@ -205,7 +212,7 @@ Hold the posture of a good product manager for every project whose helm you hold
 becomes something elegant and genuinely useful, finished well, not merely busy. Keep the person's intent
 in view, keep the work focused and moving, and make each of their decisions easy.
 
-- What it's for: each project's first roadmap line and its intention document. Work that serves them
+- What it's for: each project's live Vision (or legacy goal) and its intention document. Work that serves them
   goes ahead; say so, kindly and early, when work drifts or comes in the wrong order.
 - The version's vision decides: everything in a milestone is part of what the person described that
   version to be. Finding problems isn't a goal: "find issues, spec them, build them, repeat" has no end,
@@ -469,10 +476,12 @@ class Watcher:
     """Reads every project's screen, notices the transitions the person cares about, and hands them to
     the monitor in one message once the monitor is free."""
 
-    def __init__(self, interval=4.0, quiet=20.0):
+    def __init__(self, interval=4.0, quiet=20.0, enabled=True):
+        self.enabled = enabled
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged = set()
+        self.mail_lock = threading.Lock()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
         self.usage_checked = self.current_checked = self.discovered
@@ -542,6 +551,10 @@ class Watcher:
         (board.home() / "announced.json").write_text(json.dumps(self.announced))
 
     def mail(self):
+        with self.mail_lock:
+            self._mail()
+
+    def _mail(self):
         """Wake a project that has something it hasn't been handed: mail from another project, or a note or
         gate answer from the person whose moment has come. Start its session if it isn't running, and once
         it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
@@ -563,7 +576,8 @@ class Watcher:
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
                 what = " and ".join(filter(None, [
-                    "a note from the person on the board" if notes else "",
+                    "a note from the person on the board" if any(n.get('author') != 'observation' for n in notes) else "",
+                    "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
                     "mail from another project in the colony" if letters else ""]))
                 if console.type_into(console.session_name(p), f"[colony] You have {what}."):
                     self.nudged |= waiting          # else someone is typing there: tried again next time
@@ -743,6 +757,11 @@ class Watcher:
             save()
 
     def tick(self):
+        from . import vision
+        vision.observe_all()
+        if not self.enabled:
+            self.mail()  # project delivery is independent of the monitor agent
+            return
         self.models()
         self.usage()
         self.current()
@@ -813,10 +832,13 @@ def last_commit(root):
     return int(r.stdout.strip() or 0)
 
 
-def start():
+def start(enabled=True):
     """The monitor's session and the watcher, alongside the board."""
-    ensure()
-    threading.Thread(target=Watcher().run, daemon=True).start()
+    if enabled:
+        ensure()
+    watcher = Watcher(enabled=enabled)
+    threading.Thread(target=watcher.run, daemon=True).start()
+    return watcher
 
 
 SETUP = ("First-time setup: walk the person through it now, one step at a time, as 'First-time setup' in your brief "

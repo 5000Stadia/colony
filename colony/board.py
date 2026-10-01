@@ -34,10 +34,33 @@ PROTOCOL = """
 The colony is the person's set of projects, each with its own agent (you are this project's). The
 person follows and steers them all from one board, and the projects can write to each other.
 
+Every project is steering toward a vision: a pristine image of the finished work on the far horizon, kept in
+the `## Vision` section at the top of `ROADMAP.md` in the person's words. Making it clear and shared is yours:
+where it's unclear, draw it out with the person until you both see the same image. An unsettled detail is
+fine until the work reaches where it matters. "The best friend dies in the final chapter, how is undecided"
+needs settling near that chapter, not now; settle sooner only what the next steps depend on. The vision
+sharpens as the work gets closer, and the person's sight of it can change. The roadmap is the path to it,
+laid as stepping stones. Before you take the next one, look at the vision again and ask whether this is
+still the smartest next step toward it. If it isn't, adjust the path first: small reorderings are yours to
+make and mention; adding, dropping or reshaping a milestone goes to the consultants and then the person.
+When the work shows the vision differently than it's written, propose a revision to the person.
+When a change is clearly agreed with the person in conversation, update the vision and record the date and
+their words; brainstorming and what-ifs never change it. Treat a board edit as the person's direction:
+consider its effect on the work at hand and act accordingly, discussing anything unclear with them.
+Then build the step to fit the final vision, and so that the steps after it are easier to lay.
+
+The vision holds what shapes the whole finished thing: its narrative, feel, the best description of the
+finished product, and optionally a few bullets of fundamental elements every milestone keeps in mind.
+The vision is not the roadmap. Would a decision change what the finished product fundamentally is or
+how it feels? It belongs in Vision. Does it matter only to a handful of items? Put it in those items'
+descriptions or specifications, where you meet it when building them. This applies to conversation and
+board edits alike: move item-level detail from Vision to the items it concerns and tell the person where
+it went. Record the move and their original words in the dated vision history.
+
 - The plan is `ROADMAP.md`: milestones as `## M1 — name`, items as `- [ ] R1 text` (`[~]` in progress,
   `[?]` built and waiting for the person's own eye, `[x]` done). Keep it current as you work, and commit
-  each finished piece with a clear message. A milestone holds only what serves its purpose as the person
-  described it; what you find along the way that doesn't goes under Later. Finish what you take on: a
+  each finished piece with a clear message. What you find outside the milestone's purpose goes under Later.
+  Finish what you take on: a
   piece is done when it does what it was meant to do, so resolve what stands in the way, however many
   turns it takes. Don't go looking for faults where nothing suggests one, or re-examine a sound choice
   without cause. What you can check yourself (tests, the spec's definition of done, a review), check,
@@ -45,6 +68,9 @@ person follows and steers them all from one board, and the projects can write to
   whether it's what they wanted. Then tell them in plain words what's ready and how to see it: `colony
   ready R4 "what's ready" --check "how to check"`. They approve it or say what's wrong, and it reaches
   you as a note.
+- Record a clearly agreed conversation change with `colony vision --file PATH --words "the person's words"`:
+  it updates this project's Vision and its dated history together. An edit or merge made outside that command
+  reaches you as a before-and-after note. Read the current vision and consider what it changes for your work.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
   `colony noted ID "what you did"`. `colony notes` lists any still open.
@@ -100,12 +126,13 @@ documents, notes, open work and recent history) and write ROADMAP.md in the colo
 waits on my own eye; what you can check yourself, check. Include what's \
 done, what's under way, and features we've discussed but not built, as unchecked items under a later \
 milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
-documents stay where they are. Open the file with one line saying what this project is: the board shows it \
-as the project's goal. Then show me the milestones before treating them as settled."""
+documents stay where they are. Draft a shared vision from what you know of my intentions and bring it to me \
+to shape; when clearly agreed, record it under ## Vision near the top. Leave details open until the work \
+depends on them. Then show me the milestones before treating them as settled."""
 
 SKELETON = """# Roadmap
 
-What we're making, in the person's words.
+## Vision
 
 ## M1 — first milestone: what it looks like
 
@@ -388,7 +415,8 @@ def protocol(root):
     owner = next((p.name for p in projects() if p != root and workdir(p).resolve() == work.resolve()), None)
     whose = f"**{owner}**, whose project it is" if owner else "the project that owns it"
     head = "## This project is part of a colony\n"
-    return PROTOCOL.replace(head, head + (
+    scoped_protocol = PROTOCOL.replace("at the top of `ROADMAP.md`", f"at the top of `{root / 'ROADMAP.md'}`")
+    return scoped_protocol.replace(head, head + (
         f"\nYou are **{root.name}**, a second agent working in this folder beside {whose}. Its files, its\n"
         f"ROADMAP.md and its plan are theirs: change them only as they ask"
         + (f", and work with them through `colony send {owner}` and `colony reply`" if owner else "") + ".\n"
@@ -445,11 +473,15 @@ def epoch(stamp):
 
 
 def roadmap(root, text=None):
-    """The roadmap as the agent keeps it: the goal line, milestones and their items."""
+    """The live shared vision (or legacy goal), milestones and their items."""
+    from . import vision
     if text is None:
         path = Path(root) / "ROADMAP.md"
         text = path.read_text() if path.exists() else ""
-    goal = next((l.strip() for l in text.splitlines() if l.strip() and not l.startswith("#")), "")
+    part = vision.section(text)
+    goal = part['text'] or part['legacy']
+    if part['start'] is not None:
+        text = text[:part['start']] + text[part['end']:]
     milestones, current, last, prev = [], None, None, None
     for line in text.splitlines():
         if m := MILESTONE.match(line):
@@ -469,7 +501,7 @@ def roadmap(root, text=None):
             continue
         else:
             last = None
-    return {"goal": goal, "milestones": milestones}
+    return {"goal": goal, "vision": part['text'], "milestones": milestones}
 
 
 def item_times(root):
@@ -678,7 +710,7 @@ def notes(root):
     out = {}
     for e in read(root, "notes.jsonl"):
         if e["type"] == "note":
-            out[e["id"]] = dict(e, reply=None, addressed_at=None, delivered_at=None)
+            out.setdefault(e["id"], dict(e, reply=None, addressed_at=None, delivered_at=None))
         elif e["type"] == "addressed" and e["of"] in out:
             out[e["of"]].update(reply=e["text"], addressed_at=e["at"])
         elif e["type"] == "delivered" and e["of"] in out:
@@ -747,6 +779,8 @@ def track(path, register=True):
     (root / ".board").mkdir(exist_ok=True)
     if not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
+    from . import vision
+    vision.observe(root)
     has_plan = (root / "ROADMAP.md").exists() and "\n## M" in (root / "ROADMAP.md").read_text()
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if joining and not has_plan and not any(n["text"] in (JOIN, join) for n in notes(root)):
@@ -900,7 +934,9 @@ def note_box(pid, kind, ref, hint, back=None):
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        out += (f"<div class='note'><span class='who'>{'the monitor, for you' if n.get('author') == 'monitor' else 'the monitor suggests' if n.get('author') == 'suggestion' else 'you'} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
+        who = {'monitor': 'the monitor, for you', 'suggestion': 'the monitor suggests',
+               'observation': 'file change observed', 'colony': 'colony'}.get(n.get('author'), 'you')
+        out += (f"<div class='note'><span class='who'>{who} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
                    f"<div>{e(n['reply'])}</div></div>" if n["addressed_at"]
                    else f"<div class='who'>{e(status(n, road_items or {}))}</div>")
@@ -1035,6 +1071,27 @@ box.addEventListener('click', (ev) => {{
             + (f"<div class='panel'>{form}</div>" if cls == "psettings" else form) + "</details>")
 
 
+def vision_box(root, pid):
+    from . import vision
+    road = roadmap(root)
+    changes = [r for r in vision.history(root) if r['how'] != 'baseline']
+    current = (f"<div class='pre'>{e(road['vision'])}</div>" if road['vision'] else
+               f"<p class='muted'>{e(road['goal']) or 'Shape the vision with your project agent.'}</p>")
+    rows = ''.join(f"<li><span class='who'>{e(r['at'])} · {e(r['how'])}</span>"
+                   f"<div class='pre'>{e(r['text']) or '(vision cleared)'}</div>"
+                   + (f"<p>{e(r['words'])}</p>" if r.get('words') else '') + '</li>' for r in reversed(changes))
+    return (f"<section class='vision'><h2>Vision</h2>{current}"
+            f"<details><summary>Edit vision</summary><form class='options' method='post' action='/vision'>"
+            f"<input type='hidden' name='p' value='{pid}'>"
+            f"<textarea name='before' hidden>{e(road['vision'])}</textarea>"
+            f"<label>The finished work on the horizon<textarea name='text' rows='6'>{e(road['vision'] or road['goal'])}</textarea></label>"
+            "<label>What changed or became clearer? (optional)<input name='words'></label>"
+            "<button>Save vision</button><p class='muted'>Saving updates the vision and tells your project agent "
+            "to consider its effect on the work at hand.</p></form></details>"
+            + (f"<details><summary>Vision history ({len(changes)})</summary><ul>{rows}</ul></details>" if changes else '')
+            + '</section>')
+
+
 def render(reg, pid, view="overview"):
     plist = projects(reg)
     out = []
@@ -1044,10 +1101,11 @@ def render(reg, pid, view="overview"):
         root = plist[pid]
         message = message_form(pid, plist, "msgbox")
         if not providers.installed(providers.of(root)) and not console.live(root):
-            return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>"
+            return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>{vision_box(root, pid)}"
                          f"<div class='card'><p>{e(providers.missing(providers.of(root)))}, so its console can't start.</p>"
                          f"<p class='muted'>Install it, or choose another provider in this project's Settings.</p></div>")
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
+                     + vision_box(root, pid)
                      + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
     root = plist[pid]
@@ -1070,7 +1128,7 @@ def render(reg, pid, view="overview"):
     secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
-               f"<p>{e(road['goal'])}</p><p class='muted'>Roadmap: {done}/{total}{active}</p></header>")
+               f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p></header>")
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
         its_now = items(road)
@@ -2840,7 +2898,18 @@ class Handler(BaseHTTPRequestHandler):
         root = projects(reg)[pid]
         text = form.get("text", "").strip()
         path = urllib.parse.urlparse(self.path).path
-        if path == "/note" and text:
+        if path == '/vision':
+            from . import vision
+            try:
+                vision.save(root, form.get('text', ''), how='board', words=form.get('words', ''), before=form.get('before', ''))
+            except ValueError as err:
+                return self._send(409, shell(reg, pid, f"<h1>Vision</h1><p>{e(str(err))}</p>"
+                                            f"<p>Your unsaved revision:</p><pre>{e(form.get('text', ''))}</pre>"
+                                            f"<p><a href='/?p={pid}'>Back to the project</a></p>").encode())
+            watcher = getattr(self.server, 'watcher', None)
+            if watcher is not None:
+                watcher.mail()  # wake immediately if safe; otherwise the next hook delivers the note
+        elif path == "/note" and text:
             kind, ref = form.get("kind"), form.get("ref")
             add_note(root, {kind: ref} if kind in ("item", "commit") else None, text)
         elif path == "/answer" and text:
@@ -2904,10 +2973,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port, lan=False, monitor=True):
-    if monitor and registry()["settings"]["monitor"]:
-        from . import monitor as mon
-        mon.start()
+    from . import monitor as mon, vision
+    vision.install_all()
+    watcher = mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
+    httpd.watcher = watcher
     httpd.lan = lan
     where = "every address on this machine (your home network can open it)" if lan else "http://127.0.0.1"
     print(f"board: {where}, port {httpd.server_address[1]}  (ctrl-c to stop)", flush=True)
@@ -2966,6 +3036,9 @@ form.options { display:flex; flex-direction:column; gap:10px } form.options labe
 form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
 form.options textarea.short { min-height:44px }
+.vision { margin:18px 0; max-width:900px } .vision details { margin:12px 0 }
+.vision textarea:not([hidden]) { width:100%; box-sizing:border-box; font:inherit; padding:10px; resize:vertical;
+  border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink) }
 textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; line-height:1.45; padding:10px; border-radius:8px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } form.options input.hours { font:inherit; width:4.5em; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .msgbox { margin-left:auto } .msgbox summary { cursor:pointer; color:var(--accent); font-size:13px }
@@ -3032,7 +3105,7 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
 .touch-only { display:none }
 @media (pointer: coarse) { .keys { display:flex } .touch-only { display:inline-block } }
 /* On a phone the console fills the space between the project chips (top) and the tabs (bottom). */
-body.focus header > :not(.tabs), body.focus .console-bar, body.focus #needs-box { display:none }
+body.focus header > :not(.tabs), body.focus .console-bar, body.focus #needs-box, body.focus .vision { display:none }
 body.focus header { margin:0 } body.focus main { padding:0; max-width:none } body.focus #term { border-radius:0; padding:2px }
 body.focus .keys { position:fixed; left:0; right:0; z-index:30; margin:0; padding:6px; gap:5px; flex-wrap:nowrap;
   overflow-x:auto; background:var(--card); border-top:1px solid var(--line) }

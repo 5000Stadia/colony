@@ -58,13 +58,14 @@ def consultants():
 
 
 def brief(root, decision, question, digest, plan=None, rnd=1):
-    """The brief, assembled here rather than by the asking agent: the person's own words (the roadmap's goal line;
+    """The brief, assembled here rather than by the asking agent: the person's own words (the live vision or legacy goal;
     the decision's roadmap item and the person's notes on it), the agent's digest of sourced facts, the question.
     Round one leaves the agent's plan out; round two shows the revised plan to check."""
     root = Path(root).resolve()
     road = board.roadmap(root)
     item = board.items(road).get(decision)
-    words = [f"The project's goal, in the person's words: {road['goal']}"] if road["goal"] else []
+    subject = 'vision' if road['vision'] else 'goal'
+    words = [f"The project's {subject}, in the person's words: {road['goal']}"] if road["goal"] else []
     if item:
         words.append(f"The decision concerns roadmap item {decision}: {item['text']}" + (f" ({item['desc']})" if item["desc"] else ""))
     for n in board.notes(root):
