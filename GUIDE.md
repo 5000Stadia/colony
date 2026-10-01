@@ -38,7 +38,7 @@ These are defaults from measured runs, not rules. Where you see a better way, ta
 - Step up when the work struggles (it stalls, retries, or its work is redone), not on a guess; step back down once the hard part is done.
 
 ## Review
-- Ask of each piece of work: if a few bugs or inaccuracies are in this, will they hurt the project going forward? Chapter 2 of a book: no. A load-bearing rebuild of a core system: yes.
+- Ask of each piece of work: does later work build on it? If a few bugs or inaccuracies are in this, will they hurt the project going forward? A passing detail in chapter 2 of a book: no. A fact, a character's decision or a point of the argument later chapters rest on, or a load-bearing rebuild of a core system: yes.
 - Where yes, have a separate agent, without the builder's context, try to break it and use it the way its real users will; let it decide how for this kind of work. In testing this caught nearly all of what it went after at about twice the build's cost, which is cheap next to fixing what later work was built on.
 - Your own tests share your understanding: if you misread the spec, they pass anyway. Where the spec itself is long, subtle or ambiguous, also have a separate agent write tests from the spec alone.
 - For what tests can't express (prose, design, a document leaving the person's hands), use a reader who meets it as its recipient will. The reviewer reads, never edits, and sees the stakes first.
