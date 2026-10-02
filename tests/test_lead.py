@@ -150,6 +150,7 @@ class LeadTest(unittest.TestCase):
         self.assertEqual(len(board.notes(self.root)), len(before) + 1)
 
     def test_git_catch_up_filters_own_sources_without_truncating_others(self):
+        self.pair()
         before = self.initial
         lead.git(self.root, 'commit', '--allow-empty', '-m', 'My own checkpoint',
                  '--trailer', 'Colony-Agent: ' + self.helper.name)
@@ -161,6 +162,14 @@ class LeadTest(unittest.TestCase):
         self.assertNotIn('My own checkpoint', subjects)
         self.assertIn('Outside completed work 0', subjects)
         self.assertIn('Outside completed work 13', subjects)
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(self.root))))
+        g = lead.switch(self.root, self.helper)
+        lead.finish_handoff(self.root, g['generation'])
+        lead.tested(self.helper, target, 'passed', actor=self.helper)
+        note = lead.engage(self.helper)
+        self.assertNotIn('My own checkpoint', note)
+        self.assertIn('Outside completed work 0', note)
+        self.assertIn('Outside completed work 13', note)
 
     def test_real_conflict_routes_hashes_to_recent_file_developer_and_aborts(self):
         self.pair(); job = self.helper_job(); work = Path(job['workspace'])
@@ -209,6 +218,96 @@ class LeadTest(unittest.TestCase):
         self.assertIn('Completed garden feature', lead.engage(self.helper, mark=False))
         lead.acknowledge_engagement(self.helper)
         self.assertEqual(lead.engage(self.helper), '')
+
+    def test_primary_catches_up_in_its_branch_and_preserves_dirty_work(self):
+        self.pair()
+        work = self.base / 'primary-work'
+        lead.git(self.root, 'worktree', 'add', '-b', 'primary-existing', str(work))
+        (self.root / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(work))))
+        (work / 'file.txt').write_text('unfinished primary work\n')
+        (work / 'draft.txt').write_text('new unfinished work')
+        (work / 'AGENTS.md').write_text('generated instructions')
+        (self.root / 'helper-feature.txt').write_text('completed helper work')
+        target = self.commit(self.root, 'Helper completed reminders')
+        lead.tested(self.root, target, 'passed')
+        (self.root / 'untested.txt').write_text('unfinished integration work')
+        self.commit(self.root, 'Still untested')
+        note = lead.engage(self.root, mark=False)
+        self.assertIn('Helper completed reminders', note)
+        self.assertNotIn('Still untested', note)
+        self.assertNotIn('without a project goal', note)
+        self.assertTrue((work / 'helper-feature.txt').exists())
+        self.assertFalse((work / 'untested.txt').exists())
+        self.assertEqual((work / 'file.txt').read_text(), 'unfinished primary work\n')
+        self.assertTrue((work / 'draft.txt').exists())
+        self.assertNotIn('AGENTS.md', lead.git(work, 'ls-files'))
+        self.assertIn('Helper completed reminders', lead.engage(self.root, mark=False))
+        lead.acknowledge_engagement(self.root)
+        self.assertEqual(lead.engage(self.root), '')
+
+    def test_outgoing_lead_receives_changes_already_landed_on_canonical_main(self):
+        self.pair()
+        g = lead.switch(self.root, self.helper)
+        lead.finish_handoff(self.root, g['generation'])
+        (self.root / 'new.txt').write_text('incoming lead completed work')
+        target = self.commit(self.root, 'Incoming lead completed feature')
+        lead.tested(self.helper, target, 'passed', actor=self.helper)
+        note = lead.engage(self.root)
+        self.assertIn('Incoming lead completed feature', note)
+        self.assertEqual(lead.engage(self.root), '')
+
+    def test_assignment_keeps_unread_catch_up_and_acknowledges_member_cursor(self):
+        self.pair()
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(self.root))))
+        (self.root / 'completed.txt').write_text('completed before assignment')
+        path = self.root / 'ROADMAP.md'
+        path.write_text(path.read_text().replace('[ ] R2', '[x] R2'))
+        target = self.commit(self.root, 'Completed water log before engagement')
+        lead.tested(self.root, target, 'passed')
+        self.assertIn('Completed water log before engagement', lead.engage(self.helper, mark=False))
+        (self.root / 'another.txt').write_text('another completed change')
+        target = self.commit(self.root, 'Another completed change before assignment')
+        lead.tested(self.root, target, 'passed')
+        job = self.helper_job('R3')
+        self.assertEqual(job['base'], target)
+        self.assertEqual(job['looked_at'], self.initial)
+        self.assertIn('Completed water log before engagement', lead.engage(self.helper, mark=False))
+        self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], self.initial)
+        lead.acknowledge_engagement(self.helper)
+        self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], target)
+        lead.pair(self.root, self.helper)
+        self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], target)
+        self.assertEqual(lead.engage(self.helper), '')
+
+    def test_checkpoint_excludes_already_staged_generated_files(self):
+        self.pair(); job = self.helper_job(); work = Path(job['workspace'])
+        (work / 'real.txt').write_text('work to preserve')
+        for name in ('AGENTS.md', 'CLAUDE.md', '.board/cache', '.claude/settings.json', '.codex/config.toml'):
+            path = work / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('generated state')
+            lead.git(work, 'add', '-f', '--', name)
+        lead.checkpoint(work, 'Checkpoint only work', self.helper)
+        names = lead.git(work, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').splitlines()
+        self.assertEqual(names, ['real.txt'])
+        staged = lead.git(work, 'diff', '--cached', '--name-only').splitlines()
+        self.assertEqual(set(staged), {'AGENTS.md', 'CLAUDE.md', '.board/cache', '.claude/settings.json', '.codex/config.toml'})
+
+    def test_unassigned_engagement_keeps_an_existing_merge_untouched(self):
+        self.pair()
+        work = self.base / 'existing-merge'
+        lead.git(self.root, 'worktree', 'add', '-b', 'existing-merge', str(work))
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(work))))
+        (work / 'file.txt').write_text('my change\n')
+        self.commit(work, 'My change')
+        (self.root / 'file.txt').write_text('other change\n')
+        target = self.commit(self.root, 'Other change')
+        lead.tested(self.root, target, 'passed')
+        lead.git(work, 'merge', '--no-edit', target, check=False)
+        stages = lead.git(work, 'ls-files', '-u')
+        self.assertTrue(stages)
+        self.assertIn('merge already in progress', lead.engage(self.helper))
+        self.assertEqual(lead.git(work, 'ls-files', '-u'), stages)
 
     def test_unrelated_worktree_is_not_a_logical_agent_scope(self):
         self.pair(); work = self.base / 'unrelated'
