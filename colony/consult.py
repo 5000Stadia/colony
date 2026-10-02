@@ -32,7 +32,61 @@ def records(root):
             out[e["id"]] = dict(e, adopted=None)
         elif e["type"] == "adopted" and e["of"] in out:
             out[e["of"]]["adopted"] = e["points"]
+    # A linked gate is the human decision, including a rejection of every point.
+    # Keep legacy adoption records readable, but never let them override its choices.
+    for gate in board.gates(root):
+        cid = gate.get("consult")
+        if cid in out:
+            rec = out[cid]
+            rec["gate"] = gate["id"]
+            choices = gate.get("point_decisions") or {}
+            rec["point_decisions"] = [dict(point, decision=choices.get(point["id"]))
+                                      for point in gate.get("points", [])]
+            rec["adopted"] = "\n".join(f"{p['id']}: {p['text']}" for p in rec["point_decisions"]
+                                        if p["decision"] == "accept") or None
+            rec["gate_answer"] = gate["answer"]
+    for rec in out.values():
+        if rec["round"] == 1:
+            rec["checking_round"] = next((c["id"] for c in out.values()
+                                          if c["decision"] == rec["decision"] and c["round"] == 2), None)
     return list(out.values())
+
+
+def gate_points(root, cid, points, item):
+    """The agent curates existing recommendations; source numbers refer to report()'s consultants.
+
+    No model call or automatic interpretation of an answer is needed. The gate
+    snapshots attribution so it stays readable without fetching model catalogs.
+    """
+    rec = next((r for r in records(root) if r["id"] == cid), None)
+    if not rec:
+        raise ValueError(f"No consultation {cid} in this project.")
+    if rec["round"] != 1 or rec["decision"] != item:
+        raise ValueError("Link a first-round consultation on this same item or decision.")
+    if rec.get("checking_round"):
+        raise ValueError("This decision has already had its checking round; keep its past gate as recorded.")
+    if rec.get("gate"):
+        raise ValueError(f"Consultation {cid} already has gate {rec['gate']}.")
+    if not isinstance(points, list) or not points:
+        raise ValueError("Provide a nonempty JSON list of consultant points.")
+    result = []
+    for i, point in enumerate(points, 1):
+        if not isinstance(point, dict) or not isinstance(point.get("text"), str) or not point["text"].strip():
+            raise ValueError("Each point needs its recommendation as text.")
+        numbers = point.get("consultants")
+        if (not isinstance(numbers, list) or not numbers
+                or any(type(n) is not int or not 1 <= n <= len(rec["answers"]) for n in numbers)
+                or len(set(numbers)) != len(numbers)):
+            raise ValueError("Each point needs valid, distinct consultant numbers from the report.")
+        sources = []
+        for number in numbers:
+            answer = rec["answers"][number - 1]
+            if answer.get("error") or not (answer.get("text") or "").strip():
+                raise ValueError("A failed or empty consultant answer cannot be a point's source.")
+            sources.append(dict(consultant=number, provider=answer["provider"],
+                                model=answer["model"], effort=answer["effort"]))
+        result.append(dict(id=f"P{i}", text=point["text"].strip(), sources=sources))
+    return result
 
 
 def pick(key):
@@ -57,7 +111,7 @@ def consultants():
     return [(k, *pick(k)) for k in fams], note
 
 
-def brief(root, decision, question, digest, plan=None, rnd=1):
+def brief(root, decision, question, digest, plan=None, rnd=1, choices=None):
     """The brief, assembled here rather than by the asking agent: the person's own words (the live vision or legacy goal;
     the decision's roadmap item and the person's notes on it), the agent's digest of sourced facts, the question.
     Round one leaves the agent's plan out; round two shows the revised plan to check."""
@@ -78,6 +132,8 @@ def brief(root, decision, question, digest, plan=None, rnd=1):
              f"The digest is your material. Check a fact at its source (read-only, under {root}) only when your "
              "answer turns on it and you doubt it; don't survey the project.", digest.strip()]
     if rnd == 2 and plan:
+        if choices:
+            parts += ["## The person's choices on the consultant points", choices]
         parts += ["## The revised approach", plan.strip(), "## Your task", ROUND2]
     else:
         parts += ["## Your task", ROUND1]
@@ -92,9 +148,10 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
     if not s["consult"]:
         raise ValueError("consulting is off (colony settings consult on)")
     mine = [r for r in records(root) if r["decision"] == decision]
+    accepted = next((r for r in mine if r["round"] == 1 and r["adopted"]), None)
     if rnd == 1 and any(r["round"] == 1 for r in mine):
         raise ValueError(f"{decision} has had its first round; a second runs only after the person accepts a change")
-    if rnd == 2 and not any(r["round"] == 1 and r["adopted"] for r in mine):
+    if rnd == 2 and not accepted:
         raise ValueError(f"a second round for {decision} needs the person to have accepted a change from the first")
     if rnd == 2 and any(r["round"] == 2 for r in mine):
         raise ValueError(f"{decision} has had both its rounds")
@@ -103,7 +160,8 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
     who, note = consultants()
     if not who:
         raise ValueError("no provider that can consult is installed and on")
-    text = brief(root, decision, question, digest, plan, rnd)
+    text = brief(root, decision, question, digest, plan, rnd,
+                 choices=accepted.get("gate_answer") if rnd == 2 else None)
     import concurrent.futures as cf
 
     def ask(k, model, effort):
@@ -119,14 +177,22 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
     cost = sum(a.get("cost") or 0 for a in answers)
     rec = {"type": "consult", "id": "c" + secrets.token_hex(3), "at": board.now(), "decision": decision, "round": rnd,
            "question": question.strip(), "answers": answers, "cost": round(cost, 4), "note": note}
+    if rnd == 2:
+        rec["checked"] = dict(consult=accepted["id"], gate=accepted.get("gate"), words=accepted["adopted"],
+                              points=[p for p in accepted.get("point_decisions", []) if p["decision"] == "accept"])
     board.append(root, "consults.jsonl", rec)
     return rec
 
 
 def adopt(root, cid, points):
     """Which points the person accepted (in their words or by number): the record that opens a second round."""
-    if cid not in {r["id"] for r in records(root)}:
+    rec = next((r for r in records(root) if r["id"] == cid), None)
+    if not rec:
         raise KeyError(cid)
+    if rec.get("gate") and not rec["adopted"]:
+        raise ValueError("This consultation's gate has no human-accepted change; adoption cannot override it.")
+    if not points.strip():
+        raise ValueError("Record a change the person accepted.")
     board.append(root, "consults.jsonl", {"type": "adopted", "of": cid, "at": board.now(), "points": points.strip()})
 
 
@@ -144,10 +210,12 @@ def report(rec):
         out.append(x.get("text") or "(no answer)")
     if rec["round"] == 1:
         out += ["", "Next: bring the person only the points that would fundamentally change or improve the approach, "
-                "a few at most, each with where it came from, as one gate (colony gate \"...\" --item "
-                f"{rec['decision']}). Rewording, naming and reorganising never count. When they answer, record what they "
-                f"accepted: colony consult {rec['decision']} \"their words\" --adopt {rec['id']}. Only an accepted change "
-                "opens a second round, to check the revised approach (--plan FILE)."]
+                "a few at most, as one gate. Write a JSON list of points with text and consultants (their numbered "
+                "sources above), then link it: colony gate \"...\" --item "
+                f"{rec['decision']} --consult {rec['id']} --points FILE. Rewording, naming and reorganising never count. "
+                "The person accepts or rejects each point; the gate records adoption automatically. In conversation, "
+                "use colony gate \"their words\" --answered ID --accept P1 --reject P2, covering every point. "
+                "Only an accepted change opens a second round, to check the revised approach (--plan FILE)."]
     else:
         out += ["", "This decision has had both its rounds. Fix what the checks found that holds up, and go on."]
     return "\n".join(out)

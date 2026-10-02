@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -92,8 +93,11 @@ it went. Record the move and their original words in the dated vision history.
   a digest of facts, each with its source, looking up first what you don't know, and leave your plan out.
   Then run `colony consult R4 "the decision" --digest FILE`, which adds the person's own words and asks
   each consultant what would fundamentally change or improve the approach. Bring the person only such
-  points, a few at most, as one gate. Wording, naming and reorganising never count. Record what they
-  accept with `colony consult R4 "their words" --adopt ID`. Only an accepted change earns a second round,
+  points, a few at most, as one gate: `colony gate "the question" --item R4 --consult ID --points FILE`.
+  FILE is a JSON list like `[{"text":"the recommendation", "consultants":[1]}]`; source numbers come from
+  the consultant report. The person accepts or rejects each point on the board; adoption is recorded
+  automatically. If settled in conversation, use `colony gate "their words" --answered ID --accept P1
+  --reject P2`, covering every point. Wording, naming and reorganising never count. Only an accepted change earns a second round,
   which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
   decision; if consulting is off, go on.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
@@ -776,9 +780,11 @@ def gates(root):
     out = {}
     for e in read(root, "gates.jsonl"):
         if e["type"] == "gate":
-            out[e["id"]] = dict(e, answer=None, answered_at=None)
+            out[e["id"]] = dict(e, answer=None, answered_at=None, point_decisions=None, note_id=None, comment="")
         elif e["type"] == "answer" and e["of"] in out:
-            out[e["of"]].update(answer=e["text"], answered_at=e["at"])
+            out[e["of"]].update(answer=e["text"], answered_at=e["at"],
+                                point_decisions=e.get("point_decisions"), note_id=e.get("note_id"),
+                                comment=e.get("comment", ""))
     return list(out.values())
 
 
@@ -967,13 +973,74 @@ def add_note(root, anchor, text, author, quiet=False):
     return note
 
 
-def answer_gate(root, gate_id, text, tell=True):
+@contextmanager
+def gate_lock(root):
+    """Serialize validation, decision records and their notification receipts."""
+    import fcntl
+    path = Path(root) / ".board" / "gates.lock"
+    path.parent.mkdir(exist_ok=True)
+    with path.open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def add_gate(root, question, item=None, why="", *, consultation=None, points=None):
+    with gate_lock(root):
+        return _add_gate(root, question, item, why, consultation=consultation, points=points)
+
+
+def _add_gate(root, question, item, why, *, consultation, points):
+    gate = dict(type="gate", id="g" + secrets.token_hex(3), at=now(),
+                question=question.strip(), item=item, why=why.strip())
+    if not gate["question"]:
+        raise ValueError("A gate needs its question.")
+    if consultation:
+        from . import consult
+        gate.update(consult=consultation, points=consult.gate_points(root, consultation, points, item))
+    elif points is not None:
+        raise ValueError("Link the consultation that supplied these points.")
+    append(root, "gates.jsonl", gate)
+    return gate
+
+
+def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
     """The person's answer to a gate. From the board it reaches the agent the way every other word from the
     person does, as a note; settled in conversation, the agent records it and already knows (tell=False)."""
+    with gate_lock(root):
+        return _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
+
+
+def _gate_note(root, gate, ident, text, at):
+    if ident and not any(n["id"] == ident for n in notes(root)):
+        append(root, "notes.jsonl", dict(type="note", id=ident, at=at, author="person",
+            anchor={"gate": gate["id"], "item": gate.get("item")}, text=f"On \"{gate['question']}\": {text}"))
+
+
+def _answer_gate(root, gate_id, text, *, tell, decisions):
     gate = next(g for g in gates(root) if g["id"] == gate_id)
-    append(root, "gates.jsonl", {"type": "answer", "of": gate_id, "at": now(), "text": text.strip()})
+    text = text.strip()
+    answer = dict(type="answer", of=gate_id, at=now(), text=text)
+    if gate.get("points"):
+        ids = {p["id"] for p in gate["points"]}
+        if (not isinstance(decisions, dict) or set(decisions) != ids
+                or any(v not in ("accept", "reject") for v in decisions.values())):
+            raise ValueError("Accept or reject every consultant point; no choices are assumed.")
+        lines = [f"{decisions[p['id']].capitalize()} {p['id']}: {p['text']}" for p in gate["points"]]
+        answer.update(point_decisions=dict(decisions), comment=text, text="\n".join(lines + ([text] if text else [])))
+        if gate["answer"]:
+            if gate["answer"] == answer["text"] and gate["point_decisions"] == decisions:
+                if tell:
+                    _gate_note(root, gate, gate.get("note_id"), gate["answer"], gate["answered_at"])
+                return gate  # A retried submission creates neither another decision nor another notice.
+    elif decisions:
+        raise ValueError("This gate has no consultant points.")
+    elif not text:
+        raise ValueError("Give your answer to this gate.")
+    answer["note_id"] = "n" + secrets.token_hex(3) if tell else None
+    append(root, "gates.jsonl", answer)
     if tell:
-        add_note(root, {"gate": gate_id, "item": gate.get("item")}, f"On \"{gate['question']}\": {text.strip()}", author='person')
+        _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"])
+    return answer
 
 
 def open_notes(root, item=None):
@@ -1470,11 +1537,8 @@ def render_item(reg, pid, iid):
     if gs:
         body.append("<h2>Gates</h2>")
         for g in gs:
-            body.append(f"<div class='card{' gate' if not g['answer'] else ''}'><b>{e(g['question'])}</b><p>{e(g.get('why') or '')}</p>"
-                        + (f"<p>Your answer: {e(g['answer'])}</p>" if g["answer"] else
-                           f"<form class='add' method='post' action='/answer'><input type='hidden' name='p' value='{pid}'>"
-                           f"<input type='hidden' name='gate' value='{e(g['id'])}'><input type='hidden' name='back' value='/item?p={pid}&id={e(iid)}'>"
-                           f"<textarea name='text' placeholder='Your answer'></textarea><button>Answer</button></form>") + "</div>")
+            body.append(f"<div class='card{' gate' if not g['answer'] else ''}'>"
+                        + gate_body(root, pid, g, f"/item?p={pid}&id={iid}") + "</div>")
     from . import consult
     cs = [c for c in consult.records(root) if c["decision"] == iid]
     if cs:
@@ -1490,6 +1554,58 @@ def render_item(reg, pid, iid):
     return shell(reg, pid, "".join(body))
 
 
+def gate_body(root, pid, gate, back):
+    """The same point decisions in Needs you, Waiting on you and the item's record."""
+    body = f"<b>{e(gate['question'])}</b>"
+    if gate.get("why"):
+        body += f"<p class='muted'>{e(gate['why'])}</p>"
+    points = gate.get("points", [])
+    choices = gate.get("point_decisions") or {}
+    rec = None
+    if points:
+        from . import consult
+        rec = next((c for c in consult.records(root) if c["id"] == gate.get("consult")), None)
+    rows, editable = [], []
+    for point in points:
+        sources = "; ".join(f"Consultant {s['consultant']}: {s['model']} at {s['effort']} ({s['provider']})"
+                            for s in point["sources"])
+        select = (f"<select name='point_{e(point['id'])}' aria-label='Decision on {e(point['id'])}' required>"
+                  "<option value=''>Choose…</option>" + "".join(
+                      f"<option value='{value}'{' selected' if choices.get(point['id']) == value else ''}>{label}</option>"
+                      for value, label in (("accept", "Accept"), ("reject", "Reject"))) + "</select>")
+        control = (f"<span class='badge'>{'Accepted' if choices.get(point['id']) == 'accept' else 'Rejected'}</span>"
+                   if gate["answer"] else select)
+        prefix = f"<div class='consult-point'><label><span><b>{e(point['id'])}</b> {e(point['text'])}</span>"
+        suffix = f"</label><div class='who'>{e(sources)}</div></div>"
+        rows.append(prefix + control + suffix)
+        editable.append(prefix + select + suffix)
+    def form(content, comment=""):
+        hint = "Optional comment" if points else "Your answer"
+        css = "add consultant-gate" if points else "add"
+        button = "Save decisions" if points else "Send"
+        return (f"<form class='{css}' method='post' action='/answer'>"
+                f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(gate['id'])}'>"
+                f"<input type='hidden' name='back' value='{e(back)}'>" + content
+                + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
+                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
+    if gate["answer"]:
+        body += "".join(rows) + f"<div class='pre'>Your answer: {e(gate['answer'])}</div>"
+        if points:
+            body += ("<p class='muted'>The checking round is already recorded; this decision has used both rounds.</p>"
+                     if rec and rec.get("checking_round") else
+                     "<p class='muted'>A checking round is allowed for the accepted changes.</p>"
+                     if "accept" in choices.values() else
+                     "<p class='muted'>No change accepted; no checking round.</p>")
+            body += ("<details><summary>Revise your choices</summary>"
+                     + form("".join(editable), gate.get("comment", "")) + "</details>")
+    else:
+        body += form("".join(rows))
+    if rec:
+        body += ("<details><summary>Full consultant answers</summary>"
+                 + consultation(dict(rec, adopted=None, point_decisions=[])) + "</details>")
+    return body
+
+
 def consultation(c):
     """One round of consulting on a decision: who was asked and why, what each said and cost, what the person took."""
     def answer(x):
@@ -1498,10 +1614,15 @@ def consultation(c):
         return (f"<details><summary>{e(x['model'])} at {e(x['effort'])}{cost}{err}</summary>"
                 f"<p class='muted'>{e(x.get('why') or '')}</p><div class='pre'>{e(x.get('text') or '(no answer)')}</div></details>")
     note = f" · {e(c['note'])}" if c.get("note") else ""
+    rejected = "\n".join(f"{p['id']}: {p['text']}" for p in c.get("point_decisions", []) if p["decision"] == "reject")
+    checked = (f"<div class='pre'>Changes checked in this round: {e(c['checked']['words'])}</div>"
+               if c.get("checked") else "")
     return (f"<div class='card'><b>Round {c['round']}: {e(c['question'])}</b> "
             f"<span class='muted'>{e(c['at'][:10])} · ${c['cost']:.2f}{note}</span>"
             + "".join(answer(x) for x in c["answers"])
-            + (f"<p>You accepted: {e(c['adopted'])}</p>" if c.get("adopted") else "") + "</div>")
+            + checked
+            + (f"<div class='pre'>You accepted: {e(c['adopted'])}</div>" if c.get("adopted") else "")
+            + (f"<div class='pre'>You rejected: {e(rejected)}</div>" if rejected else "") + "</div>")
 
 
 def suggestions(name, values):
@@ -2101,9 +2222,7 @@ def waiting_on(pid, p, back, label=True):
         elif w["kind"] == "gate":
             g = w["gate"]
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
-                        f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
-                        + f"<form class='add' method='post' action='/answer'>{hidden}<input type='hidden' name='gate' value='{e(g['id'])}'>"
-                        f"<textarea name='text' placeholder='Your answer'></textarea><button>Send</button></form></div>")
+                        + gate_body(p, pid, g, back) + "</div>")
         elif w["kind"] == "choice":
             rows.append(f"<div class='need'>{who('asking in its console')}"
                         + "".join(f"<div>{e(q)}</div>" for q in w["question"])
@@ -2824,7 +2943,11 @@ class Handler(BaseHTTPRequestHandler):
             upload = None
             length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
             body_text = self.rfile.read(length).decode("utf-8", "replace")
-            form = {k: v[0] for k, v in urllib.parse.parse_qs(body_text).items()}
+            values = urllib.parse.parse_qs(body_text, keep_blank_values=True)
+            if urllib.parse.urlparse(self.path).path == "/answer" and any(
+                    len(v) != 1 for k, v in values.items() if k.startswith("point_") or k in ("gate", "p")):
+                return self._send(400, b"Give each consultant point exactly one choice in one project gate.")
+            form = {k: v[0] for k, v in values.items() if v[0]}
         if 'model_pick' in form:
             value = form['model_pick']
             form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
@@ -3208,8 +3331,15 @@ class Handler(BaseHTTPRequestHandler):
             from . import lead
             recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
             add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text, author='person')
-        elif path == "/answer" and text:
-            answer_gate(root, form["gate"], text)
+        elif path == "/answer":
+            try:
+                decisions = {k.removeprefix("point_"): v for k, v in form.items() if k.startswith("point_")}
+                answer_gate(root, form.get("gate"), text, decisions=decisions or None)
+            except StopIteration:
+                return self._send(404, b"No such gate in this project.")
+            except ValueError as err:
+                return self._send(400, shell(reg, pid, f"<h1>Gate answer not saved</h1><p>{e(str(err))}</p>"
+                                             f"<p><a href='/?p={pid}'>Back to the project</a></p>").encode())
         elif path == "/choose" and form.get("option"):
             name = console.session_name(root)
             keys = providers.of(root).choose(console.screen(name), form["option"])
@@ -3315,6 +3445,10 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
 .reply { margin-top:6px; padding-left:10px; border-left:2px solid var(--accent) } .who { font-size:12px; color:var(--muted) }
 form.add { margin:8px 0 4px 18px; display:flex; gap:8px; flex-wrap:wrap } form.add textarea { flex:1 1 100%; min-height:44px;
   font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.consult-point { width:100%; padding:10px 0; border-bottom:1px solid var(--line); overflow-wrap:anywhere }
+.consult-point label { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap }
+.consult-point label span:first-child { flex:1 1 230px } .consult-point .who { margin-top:4px }
+.consult-point select { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink) }
 button { font:inherit; padding:5px 13px; border-radius:7px; border:0; background:var(--accent); color:var(--card); cursor:pointer }
 ul { margin:0; padding-left:18px } li { margin:3px 0 }
 main.wide { max-width:none } header.slim { display:flex; align-items:center; gap:18px } header.slim h1 { margin:10px 0 }

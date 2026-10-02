@@ -2852,6 +2852,256 @@ class CatchUpTest(BoardBase):
         self.assertIn("colony said NAME", monitor.ROLE)
 
 
+class ConsultationGateTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        from unittest.mock import patch
+        from colony import consult
+        self.consult = consult
+        self.calls = []
+        def fake(brief, model, effort, project, price=None):
+            self.calls.append(brief)
+            return dict(text=f"Recommendations from {model}: retain history; make resets explicit.",
+                        cost=0.1, usage={}, error=None)
+        for provider in providers.PROVIDERS.values():
+            patched = patch.object(provider, 'consult', side_effect=fake)
+            patched.start()
+            self.addCleanup(patched.stop)
+        board.set_setting('consultants', 'claude=claude-opus-5-5:high,codex=gpt-6-astra:high')
+        board.track(self.root)
+        snap = patch.object(console, 'snapshot', return_value=dict(state='idle', lines=[]))
+        snap.start()
+        self.addCleanup(snap.stop)
+        self.rec = self.consult.run(self.root, 'R3', 'How should reminders work?', 'Reminders are local.')
+        self.points = [dict(text='Retain reminder history.', consultants=[1, 2]),
+                       dict(text='Require an explicit reset.', consultants=[2])]
+
+    def gate(self):
+        return board.add_gate(self.root, 'Which consultant changes should we take?', self.rec['decision'],
+                              'The reminder implementation depends on these choices.',
+                              consultation=self.rec['id'], points=self.points)
+
+    def server(self):
+        httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        return httpd.server_address[1]
+
+    def post(self, port, **form):
+        return urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/answer',
+                                      data=urllib.parse.urlencode(dict(p=0, **form)).encode()))
+
+    def test_cli_gate_board_choices_and_checking_round_use_the_same_human_decision(self):
+        path = self.root / 'points.json'
+        path.write_text(json.dumps(self.points))
+        opened = self.cli('gate', 'Which consultant changes should we take?', '--item', 'R3',
+                          '--consult', self.rec['id'], '--points', str(path))
+        self.assertEqual(opened.returncode, 0, opened.stderr)
+        [gate] = board.gates(self.root)
+        for page in (board.waiting_html(0, self.root), board.needs_you(board.registry()),
+                     board.render_item(board.registry(), 0, 'R3')):
+            self.assertIn('Retain reminder history.', page)
+            self.assertIn("name='point_P1'", page)
+            self.assertIn("name='point_P2'", page)
+            self.assertIn('claude-opus-5-5 at high (claude)', page)
+            self.assertIn('gpt-6-astra at high (codex)', page)
+            self.assertIn('Full consultant answers', page)
+            self.assertIn(self.rec['answers'][0]['text'], page)
+        self.assertEqual(len(self.calls), 2, 'Rendering and linking reuse the two existing answers.')
+        port = self.server()
+        self.post(port, gate=gate['id'], point_P1='accept', point_P2='reject')
+        saved = board.gates(self.root)[0]
+        self.assertEqual(saved['point_decisions'], {'P1': 'accept', 'P2': 'reject'})
+        self.assertNotIn(gate['id'], board.waiting_html(0, self.root))
+        page = board.render_item(board.registry(), 0, 'R3')
+        self.assertIn('Accepted', page)
+        self.assertIn('Rejected', page)
+        rec = self.consult.records(self.root)[0]
+        self.assertEqual(rec['adopted'], 'P1: Retain reminder history.')
+        self.assertIn('Require an explicit reset.', rec['gate_answer'])
+        [note] = [n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']]
+        self.assertEqual(note['author'], 'person')
+        self.assertIn('Reject P2', note['text'])
+        self.assertEqual(len(self.calls), 2, 'Recording choices never calls a model.')
+        self.consult.run(self.root, 'R3', 'Check the revision', 'Reminders are local.', plan='Keep history.', rnd=2)
+        self.assertIn('Accept P1: Retain reminder history.', self.calls[-1])
+        self.assertIn('Reject P2: Require an explicit reset.', self.calls[-1])
+        self.assertEqual(len(self.calls), 4)
+        with self.assertRaisesRegex(ValueError, 'both its rounds'):
+            self.consult.run(self.root, 'R3', 'Check again', 'd', plan='p', rnd=2)
+
+    def test_rejecting_all_points_cannot_be_turned_into_adoption_by_a_nonempty_reply(self):
+        gate = self.gate()
+        board.answer_gate(self.root, gate['id'], 'Thanks, retain the current approach.', tell=False,
+                          decisions={'P1': 'reject', 'P2': 'reject'})
+        board.append(self.root, 'consults.jsonl', dict(type='adopted', of=self.rec['id'],
+                                                     at=board.now(), points='A nonempty old-style reply.'))
+        rec = self.consult.records(self.root)[0]
+        self.assertIsNone(rec['adopted'])
+        with self.assertRaisesRegex(ValueError, 'human-accepted change'):
+            self.consult.adopt(self.root, self.rec['id'], 'Try to bypass the rejection.')
+        with self.assertRaisesRegex(ValueError, 'accepted a change'):
+            self.consult.run(self.root, 'R3', 'Check', 'd', plan='p', rnd=2)
+        self.assertEqual(len(self.calls), 2)
+        self.assertIn('no checking round', board.render_item(board.registry(), 0, 'R3'))
+
+    def test_an_open_linked_gate_blocks_old_adoption_until_every_choice_is_recorded(self):
+        self.consult.adopt(self.root, self.rec['id'], 'An earlier accepted recommendation.')
+        gate = self.gate()
+        self.assertIsNone(self.consult.records(self.root)[0]['adopted'])
+        port = self.server()
+        for data in [dict(text='Yes'), dict(point_P1='accept'),
+                     dict(point_P1='accept', point_P2='later'),
+                     dict(point_P1='accept', point_P2='reject', point_P3='accept')]:
+            with self.subTest(data=data), self.assertRaises(urllib.error.HTTPError) as error:
+                self.post(port, gate=gate['id'], **data)
+            self.assertEqual(error.exception.code, 400)
+            self.assertIsNone(board.gates(self.root)[0]['answer'])
+        with self.assertRaisesRegex(ValueError, 'accepted a change'):
+            self.consult.run(self.root, 'R3', 'Check', 'd', plan='p', rnd=2)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_conversation_choices_are_recorded_without_echoing_a_note_to_the_agent(self):
+        gate = self.gate()
+        result = self.cli('gate', 'Keep history; do not require resets.', '--answered', gate['id'],
+                          '--accept', 'P1', '--reject', 'P2')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(board.gates(self.root)[0]['point_decisions'], {'P1': 'accept', 'P2': 'reject'})
+        self.assertFalse([n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']])
+        self.assertEqual(self.consult.records(self.root)[0]['adopted'], 'P1: Retain reminder history.')
+
+    def test_retries_are_idempotent_and_human_revisions_preserve_the_old_decision(self):
+        gate = self.gate()
+        bad = self.cli('gate', 'Yes', '--answered', gate['id'], '--accept', 'P1', '--reject', 'P1', '--reject', 'P2')
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIsNone(board.gates(self.root)[0]['answer'])
+        port = self.server()
+        data = dict(gate=gate['id'], point_P1='accept', point_P2='reject')
+        self.post(port, **data)
+        rows, notes = board.read(self.root, 'gates.jsonl'), board.notes(self.root)
+        self.post(port, **data)
+        self.assertEqual(board.read(self.root, 'gates.jsonl'), rows)
+        self.assertEqual(board.notes(self.root), notes)
+        self.post(port, gate=gate['id'], point_P1='reject', point_P2='reject', text='Changed my mind.')
+        revised = board.read(self.root, 'gates.jsonl')
+        self.assertEqual(revised[:-1], rows, 'History is retained, never overwritten.')
+        self.assertEqual(revised[-1]['point_decisions'], {'P1': 'reject', 'P2': 'reject'})
+        self.assertIsNone(self.consult.records(self.root)[0]['adopted'])
+        page = board.render_item(board.registry(), 0, 'R3')
+        self.assertIn('Revise your choices', page)
+        self.assertIn("value='reject' selected", page)
+        self.assertIn('Changed my mind.</textarea>', page)
+
+    def test_gate_sources_must_belong_to_this_decision_and_have_a_real_answer(self):
+        for cid, item, points in [(self.rec['id'], 'R2', self.points), ('c-other', 'R3', self.points),
+                                  (self.rec['id'], 'R3', []), (self.rec['id'], 'R3', {'text': 'Wrong format'}),
+                                  (self.rec['id'], 'R3', [dict(text='Unknown source', consultants=[3])]),
+                                  (self.rec['id'], 'R3', [dict(text='Duplicate source', consultants=[1, 1])]),
+                                  (self.rec['id'], 'R3', [dict(text='Not a number', consultants=[True])]),
+                                  (self.rec['id'], 'R3', [dict(text='', consultants=[1])])]:
+            with self.subTest(cid=cid, item=item, points=points), self.assertRaises(ValueError):
+                board.add_gate(self.root, 'q', item, consultation=cid, points=points)
+            self.assertFalse(board.gates(self.root))
+        failed = dict(self.rec, id='c-failed', decision='R2', answers=[dict(self.rec['answers'][0], text=None, error='failed')])
+        board.append(self.root, 'consults.jsonl', failed)
+        with self.assertRaisesRegex(ValueError, 'failed or empty'):
+            board.add_gate(self.root, 'q', 'R2', consultation='c-failed',
+                           points=[dict(text='Not a recommendation', consultants=[1])])
+        gate = self.gate()
+        with self.assertRaisesRegex(ValueError, 'already has gate'):
+            self.gate()
+        self.assertEqual([g['id'] for g in board.gates(self.root)], [gate['id']])
+
+    def test_points_and_raw_answers_are_escaped_and_only_one_family_is_needed(self):
+        board.set_setting('providers', 'claude')
+        self.rec = self.consult.run(self.root, 'R2', 'How should watering work?', 'Water logs are local.')
+        self.assertEqual(len(self.rec['answers']), 1)
+        self.points = [dict(text='<script>not executable</script>', consultants=[1])]
+        gate = self.gate()
+        page = board.waiting_html(0, self.root)
+        self.assertNotIn('<script>not executable</script>', page)
+        self.assertIn('&lt;script&gt;not executable&lt;/script&gt;', page)
+        self.assertEqual(len(gate['points'][0]['sources']), 1)
+        board.answer_gate(self.root, gate['id'], '', tell=False, decisions={'P1': 'accept'})
+        saved = next(r for r in self.consult.records(self.root) if r['id'] == self.rec['id'])
+        self.assertIn('P1:', saved['adopted'])
+
+    def test_missing_notification_is_repaired_without_repeating_the_decision(self):
+        from unittest.mock import patch
+        gate = self.gate()
+        append = board.append
+        def fail_note(root, filename, value):
+            if filename == 'notes.jsonl':
+                raise OSError('temporary note write failure')
+            return append(root, filename, value)
+        choices = {'P1': 'accept', 'P2': 'reject'}
+        with patch.object(board, 'append', side_effect=fail_note), self.assertRaises(OSError):
+            board.answer_gate(self.root, gate['id'], '', decisions=choices)
+        rows = board.read(self.root, 'gates.jsonl')
+        [answer] = [r for r in rows if r['type'] == 'answer']
+        self.assertTrue(answer['note_id'])
+        self.assertFalse([n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']])
+        board.answer_gate(self.root, gate['id'], '', decisions=choices)
+        self.assertEqual(board.read(self.root, 'gates.jsonl'), rows)
+        [note] = [n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']]
+        self.assertEqual(note['id'], answer['note_id'])
+        board.answer_gate(self.root, gate['id'], '', decisions=choices)
+        self.assertEqual(len([n for n in board.notes(self.root) if n['id'] == answer['note_id']]), 1)
+
+    def test_duplicate_http_fields_are_rejected_before_any_choice_is_saved(self):
+        gate = self.gate()
+        port = self.server()
+        for duplicated in [('point_P1', 'reject'), ('point_P1', ''), ('gate', 'some-other-gate'), ('p', '1')]:
+            data = urllib.parse.urlencode([('p', '0'), ('gate', gate['id']), ('point_P1', 'accept'),
+                                           ('point_P2', 'reject'), duplicated]).encode()
+            with self.subTest(duplicated=duplicated), self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/answer', data=data))
+            self.assertEqual(error.exception.code, 400)
+            self.assertIsNone(board.gates(self.root)[0]['answer'])
+
+    def test_concurrent_linking_and_submitting_make_one_gate_decision_and_note(self):
+        from concurrent.futures import ThreadPoolExecutor
+        def link():
+            try:
+                return self.gate()['id']
+            except ValueError:
+                return None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: link(), range(2)))
+        self.assertEqual(sum(bool(r) for r in results), 1)
+        [gate] = board.gates(self.root)
+        port = self.server()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(lambda _: self.post(port, gate=gate['id'], point_P1='accept', point_P2='reject'), range(2)))
+        self.assertEqual(len([r for r in board.read(self.root, 'gates.jsonl') if r['type'] == 'answer']), 1)
+        self.assertEqual(len([n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']]), 1)
+        self.assertEqual(self.consult.records(self.root)[0]['adopted'], 'P1: Retain reminder history.')
+
+    def test_a_checking_round_keeps_the_accepted_basis_after_later_human_revisions(self):
+        gate = self.gate()
+        board.answer_gate(self.root, gate['id'], '', tell=False, decisions={'P1': 'accept', 'P2': 'reject'})
+        checking = self.consult.run(self.root, 'R3', 'Check', 'd', plan='Keep history.', rnd=2)
+        board.answer_gate(self.root, gate['id'], 'Changed my mind.', tell=False,
+                          decisions={'P1': 'reject', 'P2': 'reject'})
+        saved = next(r for r in self.consult.records(self.root) if r['id'] == checking['id'])
+        self.assertEqual(saved['checked']['words'], 'P1: Retain reminder history.')
+        self.assertEqual([p['id'] for p in saved['checked']['points']], ['P1'])
+        self.assertEqual(saved['checked']['gate'], gate['id'])
+        self.assertIn('has used both rounds', board.render_item(board.registry(), 0, 'R3'))
+        with self.assertRaises(ValueError):
+            self.consult.run(self.root, 'R3', 'Another check', 'd', plan='p', rnd=2)
+        self.assertEqual(len(self.calls), 4)
+
+    def test_plain_gates_and_legacy_adoption_still_work(self):
+        plain = board.add_gate(self.root, 'Keep reminders local?', 'R3')
+        board.answer_gate(self.root, plain['id'], 'Yes', tell=False)
+        self.assertEqual(board.gates(self.root)[0]['answer'], 'Yes')
+        self.consult.adopt(self.root, self.rec['id'], 'Keep reminders local.')
+        self.consult.run(self.root, 'R3', 'Check', 'd', plan='Local reminders.', rnd=2)
+        self.assertEqual(len(self.calls), 4)
+
+
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
 

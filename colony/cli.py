@@ -533,15 +533,34 @@ def cmd_gate(a):
     root = board.root_of()
     if a.answered:                       # the person settled it in conversation: record it, and it stops waiting
         try:
-            board.answer_gate(root, a.answered, a.question, tell=False)
+            if a.consult or a.points:
+                raise ValueError("An answered gate already has its consultation and points; do not replace them.")
+            decisions = {}
+            for value, ids in (("accept", a.accept), ("reject", a.reject)):
+                for ident in ids:
+                    if ident in decisions:
+                        raise ValueError("Give each consultant point exactly one decision.")
+                    decisions[ident] = value
+            board.answer_gate(root, a.answered, a.question, tell=False, decisions=decisions or None)
         except StopIteration:
             print(f"no gate {a.answered}", file=sys.stderr)
             return 2
+        except ValueError as err:
+            print(str(err), file=sys.stderr)
+            return 2
         print(f"gate {a.answered} answered: {a.question}")
         return 0
-    gid = "g" + __import__("secrets").token_hex(3)
-    board.append(root, "gates.jsonl", {"type": "gate", "id": gid, "at": board.now(), "question": a.question,
-                                       "item": a.item, "why": a.why})
+    try:
+        if a.accept or a.reject:
+            raise ValueError("Use --answered to record the person's point decisions.")
+        if bool(a.consult) != bool(a.points):
+            raise ValueError("Use --consult ID and --points FILE together.")
+        points = json.loads(sys.stdin.read() if a.points == "-" else Path(a.points).read_text()) if a.points else None
+        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points)
+    except (ValueError, OSError) as err:
+        print(str(err), file=sys.stderr)
+        return 2
+    gid = gate["id"]
     from . import lead, continuation
     g = lead.group(root)
     if g and len(g['members']) > 1:
@@ -562,6 +581,9 @@ def cmd_consult(a):
             consult.adopt(root, a.adopt, a.decision)
         except KeyError:
             print(f"no consultation {a.adopt}", file=sys.stderr)
+            return 2
+        except ValueError as err:
+            print(str(err), file=sys.stderr)
             return 2
         print(f"recorded for {a.adopt}: {a.decision}")
         return 0
@@ -1299,6 +1321,10 @@ def main(argv=None):
     p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
+    p.add_argument("--consult", metavar="ID", help="the first-round consultation that supplied this gate's points")
+    p.add_argument("--points", metavar="FILE", help="JSON list of points with text and consultant numbers (- for stdin)")
+    p.add_argument("--accept", action="append", default=[], metavar="POINT", help="with --answered: a point the person accepted, e.g. P1")
+    p.add_argument("--reject", action="append", default=[], metavar="POINT", help="with --answered: a point the person rejected, e.g. P2")
     p.set_defaults(fn=cmd_gate)
     sub.add_parser("statusline", help="(Claude Code's status line) record its usage limits").set_defaults(fn=cmd_statusline)
     p = sub.add_parser("consult", help="two fresh models from different families, at a decision costly to change")
