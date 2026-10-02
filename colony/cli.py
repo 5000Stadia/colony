@@ -851,7 +851,7 @@ def cmd_notes(a):
             from . import codex_remote
             if not codex_remote.accepts_hook(root, payload):
                 return 0
-        from . import vision, context, lead, progress
+        from . import vision, context, lead
         payload.setdefault("hook_event_name", "SessionStart" if a.session else "UserPromptSubmit")
         context.register(root, a.console or providers.key(context.program(root)), payload)
         if a.session and payload.get('source') != 'compact':
@@ -876,7 +876,6 @@ def cmd_notes(a):
         text = "\n\n".join(filter(None, [
             standing,
             lead.role_text(root) if a.session else '',
-            progress.GUIDANCE if a.session and (not lead.group(root) or str(root) == lead.info(root)['lead']) else '',
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's monitor, acting for them, left notes for you:"),

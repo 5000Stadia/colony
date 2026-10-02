@@ -520,7 +520,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(board.workdir(twin), self.root.resolve())
         self.assertEqual(board.project_settings(twin)[0]["provider"], "codex")
         agents = (self.root / "AGENTS.md").read_text()
-        self.assertIn("only plants is the lead", agents)
+        self.assertNotIn("only plants is the lead", agents, "who leads arrives fresh at each session start, never stale in a file")
         self.assertIn(str(self.root / "ROADMAP.md"), agents, "one canonical roadmap")
         self.assertFalse((twin / "ROADMAP.md").exists())
         self.assertNotIn("plants-codex", (self.root / "CLAUDE.md").read_text(), "the folder's own agent reads its own")
@@ -528,6 +528,7 @@ class GlanceTest(BoardBase):
         # A command in its console acts as it; the same command in a plain shell in the folder acts as plants.
         as_twin = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True,
                                             env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=str(twin)))
+        self.assertIn("only plants is the lead", as_twin("notes", "--deliver", "--session").stdout)
         as_twin("send", "plants", "Which sprites do you need first?", "--ask")
         [m] = mail.inbox(self.root)
         self.assertEqual((m["from"], m["to"]), ("plants-codex", "plants"))

@@ -94,10 +94,9 @@ it went. Record the move and their original words in the dated vision history.
   Then run `colony consult R4 "the decision" --digest FILE`, which adds the person's own words and asks
   each consultant what would fundamentally change or improve the approach. Bring the person only such
   points, a few at most, as one gate: `colony gate "the question" --item R4 --consult ID --points FILE`.
-  FILE is a JSON list like `[{"text":"the recommendation", "consultants":[1]}]`; source numbers come from
-  the consultant report. The person accepts or rejects each point on the board; adoption is recorded
-  automatically. If settled in conversation, use `colony gate "their words" --answered ID --accept P1
-  --reject P2`, covering every point. Wording, naming and reorganising never count. Only an accepted change earns a second round,
+  The person accepts or rejects each point on the board; adoption is recorded automatically. If settled
+  in conversation, use `colony gate "their words" --answered ID --accept P1 --reject P2`, covering every
+  point. Wording, naming and reorganising never count. Only an accepted change earns a second round,
   which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
   decision; if consulting is off, go on.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
@@ -157,15 +156,11 @@ Do not publish a roadmap path before that agreement."""
 CHECKPOINT_GUIDANCE = ("Propose a small number of natural completed versions during the Vision/path conversation. "
             "For each, say succinctly what the person can use/read/see, what counts as done, and where you pause "
             "for their approval or check-in. Use existing milestones and preserve existing plans until agreed. "
-            "Record the bounded next checkpoint with colony progress; as lead, establish its native goal and "
-            "continue across ordinary items until that coherent completed version. Later is not automatic. "
-            "Keep Codex's goal aligned with the next agreed pause. When the person releases the next scope, "
-            "select its bounded checkpoint and refresh the goal automatically; do not wait for another /goal. "
-            "Honour any project-specific approval before starting a new item. "
+            "Record the bounded next checkpoint with colony progress; as lead, continue across ordinary items "
+            "until that coherent completed version. Later is not automatic. When the person releases the next "
+            "scope, select its bounded checkpoint. Honour any project-specific approval before starting a new item. "
             "Routine item reviews are collected there; judgement that subsequent work depends on stays an immediate gate.")
 PROTOCOL += '\n\n' + CHECKPOINT_GUIDANCE
-JOIN += '\n\n' + CHECKPOINT_GUIDANCE
-BEGIN += '\n\n' + CHECKPOINT_GUIDANCE
 
 SKELETON = """# Roadmap
 
@@ -477,11 +472,12 @@ def protocol(root):
         canonical = lead.plan_path(root)
         text = PROTOCOL.replace('at the top of `ROADMAP.md`', f'at the top of `{canonical}`')
         text = text.replace('The plan is `ROADMAP.md`', f'The single canonical plan is `{canonical}`')
-        return text + '\n\n' + lead.role_text(root) + (
-            '\nOnly the lead edits that file. Commit it separately with `colony lead --commit-plan "message"`; '
+        # Who leads, and at which generation, changes: it reaches the agent fresh at each session start.
+        return text + (
+            '\n\nOnly the lead edits the canonical plan. Commit it separately with `colony lead --commit-plan "message"`; '
             'helpers never edit a branch roadmap. Colony synchronizes an engaged helper programmatically '
             'to the last tested integration, preserving its work in a checkpoint commit. '
-            'Read the short catch-up note; do not reread the project. Costly decisions reach all members.\n')
+            'Read the short catch-up note; do not reread the project.\n')
     work = workdir(root)
     if work == root:
         return PROTOCOL

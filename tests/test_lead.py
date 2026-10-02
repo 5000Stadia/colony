@@ -499,6 +499,26 @@ class LeadTest(unittest.TestCase):
         self.assertIn('Keep the log format?', note['text'])
         self.assertEqual([len(board.notes(m)) for m in (self.root, self.other)], [before[self.root], before[self.other]])
 
+    def test_instructions_hold_no_lead_state_and_the_checkpoint_guidance_once(self):
+        self.pair()
+        for key, member in (('claude', self.root), ('codex', self.helper)):
+            folder = self.base / ('wired-' + key)
+            folder.mkdir()
+            program = providers.get(key)
+            program.wire(folder, board.protocol(member))
+            text = (folder / program.instructions).read_text()
+            self.assertTrue(lead.role_text(member))
+            self.assertNotIn(lead.role_text(member), text, 'who leads reaches the agent fresh at each session start')
+            self.assertNotIn('Ownership generation', text)
+            self.assertEqual(text.count('natural completed versions'), 1)
+            self.assertEqual('/goal' in text, key == 'codex', 'only Codex has a native goal')
+        self.assertNotIn('natural completed versions', board.BEGIN + board.JOIN)
+        with (patch.object(board, 'root_of', return_value=self.root), patch.object(cli, '_hook_input', return_value={}),
+              patch.object(providers, 'discover'), redirect_stdout(io.StringIO()) as out):
+            self.assertEqual(cli.main(['notes', '--deliver', '--session']), 0)
+        self.assertIn(lead.role_text(self.root), out.getvalue())
+        self.assertNotIn('natural completed versions', out.getvalue(), 'the instruction file already holds it')
+
     def test_single_agent_checkpoint_does_not_set_up_integration_locks(self):
         c = progress.define(self.root, 'M1', 'Usable garden', 'Works', items=['R2'])
         progress.start(self.root, c['id'])
