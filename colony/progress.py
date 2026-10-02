@@ -83,14 +83,14 @@ def objective(root, member):
     member = str(Path(member).resolve())
     scope = c['items']
     if member != g['lead']:
-        job = next((a for a in g['assignments'].values() if a['owner'] == member and a['state'] in ('working', 'handback', 'testing', 'deploying')
+        job = next((a for a in g['assignments'].values() if a['owner'] == member and a['state'] in ('working', 'handback', 'testing', 'landing', 'deploying')
                     and a['item'] in scope), None)
         if not job:
             return None
         return (f"Colony {g['id']} generation {g['generation']} {c['id']} run {c['run']}: complete only {job['item']} "
                 f"in {job['workspace']}, verify it, commit and hand it back with colony item {job['item']} --handback, "
                 'then integrate, test and deliver it with colony item --integrate under the shared lock. '
-                f"Read the single canonical plan at {lead.plan_path(root)}. Stop after delivery; do not take another item.")
+                "Stop after delivery; do not take another item.")
     coordination = (' Respect assigned helpers; completing item agents integrate, test and deliver their work. '
                     'Wait for assigned hand-ins. ' if len(g['members']) > 1 else ' ')
     return (f"Colony {g['id']} generation {g['generation']} {c['id']} run {c['run']}: {c['outcome']}. "
@@ -129,9 +129,9 @@ def hold(root, member):
             return 'question for the person'
     if member != g['lead']:
         actionable = any(a['owner'] == member and a['item'] in c['items'] and
-                         a['state'] in ('working', 'handback', 'testing', 'deploying') for a in g['assignments'].values())
+                         a['state'] in ('working', 'handback', 'testing', 'landing', 'deploying') for a in g['assignments'].values())
         return None if actionable else 'helper assignment delivered'
-    if any(a['owner'] == member and a['item'] in c['items'] and a['state'] in ('handback', 'testing', 'deploying')
+    if any(a['owner'] == member and a['item'] in c['items'] and a['state'] in ('handback', 'testing', 'landing', 'deploying')
            for a in g['assignments'].values()):
         return None
     items = board.items(board.roadmap(root))
@@ -295,4 +295,3 @@ def waiting(root):
                  summary='has a completed version ready: ' + c['outcome'])]
 
 
-GUIDANCE = board.CHECKPOINT_GUIDANCE

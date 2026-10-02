@@ -21,7 +21,7 @@ from .codex_rpc import RPCError
 
 _last = {}
 NATIVE_STOPS = ('blocked', 'usageLimited', 'budgetLimited')
-ASSIGNMENT_ACTIVE = ('working', 'handback', 'testing', 'deploying')
+ASSIGNMENT_ACTIVE = ('working', 'handback', 'testing', 'landing', 'deploying')
 
 
 def save(root, value, generation):
