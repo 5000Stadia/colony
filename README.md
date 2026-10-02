@@ -62,6 +62,11 @@ hand it your notes, answers and mail at the start of each turn, so nothing relie
 board and the monitor reach a session by typing into its console, never over something you have
 half-typed there. The board's record of a project is in its `.board/` folder.
 
+At consulted decisions, gates show the relevant recommendations with their sources.
+Accept or reject each point, with an optional comment; only accepting a change allows
+the consultants' checking round. Choices and revisions stay in the decision's record.
+[How agents link consultant points to a gate](docs/consultation-gates.md).
+
     colony board [--lan]     start the board (--lan: for other devices on your network)
     colony restart           reload the board after a change; consoles and the monitor keep running
     colony doctor            is everything up and wired? what to do if not
