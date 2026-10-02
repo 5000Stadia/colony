@@ -136,6 +136,19 @@ class LeadTest(unittest.TestCase):
         lead.acknowledge_engagement(self.helper)
         self.assertEqual(lead.engage(self.helper), '')
 
+    def test_checkpoint_command_does_not_notify_its_own_console(self):
+        self.pair()
+        c = progress.define(self.root, 'M1', 'Water log works', 'R2 works', items=['R2'], actor=self.root)
+        before = board.notes(self.root)
+        progress.start(self.root, c['id'], actor=self.root, source=self.root)
+        self.assertEqual(board.notes(self.root), before)
+        self.assertEqual(progress.current(self.root)['state'], 'active')
+        # Starting from the board or an outside terminal still engages the lead.
+        progress.define(self.root, 'M2', 'Sharing works', 'R4 works', items=['R4'], actor=self.root)
+        lead.update(self.root, lambda g: g.update(active_checkpoint=None))
+        progress.start(self.root, 'M2-R4', actor=self.root)
+        self.assertEqual(len(board.notes(self.root)), len(before) + 1)
+
     def test_git_catch_up_filters_own_sources_without_truncating_others(self):
         before = self.initial
         lead.git(self.root, 'commit', '--allow-empty', '-m', 'My own checkpoint',

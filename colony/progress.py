@@ -36,7 +36,7 @@ def define(root, milestone, outcome, definition, check='', *, items=None, mode='
     return checkpoint
 
 
-def start(root, checkpoint, *, actor=None):
+def start(root, checkpoint, *, actor=None, source=None):
     g = lead.require_lead(root, actor)
     value = next((c for c in g['checkpoints'] if c['id'] == checkpoint), None)
     if not value or value['state'] not in ('planned', 'corrections'):
@@ -51,9 +51,10 @@ def start(root, checkpoint, *, actor=None):
             if c['id'] == checkpoint:
                 c.update(state='active', run=c['run'] + 1, started_at=board.now(), scope_revision=lead.revision(root))
     g = lead.update(root, change, generation=g['generation'])
-    board.add_note(Path(g['lead']), None, 'Continue only to this completed version: ' + value['outcome']
-                   + '. Definition of done: ' + value['definition'] + '. Included items: ' + ', '.join(value['items'])
-                   + '. Stop there for the person; do not start Later or another version.', author='colony')
+    if source is None or str(Path(source).resolve()) != g['lead']:
+        board.add_note(Path(g['lead']), None, 'Continue only to this completed version: ' + value['outcome']
+                       + '. Definition of done: ' + value['definition'] + '. Included items: ' + ', '.join(value['items'])
+                       + '. Stop there for the person; do not start Later or another version.', author='colony')
     return current(root)
 
 

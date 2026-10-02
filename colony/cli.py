@@ -1143,7 +1143,9 @@ def cmd_progress(a):
                                 words=a.words or '', actor=root)
             print('Planned checkpoint: ' + c['id'])
         if a.start:
-            progress.start(root, a.start, actor=root)
+            from . import console
+            source = root if os.environ.get('COLONY_CONSOLE') == console.session_name(root) else None
+            progress.start(root, a.start, actor=root, source=source)
         if a.ready:
             progress.ready(root, a.ready, a.commit or '', a.checks or '', deployed=a.deployed, actor=root)
         if a.approve or a.changes:
