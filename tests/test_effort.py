@@ -53,6 +53,17 @@ class EffortPolicyTest(unittest.TestCase):
         self.assertEqual(goals[0],57.6223698102963)
         self.assertEqual(goals[6],47.6223698102963)
 
+    def test_economy_keeps_judgement_at_the_ceiling(self):
+        for role in ('consultant', 'step-up'):
+            balanced = policy.pick('claude', role, self.points, 3)
+            for position in range(7):
+                pick = policy.pick('claude', role, self.points, position)
+                self.assertEqual((pick['model'], pick['effort']), (balanced['model'], balanced['effort']))
+                self.assertEqual(pick['evidence']['goal'], pick['evidence']['ceiling'])
+        for role in ('main', 'runtime', 'routine', 'monitor'):
+            self.assertLess(policy.pick('claude', role, self.points, 6)['evidence']['goal'],
+                            policy.pick('claude', role, self.points, 3)['evidence']['goal'])
+
     def test_tolerance_does_not_chain_through_intermediate_pairs(self):
         points=[dict(model=str(i),effort='high',score=50-i*.8,cost=10-i,family='codex',version='v1',estimated=False,evidence={}) for i in range(4)]
         pick=policy.pick('codex','consultant',points)

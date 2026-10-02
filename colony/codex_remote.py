@@ -238,6 +238,11 @@ def overrides(root, home, settings):
     config['approval_policy'] = 'never' if permission in ('all', 'edits') else 'on-request'
     config['sandbox_mode'] = {'all': 'danger-full-access', 'plan': 'read-only'}.get(permission, 'workspace-write')
     config['sandbox_workspace_write.writable_roots'] = [str(board.home())]
+    from . import lead
+    if root and str(Path(root).resolve()) == lead.info(root)['lead']:
+        config['sandbox_workspace_write.writable_roots'].append(str(lead.plan_root(root)))
+    if root:
+        config['sandbox_workspace_write.writable_roots'] += [str(p) for p in lead.workspaces(root)]
     for event, entries in providers.hook_entries(provider).items():
         config['hooks.' + event] = entries
     hook = shlex.join([sys.executable, '-m', 'colony.codex_remote', 'hook'])

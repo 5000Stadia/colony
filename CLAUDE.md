@@ -5,8 +5,8 @@ guidance it deploys. Tests: `python3 -m unittest tests.test_colony tests.test_bo
 
 ## Building the board you run on
 
-When this repository is a project on the board, you are the one agent that builds colony. The monitor
-reports what it finds to you and changes nothing here; the person's improvements come to you from them.
+When this repository is a project on the board, follow the declared shared-project lead and item ownership. The monitor
+reports what it finds and changes nothing here; the person's improvements come to you from them.
 
 - The board is live for the person's other projects while you change it. Run the tests before
   `colony restart`: a restart keeps every console, yours included, but a broken board takes down the page

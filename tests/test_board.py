@@ -478,15 +478,16 @@ class GlanceTest(BoardBase):
     def test_two_projects_share_one_folder_each_its_own(self):
         board.track(self.root)
         board.set_setting("messaging", "on")
-        r = self.cli("track", ".", "--name", "plants-codex", "--provider", "codex")
+        r = self.cli("track", ".", "--name", "plants-codex", "--provider", "codex", "--role", "helper")
         self.assertEqual(r.returncode, 0, r.stderr)
         twin = board.home() / "agents" / "plants-codex"
         self.assertEqual(sorted(p.name for p in board.projects()), ["plants", "plants-codex"])
         self.assertEqual(board.workdir(twin), self.root.resolve())
         self.assertEqual(board.project_settings(twin)[0]["provider"], "codex")
         agents = (self.root / "AGENTS.md").read_text()
-        self.assertIn("You are **plants-codex**, a second agent working in this folder beside **plants**", agents)
-        self.assertIn(f"Your own plan is `{twin / 'ROADMAP.md'}`", agents, "never the folder's own roadmap")
+        self.assertIn("only plants is the lead", agents)
+        self.assertIn(str(self.root / "ROADMAP.md"), agents, "one canonical roadmap")
+        self.assertFalse((twin / "ROADMAP.md").exists())
         self.assertNotIn("plants-codex", (self.root / "CLAUDE.md").read_text(), "the folder's own agent reads its own")
         self.assertNotEqual(console.session_name(twin), console.session_name(self.root))
         # A command in its console acts as it; the same command in a plain shell in the folder acts as plants.
@@ -497,8 +498,8 @@ class GlanceTest(BoardBase):
         self.assertEqual((m["from"], m["to"]), ("plants-codex", "plants"))
         board.add_note(twin, None, "Introduce yourself to plants.")
         self.assertIn("Introduce yourself", as_twin("notes", "--deliver").stdout)
-        self.assertEqual(board.notes(self.root), [], "its notes are its own")
-        r = self.cli("track", ".", "--name", "plants-two", "--provider", "claude")
+        self.assertFalse(any(n["author"] == "person" for n in board.notes(self.root)), "personal notes remain scoped")
+        r = self.cli("track", ".", "--name", "plants-two", "--provider", "claude", "--role", "helper")
         self.assertNotEqual(r.returncode, 0, "a second Claude would read the same CLAUDE.md")
         self.assertIn("reads CLAUDE.md", r.stderr)
         console.ensure(twin)
@@ -639,7 +640,7 @@ class GlanceTest(BoardBase):
 
     def test_codex_hooks_in_shared_folder_only_act_for_matching_board_console(self):
         board.track(self.root)
-        self.assertEqual(self.cli("track", ".", "--name", "plants-codex", "--provider", "codex").returncode, 0)
+        self.assertEqual(self.cli("track", ".", "--name", "plants-codex", "--provider", "codex", "--role", "helper").returncode, 0)
         twin = board.home() / "agents" / "plants-codex"
         for root in (self.root, twin):
             board.add_note(root, None, "Private note for " + root.name)

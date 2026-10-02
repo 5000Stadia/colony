@@ -315,8 +315,10 @@ def cmd_track(a):
     chosen = {k: getattr(a, k) for k in board.PROJECT_KEYS if getattr(a, k, None)}
     _runnable(chosen)
     if a.name and a.name != Path(a.path).expanduser().resolve().name:   # a second project in this folder
+        if not a.role:
+            raise SystemExit('This folder already has an agent. Choose --role lead to switch its lead, or --role helper for an assigned helper.')
         try:
-            root = board.sharing(a.path, a.name, chosen)
+            root = board.sharing(a.path, a.name, chosen, role=a.role)
         except (ValueError, KeyError) as err:
             raise SystemExit(f"colony: {err}")
         print(f"{root.name} is on the board, working in {board.workdir(root)}. Open it with: colony board")
@@ -517,7 +519,7 @@ def cmd_doctor(a):
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
-        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog"], cwd=home,
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_colony", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog", "tests.test_lead", "tests.test_continuation"], cwd=home,
                            capture_output=True, text=True)
         (print("ok    the test suite passes") if r.returncode == 0
          else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
@@ -540,6 +542,12 @@ def cmd_gate(a):
     gid = "g" + __import__("secrets").token_hex(3)
     board.append(root, "gates.jsonl", {"type": "gate", "id": gid, "at": board.now(), "question": a.question,
                                        "item": a.item, "why": a.why})
+    from . import lead, continuation
+    g = lead.group(root)
+    if g and len(g['members']) > 1:
+        lead.notify(g, f"Costly decision for {a.item or 'the project'}: {a.question}. Reason: {a.why}. "
+                       f"Gate {gid} is owned by {root.name}; keep work affected by it stopped.", quiet=False, exclude=[str(root)])
+    continuation.tick(root, forced_hold='blocking decision')
     print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note")
     return 0
 
@@ -798,6 +806,8 @@ def cmd_turn(a):
     key, text = context.program(root).turn_text(payload)
     board.record_ask(root, key, text)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
+    from . import continuation
+    continuation.after_turn(root)
     return 0
 
 
@@ -817,7 +827,7 @@ def cmd_notes(a):
             from . import codex_remote
             if not codex_remote.accepts_hook(root, payload):
                 return 0
-        from . import vision, context
+        from . import vision, context, lead, progress
         payload.setdefault("hook_event_name", "SessionStart" if a.session else "UserPromptSubmit")
         context.register(root, a.console or providers.key(context.program(root)), payload)
         if a.session and payload.get('source') != 'compact':
@@ -838,6 +848,9 @@ def cmd_notes(a):
         new_mail, open_asks = mail.deliver(root, session=a.session)
         text = "\n\n".join(filter(None, [
             standing,
+            lead.role_text(root) if a.session else '',
+            progress.GUIDANCE if a.session and (not lead.group(root) or str(root) == lead.info(root)['lead']) else '',
+            lead.engage(root),
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
@@ -1072,6 +1085,81 @@ def cmd_posture(a):
     return 0
 
 
+def cmd_lead(a):
+    from . import board, lead, continuation
+    root = _project(a.project) if a.project else board.root_of()
+    try:
+        if a.pair:
+            lead.pair(root, _project(a.pair), actor=root)
+        if a.switch:
+            lead.switch(root, _project(a.switch), words=a.words or '')
+            continuation.handoff(root)
+        if a.commit_plan:
+            lead.commit_plan(root, a.commit_plan, actor=root)
+        if a.tested:
+            lead.tested(root, a.tested, a.checks or '', actor=root)
+            if a.deployed:
+                lead.update(root, lambda g: g.update(deployed_commit=g['integrated']))
+        print(json.dumps(lead.info(root), indent=2))
+    except (OSError, ValueError) as err:
+        raise SystemExit(f'colony: {err}')
+    return 0
+
+
+def cmd_item(a):
+    from . import board, lead, continuation
+    root = board.root_of()
+    try:
+        if a.owner is not None:
+            lead.assign(root, a.item, _project(a.owner) if a.owner != 'inherit' else None, actor=root)
+        if a.start:
+            lead.start_item(root, a.item, actor=root)
+        if a.sync:
+            lead.sync_item(root, a.item, actor=root)
+        if a.handback:
+            lead.handback(root, a.item, actor=root)
+        if a.integrate:
+            lead.integrate(root, a.item, a.integrate, actor=root, deploy=a.deploy or '', push=a.push)
+        print(json.dumps(lead.info(root)['assignments'].get(a.item) or dict(item=a.item, owner=str(lead.owner(root, a.item))), indent=2))
+        continuation.tick(root)
+    except (OSError, ValueError) as err:
+        raise SystemExit(f'colony: {err}')
+    return 0
+
+
+def cmd_progress(a):
+    from . import board, lead, progress, continuation
+    root = board.root_of()
+    try:
+        if a.define:
+            c = progress.define(root, a.define, a.outcome or '', a.done or '', a.check or '',
+                                items=a.items.split(',') if a.items else None, mode=a.mode,
+                                words=a.words or '', actor=root)
+            print('Planned checkpoint: ' + c['id'])
+        if a.start:
+            progress.start(root, a.start, actor=root)
+        if a.ready:
+            progress.ready(root, a.ready, a.commit or '', a.checks or '', deployed=a.deployed, actor=root)
+        if a.approve or a.changes:
+            progress.decide(root, a.approve or a.changes, 'approve' if a.approve else 'changes',
+                            text=a.text or '', next_checkpoint=a.next)
+        if a.pause:
+            progress.pause(root, True)
+        if a.adopt_goal:
+            continuation.adopt(root)
+        if a.clear_goal:
+            continuation.clear(root)
+        if a.resume:
+            continuation.resume(root)
+        else:
+            continuation.tick(root)
+        print(json.dumps(dict(checkpoints=lead.info(root)['checkpoints'], current=progress.current(root),
+                              continuation=continuation.status(root)), indent=2))
+    except (OSError, ValueError, RuntimeError) as err:
+        raise SystemExit(f'colony: {err}')
+    return 0
+
+
 def cmd_vision(a):
     from . import board, vision
     root = board.root_of()
@@ -1184,6 +1272,7 @@ def main(argv=None):
     p = sub.add_parser("page"); p.add_argument("--port", type=int, default=8788); p.set_defaults(fn=cmd_page)
     p = sub.add_parser("track"); p.add_argument("path", nargs="?", default=".")
     p.add_argument("--name", help="a second project in a folder that has its own, under this name")
+    p.add_argument('--role', choices=('lead', 'helper'), help='when adding another agent, switch lead or add a helper')
     for k in ("provider", "model", "effort", "permissions"):
         p.add_argument(f"--{k}", help="for this project (default: the global setting)")
     p.set_defaults(fn=cmd_track)
@@ -1238,6 +1327,22 @@ def main(argv=None):
     p = sub.add_parser("models", help="this project's helper tiers: routine, step-up, chores")
     p.add_argument("what", nargs="?", choices=("set", "reset")); p.add_argument("args", nargs="*"); p.add_argument("--why")
     p.set_defaults(fn=cmd_models)
+    p = sub.add_parser('lead', help='shared project lead and canonical plan')
+    p.add_argument('--project'); p.add_argument('--pair'); p.add_argument('--switch'); p.add_argument('--words')
+    p.add_argument('--commit-plan'); p.add_argument('--tested'); p.add_argument('--checks'); p.add_argument('--deployed', action='store_true')
+    p.set_defaults(fn=cmd_lead)
+    p = sub.add_parser('item', help='scoped item ownership, engagement sync and completing-agent integration')
+    p.add_argument('item'); p.add_argument('--owner'); p.add_argument('--start', action='store_true')
+    p.add_argument('--sync', action='store_true'); p.add_argument('--handback', action='store_true')
+    p.add_argument('--integrate', metavar='TEST_COMMAND'); p.add_argument('--deploy', metavar='COMMAND'); p.add_argument('--push', action='store_true')
+    p.set_defaults(fn=cmd_item)
+    p = sub.add_parser('progress', help='a completed version and its human stopping point')
+    p.add_argument('--define', metavar='MILESTONE'); p.add_argument('--outcome'); p.add_argument('--done'); p.add_argument('--items')
+    p.add_argument('--check'); p.add_argument('--mode', choices=('approval', 'check-in'), default='approval'); p.add_argument('--words')
+    p.add_argument('--start'); p.add_argument('--ready', metavar='ARTIFACT_OR_URL'); p.add_argument('--commit'); p.add_argument('--checks')
+    p.add_argument('--deployed', action='store_true'); p.add_argument('--approve', metavar='CANDIDATE'); p.add_argument('--changes', metavar='CANDIDATE')
+    p.add_argument('--next'); p.add_argument('--text'); p.add_argument('--pause', action='store_true'); p.add_argument('--resume', action='store_true')
+    p.add_argument('--adopt-goal', action='store_true'); p.add_argument('--clear-goal', action='store_true'); p.set_defaults(fn=cmd_progress)
     p = sub.add_parser("context", help="context refresh status")
     p.add_argument("--hook", choices=["before", "restore"])
     p.add_argument("--console", choices=["claude", "codex"])

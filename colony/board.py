@@ -148,6 +148,18 @@ on them. Once we clearly agree the vision, record it with
 `colony vision --file PATH --words "the person's words agreeing it"`. Only then lay the roadmap toward it.
 Do not publish a roadmap path before that agreement."""
 
+# This guidance is paid for only in the normal project conversation. A second
+# provider is never proposed, instantiated or woken for a one-agent project.
+CHECKPOINT_GUIDANCE = ("Propose a small number of natural completed versions during the Vision/path conversation. "
+            "For each, say succinctly what the person can use/read/see, what counts as done, and where you pause "
+            "for their approval or check-in. Use existing milestones and preserve existing plans until agreed. "
+            "Record the bounded next checkpoint with colony progress; as lead, establish its native goal and "
+            "continue across ordinary items until that coherent completed version. Later is not automatic. "
+            "Routine item reviews are collected there; judgement that subsequent work depends on stays an immediate gate.")
+PROTOCOL += '\n\n' + CHECKPOINT_GUIDANCE
+JOIN += '\n\n' + CHECKPOINT_GUIDANCE
+BEGIN += '\n\n' + CHECKPOINT_GUIDANCE
+
 SKELETON = """# Roadmap
 
 ## Vision
@@ -414,7 +426,7 @@ def workdir(root):
     return Path(shared) if shared else Path(root)
 
 
-def sharing(path, name, chosen):
+def sharing(path, name, chosen, role='helper'):
     """A second project in a folder that has its own: it has a name, its own .board and plan in colony's home,
     and works in that folder. Its instructions go in the file its provider reads, so it runs on a provider that
     reads a different file from each project already working there."""
@@ -434,6 +446,17 @@ def sharing(path, name, chosen):
     project_settings(root, chosen)
     settings = root / ".board" / "settings.json"
     settings.write_text(json.dumps(dict(json.loads(settings.read_text()), workdir=str(work)), indent=2) + "\n")
+    original = next((p for p in projects() if workdir(p).resolve() == work), None)
+    if original:
+        if role not in ('helper', 'lead'):
+            raise ValueError('Choose whether this agent is a helper or becomes the lead.')
+        reg = registry()
+        reg['projects'].append(str(root))
+        save_registry(reg)
+        from . import lead
+        lead.pair(original, root)
+        if role == 'lead':
+            lead.switch(original, root, words='Add this agent as the project lead.')
     return track(root)
 
 
@@ -441,6 +464,17 @@ def protocol(root):
     """The colony protocol as a project's agent reads it; for one sharing another project's folder, it says
     whose folder it is and where its own plan lives."""
     root = Path(root)
+    from . import lead
+    shared = lead.group(root)
+    if shared and len(shared['members']) > 1:
+        canonical = lead.plan_path(root)
+        text = PROTOCOL.replace('at the top of `ROADMAP.md`', f'at the top of `{canonical}`')
+        text = text.replace('The plan is `ROADMAP.md`', f'The single canonical plan is `{canonical}`')
+        return text + '\n\n' + lead.role_text(root) + (
+            '\nOnly the lead edits that file. Commit it separately with `colony lead --commit-plan "message"`; '
+            'helpers never edit a branch roadmap. Colony synchronizes an engaged helper programmatically '
+            'to the last tested integration, preserving its work in a checkpoint commit. '
+            'Read the short catch-up note; do not reread the project. Costly decisions reach all members.\n')
     work = workdir(root)
     if work == root:
         return PROTOCOL
@@ -470,7 +504,9 @@ def root_of(path="."):
             here.relative_to(workdir(mine).resolve())
             return Path(mine)
         except ValueError:
-            pass                                      # run elsewhere: the folder decides
+            from . import lead
+            if any(here.is_relative_to(p.resolve()) for p in lead.workspaces(mine, active=False)):
+                return Path(mine)                       # an assigned sibling worktree, never an arbitrary folder
     for d in (here, *here.parents):
         if (d / ".board").is_dir():
             return d
@@ -508,13 +544,16 @@ def roadmap(root, text=None):
     """The live shared vision (or legacy goal), milestones and their items."""
     from . import vision
     if text is None:
-        path = Path(root) / "ROADMAP.md"
+        from . import lead
+        path = lead.plan_path(root)
         text = path.read_text() if path.exists() else ""
     part = vision.section(text)
     goal = part['text'] or part['legacy']
     if part['start'] is not None:
         text = text[:part['start']] + text[part['end']:]
     milestones, current, last, prev = [], None, None, None
+    from . import lead
+    shared = lead.info(root) if root else None
     for line in text.splitlines():
         if m := MILESTONE.match(line):
             current = {"id": m.group(1), "title": m.group(2), "items": []}
@@ -525,6 +564,8 @@ def roadmap(root, text=None):
             after = re.findall(r"R\d+", m.group(4) or "") or ([prev] if prev else [])
             last = {"id": m.group(2), "state": STATE[m.group(1)], "text": m.group(3), "after": after,
                     "desc": "", "milestone": current["id"]}
+            if shared:
+                last['owner'] = shared['owners'].get(last['id']) or shared['lead']
             current["items"].append(last)
             prev = last["id"]
         elif last is not None and line.startswith(("  ", "\t")) and line.strip():
@@ -810,12 +851,14 @@ def track(path, register=True):
         subprocess.run(["git", "init", "-q", str(root)], check=True)
     (root / ".board").mkdir(exist_ok=True)
     first_track = not any((root / '.board' / name).exists() for name in ('vision.jsonl', 'vision-installed'))
-    if not joining and not (root / "ROADMAP.md").exists():
+    from . import lead
+    paired = lead.group(root)
+    if not paired and not joining and not (root / "ROADMAP.md").exists():
         (root / "ROADMAP.md").write_text(SKELETON)
     from . import vision
     vision.observe(root)
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
-    if first_track and not any(n.get('onboarding') == 'vision' for n in notes(root)):
+    if first_track and not paired and not any(n.get('onboarding') == 'vision' for n in notes(root)):
         append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(3), at=now(),
                author='person', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
     from . import providers
@@ -1139,6 +1182,48 @@ def vision_box(root, pid):
             + '</section>')
 
 
+def lead_is_shared(root):
+    from . import lead
+    g = lead.group(root)
+    return bool(g and len(g['members']) > 1)
+
+
+def progress_panel(root, pid):
+    from . import lead, progress, continuation
+    g = lead.group(root)
+    if not g:
+        return ''
+    hidden = f"<input type='hidden' name='p' value='{pid}'>"
+    parts = []
+    if len(g['members']) > 1:
+        options = ''.join(f"<option value='{e(member)}'{' selected' if member == g['lead'] else ''}>{e(Path(member).name)}</option>" for member in g['members'])
+        parts.append(f"<form method='post' action='/lead/switch'>{hidden}<label>Project lead <select name='member'>{options}</select></label>"
+                     "<button class='quiet'>Switch lead</button></form>"
+                     + ("<p>Handoff is landing; the incoming lead waits for the current turn and committed work.</p>" if g.get('handoff') else ''))
+    if g['checkpoints']:
+        c = progress.current(root)
+        if c:
+            parts.append(f"<p><b>{e(c['outcome'])}</b> · {e(c['state'])}</p><p>{e(c['definition'])}</p>")
+        status = continuation.status(root)
+        message = status.get('error') or status.get('hold')
+        if message:
+            parts.append(f"<p class='muted'>{e(message)}</p>")
+        parts.append(f"<form method='post' action='/progress/control'>{hidden}"
+                     "<button class='quiet' name='action' value='pause'>Pause work</button>"
+                     "<button class='quiet' name='action' value='resume'>Continue current version</button></form>")
+        planned = [v for v in g['checkpoints'] if v['state'] == 'planned']
+        if not c and planned:
+            opts = ''.join(f"<option value='{e(v['id'])}'>{e(v['outcome'])}</option>" for v in planned)
+            parts.append(f"<form method='post' action='/progress/control'>{hidden}<select name='checkpoint'>{opts}</select>"
+                         "<button name='action' value='start'>Start selected version</button></form>")
+        if c and c['state'] == 'review':
+            # Visible even after Clear; hiding a card never grants approval.
+            if progress.waiting(root)[0]['key'] in dismissed(root):
+                parts.append("<p>Version review is hidden from Needs you; it remains unapproved.</p>"
+                             f"<form method='post' action='/progress/control'>{hidden}<button class='quiet' name='action' value='show'>Show version review</button></form>")
+    return "<details class='card'><summary>" + ('Project lead and versions' if len(g['members']) > 1 else 'Completed versions') + '</summary>' + ''.join(parts) + '</details>' if parts else ''
+
+
 def render(reg, pid, view="overview"):
     plist = projects(reg)
     out = []
@@ -1176,6 +1261,7 @@ def render(reg, pid, view="overview"):
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
                f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p></header>")
+    out.append(progress_panel(root, pid))
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
         its_now = items(road)
@@ -1225,6 +1311,7 @@ def render(reg, pid, view="overview"):
                     out.append(
                         f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
                         f"<b>{e(it['id'])}</b> {e(it['text'])}"
+                        + (f" <span class='muted'>primary: {e(Path(it['owner']).name)}</span>" if lead_is_shared(root) else '')
                         + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
@@ -1352,6 +1439,14 @@ def render_item(reg, pid, iid):
     link = lambda i: f"<a href='/item?p={pid}&id={e(i)}'>{e(i)} {e(its[i]['text'])}</a>" if i in its else e(i)
     body = [f"<p><a href='/?p={pid}'>← {e(root.name)}</a></p><header><h1>{e(iid)} — {e(it['text'])}</h1>"
             f"<p><span class='st {it['state']}'>{LABEL[it['state']]}</span> · milestone {e(it['milestone'])}</p></header>"]
+    if lead_is_shared(root):
+        from . import lead
+        g = lead.info(root)
+        opts = "<option value='inherit'>Project lead (inherited)</option>" + ''.join(
+            f"<option value='{e(member)}'{' selected' if g['owners'].get(iid) == member else ''}>{e(Path(member).name)}</option>" for member in g['members'])
+        body.append(f"<form class='card' method='post' action='/item/owner'><input type='hidden' name='p' value='{pid}'>"
+                    f"<input type='hidden' name='item' value='{e(iid)}'><label>Item primary <select name='member'>{opts}</select></label>"
+                    "<button class='quiet'>Assign primary</button></form>")
     body.append(f"<div class='card'><p>{e(it['desc'] or 'No description yet: direct it below and the agent will pick it up.')}</p>"
                 f"<p class='muted'>Builds on: {', '.join(link(a) for a in it['after']) or 'nothing'}"
                 f"<br>Unlocks: {', '.join(link(u) for u in unlocks) or 'nothing yet'}</p></div>")
@@ -1568,6 +1663,15 @@ def folder_browser(reg, current, purpose):
         out.append(f"<form method='post' action='/roots'><input type='hidden' name='add' value='{e(here)}'>"
                    f"<button>Use this folder: every subfolder becomes a project</button></form>")
     return shell(reg, -2, "".join(out) + "</div>")
+
+
+def duplicate_agent_page(reg, original, chosen):
+    hidden = f"<input type='hidden' name='path' value='{e(workdir(original))}'>" + ''.join(
+        f"<input type='hidden' name='{e(k)}' value='{e(v)}'>" for k, v in chosen.items())
+    return shell(reg, -2, f"<h1>{e(original.name)} already has an agent</h1>"
+                 "<p>Add this agent as a helper for assigned items, or switch the project lead to it. Both use the same Vision and roadmap.</p>"
+                 f"<form method='post' action='/add'>{hidden}<button name='role' value='helper'>Add helper</button>"
+                 "<button class='quiet' name='role' value='lead'>Switch lead</button></form>")
 
 
 def add_project_page(reg, tab="new", error=""):
@@ -1873,8 +1977,14 @@ def waiting_items(p, snap=None):
             out.append({"kind": "screen", "key": key, "lines": snap["lines"],
                         "summary": "needs you in its console: " + " / ".join(snap["lines"][-2:])})
     out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]} for a in asks(p)]
+    from . import lead, progress
+    shared = lead.group(p)
+    primary = not shared or shared['lead'] == str(p.resolve())
+    held = progress.held_items(p) if shared else set()
+    if primary:
+        out += progress.waiting(p) if shared else []
     told = ready_notes(p)
-    for it in (i for i in items(roadmap(p)).values() if i["state"] == "verify"):
+    for it in (i for i in items(roadmap(p)).values() if primary and i["state"] == "verify" and i['id'] not in held):
         r = told.get(it["id"], {})
         it = dict(it, what=r.get("what") or plain(it["text"]), check=r.get("check", ""))
         out.append({"kind": "verify", "key": "verify:" + it["id"], "item": it, "summary": f"has {it['id']} ready for your OK: {it['what']}"})
@@ -1917,7 +2027,10 @@ def clear_waiting(root, key):
                  "Treat it as handled; ask again only if it still blocks you.", quiet=True)
     else:
         append(root, "dismissed.jsonl", {"type": "dismissed", "key": key, "at": now()})
-        if w["kind"] == "verify":
+        if w['kind'] == 'checkpoint':
+            add_note(root, None, 'The person hid this version review from their list. Its candidate remains unapproved; '
+                     'continuation stays stopped until an explicit candidate decision.', quiet=True)
+        elif w["kind"] == "verify":
             it = w["item"]
             add_note(root, {"item": it["id"]}, f"The person cleared {it['id']} from their list of things to verify: they "
                      "consider it handled. Update the roadmap if you agree.", quiet=True)
@@ -1928,7 +2041,7 @@ def moments(p, snap=None):
     on screen is its own; a turn that asked something, together with the items it left to verify, is one;
     items to verify with no question beside them are one. The counts count these."""
     items = waiting_items(p, snap)
-    single = [[w] for w in items if w["kind"] in ("gate", "choice", "screen")]
+    single = [[w] for w in items if w["kind"] in ("gate", "choice", "screen", "checkpoint")]
     asks, verify = [w for w in items if w["kind"] == "ask"], [w for w in items if w["kind"] == "verify"]
     return single + ([asks + verify] if asks else [verify] if verify else [])
 
@@ -1954,7 +2067,22 @@ def waiting_on(pid, p, back, label=True):
                     f"<button>Approve</button><input name='text' placeholder='or say what is wrong'>"
                     f"<button class='quiet' name='verdict' value='not-yet'>Not yet</button></form></div>")
         to_verify = "".join(ready_row(it) for it in verify)
-        if w["kind"] == "gate":
+        if w['kind'] == 'checkpoint':
+            from . import lead
+            c, candidate = w['checkpoint'], w['checkpoint']['candidate']
+            href = candidate['artifact'] if candidate['artifact'].startswith(('http://', 'https://')) else f"/progress/artifact?p={pid}&candidate={candidate['id']}"
+            next_versions = [v for v in lead.info(p)['checkpoints'] if v['state'] == 'planned']
+            choose_next = ("<label>After approval <select name='next'><option value=''>Pause here</option>" +
+                           ''.join(f"<option value='{e(v['id'])}'>{e(v['outcome'])}</option>" for v in next_versions) + '</select></label>')
+            rows.append(f"<div class='need'>{who('completed version')}<b>{e(c['outcome'])}</b>"
+                        f"<p>{e(c['definition'])}</p><p><a href='{e(href)}'>Open the completed work</a></p>"
+                        f"<p class='muted'>{e(c['check'])}</p>"
+                        f"<form class='verdict' method='post' action='/progress/decision'>{hidden}"
+                        f"<input type='hidden' name='candidate' value='{e(candidate['id'])}'>"
+                        f"{choose_next}<input name='text' placeholder='Your feedback'>"
+                        "<button name='action' value='approve'>Approve version</button>"
+                        "<button class='quiet' name='action' value='changes'>Request corrections</button></form></div>")
+        elif w["kind"] == "gate":
             g = w["gate"]
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
                         f"<b>{e(g['question'])}</b>" + (f"<p class='muted'>{e(g.get('why') or '')}</p>" if g.get("why") else "")
@@ -2556,6 +2684,24 @@ class Handler(BaseHTTPRequestHandler):
         reg = registry()
         plist = projects(reg)
         pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
+        if url.path == '/progress/artifact' and plist:
+            from . import progress
+            c = progress.current(plist[pid])
+            candidate = c.get('candidate') if c else None
+            if not candidate or candidate['id'] != (q.get('candidate') or [''])[0]:
+                return self._send(409, b'This completed candidate is no longer current.')
+            if candidate['artifact_hash'] is None or candidate['artifact_hash'] != progress.artifact_identity(candidate['artifact']):
+                return self._send(409, b'The completed artifact changed; present a fresh candidate.')
+            import mimetypes
+            artifact = Path(candidate['artifact'])
+            body = artifact.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', mimetypes.guess_type(artifact.name)[0] or 'application/octet-stream')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Content-Security-Policy', 'sandbox')
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            return self.wfile.write(body)
         if url.path == "/" and "p" not in q and reg["settings"]["monitor"]:
             self.send_response(303)                    # the monitor is the front page; projects are a click away
             self.send_header("Location", "/monitor")
@@ -2909,10 +3055,27 @@ class Handler(BaseHTTPRequestHandler):
             target = "/settings" if path == "/roots" else "/"
             chosen = {k: form.get(k, "") for k in PROJECT_KEYS if form.get(k)}
             if path == "/add" and form.get("path"):
-                if chosen:
-                    project_settings(Path(form["path"]).expanduser().resolve(), chosen)
-                track(Path(form["path"]))
-                target = f"/?p={projects().index(root_of(form['path']))}"
+                folder = Path(form['path']).expanduser().resolve()
+                original = next((p for p in projects() if workdir(p).resolve() == folder), None)
+                family = chosen.get('provider') or reg['settings']['provider']
+                if original and (providers.of(original) is not providers.get(family) or form.get('role')):
+                    if form.get('role') not in ('lead', 'helper'):
+                        return self._send(200, duplicate_agent_page(reg, original, chosen).encode())
+                    name = original.name + '-' + family
+                    count = 2
+                    while any(p.name == name for p in projects()):
+                        name = original.name + '-' + family + '-' + str(count)
+                        count += 1
+                    try:
+                        root = sharing(folder, name, chosen, role=form['role'])
+                    except ValueError as err:
+                        return self._send(409, str(err).encode())
+                    target = f"/?p={projects().index(root)}"
+                else:
+                    if chosen:
+                        project_settings(folder, chosen)
+                    track(folder)
+                    target = f"/?p={projects().index(folder)}"
             elif path == "/new" and form.get("name", "").strip():
                 new = Path(form.get("within") or reg["new_root"]).expanduser() / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
                 new.mkdir(parents=True, exist_ok=True)
@@ -2990,7 +3153,30 @@ class Handler(BaseHTTPRequestHandler):
         root = projects(reg)[pid]
         text = form.get("text", "").strip()
         path = urllib.parse.urlparse(self.path).path
-        if path == '/vision':
+        if path in ('/lead/switch', '/item/owner', '/progress/decision', '/progress/control'):
+            from . import lead, progress, continuation
+            try:
+                if path == '/lead/switch':
+                    lead.switch(root, form.get('member', ''), words='Switch the project lead from the board.')
+                    continuation.handoff(root)
+                elif path == '/item/owner':
+                    lead.assign(root, form.get('item', ''), None if form.get('member') == 'inherit' else Path(form.get('member', '')))
+                elif path == '/progress/decision':
+                    progress.decide(root, form.get('candidate', ''), form.get('action', ''),
+                                    text=text, next_checkpoint=form.get('next') or None)
+                elif form.get('action') == 'pause':
+                    progress.pause(root, True)
+                elif form.get('action') == 'resume':
+                    continuation.resume(Path(lead.info(root)['lead']))
+                elif form.get('action') == 'start':
+                    progress.start(root, form.get('checkpoint', ''))
+                elif form.get('action') == 'show':
+                    for value in progress.waiting(root):
+                        append(root, 'dismissed.jsonl', dict(type='restored', key=value['key'], at=now()))
+                continuation.tick(Path(lead.info(root)['lead']))
+            except (OSError, ValueError, RuntimeError) as err:
+                return self._send(409, str(err).encode())
+        elif path == '/vision':
             from . import vision
             try:
                 vision.save(root, form.get('text', ''), how='board', words=form.get('words', ''), before=form.get('before', ''))
@@ -3003,7 +3189,9 @@ class Handler(BaseHTTPRequestHandler):
                 watcher.mail()  # wake immediately if safe; otherwise the next hook delivers the note
         elif path == "/note" and text:
             kind, ref = form.get("kind"), form.get("ref")
-            add_note(root, {kind: ref} if kind in ("item", "commit") else None, text)
+            from . import lead
+            recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
+            add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text)
         elif path == "/answer" and text:
             answer_gate(root, form["gate"], text)
         elif path == "/choose" and form.get("option"):
@@ -3041,6 +3229,9 @@ class Handler(BaseHTTPRequestHandler):
                 clear_waiting(root, key)
         elif path == "/approve" and form.get("item"):
             iid = form["item"]
+            from . import progress
+            if iid in progress.held_items(root):
+                return self._send(409, b'Approve the completed version using its current candidate.')
             # either way it leaves the person's list now: "not yet" is back with the agent until it says ready again
             if form.get("verdict") == "not-yet":
                 add_note(root, {"item": iid}, f"Not yet, on {iid}" + (f": {text}" if text else ".")
