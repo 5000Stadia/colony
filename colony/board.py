@@ -155,6 +155,9 @@ CHECKPOINT_GUIDANCE = ("Propose a small number of natural completed versions dur
             "for their approval or check-in. Use existing milestones and preserve existing plans until agreed. "
             "Record the bounded next checkpoint with colony progress; as lead, establish its native goal and "
             "continue across ordinary items until that coherent completed version. Later is not automatic. "
+            "Keep Codex's goal aligned with the next agreed pause. When the person releases the next scope, "
+            "select its bounded checkpoint and refresh the goal automatically; do not wait for another /goal. "
+            "Honour any project-specific approval before starting a new item. "
             "Routine item reviews are collected there; judgement that subsequent work depends on stays an immediate gate.")
 PROTOCOL += '\n\n' + CHECKPOINT_GUIDANCE
 JOIN += '\n\n' + CHECKPOINT_GUIDANCE
