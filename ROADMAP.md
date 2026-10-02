@@ -149,7 +149,8 @@ expected pause.  Im not sure if we specced that in upcoming or not".
 
 - [x] R56 The consult call for each program: fresh, in an empty folder with no settings or hooks, read-only; no silent fallback to Claude for an unknown provider — design/consult-log.md
 - [x] R57 colony consult: each family's consultant chosen from the benchmark cards (best for planning, the cheapest within a few points), or the person's pick in Settings; the brief assembled in code (the person's words from the roadmap, item and notes; the asking agent's sourced digest; the question), two families side by side, the decision record (at most two rounds), every cost and answer logged; an off switch (no caps or budgets: the person's call)
-- [ ] R58 Gates carry the consultants' points, each accepted or rejected by the person; only an accepted change opens a second, checking round
+- [~] R58 Gates carry the consultants' points, each accepted or rejected by the person; only an accepted change opens a second, checking round
+  Authorised by the person in conversation on 2026-10-02: "Fully agree, please implement". Claude recommends this as the next item (mdf7eb8); reuse existing consultant answers without additional display or recording model calls. Stop at the tested, deployed R58 version for the person's review.
 - [x] R59 The rule in every project's instructions, with examples of costly decisions; each project's consultations and their cost on the board. Approved by the person in conversation on 2026-10-02.
 - [ ] R60 Each project's actual usage (reading against thinking and writing) beside its model plan
 
