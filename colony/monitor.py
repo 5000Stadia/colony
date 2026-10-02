@@ -578,7 +578,10 @@ class Watcher:
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
                 what = " and ".join(filter(None, [
-                    "a note from the person on the board" if any(n.get('author') != 'observation' for n in notes) else "",
+                    "a note from the person on the board" if any(n.get('author') not in ('colony', 'observation', 'monitor', 'suggestion') for n in notes) else "",
+                    "a note from the person's monitor" if any(n.get('author') == 'monitor' for n in notes) else "",
+                    "a suggestion from the monitor" if any(n.get('author') == 'suggestion' for n in notes) else "",
+                    "an update from Colony" if any(n.get('author') == 'colony' for n in notes) else "",
                     "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
                     "mail from another project in the colony" if letters else ""]))
                 if console.type_into(console.session_name(p), f"[colony] You have {what}."):

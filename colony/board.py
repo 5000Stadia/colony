@@ -873,7 +873,7 @@ def track(path, register=True):
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if first_track and not paired and not any(n.get('onboarding') == 'vision' for n in notes(root)):
         append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(3), at=now(),
-               author='person', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
+               author='colony', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
     from . import providers
     providers.of(root).wire(workdir(root), protocol(root))
     from . import bench
@@ -956,7 +956,7 @@ def said_reply(root, text):
     append(root, "said.jsonl", {"at": now(), "reply": ("…" + tail[-600:]) if len(tail) > 600 else tail})
 
 
-def add_note(root, anchor, text, author="person", quiet=False):
+def add_note(root, anchor, text, author, quiet=False):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
             "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {})}
@@ -970,7 +970,7 @@ def answer_gate(root, gate_id, text, tell=True):
     gate = next(g for g in gates(root) if g["id"] == gate_id)
     append(root, "gates.jsonl", {"type": "answer", "of": gate_id, "at": now(), "text": text.strip()})
     if tell:
-        add_note(root, {"gate": gate_id, "item": gate.get("item")}, f"On \"{gate['question']}\": {text.strip()}")
+        add_note(root, {"gate": gate_id, "item": gate.get("item")}, f"On \"{gate['question']}\": {text.strip()}", author='person')
 
 
 def open_notes(root, item=None):
@@ -2011,7 +2011,7 @@ def waiting_items(p, snap=None):
 def tell_pinned(root, pin, comment=""):
     """The agent hears of the person's pin: with a comment, as a message; without one, quietly."""
     text = f"The person pinned {pins.describe(pin)} on the board."
-    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""), quiet=not comment)
+    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""), author='colony', quiet=not comment)
 
 
 def dismissed(root):
@@ -2032,21 +2032,21 @@ def clear_waiting(root, key):
         g = w["gate"]
         answer_gate(root, g["id"], "(cleared by the person without an answer)", tell=False)
         add_note(root, {"gate": g["id"], "item": g.get("item")}, f"The person cleared your gate \"{g['question']}\" from "
-                 "their list without answering. Treat it as handled; if it still blocks you, open it again with the reason.", quiet=True)
+                 "their list without answering. Treat it as handled; if it still blocks you, open it again with the reason.", author='colony', quiet=True)
     elif w["kind"] == "ask":
         answer_asks(root, "cleared by the person")
         asked = [s.strip() for s in re.split(r"(?<=[.!?])\s+", w["ask"]["text"]) if s.strip().endswith("?")]
         add_note(root, None, f"The person cleared your question from their list: \"{(asked or [w['ask']['text'][-200:]])[-1]}\" "
-                 "Treat it as handled; ask again only if it still blocks you.", quiet=True)
+                 "Treat it as handled; ask again only if it still blocks you.", author='colony', quiet=True)
     else:
         append(root, "dismissed.jsonl", {"type": "dismissed", "key": key, "at": now()})
         if w['kind'] == 'checkpoint':
             add_note(root, None, 'The person hid this version review from their list. Its candidate remains unapproved; '
-                     'continuation stays stopped until an explicit candidate decision.', quiet=True)
+                     'continuation stays stopped until an explicit candidate decision.', author='colony', quiet=True)
         elif w["kind"] == "verify":
             it = w["item"]
             add_note(root, {"item": it["id"]}, f"The person cleared {it['id']} from their list of things to verify: they "
-                     "consider it handled. Update the roadmap if you agree.", quiet=True)
+                     "consider it handled. Update the roadmap if you agree.", author='colony', quiet=True)
 
 
 def moments(p, snap=None):
@@ -3204,7 +3204,7 @@ class Handler(BaseHTTPRequestHandler):
             kind, ref = form.get("kind"), form.get("ref")
             from . import lead
             recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
-            add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text)
+            add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text, author='person')
         elif path == "/answer" and text:
             answer_gate(root, form["gate"], text)
         elif path == "/choose" and form.get("option"):
@@ -3230,13 +3230,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/pin/comment" and text and form.get("id"):
             pin = pins.get(root, form["id"])
             if pin:
-                add_note(root, {"pin": pin["id"]}, f"On the pinned {pins.describe(pin)}: {text}")
+                add_note(root, {"pin": pin["id"]}, f"On the pinned {pins.describe(pin)}: {text}", author='person')
         elif path == "/pin/save" and form.get("id"):
             pin = pins.get(root, form["id"])
             target = pins.inside(root, pin["target"]) if pin and pins.is_text(pin) else None
             if target:
                 target.write_text(form.get("text", "").replace("\r\n", "\n"))
-                add_note(root, {"pin": pin["id"]}, f"The person edited the pinned {pins.describe(pin)} on the board.", quiet=True)
+                add_note(root, {"pin": pin["id"]}, f"The person edited the pinned {pins.describe(pin)} on the board.", author='colony', quiet=True)
         elif path == "/clear" and form.get("key"):
             for key in form["key"].split(","):                # a moment may hold several items
                 clear_waiting(root, key)
@@ -3248,9 +3248,9 @@ class Handler(BaseHTTPRequestHandler):
             # either way it leaves the person's list now: "not yet" is back with the agent until it says ready again
             if form.get("verdict") == "not-yet":
                 add_note(root, {"item": iid}, f"Not yet, on {iid}" + (f": {text}" if text else ".")
-                         + " When it's ready again, say so with colony ready.")
+                         + " When it's ready again, say so with colony ready.", author='colony')
             else:
-                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.")
+                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.", author='colony')
             append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
             if not console.type_into(console.session_name(root), text):

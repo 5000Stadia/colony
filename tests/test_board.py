@@ -85,6 +85,15 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_note_producers_must_choose_an_author_and_onboarding_is_from_colony(self):
+        with self.assertRaises(TypeError):
+            board.add_note(self.root, None, 'An accidental unattributed receipt')
+        root = self.root.parent / 'new-project'
+        root.mkdir()
+        board.track(root)
+        [note] = board.notes(root)
+        self.assertEqual(note['author'], 'colony')
+
     def test_track_adds_to_what_the_project_has(self):
         board.track(self.root)
         self.assertTrue((self.root / "CLAUDE.md").read_text().startswith("Our own rules."))
@@ -133,8 +142,8 @@ class BoardTest(BoardBase):
 
     def test_the_persons_open_notes_are_listed_and_none_is_lost_with_its_item(self):
         board.track(self.root)
-        kept = board.add_note(self.root, {"item": "R1"}, "use the wording from the brief")
-        board.add_note(self.root, {"item": "R9"}, "an item later dropped from the plan")
+        kept = board.add_note(self.root, {"item": "R1"}, "use the wording from the brief", author='person')
+        board.add_note(self.root, {"item": "R9"}, "an item later dropped from the plan", author='person')
         page = board.render(board.registry(), 0, "roadmap")
         self.assertIn("Your notes, not yet acted on (2)", page)
         self.assertIn("Notes on items no longer on the roadmap (R9)", page)
@@ -180,8 +189,8 @@ class BoardTest(BoardBase):
 
     def test_notes_reach_the_agent_when_they_are_relevant(self):
         board.track(self.root)
-        board.add_note(self.root, {"commit": "abc1234"}, "the log format is wrong")
-        board.add_note(self.root, {"item": "R3"}, "reminders by email, not SMS")
+        board.add_note(self.root, {"commit": "abc1234"}, "the log format is wrong", author='person')
+        board.add_note(self.root, {"item": "R3"}, "reminders by email, not SMS", author='person')
         out = self.cli("notes", "--deliver").stdout
         self.assertIn("the log format is wrong", out, "past work: on the next turn")
         self.assertNotIn("reminders by email", out, "a future item's note waits for the item")
@@ -191,7 +200,7 @@ class BoardTest(BoardBase):
 
     def test_no_note_waits_forever(self):
         board.track(self.root)
-        board.add_note(self.root, {"item": "R3"}, "keep it simple")
+        board.add_note(self.root, {"item": "R3"}, "keep it simple", author='person')
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders\n", ""))
         self.assertIn("keep it simple", self.cli("notes", "--deliver").stdout, "its item left the roadmap: due now")
         n = board.notes(self.root)[0]
@@ -203,9 +212,9 @@ class BoardTest(BoardBase):
 
     def test_session_delivery_keeps_fresh_notes_and_mail_out_of_the_backlog(self):
         board.track(self.root)
-        old = board.add_note(self.root, None, "Earlier note")
+        old = board.add_note(self.root, None, "Earlier note", author='person')
         self.cli("notes", "--deliver")
-        new = board.add_note(self.root, None, "Fresh note")
+        new = board.add_note(self.root, None, "Fresh note", author='person')
         for mid, text in (("old-mail", "Earlier question?"), ("new-mail", "Fresh question?")):
             board.append(self.root, mail.FILE, {"type": "message", "id": mid, "at": board.now(),
                          "from": "other", "to": self.root.name, "text": text, "ask": True, "re": None})
@@ -496,7 +505,7 @@ class GlanceTest(BoardBase):
         as_twin("send", "plants", "Which sprites do you need first?", "--ask")
         [m] = mail.inbox(self.root)
         self.assertEqual((m["from"], m["to"]), ("plants-codex", "plants"))
-        board.add_note(twin, None, "Introduce yourself to plants.")
+        board.add_note(twin, None, "Introduce yourself to plants.", author='person')
         self.assertIn("Introduce yourself", as_twin("notes", "--deliver").stdout)
         self.assertFalse(any(n["author"] == "person" for n in board.notes(self.root)), "personal notes remain scoped")
         r = self.cli("track", ".", "--name", "plants-two", "--provider", "claude", "--role", "helper")
@@ -575,13 +584,13 @@ class GlanceTest(BoardBase):
                     output.append(result.stdout)
             return ''.join(output)
 
-        board.add_note(self.root, {}, "Use blue pots.")
+        board.add_note(self.root, {}, "Use blue pots.", author='person')
         self.assertNotIn("Use blue pots.", run("SessionStart"))
         self.assertIsNone(console.last_conversation(self.root), "personal sessions do not replace the board console")
         env["COLONY_CONSOLE"] = console.session_name(self.root)
         self.assertIn("Use blue pots.", run("SessionStart"))
         self.assertEqual(console.last_conversation(self.root), "codex-session")
-        board.add_note(self.root, {}, "Use clay pots.")
+        board.add_note(self.root, {}, "Use clay pots.", author='person')
         self.assertIn("Use clay pots.", run("UserPromptSubmit", prompt="[colony] Notes arrived"))
         final = {"turn_id": "turn-1", "last_assistant_message": "Ready. Which pot size do you want?"}
         self.assertEqual(json.loads(run("Stop", **final)), {})
@@ -643,7 +652,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(self.cli("track", ".", "--name", "plants-codex", "--provider", "codex", "--role", "helper").returncode, 0)
         twin = board.home() / "agents" / "plants-codex"
         for root in (self.root, twin):
-            board.add_note(root, None, "Private note for " + root.name)
+            board.add_note(root, None, "Private note for " + root.name, author='person')
             board.record_ask(root, "earlier", "Which pot do you want?")
             board.append(root, mail.FILE, {"type": "message", "id": "mail-" + root.name, "at": board.now(),
                          "from": "other", "to": root.name, "text": "Private mail for " + root.name,
@@ -679,7 +688,7 @@ class GlanceTest(BoardBase):
         hook(["turn", "--console", "codex"], markers, turn_id="own", last_assistant_message="What color?")
         self.assertEqual(board.asks(twin)[0]["text"], "What color?")
         self.assertEqual(snapshot(self.root), original, "the other agent's records remain untouched")
-        board.add_note(twin, None, "Explicit manual delivery")
+        board.add_note(twin, None, "Explicit manual delivery", author='person')
         self.assertIn("Explicit manual delivery", hook(["notes", "--deliver"], {"COLONY_PROJECT": str(twin)}).stdout)
 
     def test_a_machine_with_only_codex_runs_everything_on_codex(self):
@@ -1289,7 +1298,7 @@ class MonitorTest(BoardBase):
             cli.main(["tell", "plants", "Keep to V1.5: a long direction the monitor relays for the person.\nWith a second line."])
         finally:
             console.type_into, console.ensure, console.snapshot = saved
-        self.assertEqual(typed, ["[colony] You have a note from the person on the board."], "only a one-line nudge is typed")
+        self.assertEqual(typed, ["[colony] You have a note from the person's monitor."], "only a one-line nudge is typed")
         fresh, _ = board.deliver(self.root)
         text = board.render_notes(fresh, "The person left notes for you on the board:")
         self.assertIn("from the person's monitor, acting for them", text)
@@ -1751,12 +1760,23 @@ class MailWakeTest(BoardBase):
 
     def test_a_note_left_while_the_agent_is_idle_does_not_wait_for_the_person_to_type(self):
         w = monitor.Watcher()
-        board.add_note(self.root, {"item": "R3"}, "for when reminders start")        # R3 not started: it waits
+        board.add_note(self.root, {"item": "R3"}, "for when reminders start", author='person')        # R3 not started: it waits
         w.mail()
         self.assertEqual(self.typed, [])
-        board.add_note(self.root, None, "add a one-line README")
+        board.add_note(self.root, None, "add a one-line README", author='person')
         w.mail()
         self.assertEqual(self.typed, ["[colony] You have a note from the person on the board."])
+
+    def test_nudge_distinguishes_actual_sources_and_leaves_quiet_receipts_queued(self):
+        w = monitor.Watcher()
+        board.add_note(self.root, None, 'A quiet status receipt', author='colony', quiet=True)
+        w.mail()
+        self.assertEqual(self.typed, [])
+        board.add_note(self.root, None, 'A released checkpoint', author='colony')
+        board.add_note(self.root, None, 'A delegated direction', author='monitor')
+        board.add_note(self.root, None, 'Their actual words', author='person')
+        w.mail()
+        self.assertEqual(self.typed, ["[colony] You have a note from the person on the board and a note from the person's monitor and an update from Colony."])
 
     def test_busy_projects_wait_unless_the_mail_is_urgent(self):
         w = monitor.Watcher()
@@ -2533,7 +2553,7 @@ class UsageTest(BoardBase):
                       "declared when the project connects")
         self.assertIn("Colony's own notices are trusted", monitor.ROLE, "and to the monitor")
         self.assertIn("  2. Hand this project to Codex", out, "the options, numbered")
-        board.add_note(self.root, None, "a note from the person")
+        board.add_note(self.root, None, "a note from the person", author='person')
         w = monitor.Watcher(quiet=0)
         w.mail()
         self.assertFalse(w.nudged, "a paused project isn't woken")
@@ -2824,7 +2844,7 @@ class CatchUpTest(BoardBase):
         self.assertEqual(run("decided", "plants", "held reminders, as they said").returncode, 0)
         self.assertIn("Nothing new from the person", run("said", "plants").stdout)
         time.sleep(1.1)                                      # records are to the second
-        board.add_note(self.root, None, "Actually ship reminders on Friday")
+        board.add_note(self.root, None, "Actually ship reminders on Friday", author='person')
         self.assertIn("in a note on the board: Actually ship reminders", run("said", "plants").stdout)
         r = subprocess.run([sys.executable, "-m", "colony", "decided", "plants", "x"], cwd=self.root, capture_output=True,
                            text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))

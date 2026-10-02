@@ -848,12 +848,15 @@ def cmd_notes(a):
         if any(not n.get("quiet") and not n["anchor"] and n.get('author') != 'observation' for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
+        engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
         text = "\n\n".join(filter(None, [
             standing,
             lead.role_text(root) if a.session else '',
             progress.GUIDANCE if a.session and (not lead.group(root) or str(root) == lead.info(root)['lead']) else '',
-            lead.engage(root, mark=False),
-            board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation")], "The person left notes for you on the board:"),
+            engagement,
+            board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's monitor, acting for them, left notes for you:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion"], "Suggestions from the monitor:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
@@ -865,7 +868,7 @@ def cmd_notes(a):
         print(text, flush=True)
     if a.deliver:
         board.delivered(root, fresh, own + earlier_own)
-        lead.acknowledge_engagement(root)
+        lead.acknowledge_engagement(root, engagement_receipt)
     return 0
 
 
@@ -937,7 +940,7 @@ def cmd_said(a):
 
 
 def cmd_tell(a):
-    """The monitor speaks for the person: as a note from them, delivered through the hooks into the agent's own
+    """The monitor speaks for the person: as an attributed monitor note, delivered through hooks into the agent's own
     context (typed text arrives as a paste, which an agent rightly doesn't take as the person's word), and a
     one-line nudge if the session is idle. It shows on the board like any note."""
     from . import board, console
@@ -947,8 +950,8 @@ def cmd_tell(a):
     board.add_note(root, None, a.text, author="monitor")
     name = console.ensure(root)
     if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
-        console.type_into(name, "[colony] You have a note from the person on the board.")
-    print(f"sent to {a.name} as a note from the person, via the monitor")
+        console.type_into(name, "[colony] You have a note from the person's monitor.")
+    print(f"sent to {a.name} as a note from the monitor, acting for the person")
     return 0
 
 
@@ -1134,8 +1137,9 @@ def cmd_item(a):
 
 
 def cmd_progress(a):
-    from . import board, lead, progress, continuation
+    from . import board, lead, progress, continuation, console
     root = board.root_of()
+    source = root if os.environ.get('COLONY_CONSOLE') == console.session_name(root) else None
     try:
         if a.define:
             c = progress.define(root, a.define, a.outcome or '', a.done or '', a.check or '',
@@ -1143,14 +1147,12 @@ def cmd_progress(a):
                                 words=a.words or '', actor=root)
             print('Planned checkpoint: ' + c['id'])
         if a.start:
-            from . import console
-            source = root if os.environ.get('COLONY_CONSOLE') == console.session_name(root) else None
             progress.start(root, a.start, actor=root, source=source)
         if a.ready:
             progress.ready(root, a.ready, a.commit or '', a.checks or '', deployed=a.deployed, actor=root)
         if a.approve or a.changes:
             progress.decide(root, a.approve or a.changes, 'approve' if a.approve else 'changes',
-                            text=a.text or '', next_checkpoint=a.next)
+                            text=a.text or '', next_checkpoint=a.next, source=source)
         if a.pause:
             progress.pause(root, True)
         if a.adopt_goal:

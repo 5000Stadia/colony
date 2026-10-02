@@ -188,12 +188,12 @@ def ready(root, artifact, commit, checks, *, deployed=False, actor=None):
     return current(root)
 
 
-def decide(root, candidate, action, *, text='', next_checkpoint=None):
+def decide(root, candidate, action, *, text='', next_checkpoint=None, source=None):
     with lead.operation_lock(root, 'integration'):
-        return _decide(root, candidate, action, text=text, next_checkpoint=next_checkpoint)
+        return _decide(root, candidate, action, text=text, next_checkpoint=next_checkpoint, source=source)
 
 
-def _decide(root, candidate, action, *, text='', next_checkpoint=None):
+def _decide(root, candidate, action, *, text='', next_checkpoint=None, source=None):
     g, c = lead.info(root), current(root)
     if not c or c['state'] != 'review' or c['candidate']['id'] != candidate:
         raise ValueError('This review is no longer current; inspect the current completed candidate.')
@@ -211,7 +211,8 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None):
     if action == 'approve':
         # This is the person's explicit bundled approval, never a dismissed gate.
         path = lead.plan_path(root)
-        old = path.read_text()
+        old_bytes = path.read_bytes()
+        old = old_bytes.decode('utf-8')
         ids = set(c['items'])
         lines = []
         for line in old.splitlines(keepends=True):
@@ -219,10 +220,13 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None):
             if match and match[2] in ids and match[1] == '?':
                 line = line.replace('[?]', '[x]', 1)
             lines.append(line)
-        if ''.join(lines) != old:
-            path.write_text(''.join(lines))
+        approved = ''.join(lines)
+        if approved != old:
+            path.write_text(approved, encoding='utf-8')
             if lead.git(path.parent, 'rev-parse', '--is-inside-work-tree', check=False) == 'true':
-                lead.commit_plan(root, 'Approve ' + c['id'] + ' completed version')
+                lead.commit_plan(root, 'Approve ' + c['id'] + ' completed version', source=source,
+                                 before_revision=hashlib.sha256(old_bytes).hexdigest(),
+                                 expected_revision=hashlib.sha256(approved.encode('utf-8')).hexdigest())
     def change(g):
         active = next((value for value in g['checkpoints'] if value['id'] == g.get('active_checkpoint')), None)
         if not active or active['state'] != 'review' or active['candidate']['id'] != candidate:
@@ -236,11 +240,14 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None):
         if action == 'approve':
             g.pop('active_checkpoint', None)
     updated = lead.update(root, change, generation=g['generation'])
-    board.add_note(Path(updated['lead']), None, f"The person {'approved' if action == 'approve' else 'requests corrections to'} "
-                   f"{c['outcome']} (candidate {candidate}). {text}"
-                   + (' Stop here; no next version was released.' if action == 'approve' and not next_checkpoint else ''), author='person')
+    # Keep the decision in the checkpoint history without echoing it to the
+    # agent that just recorded it. An outside decision still reaches the lead.
+    if source is None or str(Path(source).resolve()) != updated['lead']:
+        board.add_note(Path(updated['lead']), None, f"The person {'approved' if action == 'approve' else 'requests corrections to'} "
+                       f"{c['outcome']} (candidate {candidate}). {text}"
+                       + (' Stop here; no next version was released.' if action == 'approve' and not next_checkpoint else ''), author='colony')
     if next_checkpoint:
-        start(root, next_checkpoint)
+        start(root, next_checkpoint, source=source)
     return updated
 
 

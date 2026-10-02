@@ -1,6 +1,8 @@
 """Shared-plan ownership, Git engagement and candidate review in isolated projects."""
 import json
+import io
 import os
+from contextlib import redirect_stdout
 from pathlib import Path
 import subprocess
 import sys
@@ -13,7 +15,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
-from colony import board, lead, progress, providers, vision
+from colony import board, cli, console, continuation, lead, progress, providers, vision
 
 PLAN = '''# Roadmap
 
@@ -74,6 +76,47 @@ class LeadTest(unittest.TestCase):
         lead.assign(self.root, item, member, actor=self.root)
         return lead.start_item(self.root, item, actor=member)
 
+    def completed_candidate(self):
+        self.pair()
+        checkpoint = progress.define(self.root, 'M1', 'Water log works', 'R2 works', items=['R2'])
+        progress.start(self.root, checkpoint['id'], source=self.root)
+        path = self.root / 'ROADMAP.md'
+        path.write_text(path.read_text().replace('[ ] R2', '[?] R2'))
+        commit = self.commit(self.root, 'Built water log')
+        lead.tested(self.root, commit, 'fixture passed')
+        artifact = self.base / 'deliverable.txt'
+        artifact.write_text('A completed water log')
+        return progress.ready(self.root, str(artifact), commit, 'fixture passed')
+
+    def late_change_survives(self, boundary):
+        self.pair()
+        if boundary == 'sync_item':
+            lead.start_item(self.root, 'R2', actor=self.root)
+        original = getattr(lead, boundary)
+        def change_during_catch_up(*args, **kwargs):
+            path = self.root / 'ROADMAP.md'
+            path.write_text(path.read_text().replace('[ ] R3', '[x] R3'))
+            lead.update(self.root, lambda g: g.update(completed_items=['R1', 'R3']))
+            return original(*args, **kwargs)
+        with patch.object(lead, boundary, side_effect=change_during_catch_up):
+            text, token = lead.engage(self.root, mark=False, with_receipt=True)
+        self.assertEqual(text, '', 'the late change was not in this output')
+        lead.acknowledge_engagement(self.root, token)
+        seat = lead.info(self.root)['engagements'][str(self.root)]
+        self.assertNotIn('R3', seat['looked_items'])
+        self.assertNotEqual(seat['looked_revision'], lead.revision(self.root))
+        following, token = lead.engage(self.root, mark=False, with_receipt=True)
+        self.assertIn('R3', following)
+        self.assertIn('changed', following)
+        lead.acknowledge_engagement(self.root, token)
+        self.assertEqual(lead.engage(self.root), '')
+
+    def test_change_arriving_during_item_sync_is_not_acknowledged_before_announcement(self):
+        self.late_change_survives('sync_item')
+
+    def test_change_arriving_during_member_catch_up_is_not_acknowledged_before_announcement(self):
+        self.late_change_survives('catch_up_subjects')
+
     def test_single_agent_needs_no_pairing_or_sync_setup(self):
         self.assertIsNone(lead.group(self.root))
         self.assertEqual(lead.owner(self.root, 'R2'), self.root)
@@ -132,8 +175,9 @@ class LeadTest(unittest.TestCase):
         first = lead.engage(self.helper, mark=False)
         self.assertIn('Completed safe work', first)
         self.assertEqual(lead.info(self.root)['assignments']['R2']['looked_at'], job['base'])
-        self.assertIn('Completed safe work', lead.engage(self.helper, mark=False))
-        lead.acknowledge_engagement(self.helper)
+        second, token = lead.engage(self.helper, mark=False, with_receipt=True)
+        self.assertIn('Completed safe work', second)
+        lead.acknowledge_engagement(self.helper, token)
         self.assertEqual(lead.engage(self.helper), '')
 
     def test_checkpoint_command_does_not_notify_its_own_console(self):
@@ -148,6 +192,113 @@ class LeadTest(unittest.TestCase):
         lead.update(self.root, lambda g: g.update(active_checkpoint=None))
         progress.start(self.root, 'M2-R4', actor=self.root)
         self.assertEqual(len(board.notes(self.root)), len(before) + 1)
+
+    def test_own_approval_keeps_history_without_echoing_note_or_plan(self):
+        c = self.completed_candidate()
+        lead.start_item(self.root, 'R2', actor=self.root)
+        lead.engage(self.root)
+        _, token = lead.engage(self.root, mark=False, with_receipt=True)
+        before = lead.info(self.root)
+        notes = board.notes(self.root)
+        lead_revision = before['engagements'][str(self.root)]['looked_revision']
+        progress.decide(self.root, c['candidate']['id'], 'approve', text='Yes, this works.', source=self.root)
+        g = lead.info(self.root)
+        self.assertEqual(board.notes(self.root), notes)
+        self.assertEqual(g['checkpoints'][0]['decision'], 'Yes, this works.')
+        self.assertEqual(g['checkpoints'][0]['state'], 'accepted')
+        self.assertNotEqual(lead.revision(self.root), lead_revision)
+        for value in (g['engagements'][str(self.root)], g['assignments']['R2']):
+            self.assertEqual(value['looked_revision'], lead.revision(self.root))
+            self.assertEqual(value['pending_look']['token'], token)
+        self.assertEqual(g['engagements'][str(self.root)]['looked_at'], before['engagements'][str(self.root)]['looked_at'])
+        lead.acknowledge_engagement(self.root, token)
+        self.assertEqual(lead.engage(self.root), '')
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(self.root))))
+        self.assertIn('canonical plan changed', lead.engage(self.helper))
+
+    def test_outside_approval_is_a_colony_receipt_and_still_reaches_lead(self):
+        c = self.completed_candidate()
+        lead.engage(self.root)
+        before = len(board.notes(self.root))
+        progress.decide(self.root, c['candidate']['id'], 'approve', text='Approved on the board.')
+        [note] = board.notes(self.root)[before:]
+        self.assertEqual(note['author'], 'colony')
+        self.assertIn('Approved on the board.', note['text'])
+        self.assertIn('canonical plan changed', lead.engage(self.root))
+
+    def test_own_approval_and_next_version_do_not_send_two_self_notices(self):
+        c = self.completed_candidate()
+        following = progress.define(self.root, 'M2', 'Sharing works', 'R4 works', items=['R4'])
+        before = board.notes(self.root)
+        progress.decide(self.root, c['candidate']['id'], 'approve', next_checkpoint=following['id'], source=self.root)
+        self.assertEqual(board.notes(self.root), before)
+        self.assertEqual(progress.current(self.root)['id'], following['id'])
+        self.assertEqual(progress.current(self.root)['state'], 'active')
+
+    def test_progress_cli_suppresses_only_the_matching_consoles_correction_receipt(self):
+        c = self.completed_candidate()
+        for seat, expected in ((console.session_name(self.root), 0), (console.session_name(self.helper), 1), ('', 1)):
+            with self.subTest(seat=seat):
+                before = len(board.notes(self.root))
+                with (patch.object(board, 'root_of', return_value=self.root),
+                      patch.dict(os.environ, COLONY_CONSOLE=seat),
+                      patch.object(continuation, 'tick'), redirect_stdout(io.StringIO())):
+                    self.assertEqual(cli.main(['progress', '--changes', c['candidate']['id'], '--text', 'Fix the wording.']), 0)
+                self.assertEqual(len(board.notes(self.root)), before + expected)
+                if expected:
+                    self.assertEqual(board.notes(self.root)[-1]['author'], 'colony')
+                self.assertEqual(progress.current(self.root)['decision'], 'Fix the wording.')
+                progress.start(self.root, c['id'], source=self.root)
+                c = progress.ready(self.root, c['candidate']['artifact'], c['candidate']['commit'], 'fixture passed')
+
+    def test_unread_outside_plan_change_is_not_hidden_by_a_following_own_edit(self):
+        self.pair()
+        lead.start_item(self.root, 'R2', actor=self.root)
+        lead.engage(self.root)
+        path = self.root / 'ROADMAP.md'
+        path.write_text(path.read_text().replace('A usable garden.', 'A garden with an outside change.'))
+        before = lead.revision(self.root)
+        path.write_text(path.read_text() + '\nMy own progress note.\n')
+        expected = lead.revision(self.root)
+        commit = lead.commit_plan(self.root, 'Record own progress', source=self.root,
+                                  before_revision=before, expected_revision=expected)
+        lead.tested(self.root, commit, 'fixture passed')
+        first, old_token = lead.engage(self.root, mark=False, with_receipt=True)
+        self.assertIn('canonical Vision/roadmap changed', first)
+        lead.update(self.root, lambda g: g['assignments']['R2'].update(state='integrated'))
+        lead.start_item(self.root, 'R3', actor=self.root)
+        second, token = lead.engage(self.root, mark=False, with_receipt=True)
+        self.assertIn('canonical Vision/roadmap changed', second)
+        lead.acknowledge_engagement(self.root, old_token)
+        self.assertNotEqual(lead.info(self.root)['engagements'][str(self.root)]['looked_revision'], expected)
+        lead.acknowledge_engagement(self.root, token)
+        self.assertEqual(lead.engage(self.root), '')
+
+    def test_retired_pending_receipt_cannot_replace_a_new_member_catch_up(self):
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(self.root))))
+        self.pair()
+        self.helper_job()
+        (self.root / 'first.txt').write_text('first outside change')
+        first = self.commit(self.root, 'First outside change')
+        lead.tested(self.root, first, 'fixture passed')
+        _, retired = lead.engage(self.helper, mark=False, with_receipt=True)
+        lead.update(self.root, lambda g: g['assignments']['R2'].update(state='integrated'))
+        (self.root / 'second.txt').write_text('second outside change')
+        latest = self.commit(self.root, 'Second outside change')
+        lead.tested(self.root, latest, 'fixture passed')
+        text, token = lead.engage(self.helper, mark=False, with_receipt=True)
+        self.assertIn('First outside change', text)
+        self.assertIn('Second outside change', text)
+        lead.acknowledge_engagement(self.helper, retired)
+        lead.acknowledge_engagement(self.helper)
+        self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], self.initial)
+        lead.acknowledge_engagement(self.helper, token)
+        g = lead.info(self.root)
+        self.assertEqual(g['engagements'][str(self.helper)]['looked_at'], latest)
+        self.assertEqual(g['assignments']['R2']['pending_look']['token'], retired)
+        self.assertEqual(lead.engage(self.helper), '')
+        self.helper_job('R3')
+        self.assertEqual(lead.engage(self.helper), '')
 
     def test_git_catch_up_filters_own_sources_without_truncating_others(self):
         self.pair()
@@ -215,8 +366,9 @@ class LeadTest(unittest.TestCase):
         self.assertTrue((branch / 'completed.txt').exists())
         self.assertTrue((branch / 'unfinished.txt').exists())
         self.assertEqual(lead.info(self.root)['assignments'], {})
-        self.assertIn('Completed garden feature', lead.engage(self.helper, mark=False))
-        lead.acknowledge_engagement(self.helper)
+        second, token = lead.engage(self.helper, mark=False, with_receipt=True)
+        self.assertIn('Completed garden feature', second)
+        lead.acknowledge_engagement(self.helper, token)
         self.assertEqual(lead.engage(self.helper), '')
 
     def test_primary_catches_up_in_its_branch_and_preserves_dirty_work(self):
@@ -241,8 +393,9 @@ class LeadTest(unittest.TestCase):
         self.assertEqual((work / 'file.txt').read_text(), 'unfinished primary work\n')
         self.assertTrue((work / 'draft.txt').exists())
         self.assertNotIn('AGENTS.md', lead.git(work, 'ls-files'))
-        self.assertIn('Helper completed reminders', lead.engage(self.root, mark=False))
-        lead.acknowledge_engagement(self.root)
+        second, token = lead.engage(self.root, mark=False, with_receipt=True)
+        self.assertIn('Helper completed reminders', second)
+        lead.acknowledge_engagement(self.root, token)
         self.assertEqual(lead.engage(self.root), '')
 
     def test_outgoing_lead_receives_changes_already_landed_on_canonical_main(self):
@@ -271,9 +424,10 @@ class LeadTest(unittest.TestCase):
         job = self.helper_job('R3')
         self.assertEqual(job['base'], target)
         self.assertEqual(job['looked_at'], self.initial)
-        self.assertIn('Completed water log before engagement', lead.engage(self.helper, mark=False))
+        second, token = lead.engage(self.helper, mark=False, with_receipt=True)
+        self.assertIn('Completed water log before engagement', second)
         self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], self.initial)
-        lead.acknowledge_engagement(self.helper)
+        lead.acknowledge_engagement(self.helper, token)
         self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], target)
         lead.pair(self.root, self.helper)
         self.assertEqual(lead.info(self.root)['engagements'][str(self.helper)]['looked_at'], target)

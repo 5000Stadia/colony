@@ -137,7 +137,7 @@ class NativeRemoteTest(unittest.TestCase):
     def test_two_projects_same_folder_keep_settings_hooks_and_cold_resume(self):
         ids = []
         for root, settings in zip(self.roots, self.settings):
-            board.add_note(root, None, 'Private note for ' + root.name)
+            board.add_note(root, None, 'Private note for ' + root.name, author='person')
             with self.native(root, settings) as (client, config, home):
                 tid = remote.attach(client, root, config, None)
                 ids.append(tid)

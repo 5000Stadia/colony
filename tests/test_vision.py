@@ -197,7 +197,7 @@ class VisionTest(BoardBase):
         self.assertIn('The new shared horizon.', changes[0]['text'])
 
     def test_item_notes_wait_until_relevant_work_begins(self):
-        note = board.add_note(self.root, {'item': 'R3'}, 'Needed when reminders begin.', quiet=True)
+        note = board.add_note(self.root, {'item': 'R3'}, 'Needed when reminders begin.', quiet=True, author='person')
         self.assertNotIn(note['id'], [n['id'] for n in board.open_notes(self.root)])
         self.path.write_text(self.path.read_text().replace('[ ] R3', '[~] R3'))
         self.assertIn(note['id'], [n['id'] for n in board.open_notes(self.root)])
