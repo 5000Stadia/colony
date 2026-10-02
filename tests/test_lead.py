@@ -526,6 +526,95 @@ class LeadTest(unittest.TestCase):
         self.assertEqual(reopened['workspace'], str(work), 'corrections reuse only their own item workspace')
         self.assertEqual(reopened['base'], lead.info(self.root)['integrated'])
 
+    def test_r74_lands_exactly_the_tested_commit_never_a_later_lead_commit(self):
+        self.pair()
+        work = Path(self.helper_job()['workspace'])
+        (work / 'feature.txt').write_text('ready'); self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        real_run = subprocess.run
+        def run(args, **kwargs):
+            if args == ['fixture-check']:
+                self.assertNotEqual(Path(kwargs['cwd']).resolve(), self.root.resolve(), 'checks never run in the lead checkout')
+                (self.root / 'lead.txt').write_text('mid-test'); self.commit(self.root, 'Lead commit during the checks')
+                return subprocess.CompletedProcess(args, 0, '', '')
+            return real_run(args, **kwargs)
+        with patch.object(subprocess, 'run', side_effect=run):
+            with self.assertRaisesRegex(ValueError, 'moved while the checks ran'):
+                lead.integrate(self.helper, 'R2', 'fixture-check', actor=self.helper)
+        self.assertEqual(lead.info(self.root)['integrated'], self.initial, 'an untested lead commit is never recorded')
+        self.assertFalse((self.root / 'feature.txt').exists())
+        value = lead.integrate(self.helper, 'R2', 'true', actor=self.helper)
+        self.assertEqual(value['state'], 'integrated')
+        self.assertEqual(lead.info(self.root)['integrated'], value['testing_commit'])
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), value['testing_commit'])
+        self.assertTrue((self.root / 'lead.txt').exists() and (self.root / 'feature.txt').exists())
+        self.assertFalse(work.exists(), 'the finished item worktree is removed')
+        self.assertNotIn(value['branch'], lead.git(self.root, 'branch', '--list'))
+
+    def test_r74_failed_checks_leave_the_lead_branch_untouched(self):
+        self.pair()
+        work = Path(self.helper_job()['workspace'])
+        (work / 'feature.txt').write_text('ready'); self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        with self.assertRaisesRegex(ValueError, 'checks failed'):
+            lead.integrate(self.helper, 'R2', 'false', actor=self.helper)
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), self.initial)
+        (self.root / 'lead.txt').write_text('later'); self.commit(self.root, 'Later lead work')
+        self.assertEqual(lead.integrate(self.helper, 'R2', 'true', actor=self.helper)['state'], 'integrated')
+
+    def test_r74_dirty_lead_checkout_neither_blocks_nor_is_committed(self):
+        self.pair()
+        work = Path(self.helper_job()['workspace'])
+        (work / 'feature.txt').write_text('ready'); self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        plan = self.root / 'ROADMAP.md'
+        plan.write_text(plan.read_text().replace('[ ] R4', '[~] R4'))
+        (self.root / 'scratch.txt').write_text('half done')
+        lead.integrate(self.helper, 'R2', 'true', actor=self.helper)
+        self.assertIn('[~] R4', plan.read_text(), "the lead's unfinished edit is kept, uncommitted")
+        self.assertIn('ROADMAP.md', lead.git(self.root, 'status', '--porcelain'))
+        self.assertIn('scratch.txt', lead.git(self.root, 'status', '--porcelain'))
+
+    def test_r74_lead_item_sync_never_checkpoints_the_lead_checkout(self):
+        self.pair()
+        lead.start_item(self.root, 'R4', actor=self.root)
+        work = Path(self.helper_job()['workspace'])
+        (work / 'feature.txt').write_text('ready'); self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        lead.integrate(self.helper, 'R2', 'true', actor=self.helper)
+        head = lead.git(self.root, 'rev-parse', 'HEAD')
+        (self.root / 'file.txt').write_text('half done\n')
+        (self.root / 'scratch.txt').write_text('scratch')
+        lead.engage(self.root)
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), head, 'no checkpoint commit of unfinished lead work')
+        self.assertEqual((self.root / 'file.txt').read_text(), 'half done\n')
+
+    def test_r74_a_rejecting_commit_hook_never_breaks_engagement(self):
+        self.pair()
+        work = Path(self.helper_job()['workspace'])
+        hooks = Path(lead.git(self.root, 'rev-parse', '--git-common-dir'))
+        hooks = (hooks if hooks.is_absolute() else self.root / hooks) / 'hooks'
+        hooks.mkdir(exist_ok=True)
+        (hooks / 'pre-commit').write_text('#!/bin/sh\nexit 1\n'); (hooks / 'pre-commit').chmod(0o755)
+        (self.root / 'lead.txt').write_text('x'); lead.git(self.root, 'add', '--all')
+        lead.git(self.root, 'commit', '-qm', 'Lead work', '--no-verify')
+        lead.tested(self.root, lead.git(self.root, 'rev-parse', 'HEAD'), 'fixture passed')
+        (work / 'draft.txt').write_text('unfinished')
+        lead.engage(self.helper)
+        self.assertTrue((work / 'lead.txt').exists(), 'synced despite the hook')
+        self.assertIn('Checkpoint', lead.git(work, 'log', '-2', '--format=%s'))
+
+    def test_r74_unlinked_items_run_in_parallel_and_only_explicit_links_wait(self):
+        plan = self.root / 'ROADMAP.md'
+        plan.write_text(PLAN.replace('- [ ] R4 Sharing', '- [ ] R4 Sharing\n- [ ] R5 Export (after R4)'))
+        self.commit(self.root, 'Add R5'); self.initial = lead.git(self.root, 'rev-parse', 'HEAD')
+        self.pair(); lead.pair(self.root, self.other)
+        self.helper_job('R2')
+        self.helper_job('R4', self.other)                     # R4 follows R3 on the page but declares no link
+        lead.assign(self.root, 'R5', self.root, actor=self.root)
+        with self.assertRaisesRegex(ValueError, 'R4'):
+            lead.start_item(self.root, 'R5', actor=self.root)
+
     def test_parallel_finishers_wait_sync_and_test_in_order(self):
         self.pair(); lead.pair(self.root, self.other)
         for iid, who in (('R2', self.helper), ('R3', self.other)):
@@ -537,7 +626,7 @@ class LeadTest(unittest.TestCase):
         real_run, calls, results = subprocess.run, [], []
         def run(args, **kwargs):
             if args == ['fixture-check']:
-                calls.append(lead.git(self.root, 'rev-parse', 'HEAD'))
+                calls.append(lead.git(kwargs['cwd'], 'rev-parse', 'HEAD'))     # the commit actually tested
                 if len(calls) == 1:
                     entered.set(); release.wait(3)
                 return subprocess.CompletedProcess(args, 0, '', '')

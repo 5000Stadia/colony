@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import secrets
 import shlex
+import shutil
 import subprocess
 
 from . import board
@@ -65,7 +66,7 @@ def workspaces(root, *, active=True):
     g = info(root)
     mine = str(Path(root).resolve())
     return [Path(a['workspace']) for a in g['assignments'].values()
-            if a['owner'] == mine and (not active or a['state'] in ('working', 'handback', 'testing', 'deploying'))]
+            if a['owner'] == mine and (not active or a['state'] in ('working', 'handback', 'testing', 'landing', 'deploying'))]
 
 
 @contextmanager
@@ -185,7 +186,7 @@ def assign(root, item, member=None, *, actor=None):
     if member and str(Path(member).resolve()) not in g['members']:
         raise ValueError('An item owner must be a member of this shared project.')
     current = g['assignments'].get(item, {})
-    if current.get('state') in ('working', 'handback', 'testing', 'deploying'):
+    if current.get('state') in ('working', 'handback', 'testing', 'landing', 'deploying'):
         raise ValueError('Land or integrate the existing assignment before changing its owner.')
     def change(g):
         if member:
@@ -215,7 +216,7 @@ def switch(root, member, *, words=''):
         notify(g, f"The person switches the lead from {Path(g['lead']).name} to {Path(member).name}. "
                   'Outgoing lead: finish and commit work in flight, and start no new item. '
                   'The incoming lead waits for that turn to land. The canonical plan and checkpoints stay at '
-                  f"{plan_path(root)}. The agent completing an item integrates, tests and delivers it under the shared lock.", quiet=False)
+                  f"{plan_path(root)}. The agent completing an item integrates, tests and delivers it under the shared lock.")
     return g
 
 
@@ -228,7 +229,7 @@ def finish_handoff(root, generation):
         g['lead'] = handoff['incoming']
         for item, value in g['assignments'].items():
             if (item not in g['owners'] and value['owner'] == handoff['outgoing']
-                    and value['state'] in ('working', 'handback', 'testing', 'deploying')):
+                    and value['state'] in ('working', 'handback', 'testing', 'landing', 'deploying')):
                 value.update(owner=handoff['incoming'], generation=g['generation'],
                              previous_owner=handoff['outgoing'])
                 seen = g.get('engagements', {}).get(handoff['incoming'], {})
@@ -241,7 +242,7 @@ def finish_handoff(root, generation):
     g = update(root, change, generation=generation)
     notify(g, f"{Path(g['lead']).name} is now the project's only lead. Read the current Vision, roadmap, "
               f"notes, gates and unfinished work at {plan_path(root)}. Continue only the current agreed checkpoint; "
-              'keep explicit item owners. The completing agent integrates, tests and delivers its item.', quiet=False)
+              'keep explicit item owners. The completing agent integrates, tests and delivers its item.')
     return g
 
 
@@ -249,7 +250,7 @@ def linked(root, first, second):
     items = board.items(board.roadmap(root))
     def ancestors(item, seen=None):
         seen = set() if seen is None else seen
-        for previous in items.get(item, {}).get('after', []):
+        for previous in items.get(item, {}).get('links', []):
             if previous not in seen:
                 seen.add(previous)
                 ancestors(previous, seen)
@@ -266,6 +267,35 @@ def git(root, *args, check=True):
 
 def clean(root):
     return not git(root, 'status', '--porcelain', '--untracked-files=no', check=False)
+
+
+def contains(root, commit, ancestor):
+    """Whether commit already includes ancestor."""
+    return subprocess.run(['git', '-C', str(root), 'merge-base', '--is-ancestor', ancestor, commit],
+                          capture_output=True).returncode == 0
+
+
+def source_of(g):
+    return Path(g.get('integration_root') or board.workdir(Path(g['canonical'])))
+
+
+def merge(workspace, target):
+    return subprocess.run(['git', '-C', str(workspace), 'merge', '--no-edit', '--no-verify', target],
+                          text=True, capture_output=True)
+
+
+def conflicted(root, item, workspace, before, target, generation, *, member=None):
+    """Record a conflicted merge's evidence, always leaving the workspace at its checkpoint."""
+    try:
+        return record_conflict(root, item, workspace, before, target, generation, member=member)
+    finally:
+        git(workspace, 'merge', '--abort', check=False)
+
+
+def remove_workspace(source, workspace, branch):
+    git(source, 'worktree', 'remove', '--force', str(workspace), check=False)
+    if branch:
+        git(source, 'branch', '-D', branch, check=False)
 
 
 def tested(root, commit, checks, *, actor=None):
@@ -298,9 +328,9 @@ def start_item(root, item, *, actor=None):
     if old and old.get('state') == 'working':
         return sync_item(root, item, actor=actor)
     for iid, active in g['assignments'].items():
-        if active['state'] in ('working', 'handback', 'testing', 'deploying') and (active['owner'] == responsible or linked(root, item, iid)):
+        if active['state'] in ('working', 'handback', 'testing', 'landing', 'deploying') and (active['owner'] == responsible or linked(root, item, iid)):
             raise ValueError(f'{iid} must land first; one item per helper and linked items run in sequence.')
-    for previous in items[item]['after']:
+    for previous in items[item].get('links', []):
         if items.get(previous, {}).get('state') not in (None, 'done', 'verify'):
             raise ValueError(f'{previous} must be built before {item} starts.')
     source = Path(g.get('integration_root') or board.workdir(Path(g['canonical'])))
@@ -334,12 +364,17 @@ def start_item(root, item, *, actor=None):
                       looked_revision=seen.get('looked_revision', revision(root)))
     def register(g):
         for iid, active in g['assignments'].items():
-            if active['state'] in ('working', 'handback', 'testing', 'deploying') and (active['owner'] == responsible or linked(root, item, iid)):
+            if active['state'] in ('working', 'handback', 'testing', 'landing', 'deploying') and (active['owner'] == responsible or linked(root, item, iid)):
                 raise ValueError('Another linked assignment started; land it before this one.')
         g['assignments'][item] = assignment
         g.setdefault('development', []).append(dict(item=item, owner=responsible, at=board.now(),
                                                    generation=g['generation']))
-    update(root, register, generation=g['generation'])
+    try:
+        update(root, register, generation=g['generation'])
+    except Exception:
+        if branch and not old:
+            remove_workspace(source, workspace, branch)
+        raise
     # Instructions/hooks stay at the logical agent's root; generated provider
     # configuration must never become an item change in the integration branch.
     board.add_note(Path(responsible), {'item': item}, f"You own only {item}, in {workspace}. Read the canonical plan at "
@@ -417,11 +452,14 @@ def record_conflict(root, item, workspace, before, target, generation, *, member
 def sync_item(root, item, *, actor=None):
     with operation_lock(root, 'item-' + item):
         g, value = assignment(root, item, actor)
-        if value['state'] not in ('working', 'handback', 'testing'):
+        if value['state'] not in ('working', 'handback', 'testing', 'landing'):
             raise ValueError('This item is already integrated.')
         workspace = Path(value['workspace'])
         target = g.get('integrated') or value['base']
-        if target and target != value['base'] and git(workspace, 'rev-parse', 'HEAD', check=False):
+        head = git(workspace, 'rev-parse', 'HEAD', check=False)
+        # The integration checkout is the lead's own: Colony never commits or merges its unfinished work.
+        if (target and head and workspace.resolve() != source_of(g).resolve()
+                and not contains(workspace, head, target)):
             if git(workspace, 'ls-files', '-u', check=False):
                 raise ValueError('Finish the merge already in progress before Colony synchronizes this workspace.')
             # Preserve unfinished helper work before engagement, including new files.
@@ -431,11 +469,10 @@ def sync_item(root, item, *, actor=None):
             prior = value.get('conflict') or {}
             if prior.get('checkpoint') == before and prior.get('target') == target:
                 raise ValueError(value['sync_error'])
-            result = subprocess.run(['git', '-C', str(workspace), 'merge', '--no-edit', target], text=True, capture_output=True)
+            result = merge(workspace, target)
             if result.returncode:
                 if git(workspace, 'ls-files', '-u', check=False):
-                    error = record_conflict(root, item, workspace, before, target, g['generation'])
-                    git(workspace, 'merge', '--abort')
+                    error = conflicted(root, item, workspace, before, target, g['generation'])
                     if git(workspace, 'rev-parse', 'HEAD') != before:
                         raise ValueError('The engagement merge did not restore its checkpoint; inspect the workspace.')
                     raise ValueError(error)
@@ -468,8 +505,11 @@ def checkpoint(workspace, message, member):
     eligible = names('diff', '--cached', '--name-only', '-z', '--', *eligible)
     if eligible:
         # --only also protects excluded files that were already staged.
-        git(workspace, 'commit', '--only', '-m', message,
+        git(workspace, 'commit', '--only', '--no-verify', '-m', message,
             '--trailer', 'Colony-Agent: ' + Path(member).name, '--', *eligible)
+
+
+SUBJECTS = 20                       # commit subjects in one catch-up; the rest are counted
 
 
 def catch_up_subjects(workspace, previous, target, member):
@@ -484,7 +524,7 @@ def catch_up_subjects(workspace, previous, target, member):
         subject, source = entry.strip('\n').split('\x1f', 1)
         if source.strip() not in (str(member), Path(member).name):
             subjects.append(subject)
-    return subjects
+    return subjects[:SUBJECTS] + ([f'and {len(subjects) - SUBJECTS} more'] if len(subjects) > SUBJECTS else [])
 
 
 def _looked(g, member, target, items, revision, *, mark, item=None):
@@ -578,12 +618,6 @@ def _engage(root, *, mark):
             + '. Read only the canonical plan at ' + str(plan_path(root)) + '.'), token
 
 
-def engage_member(root, *, mark=True, with_receipt=False):
-    """Catch up an existing member without creating an item or goal."""
-    text, token = _engage_member(root, mark=mark)
-    return (text, token) if with_receipt else text
-
-
 def _engage_member(root, *, mark):
     """An existing member branch catches up even without a development item.
 
@@ -613,12 +647,10 @@ def _engage_member(root, *, mark):
             conflict = value.get('conflict') or {}
             if conflict.get('checkpoint') == before and conflict.get('target') == target:
                 return value['sync_error'], None
-            result = subprocess.run(['git', '-C', str(workspace), 'merge', '--no-edit', target], capture_output=True, text=True)
+            result = merge(workspace, target)
             if result.returncode:
                 if git(workspace, 'ls-files', '-u', check=False):
-                    error = record_conflict(root, None, workspace, before, target, g['generation'], member=mine)
-                    git(workspace, 'merge', '--abort')
-                    return error, None
+                    return conflicted(root, None, workspace, before, target, g['generation'], member=mine), None
                 git(workspace, 'merge', '--abort', check=False)
                 return 'Engagement sync could not finish: ' + (result.stderr.strip() or result.stdout.strip()), None
         done = [iid for iid in completed if iid not in value.get('looked_items', [])
@@ -656,8 +688,8 @@ def handback(root, item, *, actor=None):
 def integrate(root, item, tests, *, actor=None, deploy='', push=False):
     """The completing agent owns integration; other finishers wait in flock.
 
-    Failed checks never advance the tested synchronization target. The landed
-    candidate stays available for the same agent to correct and re-test.
+    The candidate is merged and tested in Colony's own detached worktree, never in anyone's checkout, and the
+    branch moves only by fast-forward to exactly the commit that passed. Failed checks change nothing.
     """
     with operation_lock(root, 'integration'):
         g, value = assignment(root, item, actor)
@@ -665,63 +697,82 @@ def integrate(root, item, tests, *, actor=None, deploy='', push=False):
             raise ValueError('The agent completing this item integrates it.')
         if g.get('handoff') or g.get('paused'):
             raise ValueError('Integration waits for the lead handoff or project pause.')
-        if value['state'] not in ('handback', 'testing', 'deploying') or not tests.strip():
+        if value['state'] not in ('handback', 'testing', 'landing', 'deploying') or not tests.strip():
             raise ValueError('Hand back the item and supply its repository test command before integration.')
-        source = Path(g.get('integration_root') or board.workdir(Path(g['canonical'])))
-        if not clean(source):
-            raise ValueError('Land the integration workspace’s tracked changes before integrating this item.')
-        if value['state'] != 'deploying':
-            # Sync again after the previous finisher released the integration lock.
+        source = source_of(g)
+        branch = g.get('integration_branch') or git(source, 'symbolic-ref', '--short', 'HEAD')
+        tip = git(source, 'rev-parse', 'refs/heads/' + branch)
+        if value['state'] == 'landing' and value.get('tip') != tip:
+            value['state'] = 'testing'                      # the branch moved since the checks: test again
+        if value['state'] in ('handback', 'testing'):
             value = sync_item(root, item, actor=actor)
-            value['commit'] = git(Path(value['workspace']), 'rev-parse', 'HEAD', check=False)
-            if value['commit']:
-                changed = git(Path(value['workspace']), 'diff', '--name-only', value['base'] + '...' + value['commit']).splitlines()
-                if value['branch'] and 'ROADMAP.md' in changed:
-                    raise ValueError('A helper changed a roadmap copy. Propose that change to the lead.')
-                before = git(source, 'rev-parse', 'HEAD')
-                # An unrelated in-flight integration is never included by accident.
-                if g.get('integrated') and before != g['integrated'] and source != Path(value['workspace']):
-                    extra = git(source, 'diff', '--name-only', g['integrated'] + '..' + before).splitlines()
-                    allowed = {'ROADMAP.md'}
-                    if any(path not in allowed for path in extra) and value.get('testing_commit') != before:
-                        raise ValueError('The integration branch contains untested work from another item; land and test it first.')
-                result = subprocess.run(['git', '-C', str(source), 'merge', '--no-edit', value['commit']], text=True, capture_output=True)
+            workspace = Path(value['workspace'])
+            value['commit'] = git(workspace, 'rev-parse', 'HEAD', check=False) or tip
+            if value['branch'] and 'ROADMAP.md' in git(workspace, 'diff', '--name-only',
+                                                        value['base'] + '...' + value['commit']).splitlines():
+                raise ValueError('A helper changed a roadmap copy. Propose that change to the lead.')
+            bench = board.home() / 'items' / g['id'] / 'integration'
+            if not (bench / '.git').exists():
+                shutil.rmtree(bench, ignore_errors=True)
+                git(source, 'worktree', 'prune', check=False)
+                bench.parent.mkdir(parents=True, exist_ok=True)
+                git(source, 'worktree', 'add', '--detach', str(bench), tip)
+            git(bench, 'checkout', '--detach', '--force', tip)
+            git(bench, 'clean', '-fdq')
+            if not contains(bench, tip, value['commit']):
+                result = merge(bench, value['commit'])
                 if result.returncode:
-                    if git(source, 'ls-files', '-u', check=False):
-                        error = record_conflict(root, item, source, before, value['commit'], g['generation'])
-                        git(source, 'merge', '--abort')
-                        raise ValueError(error)
+                    if git(bench, 'ls-files', '-u', check=False):
+                        raise ValueError(conflicted(root, item, bench, tip, value['commit'], g['generation']))
+                    git(bench, 'merge', '--abort', check=False)
                     raise ValueError(result.stderr.strip() or result.stdout.strip())
-            value.update(state='testing', testing_commit=git(source, 'rev-parse', 'HEAD', check=False))
+            candidate = git(bench, 'rev-parse', 'HEAD')
+            value.update(state='testing', testing_commit=candidate, tip=tip)
             update(root, lambda g: g['assignments'][item].update(value), generation=g['generation'])
-            result = subprocess.run(shlex.split(tests), cwd=source, text=True, capture_output=True)
-            if result.returncode or not clean(source):
+            result = subprocess.run(shlex.split(tests), cwd=bench, text=True, capture_output=True)
+            if result.returncode or not clean(bench):
                 error = (result.stdout + result.stderr)[-4000:] or 'Checks changed tracked files; land them and re-test.'
                 update(root, lambda g: g['assignments'][item].update(test_error=error), generation=g['generation'])
                 raise ValueError('Integration checks failed; the item remains unaccepted.\n' + error)
-            commit = git(source, 'rev-parse', 'HEAD', check=False)
-            value.update(state='deploying' if deploy or push else 'integrated', integrated=commit,
-                         tests=tests, checked_at=board.now())
+            value.update(state='landing', tests=tests, checked_at=board.now())
             value.pop('test_error', None)
+            update(root, lambda g: g['assignments'][item].update(value), generation=g['generation'])
+        if value['state'] == 'landing':
+            commit = value['testing_commit']
+            if git(source, 'rev-parse', 'refs/heads/' + branch) != value['tip']:
+                raise ValueError(f'{branch} moved while the checks ran; integrate again to test the new tip.')
+            if git(source, 'symbolic-ref', '--short', 'HEAD', check=False) == branch:
+                # Fast-forward keeps the checkout's uncommitted work; git refuses if it would be overwritten.
+                result = subprocess.run(['git', '-C', str(source), 'merge', '--ff-only', commit], text=True, capture_output=True)
+                if result.returncode:
+                    raise ValueError(f'The tested commit {commit} could not fast-forward {branch} in {source}: '
+                                     + (result.stderr.strip() or result.stdout.strip()) + ' Integrate again once that is clear.')
+            else:
+                git(source, 'update-ref', 'refs/heads/' + branch, commit, value['tip'])
+            value.update(state='deploying' if deploy or push else 'integrated', integrated=commit)
             def accepted(g):
                 g['assignments'][item] = value
                 g['integrated'] = commit
                 g['integrated_checks'] = tests
                 g['integrated_at'] = board.now()
+                g['integration_branch'] = branch
                 g['completed_items'] = [i['id'] for i in board.items(board.roadmap(root)).values() if i['state'] in ('done', 'verify')]
                 g.setdefault('integrations', []).append(dict(item=item, owner=value['owner'], commit=commit,
                     files=git(source, 'diff', '--name-only', value['base'] + '...' + value['commit']).splitlines() if value['commit'] else [],
                     at=board.now()))
             update(root, accepted, generation=g['generation'])
+            if value['branch']:
+                remove_workspace(source, Path(value['workspace']), value['branch'])
         if deploy:
             result = subprocess.run(shlex.split(deploy), cwd=source, text=True, capture_output=True)
             if result.returncode:
                 raise ValueError('Delivery failed; tested work is preserved and no push was attempted.\n' + (result.stdout + result.stderr)[-4000:])
             update(root, lambda g: g['assignments'][item].update(deployed=True, deployed_commit=g['integrated']), generation=g['generation'])
         if push:
-            git(source, 'push', 'origin')
+            git(source, 'push', 'origin', value.get('integrated', 'HEAD') + ':refs/heads/' + branch)
         update(root, lambda g: g['assignments'][item].update(state='integrated', pushed=push), generation=g['generation'])
         return info(root)['assignments'][item]
+
 
 def observe(root):
     g = group(root)
@@ -738,7 +789,7 @@ def role_text(root):
     if len(g['members']) == 1:
         return (f"You are this project's agent. Read {plan_path(root)} and continue only the current completed version "
                 'to its human checkpoint.' if g['checkpoints'] else '')
-    jobs = [a for a in g['assignments'].values() if a['owner'] == mine and a['state'] in ('working', 'handback', 'testing', 'deploying')]
+    jobs = [a for a in g['assignments'].values() if a['owner'] == mine and a['state'] in ('working', 'handback', 'testing', 'landing', 'deploying')]
     text = (f"One shared project; only {Path(g['lead']).name} is the lead. Canonical Vision and roadmap: "
             f"{plan_path(root)}. Never read/copy the roadmap in a helper branch. Ownership generation {g['generation']}.")
     if mine == g['lead']:

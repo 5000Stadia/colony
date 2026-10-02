@@ -561,15 +561,25 @@ def roadmap(root, text=None):
     milestones, current, last, prev = [], None, None, None
     from . import lead
     shared = lead.info(root) if root else None
+    heading = None
     for line in text.splitlines():
         if m := MILESTONE.match(line):
             current = {"id": m.group(1), "title": m.group(2), "items": []}
             milestones.append(current)
-            last = None
-        elif (m := ITEM.match(line)) and current is not None:
+            last = heading = None
+        elif line.startswith("## "):
+            # Any other heading (## Later) is its own section, never part of the milestone above it.
+            current, last, heading = None, None, line[3:].strip()
+        elif m := ITEM.match(line):
+            if current is None:
+                if heading is None:
+                    continue
+                current = {"id": heading, "title": "", "items": []}
+                milestones.append(current)
             # An item builds on the one before it unless it says otherwise: `(after R2, R3)` branches.
-            after = re.findall(r"R\d+", m.group(4) or "") or ([prev] if prev else [])
-            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": m.group(3), "after": after,
+            links = re.findall(r"R\d+", m.group(4) or "")
+            after = links or ([prev] if prev else [])
+            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": m.group(3), "after": after, "links": links,
                     "desc": "", "milestone": current["id"]}
             if shared:
                 last['owner'] = shared['owners'].get(last['id']) or shared['lead']
@@ -1399,7 +1409,7 @@ def render(reg, pid, view="overview"):
                 dot = (f"<span class='sdot msdot {live}' data-p='{pid}' title='In progress; its agent is {e(live.replace('-', ' '))}'></span>"
                        if started(m) is not None else "")
                 done_m = sum(1 for i in m["items"] if i["state"] == "done")
-                out.append(f"<details class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])} — {e(m['title'])}</h3>"
+                out.append(f"<details class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3>"
                            f"<span class='muted'>{done_m}/{len(m['items'])} {elapsed([times.get(i['id'], {}) for i in m['items']], finished(m))}</span></summary>")
                 doing = sorted((i for i in m["items"] if i["state"] == "doing"), key=when, reverse=True)
                 done_i = sorted((i for i in m["items"] if i["state"] == "done"), key=when, reverse=True)
@@ -1927,7 +1937,7 @@ def focus(root):
         open_ = [i for i in m["items"] if i["state"] != "done"]
         if open_:
             pick = lambda st, n=5: [f"{i['id']} {i['text'][:70]}" for i in open_ if i["state"] == st][:n]
-            return {"milestone": f"{m['id']} — {m['title']}", "doing": pick("doing"), "verify": pick("verify"), "next": pick("todo", 3)}
+            return {"milestone": f"{m['id']} — {m['title']}" if m['title'] else m['id'], "doing": pick("doing"), "verify": pick("verify"), "next": pick("todo", 3)}
     return {"milestone": "", "doing": [], "verify": [], "next": []}
 
 
