@@ -72,11 +72,12 @@ def objective(root, member):
                 f"in {job['workspace']}, verify it, commit and hand it back with colony item {job['item']} --handback, "
                 'then integrate, test and deliver it with colony item --integrate under the shared lock. '
                 f"Read the single canonical plan at {lead.plan_path(root)}. Stop after delivery; do not take another item.")
+    coordination = (' Respect assigned helpers; completing item agents integrate, test and deliver their work. '
+                    'Wait for assigned hand-ins. ' if len(g['members']) > 1 else ' ')
     return (f"Colony {g['id']} generation {g['generation']} {c['id']} run {c['run']}: {c['outcome']}. "
-            f"Done means: {c['definition']}. Work only on {', '.join(scope)}, respecting assigned helpers. "
+            f"Done means: {c['definition']}. Work only on {', '.join(scope)}." + coordination +
             f"Read the canonical Vision and roadmap at {lead.plan_path(root)}. Stop at the integrated completed version "
-            'for human review with colony progress --ready. Completing item agents integrate, test and deliver their work. '
-            'Wait for helper hand-ins, open decisions and usage resets. '
+            'for human review with colony progress --ready. Respect open decisions and usage resets. '
             'Do not continue into another version or Later without the person’s direction.')
 
 

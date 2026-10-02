@@ -595,8 +595,9 @@ def observe(root):
 def role_text(root):
     g = info(root)
     mine = str(Path(root).resolve())
-    if len(g['members']) == 1 and not g['checkpoints']:
-        return ''
+    if len(g['members']) == 1:
+        return (f"You are this project's agent. Read {plan_path(root)} and continue only the current completed version "
+                'to its human checkpoint.' if g['checkpoints'] else '')
     jobs = [a for a in g['assignments'].values() if a['owner'] == mine and a['state'] in ('working', 'handback', 'testing', 'deploying')]
     text = (f"One shared project; only {Path(g['lead']).name} is the lead. Canonical Vision and roadmap: "
             f"{plan_path(root)}. Never read/copy the roadmap in a helper branch. Ownership generation {g['generation']}.")

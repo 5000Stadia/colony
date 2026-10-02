@@ -190,6 +190,8 @@ class LeadTest(unittest.TestCase):
     def test_single_agent_checkpoint_does_not_set_up_integration_locks(self):
         c = progress.define(self.root, 'M1', 'Usable garden', 'Works', items=['R2'])
         progress.start(self.root, c['id'])
+        self.assertNotIn('helper', progress.objective(self.root, self.root).lower())
+        self.assertNotIn('helper', lead.role_text(self.root).lower())
         with lead.operation_lock(self.root, 'integration'):
             self.assertFalse((board.home() / 'locks').exists())
 
