@@ -142,7 +142,8 @@ def pick(family, role, points, balance=3, ceiling=None, blocked=()):
     if not priced:
         return None
     best = max(p['score'] for p in mine)
-    goal = None if role == 'chores' else max(0, ceiling - max(0, OFFSETS[role] + 2 * (balance - 3)))
+    shift = 0 if role in ('consultant', 'step-up') else 2 * (balance - 3)
+    goal = None if role == 'chores' else max(0, ceiling - max(0, OFFSETS[role] + shift))
     if role == 'chores':
         chosen = min(priced, key=lambda p: (-p['score'] / p['cost'], p['cost'], p['model'], p['effort']))
         reason = 'Most Intelligence Index points per task-dollar'
