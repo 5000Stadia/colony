@@ -85,6 +85,11 @@ def _record(root, before, after, how, words='', notify=True, source=None):
     return event
 
 
+ORIGIN = {'board': 'The person saved the vision on the board.',
+          'conversation': 'The lead recorded a vision change agreed with the person in conversation.',
+          'file': 'The roadmap vision changed in the file (for example, an edit or merge); no author or agreement is inferred.'}
+
+
 def _notifications(root, events):
     """Replay missing notifications after a crash, with a stable note ID."""
     from . import board, lead
@@ -95,15 +100,14 @@ def _notifications(root, events):
             ident = 'n-' + event['id']
             if not event.get('notify') or ident in existing or event.get('source') == member:
                 continue
-            origin = ('The person saved the vision on the board.' if event['how'] == 'board'
-                      else 'The roadmap vision changed in the file (for example, an edit or merge); its author is not inferred.')
-            text = (origin + '\n\nBefore:\n' + (event['before'] or '(no vision yet)')
+            text = (ORIGIN.get(event['how'], ORIGIN['file']) + '\n\nBefore:\n' + (event['before'] or '(no vision yet)')
                     + '\n\nAfter:\n' + (event['text'] or '(vision cleared)')
                     + '\n\nConsider the effect on the work at hand and the path ahead, and act accordingly. '
                       'Discuss anything unclear with the person. Read the current Vision before acting; '
                       'later changes may have followed this one. ' + SCOPE)
+            # Colony writes the notice of a save; the change itself stays the person's (monitor.unseen).
             board.append(recipient, 'notes.jsonl', dict(type='note', id=ident, at=event['at'],
-                         author='person' if event['how'] == 'board' else 'observation', anchor=None,
+                         author='observation' if event['how'] == 'file' else 'colony', anchor=None,
                          text=text, quiet=True, change='vision', source=event.get('source')))
 
 
@@ -165,9 +169,10 @@ def delivery(root, notes):
         else:
             note, last = updates[-1]
             first = updates[0][1]
-            digest = dict(note, batch_ids=[n['id'] for n, _ in updates])
-            origin = ('The person saved the vision on the board.' if any(e['how'] == 'board' for _, e in updates)
-                      else 'The roadmap vision changed in the file; no author or agreement is inferred.')
+            hows = {e['how'] for _, e in updates}
+            digest = dict(note, batch_ids=[n['id'] for n, _ in updates],
+                          author='observation' if hows == {'file'} else 'colony')
+            origin = ORIGIN['board' if 'board' in hows else 'conversation' if 'conversation' in hows else 'file']
             digest['text'] = (origin + f"\n\n{len(updates)} pending change(s); complete history is on the board."
                               + '\n\nBefore:\n' + (first['before'] or '(no vision yet)')
                               + '\n\nCurrent Vision:\n' + (recorded[-1]['text'] or '(vision cleared)')

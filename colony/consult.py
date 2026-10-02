@@ -189,8 +189,9 @@ def adopt(root, cid, points):
     rec = next((r for r in records(root) if r["id"] == cid), None)
     if not rec:
         raise KeyError(cid)
-    if rec.get("gate") and not rec["adopted"]:
-        raise ValueError("This consultation's gate has no human-accepted change; adoption cannot override it.")
+    if rec.get("gate"):
+        raise ValueError(f"Consultation {cid} is linked to gate {rec['gate']}: the person's choices on its points there are "
+                         f"its adoption (in conversation: colony gate \"their words\" --answered {rec['gate']} --accept P1 --reject P2).")
     if not points.strip():
         raise ValueError("Record a change the person accepted.")
     board.append(root, "consults.jsonl", {"type": "adopted", "of": cid, "at": board.now(), "points": points.strip()})

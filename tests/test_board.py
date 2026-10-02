@@ -88,11 +88,39 @@ class BoardTest(BoardBase):
     def test_note_producers_must_choose_an_author_and_onboarding_is_from_colony(self):
         with self.assertRaises(TypeError):
             board.add_note(self.root, None, 'An accidental unattributed receipt')
+        with self.assertRaises(TypeError):
+            board.add_note(self.root, None, 'An author passed by position', 'person')
         root = self.root.parent / 'new-project'
         root.mkdir()
         board.track(root)
         [note] = board.notes(root)
         self.assertEqual(note['author'], 'colony')
+        self.assertTrue(note['text'].startswith('The person has just added this project.'), "colony's note, in colony's voice")
+        self.assertNotIn("I've", board.JOIN + board.BEGIN)
+
+    def test_the_persons_typed_words_are_theirs_and_colonys_receipts_are_colonys(self):
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
+        (self.root / "notes.md").write_text("# Chapter 2\n")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        post = lambda path, **f: urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}{path}", data=urllib.parse.urlencode(dict(p=0, **f)).encode()))
+        for path, form, author in [("/approve", dict(item="R2", verdict="not-yet", text="the dates are wrong"), "person"),
+                                   ("/approve", dict(item="R2", verdict="not-yet", text=""), "colony"),
+                                   ("/approve", dict(item="R2", text="lovely, thanks"), "person"),
+                                   ("/approve", dict(item="R2", text=""), "colony"),
+                                   ("/pin", dict(kind="file", target="notes.md", comment="Is this the final one?"), "person"),
+                                   ("/pin", dict(kind="file", target="notes.md", title="Chapter 2"), "colony")]:
+            with self.subTest(path=path, form=form):
+                post(path, **form)
+                self.assertEqual(board.notes(self.root)[-1]["author"], author)
+        words = monitor.catch_up(self.root)
+        for typed in ("the dates are wrong", "lovely, thanks", "Is this the final one?"):
+            self.assertIn(typed, words, "the monitor's stale-picture guard sees the person's own words")
+        self.assertNotIn("Not yet, on R2.", words, "a bare click is colony's receipt, not their words")
 
     def test_track_adds_to_what_the_project_has(self):
         board.track(self.root)
@@ -160,7 +188,7 @@ class BoardTest(BoardBase):
         self.assertFalse((old / "ROADMAP.md").exists(), "no empty placeholder beside the project's own plan")
         [n] = board.notes(old)
         self.assertIn("bring the roadmap on board", n["text"])
-        self.assertLess(n['text'].index('have a conversation with me'), n['text'].index('Only then bring the roadmap'))
+        self.assertLess(n['text'].index('have a conversation with the person'), n['text'].index('Only then bring the roadmap'))
         board.track(old)
         self.assertEqual(len(board.notes(old)), 1, "asked once, however often it is added")
         fresh = Path(self.tmp.name) / "fresh"
@@ -494,7 +522,7 @@ class GlanceTest(BoardBase):
         self.assertEqual(board.workdir(twin), self.root.resolve())
         self.assertEqual(board.project_settings(twin)[0]["provider"], "codex")
         agents = (self.root / "AGENTS.md").read_text()
-        self.assertIn("only plants is the lead", agents)
+        self.assertNotIn("only plants is the lead", agents, "who leads arrives fresh at each session start, never stale in a file")
         self.assertIn(str(self.root / "ROADMAP.md"), agents, "one canonical roadmap")
         self.assertFalse((twin / "ROADMAP.md").exists())
         self.assertNotIn("plants-codex", (self.root / "CLAUDE.md").read_text(), "the folder's own agent reads its own")
@@ -502,6 +530,7 @@ class GlanceTest(BoardBase):
         # A command in its console acts as it; the same command in a plain shell in the folder acts as plants.
         as_twin = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True, text=True,
                                             env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=str(twin)))
+        self.assertIn("only plants is the lead", as_twin("notes", "--deliver", "--session").stdout)
         as_twin("send", "plants", "Which sprites do you need first?", "--ask")
         [m] = mail.inbox(self.root)
         self.assertEqual((m["from"], m["to"]), ("plants-codex", "plants"))
@@ -1180,6 +1209,17 @@ class MonitorTest(BoardBase):
         self.assertEqual(board.asks(self.root), [], "delivered, the note answers the question")
         w.tick()
         self.assertFalse(any("asked you" in t for t in sent))
+
+    def test_a_pending_colony_notice_does_not_hide_the_agents_question(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        sent = []
+        console.type_into = lambda name, text: sent.append(text) or True
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        monitor.helm(True)
+        board.add_note(self.root, None, "Safe pause over. Carry on where you stopped.", author="colony")
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        monitor.Watcher(quiet=0).tick()
+        self.assertTrue(any("asked you: Which format" in t for t in sent), "no answer from the person is on its way")
 
     def test_a_turn_that_only_restates_an_open_gate_asks_nothing_new(self):
         board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(),
@@ -2287,6 +2327,20 @@ class AskTest(BoardBase):
         self.hook("turn", payload=self.transcript(("user", "go"), ("assistant", "Done; all tests pass. See `x?y` and https://a.b/?q")))
         self.assertEqual(board.asks(self.root), [], "no question, nothing waits: code and links don't count")
 
+    def test_only_the_persons_or_their_monitors_note_answers_the_agents_question(self):
+        board.track(self.root)
+        board.record_ask(self.root, "t1", "Which format do you want?")
+        for author in ("colony", "suggestion"):
+            board.add_note(self.root, None, f"A notice from {author}.", author=author)
+        self.hook("notes", "--deliver")
+        self.assertEqual(len(board.asks(self.root)), 1, "colony's own notices answer nothing")
+        for author in ("monitor", "person"):
+            with self.subTest(author=author):
+                board.record_ask(self.root, "t-" + author, "Which delimiter?")
+                board.add_note(self.root, None, "CSV, with commas.", author=author)
+                self.hook("notes", "--deliver")
+                self.assertEqual(board.asks(self.root), [])
+
 
 class MilestoneTest(BoardBase):
     def test_a_milestone_between_two_others_is_its_own(self):
@@ -2924,6 +2978,9 @@ class ConsultationGateTest(BoardBase):
         self.assertEqual(note['author'], 'person')
         self.assertIn('Reject P2', note['text'])
         self.assertEqual(len(self.calls), 2, 'Recording choices never calls a model.')
+        refused = self.cli('consult', 'Take P1.', '--adopt', self.rec['id'])
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn('linked to gate ' + gate['id'], refused.stderr)
         self.consult.run(self.root, 'R3', 'Check the revision', 'Reminders are local.', plan='Keep history.', rnd=2)
         self.assertIn('Accept P1: Retain reminder history.', self.calls[-1])
         self.assertIn('Reject P2: Require an explicit reset.', self.calls[-1])
@@ -2939,7 +2996,7 @@ class ConsultationGateTest(BoardBase):
                                                      at=board.now(), points='A nonempty old-style reply.'))
         rec = self.consult.records(self.root)[0]
         self.assertIsNone(rec['adopted'])
-        with self.assertRaisesRegex(ValueError, 'human-accepted change'):
+        with self.assertRaisesRegex(ValueError, 'linked to gate ' + gate['id']):
             self.consult.adopt(self.root, self.rec['id'], 'Try to bypass the rejection.')
         with self.assertRaisesRegex(ValueError, 'accepted a change'):
             self.consult.run(self.root, 'R3', 'Check', 'd', plan='p', rnd=2)

@@ -682,6 +682,9 @@ class Codex:
                 "delivered notes at session start or when a `[colony]` line arrives, run "
                 "`colony notes --deliver --console codex` and act on what it prints. Outside the matching board "
                 "console, explicitly choose the intended project before manual delivery; do not infer it from a shared folder.\n")
+    # PROVIDER: only Codex has a native goal; colony progress sets and refreshes it (continuation.py).
+    GOAL = ("- As lead, establish the checkpoint's native goal and keep it aligned with the next agreed pause: when "
+            "you select the next bounded checkpoint, the goal refreshes automatically; do not wait for another /goal.\n")
 
     def signed_in(self, run=None):
         """Whether Codex is signed in here, by its own status (no tokens spent)."""
@@ -781,7 +784,7 @@ class Codex:
         """Install instructions and retire our old file hooks; launch flags now supply them in every checkout."""
         path = root / "AGENTS.md"
         have = path.read_text() if path.exists() else ""
-        block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY
+        block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY + self.GOAL
         marker = "## This project is part of a colony"
         if marker in have:
             start = have.index(marker)

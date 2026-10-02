@@ -94,10 +94,9 @@ it went. Record the move and their original words in the dated vision history.
   Then run `colony consult R4 "the decision" --digest FILE`, which adds the person's own words and asks
   each consultant what would fundamentally change or improve the approach. Bring the person only such
   points, a few at most, as one gate: `colony gate "the question" --item R4 --consult ID --points FILE`.
-  FILE is a JSON list like `[{"text":"the recommendation", "consultants":[1]}]`; source numbers come from
-  the consultant report. The person accepts or rejects each point on the board; adoption is recorded
-  automatically. If settled in conversation, use `colony gate "their words" --answered ID --accept P1
-  --reject P2`, covering every point. Wording, naming and reorganising never count. Only an accepted change earns a second round,
+  The person accepts or rejects each point on the board; adoption is recorded automatically. If settled
+  in conversation, use `colony gate "their words" --answered ID --accept P1 --reject P2`, covering every
+  point. Wording, naming and reorganising never count. Only an accepted change earns a second round,
   which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
   decision; if consulting is off, go on.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
@@ -125,30 +124,30 @@ it went. Record the move and their original words in the dated vision history.
   quicker. Mail from the colony arrives by itself; answer a question with `colony reply ID "..."`.
 """
 
-# Left once, as the person, for a project that joins with work of its own: the notes deliver it on the agent's
-# next turn (the watcher starts or wakes the session), and its reply shows on the board.
-JOIN = """I've just added this project to my colony: the set of projects I follow and steer from one board, where \
-I leave notes and answer your gates, and where the projects can message each other. The new section of \
-CLAUDE.md, "This project is part of a colony", says how it works.
+# Left once by colony, which writes it (the person never typed it), for a project the person adds: the notes
+# deliver it on the agent's next turn (the watcher starts or wakes the session), and its reply shows on the board.
+JOIN = """The person has just added this project to their colony: the set of projects they follow and steer from \
+one board, where they leave notes and answer your gates, and where the projects can message each other. The new \
+section of CLAUDE.md, "This project is part of a colony", says how it works.
 
 First, read how this project already plans its work (its plan and spec documents, notes, open work and \
-recent history), so you arrive informed. Then have a conversation with me about our shared vision: \
-draw out the image of the finished work with me. This is between you, this project's own agent, and me; \
-the monitor's setup does not stand in for it. Leave distant details open until the work depends on them. \
-Keep existing plans intact and do not publish a new roadmap path before we clearly agree the vision. \
+recent history), so you arrive informed. Then have a conversation with the person about your shared vision: \
+draw out the image of the finished work with them. This is between you, this project's own agent, and the \
+person; the monitor's setup does not stand in for it. Leave distant details open until the work depends on \
+them. Keep existing plans intact and do not publish a new roadmap path before you clearly agree the vision. \
 Once agreed, record it with `colony vision --file PATH --words "the person's words agreeing it"`.
 
 Only then bring the roadmap on board. Write ROADMAP.md in the colony format: milestones as \
 `## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` only for what \
-waits on my own eye; what you can check yourself, check. Include what's \
-done, what's under way, and features we've discussed but not built, as unchecked items under a later \
-milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
-documents stay where they are. Show me the milestones before treating them as settled."""
+waits on the person's own eye; what you can check yourself, check. Include what's done, what's under way, and \
+features discussed but not built, as unchecked items under a later milestone. Point each item at the document \
+its detail lives in rather than copying it; the project's own documents stay where they are. Show the person \
+the milestones before treating them as settled."""
 
-BEGIN = """I've just added this project. Your first piece of work is a conversation with me about its vision:
-draw out our shared image of the finished work with me. This is between you, this project's own agent,
-and me; the monitor's setup does not stand in for it. Leave distant details open until the work depends
-on them. Once we clearly agree the vision, record it with
+BEGIN = """The person has just added this project. Your first piece of work is a conversation with them about its
+vision: draw out your shared image of the finished work together. This is between you, this project's own
+agent, and the person; the monitor's setup does not stand in for it. Leave distant details open until the
+work depends on them. Once you clearly agree the vision, record it with
 `colony vision --file PATH --words "the person's words agreeing it"`. Only then lay the roadmap toward it.
 Do not publish a roadmap path before that agreement."""
 
@@ -157,15 +156,11 @@ Do not publish a roadmap path before that agreement."""
 CHECKPOINT_GUIDANCE = ("Propose a small number of natural completed versions during the Vision/path conversation. "
             "For each, say succinctly what the person can use/read/see, what counts as done, and where you pause "
             "for their approval or check-in. Use existing milestones and preserve existing plans until agreed. "
-            "Record the bounded next checkpoint with colony progress; as lead, establish its native goal and "
-            "continue across ordinary items until that coherent completed version. Later is not automatic. "
-            "Keep Codex's goal aligned with the next agreed pause. When the person releases the next scope, "
-            "select its bounded checkpoint and refresh the goal automatically; do not wait for another /goal. "
-            "Honour any project-specific approval before starting a new item. "
+            "Record the bounded next checkpoint with colony progress; as lead, continue across ordinary items "
+            "until that coherent completed version. Later is not automatic. When the person releases the next "
+            "scope, select its bounded checkpoint. Honour any project-specific approval before starting a new item. "
             "Routine item reviews are collected there; judgement that subsequent work depends on stays an immediate gate.")
 PROTOCOL += '\n\n' + CHECKPOINT_GUIDANCE
-JOIN += '\n\n' + CHECKPOINT_GUIDANCE
-BEGIN += '\n\n' + CHECKPOINT_GUIDANCE
 
 SKELETON = """# Roadmap
 
@@ -477,11 +472,12 @@ def protocol(root):
         canonical = lead.plan_path(root)
         text = PROTOCOL.replace('at the top of `ROADMAP.md`', f'at the top of `{canonical}`')
         text = text.replace('The plan is `ROADMAP.md`', f'The single canonical plan is `{canonical}`')
-        return text + '\n\n' + lead.role_text(root) + (
-            '\nOnly the lead edits that file. Commit it separately with `colony lead --commit-plan "message"`; '
+        # Who leads, and at which generation, changes: it reaches the agent fresh at each session start.
+        return text + (
+            '\n\nOnly the lead edits the canonical plan. Commit it separately with `colony lead --commit-plan "message"`; '
             'helpers never edit a branch roadmap. Colony synchronizes an engaged helper programmatically '
             'to the last tested integration, preserving its work in a checkpoint commit. '
-            'Read the short catch-up note; do not reread the project. Costly decisions reach all members.\n')
+            'Read the short catch-up note; do not reread the project.\n')
     work = workdir(root)
     if work == root:
         return PROTOCOL
@@ -762,6 +758,11 @@ def answer_asks(root, how):
         append(root, "asks.jsonl", {"type": "answered", "of": a["id"], "at": now(), "how": how})
 
 
+def answers_ask(n):
+    """A note that answers the agent's open question: the person's own words, or their monitor's, on the project."""
+    return not n.get("quiet") and not n["anchor"] and n.get("author") in ("person", "monitor")
+
+
 # ---------------------------------------------------------------- what's ready for the person's OK, in their words
 
 def ready_notes(root):
@@ -975,7 +976,7 @@ def said_reply(root, text):
     append(root, "said.jsonl", {"at": now(), "reply": ("…" + tail[-600:]) if len(tail) > 600 else tail})
 
 
-def add_note(root, anchor, text, author, quiet=False):
+def add_note(root, anchor, text, *, author, quiet=False):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
             "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {})}
@@ -1020,7 +1021,7 @@ def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
         return _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
 
 
-def _gate_note(root, gate, ident, text, at, *, author="person", quiet=False):
+def _gate_note(root, gate, ident, text, at, *, author, quiet=False):
     if ident and not any(n["id"] == ident for n in notes(root)):
         append(root, "notes.jsonl", dict(type="note", id=ident, at=at, author=author,
             anchor={"gate": gate["id"], "item": gate.get("item")}, text=f"On \"{gate['question']}\": {text}",
@@ -1041,7 +1042,7 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
         if gate["answer"]:
             if gate["answer"] == answer["text"] and gate["point_decisions"] == decisions:
                 if tell:
-                    _gate_note(root, gate, gate.get("note_id"), gate["answer"], gate["answered_at"])
+                    _gate_note(root, gate, gate.get("note_id"), gate["answer"], gate["answered_at"], author="person")
                 return gate  # A retried submission creates neither another decision nor another notice.
     elif decisions:
         raise ValueError("This gate has no consultant points.")
@@ -1050,7 +1051,7 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
     answer["note_id"] = "n" + secrets.token_hex(3) if tell else None
     append(root, "gates.jsonl", answer)
     if tell:
-        _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"])
+        _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"], author="person")
     return answer
 
 
@@ -2163,9 +2164,10 @@ def waiting_items(p, snap=None):
 
 
 def tell_pinned(root, pin, comment=""):
-    """The agent hears of the person's pin: with a comment, as a message; without one, quietly."""
+    """The agent hears of the person's pin: with a comment, as a message in their words; without one, quietly."""
     text = f"The person pinned {pins.describe(pin)} on the board."
-    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""), author='colony', quiet=not comment)
+    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""),
+             author='person' if comment else 'colony', quiet=not comment)
 
 
 def dismissed(root):
@@ -3351,9 +3353,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, shell(reg, pid, f"<h1>Vision</h1><p>{e(str(err))}</p>"
                                             f"<p>Your unsaved revision:</p><pre>{e(form.get('text', ''))}</pre>"
                                             f"<p><a href='/?p={pid}'>Back to the project</a></p>").encode())
-            watcher = getattr(self.server, 'watcher', None)
-            if watcher is not None:
-                watcher.mail()  # wake immediately if safe; otherwise the next hook delivers the note
         elif path == "/note" and text:
             kind, ref = form.get("kind"), form.get("ref")
             from . import lead
@@ -3407,11 +3406,13 @@ class Handler(BaseHTTPRequestHandler):
             if iid in progress.held_items(root):
                 return self._send(409, b'Approve the completed version using its current candidate.')
             # either way it leaves the person's list now: "not yet" is back with the agent until it says ready again
+            # What the person typed is theirs; a bare verdict is colony's receipt of the click.
             if form.get("verdict") == "not-yet":
                 add_note(root, {"item": iid}, f"Not yet, on {iid}" + (f": {text}" if text else ".")
-                         + " When it's ready again, say so with colony ready.", author='colony')
+                         + " When it's ready again, say so with colony ready.", author='person' if text else 'colony')
             else:
-                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.", author='colony')
+                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.",
+                         author='person' if text else 'colony')
             append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
             if not console.type_into(console.session_name(root), text):
@@ -3433,9 +3434,8 @@ def serve(port, lan=False, monitor=True):
     from . import monitor as mon, vision
     vision.install_all()
     rewire_projects()
-    watcher = mon.start(enabled=monitor and registry()["settings"]["monitor"])
+    mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
-    httpd.watcher = watcher
     httpd.lan = lan
     where = "every address on this machine (your home network can open it)" if lan else "http://127.0.0.1"
     print(f"board: {where}, port {httpd.server_address[1]}  (ctrl-c to stop)", flush=True)

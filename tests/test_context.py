@@ -170,13 +170,42 @@ class ContextTest(unittest.TestCase):
         self.assertIn('Keep the exact recent words.', restored)
         self.assertIn('native summary already retains', restored)
         context._cache.clear()
-        self.assertIn('1234567890abcdef', context.transcript(self.s)['summary_carries'])
+        self.assertIn('Already sent the invoice', context.transcript(self.s)['summary'])
+
+    def test_claude_summary_quoting_only_colonys_request_still_restores_the_carry(self):
+        self.s['provider'] = 'claude'
+        atomic_json(context.file(self.root, 'context-session.json'), self.s)
+        self.state('prepared', tail=[], boundary=0)
+        request = '[colony] Context carry-over (1234567890abcdef). Reply only inside <colony-carry id="1234567890abcdef">...</colony-carry>.'
+        events = [dict(type='system', subtype='compact_boundary'),
+                  dict(type='user', isCompactSummary=True, message=dict(content='All user messages: ' + request))]
+        self.path.write_text(''.join(json.dumps(e) + '\n' for e in events))
+        with patch.object(context, 'register', return_value=True):
+            restored = context.on_prompt(self.root, 'claude', dict(self.payload, hook_event_name='SessionStart', source='compact'))
+        self.assertIn('Already sent the invoice; do not repeat.', restored)
+
+    def test_codex_compaction_keeping_colonys_request_verbatim_still_restores_the_carry(self):
+        request = '[colony] Context carry-over (1234567890abcdef). Reply only inside <colony-carry id="1234567890abcdef">...</colony-carry>.'
+        self.message('user', 'Keep blue.'); self.message('assistant', 'Already sent.')
+        self.message('user', request)
+        self.message('assistant', '<colony-carry id="1234567890abcdef">Already sent the invoice; do not repeat.</colony-carry>')
+        self.state()
+        context.before_compact(self.root, 'codex', self.payload)
+        kept = [dict(type='message', role='user', content=[dict(type='input_text', text=t)]) for t in ('Keep blue.', request)]
+        self.event('compacted', dict(message='', replacement_history=kept + [dict(type='compaction', encrypted_content='opaque')]))
+        prompt = dict(self.payload, hook_event_name='UserPromptSubmit')
+        text = context.on_prompt(self.root, 'codex', prompt)
+        self.assertIn('Already sent the invoice; do not repeat.', text)
+        self.assertNotIn('already retains', text)
+        self.event('compacted', dict(message='Summary: Already sent the\ninvoice;  do not repeat.'))
+        self.assertIn('already retains', context.on_prompt(self.root, 'codex', prompt), 'the summary itself holds it')
 
     def test_original_carry_before_compaction_is_not_mistaken_for_summary(self):
         self.message('user', 'Original words')
         self.message('assistant', '<colony-carry id="1234567890abcdef">Original carry.</colony-carry>')
         self.event('compacted', dict(message='A native summary without that carry.'))
-        self.assertNotIn('1234567890abcdef', context.transcript(self.s)['summary_carries'])
+        self.assertEqual(context.transcript(self.s)['summary'], 'A native summary without that carry.')
+        self.assertFalse(context.retained('Original carry.', context.transcript(self.s)['summary']))
 
     def test_safety_checks_busy_attached_drafts_pauses_and_pending_delivery(self):
         from colony import usage, mail

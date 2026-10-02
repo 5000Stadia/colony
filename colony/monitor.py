@@ -337,7 +337,8 @@ def choice():
 
 def unseen(root):
     """The person's own words to a project since the monitor last caught up on it: what they typed in its
-    console, and their notes to it on the board. (at, where, text), oldest first."""
+    console, their notes to it on the board, and the Vision they saved there. (at, where, text), oldest first."""
+    from . import vision
     since = caught().get(str(root)) or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 7 * 86400))
     out = []
     for r in board.read(root, "said.jsonl"):
@@ -347,6 +348,8 @@ def unseen(root):
             out.append((r["at"], "in its console", r["text"]))
     out += [(n["at"], "in a note on the board", n["text"]) for n in board.notes(root)
             if n.get("author") == "person" and n["at"] > since]
+    out += [(e["at"], "in the Vision, saved on the board", e["text"]) for e in vision.history(root)
+            if e["how"] == "board" and e["at"] > since]
     return sorted(out)[-20:]                            # the latest twenty: what they want now
 
 
@@ -534,7 +537,7 @@ class Watcher:
                 out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]) + fresh))
             # Each thing the project waits on the person for is announced once, even across board restarts.
             # A question isn't yet: the person's note on its way answers it the moment it is delivered.
-            unheard = any(not n["delivered_at"] and not n.get("quiet") for n in board.open_notes(p))
+            unheard = any(not n["delivered_at"] and board.answers_ask(n) for n in board.open_notes(p))
             waiting = [w for w in board.waiting_items(p, snap) if not (w["kind"] == "ask" and unheard)]
             told = set(self.announced.get(str(p), []))
             for w in waiting:
