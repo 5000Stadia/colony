@@ -360,11 +360,21 @@ def safe(root):
 
 def tick(root):
     s = session(root)
-    if not s or not safe(root):
+    if not s:
         return
     snap = transcript(s)
     tokens, window = occupancy(root, s, snap)
     now = time.time()
+    from . import continuation
+    previous = read(file(root))
+    pending = previous.get('job') or {}
+    needs_refresh = (pending.get('phase') in ('requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown') or
+                     (window and tokens is not None and tokens >= window * SOFT and now >= previous.get('retry_after', 0)) or
+                     (is_monitor(root) and now - previous.get('last', now) >= DAILY))
+    if needs_refresh and not continuation.hold(root, reason='context refresh'):
+        return
+    if not safe(root):
+        return
     action = None
     with locked(root):
         st = read(file(root)) or dict(last=now)
@@ -415,6 +425,8 @@ def tick(root):
                     st['job'] = job
                     action = 'carry'
         atomic_json(file(root), st)
+    if job.get('phase') in ('restored', 'deferred'):
+        continuation.release(root, reason='context refresh')
     if action and not safe(root):
         defer(root, job, 'Input became busy before dispatch; refresh postponed.')
         return

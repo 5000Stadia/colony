@@ -1,0 +1,345 @@
+"""Shared-plan ownership, Git engagement and candidate review in isolated projects."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import ThreadingHTTPServer
+from unittest.mock import patch
+
+from colony import board, lead, progress, providers, vision
+
+PLAN = '''# Roadmap
+
+## Vision
+A usable garden.
+
+## M1 — Useful version
+- [x] R1 Foundation
+- [ ] R2 Water log (after R1)
+- [ ] R3 Reminders (after R1)
+
+## M2 — Complete version
+- [ ] R4 Sharing
+
+## M9 — Later
+- [ ] R9 Experiments
+'''
+
+
+class LeadTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.env = patch.dict(os.environ, {'COLONY_BOARD_HOME': str(self.base / 'home')})
+        self.env.start(); self.addCleanup(self.env.stop)
+        for key in ('COLONY_PROJECT', 'COLONY_CONSOLE'):
+            if key in os.environ:
+                old = os.environ.pop(key)
+                self.addCleanup(os.environ.__setitem__, key, old)
+        self.root = self.base / 'garden'; self.root.mkdir()
+        self.helper = self.base / 'garden-codex'; self.helper.mkdir()
+        self.other = self.base / 'garden-other'; self.other.mkdir()
+        for root in (self.root, self.helper, self.other):
+            (root / '.board').mkdir()
+        board.save_registry(dict(roots=[], projects=[str(self.root), str(self.helper), str(self.other)], settings={'messaging': False}))
+        lead.git(self.root, 'init', '-q', '-b', 'main')
+        lead.git(self.root, 'config', 'user.name', 'Fixture')
+        lead.git(self.root, 'config', 'user.email', 'fixture@users.noreply.github.com')
+        (self.root / 'ROADMAP.md').write_text(PLAN)
+        (self.root / 'file.txt').write_text('original\n')
+        (self.root / '.gitignore').write_text('.board/\n.codex/\n.claude/\n')
+        self.commit(self.root, 'Foundation')
+        vision.observe(self.root)
+        self.initial = lead.git(self.root, 'rev-parse', 'HEAD')
+
+    def commit(self, root, text):
+        lead.git(root, 'add', '--all')
+        lead.git(root, 'commit', '-qm', text)
+        return lead.git(root, 'rev-parse', 'HEAD')
+
+    def pair(self):
+        lead.pair(self.root, self.helper, actor=self.root)
+        lead.tested(self.root, self.initial, 'fixture passed', actor=self.root)
+
+    def helper_job(self, item='R2', member=None):
+        member = member or self.helper
+        lead.assign(self.root, item, member, actor=self.root)
+        return lead.start_item(self.root, item, actor=member)
+
+    def test_single_agent_needs_no_pairing_or_sync_setup(self):
+        self.assertIsNone(lead.group(self.root))
+        self.assertEqual(lead.owner(self.root, 'R2'), self.root)
+        with patch.object(providers, 'of', side_effect=AssertionError('secondary provider access')):
+            self.assertEqual(lead.engage(self.root), '')
+            self.assertEqual(board.progress_panel(self.root, 0), '')
+        self.assertFalse(lead.location().exists())
+        self.assertFalse((board.home() / 'items').exists())
+
+    def test_one_plan_owner_inheritance_and_generation(self):
+        self.pair()
+        lead.assign(self.root, 'R3', self.root, actor=self.root)
+        (self.helper / 'ROADMAP.md').write_text('stale unrelated branch plan')
+        self.assertEqual(board.roadmap(self.helper), board.roadmap(self.root))
+        with self.assertRaisesRegex(ValueError, 'Only garden'):
+            vision.save(self.helper, 'An unapproved helper vision', how='conversation', words='Yes')
+        g = lead.switch(self.root, self.helper)
+        self.assertEqual(g['lead'], str(self.root))
+        lead.finish_handoff(self.root, g['generation'])
+        self.assertEqual(lead.owner(self.root, 'R2'), self.helper)
+        self.assertEqual(lead.owner(self.root, 'R3'), self.root)
+        with self.assertRaisesRegex(ValueError, 'lead changed'):
+            lead.update(self.root, lambda g: g.update(lead=str(self.root)), generation=0)
+        self.assertEqual(lead.plan_path(self.helper), self.root / 'ROADMAP.md')
+
+    def test_engagement_commits_dirty_helper_and_uses_only_tested_revision(self):
+        self.pair(); job = self.helper_job(); work = Path(job['workspace'])
+        self.assertFalse((work / 'ROADMAP.md').exists())
+        (work / 'new.txt').write_text('unfinished work preserved')
+        (self.root / 'safe.txt').write_text('completed lead work')
+        tested = self.commit(self.root, 'Completed safe work')
+        lead.tested(self.root, tested, 'fixture passed')
+        (self.root / 'untested.txt').write_text('unfinished lead work')
+        untested = self.commit(self.root, 'Still in progress')
+        with patch.dict(os.environ, COLONY_PROJECT=str(self.helper)):
+            self.assertEqual(board.root_of(work), self.helper)
+        note = lead.engage(self.helper)
+        self.assertIn('Completed safe work', note)
+        self.assertNotIn('Still in progress', note)
+        self.assertTrue((work / 'new.txt').exists())
+        self.assertTrue((work / 'safe.txt').exists())
+        self.assertFalse((work / 'untested.txt').exists())
+        self.assertIn('Checkpoint R2', lead.git(work, 'log', '--format=%s'))
+        self.assertEqual(lead.engage(self.helper), '')
+        self.assertNotEqual(tested, untested)
+
+    def test_real_conflict_routes_hashes_to_recent_file_developer_and_aborts(self):
+        self.pair(); job = self.helper_job(); work = Path(job['workspace'])
+        (work / 'file.txt').write_text('helper change\n')
+        (self.root / 'file.txt').write_text('lead change\n')
+        target = self.commit(self.root, 'Lead R3 file change')
+        lead.tested(self.root, target, 'fixture passed')
+        lead.update(self.root, lambda g: g.update(integrations=[dict(item='R3', owner=str(self.root), files=['file.txt'], commit=target)]))
+        with self.assertRaisesRegex(ValueError, 'Sync conflict'):
+            lead.sync_item(self.helper, 'R2', actor=self.helper)
+        value = lead.info(self.root)['assignments']['R2']; evidence = value['conflict']; entry = evidence['files'][0]
+        self.assertEqual(entry['path'], 'file.txt')
+        self.assertEqual(entry['recipient'], str(self.root))
+        self.assertEqual(entry['item'], 'R3')
+        self.assertTrue(entry['both_changed'])
+        self.assertEqual(len({entry['base'], entry['ours'], entry['theirs']}), 3)
+        self.assertEqual(lead.git(work, 'rev-parse', 'HEAD'), evidence['checkpoint'])
+        self.assertFalse(lead.git(work, 'ls-files', '-u'))
+        self.assertEqual((work / 'file.txt').read_text(), 'helper change\n')
+        notices = len(board.notes(self.root))
+        with self.assertRaises(ValueError):
+            lead.sync_item(self.helper, 'R2', actor=self.helper)
+        self.assertEqual(len(board.notes(self.root)), notices, 'repeated hooks do not repeat conflict mail')
+        # The routed developer deliberately resolves the preserved versions.
+        (work / 'file.txt').write_text('lead change\n')
+        self.commit(work, 'Resolve R2 against tested target')
+        lead.sync_item(self.helper, 'R2', actor=self.helper)
+        self.assertNotIn('sync_error', lead.info(self.root)['assignments']['R2'])
+
+    def test_unassigned_existing_helper_syncs_only_when_engaged(self):
+        branch = self.base / 'helper-work'
+        lead.git(self.root, 'worktree', 'add', '-b', 'helper-existing', str(branch))
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(branch))))
+        self.pair()
+        (self.root / 'completed.txt').write_text('completed')
+        target = self.commit(self.root, 'Completed garden feature')
+        lead.tested(self.root, target, 'passed')
+        self.assertFalse((branch / 'completed.txt').exists(), 'dormant helper is untouched')
+        (branch / 'unfinished.txt').write_text('preserve')
+        note = lead.engage(self.helper)
+        self.assertIn('Completed garden feature', note)
+        self.assertIn('No item is assigned', note)
+        self.assertTrue((branch / 'completed.txt').exists())
+        self.assertTrue((branch / 'unfinished.txt').exists())
+        self.assertEqual(lead.info(self.root)['assignments'], {})
+        self.assertEqual(lead.engage(self.helper), '')
+
+    def test_unrelated_worktree_is_not_a_logical_agent_scope(self):
+        self.pair(); work = self.base / 'unrelated'
+        lead.git(self.root, 'worktree', 'add', '-b', 'unrelated', str(work))
+        with patch.dict(os.environ, COLONY_PROJECT=str(self.helper)):
+            self.assertNotEqual(board.root_of(work), self.helper)
+
+    def test_delete_modify_conflict_records_absent_version(self):
+        self.pair(); job = self.helper_job(); work = Path(job['workspace'])
+        (work / 'file.txt').unlink()
+        (self.root / 'file.txt').write_text('modified main file\n')
+        target = self.commit(self.root, 'Modify R3 file')
+        lead.tested(self.root, target, 'passed')
+        with self.assertRaisesRegex(ValueError, 'Sync conflict'):
+            lead.sync_item(self.helper, 'R2')
+        file = lead.info(self.root)['assignments']['R2']['conflict']['files'][0]
+        self.assertIsNone(file['ours'])
+        self.assertTrue(file['base'] and file['theirs'] and file['both_changed'])
+
+    def test_single_agent_checkpoint_does_not_set_up_integration_locks(self):
+        c = progress.define(self.root, 'M1', 'Usable garden', 'Works', items=['R2'])
+        progress.start(self.root, c['id'])
+        with lead.operation_lock(self.root, 'integration'):
+            self.assertFalse((board.home() / 'locks').exists())
+
+    def test_failed_delivery_never_pushes(self):
+        self.pair(); job = self.helper_job(); work = Path(job['workspace'])
+        (work / 'feature.txt').write_text('ready')
+        self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2')
+        real_git, pushed = lead.git, []
+        def git(root, *args, **kwargs):
+            if args and args[0] == 'push':
+                pushed.append(args)
+            return real_git(root, *args, **kwargs)
+        with patch.object(lead, 'git', side_effect=git):
+            with self.assertRaisesRegex(ValueError, 'Delivery failed'):
+                lead.integrate(self.helper, 'R2', 'true', actor=self.helper, deploy='false', push=True)
+        self.assertFalse(pushed)
+        self.assertEqual(lead.info(self.root)['assignments']['R2']['state'], 'deploying')
+
+    def test_failed_checks_do_not_advance_target_and_completer_can_retry(self):
+        self.pair(); job = self.helper_job(); work = Path(job['workspace'])
+        (work / 'feature.txt').write_text('ready')
+        self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        with self.assertRaisesRegex(ValueError, 'completing'):
+            lead.integrate(self.root, 'R2', 'true', actor=self.root)
+        with self.assertRaisesRegex(ValueError, 'checks failed'):
+            lead.integrate(self.helper, 'R2', 'false', actor=self.helper)
+        self.assertEqual(lead.info(self.root)['integrated'], self.initial)
+        self.assertEqual(lead.info(self.root)['assignments']['R2']['state'], 'testing')
+        value = lead.integrate(self.helper, 'R2', 'true', actor=self.helper)
+        self.assertEqual(value['state'], 'integrated')
+        self.assertEqual(lead.info(self.root)['integrated'], lead.git(self.root, 'rev-parse', 'HEAD'))
+        self.assertEqual((self.root / 'feature.txt').read_text(), 'ready')
+        with patch.dict(os.environ, COLONY_PROJECT=str(self.helper)):
+            self.assertEqual(board.root_of(work), self.helper, 'Stop hook keeps its identity after delivery')
+        reopened = lead.start_item(self.helper, 'R2', actor=self.helper)
+        self.assertEqual(reopened['workspace'], str(work), 'corrections reuse only their own item workspace')
+        self.assertEqual(reopened['base'], lead.info(self.root)['integrated'])
+
+    def test_parallel_finishers_wait_sync_and_test_in_order(self):
+        self.pair(); lead.pair(self.root, self.other)
+        for iid, who in (('R2', self.helper), ('R3', self.other)):
+            job = self.helper_job(iid, who); work = Path(job['workspace'])
+            (work / (iid + '.txt')).write_text(iid)
+            self.commit(work, 'Complete ' + iid)
+            lead.handback(who, iid, actor=who)
+        entered, release = threading.Event(), threading.Event()
+        real_run, calls, results = subprocess.run, [], []
+        def run(args, **kwargs):
+            if args == ['fixture-check']:
+                calls.append(lead.git(self.root, 'rev-parse', 'HEAD'))
+                if len(calls) == 1:
+                    entered.set(); release.wait(3)
+                return subprocess.CompletedProcess(args, 0, '', '')
+            return real_run(args, **kwargs)
+        def finish(who, iid):
+            try: results.append(lead.integrate(who, iid, 'fixture-check', actor=who))
+            except Exception as e: results.append(e)
+        with patch.object(subprocess, 'run', side_effect=run):
+            one = threading.Thread(target=finish, args=(self.helper, 'R2')); one.start()
+            self.assertTrue(entered.wait(3))
+            two = threading.Thread(target=finish, args=(self.other, 'R3')); two.start()
+            self.assertEqual(len(calls), 1)
+            release.set(); one.join(4); two.join(4)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(isinstance(v, dict) for v in results), results)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue((self.root / 'R2.txt').exists() and (self.root / 'R3.txt').exists())
+        self.assertEqual(lead.info(self.root)['assignments']['R3']['base'], calls[0])
+
+    def test_checkpoint_bundles_review_and_dismissal_never_approves(self):
+        self.pair()
+        c = progress.define(self.root, 'M1', 'Useful garden', 'Both functions work', 'Open the document')
+        progress.start(self.root, c['id'])
+        path = self.root / 'ROADMAP.md'
+        path.write_text(PLAN.replace('- [ ] R2', '- [?] R2').replace('- [ ] R3', '- [?] R3'))
+        self.commit(self.root, 'Built version')
+        commit = lead.git(self.root, 'rev-parse', 'HEAD'); lead.tested(self.root, commit, 'all passed')
+        artifact = self.root / 'deliverable.txt'; artifact.write_text('A coherent document')
+        idle = dict(state='idle', lines=[])
+        with patch.object(board.console, 'snapshot', return_value=idle):
+            self.assertEqual(board.waiting_items(self.root), [])
+            c = progress.ready(self.root, str(artifact), commit, 'all passed')
+            [waiting] = board.waiting_items(self.root)
+            self.assertEqual(waiting['kind'], 'checkpoint')
+            self.assertEqual(board.waiting_items(self.helper), [])
+            board.clear_waiting(self.root, waiting['key'])
+            self.assertEqual(progress.current(self.root)['state'], 'review')
+            self.assertIn('human review', progress.hold(self.root, self.root))
+            self.assertEqual(board.waiting_items(self.root), [])
+        with self.assertRaisesRegex(ValueError, 'no longer current'):
+            progress.decide(self.root, 'stale-candidate', 'approve')
+        artifact.write_text('Changed after review')
+        with self.assertRaisesRegex(ValueError, 'changed since'):
+            progress.decide(self.root, c['candidate']['id'], 'approve')
+        c = progress.ready(self.root, str(artifact), commit, 'all passed')
+        progress.decide(self.root, c['candidate']['id'], 'approve')
+        self.assertIsNone(progress.current(self.root))
+        self.assertEqual(board.items(board.roadmap(self.root))['R2']['state'], 'done')
+        self.assertEqual(lead.info(self.root)['checkpoints'][0]['state'], 'accepted')
+
+    def test_later_and_completed_items_cannot_be_released(self):
+        with self.assertRaises(ValueError):
+            progress.define(self.root, 'M9', 'Experiments', 'Do experiments')
+        with self.assertRaises(ValueError):
+            progress.define(self.root, 'M1', 'Again', 'Redo', items=['R1'])
+
+    def test_browser_duplicate_folder_asks_role_before_mutation(self):
+        server = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        url = f'http://127.0.0.1:{server.server_address[1]}'
+        try:
+            request = urllib.request.Request(url + '/add', data=urllib.parse.urlencode(dict(path=str(self.root), provider='codex')).encode())
+            with urllib.request.urlopen(request) as response:
+                page = response.read().decode()
+            self.assertIn('Add helper', page)
+            self.assertIn('Switch lead', page)
+            self.assertIsNone(lead.group(self.root))
+            self.assertEqual(board.project_settings(self.root)[0]['provider'], 'claude')
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+    def test_candidate_can_be_read_and_decided_from_the_browser(self):
+        self.pair()
+        c = progress.define(self.root, 'M1', 'Useful garden', 'Works', items=['R2'])
+        progress.start(self.root, c['id'])
+        path = self.root / 'ROADMAP.md'; path.write_text(PLAN.replace('- [ ] R2', '- [?] R2'))
+        commit = self.commit(self.root, 'Completed R2'); lead.tested(self.root, commit, 'all passed')
+        artifact = self.root / 'deliverable.txt'; artifact.write_text('Completed garden document')
+        c = progress.ready(self.root, str(artifact), commit, 'all passed')
+        candidate = c['candidate']['id']
+        server = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        url = f'http://127.0.0.1:{server.server_address[1]}'
+        try:
+            with urllib.request.urlopen(url + '/progress/artifact?p=0&candidate=' + candidate) as response:
+                self.assertEqual(response.read().decode(), 'Completed garden document')
+            request = urllib.request.Request(url + '/progress/decision', data=urllib.parse.urlencode(dict(p=0, candidate='old', action='approve')).encode())
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                urllib.request.urlopen(request)
+            self.assertEqual(rejected.exception.code, 409)
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, *args): return None
+            request = urllib.request.Request(url + '/progress/decision', data=urllib.parse.urlencode(dict(p=0, candidate=candidate, action='approve')).encode())
+            with self.assertRaises(urllib.error.HTTPError) as redirect:
+                urllib.request.build_opener(NoRedirect).open(request)
+            self.assertEqual(redirect.exception.code, 303)
+            self.assertIsNone(progress.current(self.root))
+            self.assertEqual(board.items(board.roadmap(self.root))['R2']['state'], 'done')
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+
+if __name__ == '__main__':
+    unittest.main()

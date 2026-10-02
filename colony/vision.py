@@ -72,7 +72,8 @@ def locked(root):
 
 def history(root):
     from . import board
-    return board.read(root, 'vision.jsonl')
+    from . import lead
+    return board.read(lead.plan_root(root), 'vision.jsonl')
 
 
 def _record(root, before, after, how, words='', notify=True):
@@ -85,7 +86,8 @@ def _record(root, before, after, how, words='', notify=True):
 
 def _notifications(root, events):
     """Replay missing notifications after a crash, with a stable note ID."""
-    from . import board
+    from . import board, lead
+    root = Path(lead.info(root)['lead'])
     existing = {n['id'] for n in board.notes(root)}
     for event in events:
         ident = 'n-' + event['id']
@@ -103,6 +105,8 @@ def _notifications(root, events):
 
 
 def _observe(root):
+    from . import lead
+    root = lead.plan_root(root)
     path = Path(root) / 'ROADMAP.md'
     text = section(path.read_text())['text'] if path.exists() else ''
     events = history(root)
@@ -117,6 +121,8 @@ def _observe(root):
 
 
 def observe(root):
+    from . import lead
+    root = lead.plan_root(root)
     with locked(root):
         return _observe(root)
 
@@ -125,6 +131,10 @@ def save(root, text, *, how, words='', before=None):
     """Publish a board edit or an already agreed conversation change immediately."""
     if how not in ('board', 'conversation'):
         raise ValueError('A vision is saved from the board or an agreed conversation.')
+    from . import lead
+    if how == 'conversation':
+        lead.require_lead(root, root)
+    root = lead.plan_root(root)
     if how == 'conversation' and not words.strip():
         raise ValueError('Record the person’s words agreeing the change; brainstorming is not a vision update.')
     text = text.replace('\r\n', '\n').strip()
@@ -178,13 +188,15 @@ def install(root):
     """Called at rollout and project discovery, once per logical project, without waking it."""
     from . import board, providers
     root = Path(root)
+    observe(root)
     with locked(root):
-        _observe(root)
         marker = root / '.board' / 'vision-installed'
         if marker.exists():
             return
         providers.of(root).wire(board.workdir(root), board.protocol(root))
-        text = section((root / 'ROADMAP.md').read_text())['text'] if (root / 'ROADMAP.md').exists() else ''
+        from . import lead
+        plan = lead.plan_path(root)
+        text = section(plan.read_text())['text'] if plan.exists() else ''
         if not any(n.get('migration') == 'vision' or n.get('onboarding') == 'vision' for n in board.notes(root)):
             draft = board.roadmap(root)['goal']
             message = ("Your existing ## Vision stays as written. Board saves now update it directly and notify you "

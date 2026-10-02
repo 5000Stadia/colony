@@ -2,6 +2,24 @@
 
 One board to follow and steer a person's long projects, each driven by its own agent, with a monitor that acts for them across the colony.
 
+
+## Vision
+
+Colony is where a person brings ambitious, long projects to an excellent finish with AI agents, from their
+phone as easily as their desk. Each project is driven by its own agent, which holds a shared vision with the
+person, lays the path toward it, and builds each step to fit it and to make the next easier. The person
+steers; the agents carry the work, judging with the smartest models where judgement matters, spending lightly
+where it doesn't, and bringing the person only what truly needs them. A monitor acts for the person across
+the colony, within the helm they give it. Colony works from a fresh install on whichever agent programs are
+there, follows new models on its own, keeps itself current, and never gets in the way of the work.
+
+- One board: every project, its vision, its path and what waits on the person, readable on a phone.
+- The person's word is never lost: notes, direct conversation and the vision reach the agents and the monitor.
+- Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
+  decisions; no extra spend without substantial gain.
+- Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
+- Light machinery: a guardrail only where it helps more than it hinders; nothing interrupted mid-work.
+
 ## M1 — A harness that earns its shape
 
 - [x] R1 Intention and blueprint, from the garden pilots' measurements — design/intention.md, design/blueprint.md
@@ -39,8 +57,8 @@ One board to follow and steer a person's long projects, each driven by its own a
 - [x] R32 The roadmap folds and orders itself by the work: the latest started first, finished last in Completed, a live dot on what's in progress, each item's time in progress, and each heading's elapsed time
 - [x] R33 Not yet takes an item off the person's list until the agent says it's ready again
 - [x] R34 The overview line reads Roadmap: #/# · Active: the agent's time at work, all told
-- [~] R71 One switchable primary for a shared project and its roadmap, inherited item primaries with explicit exceptions, native Codex goals that continue to a coherent completed milestone/version, and human checkpoints proposed during the project's Vision/path conversation. The person requests colony-codex take the lead for Colony. Preserve the existing merge/deploy split unless they change it. Specification: docs/project-lead-spec.md.
-  First consultation cd37d08 ($0.96) complete. Native goal set/get, cold resume, clear, automatic activation and pause during an in-flight turn checked with local fixtures and no account calls. Proposed additions awaiting the person: consolidate routine item reviews at the milestone checkpoint, present the integrated usable deliverable for approval, and isolate or serialize item owners' edits. No live pairing or lead migration yet.
+- [?] R71 One switchable primary and canonical Vision/roadmap for a shared project, inherited item owners with explicit exceptions, bounded native Codex goals and human checkpoints at completed versions. Built: engagement sync to the last tested integration with preserved checkpoints and routed Git conflict hashes; the completing agent integrates, tests and delivers under a shared lock. Single-provider projects use their existing agent without secondary-provider coordination. Specification: docs/project-lead-spec.md.
+  Approved in m1222c6 / g99da32, refined by mc2b869, mb3fb46 and mdd202f; consultations cd37d08 ($0.96) and c97f627 ($1.28) complete. The person requests colony-codex take the lead. Isolated Git and native-goal lifecycle checks cover shared ownership, exclusive handoff, synchronization, review and recovery. Awaiting deployment, the requested live lead switch and the person's review of the coherent version.
 
 ## M5 — Public: anyone can start with it
 
@@ -94,6 +112,9 @@ One board to follow and steer a person's long projects, each driven by its own a
 
 - [?] R69 Choose model-and-effort pairs by an intelligence goal first: one Intelligence Index ceiling across all runnable providers, a configurable distance below it for each role, then the cheapest task-cost pair in each provider meeting that goal, or its highest-scoring pair with the shortfall visible. Exclude Ultra on Auto. Usage never lowers intelligence; waiting for reset is acceptable. Chores retain a value pick. Preserve adoption, rollback, pins and evidence/estimate labels; no domain categories or R70.
   The person's goal-first direction and final estimation rule supersede the knee proposal (m6ac2f1, md3ecb7). At least two measured efforts use the model's own average score gap; exactly one uses the closest same-provider donor at that effort and percentage spreads; otherwise no estimate or selection participation. Costs use positive proportional steps. Qualifying estimates follow the existing adoption switch and are replaced by measurements on daily refresh. Balanced offsets: judgement 0, monitor 2, main/runtime 4, routine 10. Primary evidence and plot: docs/model-pairs-research.md. The person approved one-point score equivalence and a seven-position global Auto slider with a per-project override (m1ec0d2; g835a7b answered). First consultation c8aafb9 ($2.72) and checking round cccc136 ($2.23) complete. Built: seven-position slider and previews in colony/project settings; project-scoped adoption and rollback; Index-only Models page; measured/estimated pair provenance and daily refresh. All 245 regression checks passed, then all 13 relevant checks passed after matching the person’s daily-refresh direction. Read-only current-lineup verification picks Sol6.1/max for Codex main. Colony merged, deployed and pushed R69 with all 245 checks passing (maa87ae). After reconciliation confirmed Sol6.1/max for both Codex projects, colony cleared both temporary model/effort pins; both now use Auto. Bookflow’s and holo-emitter’s Opus high pins were preserved. Daily fetching is guarded across board restarts. Awaiting only the person’s review of the slider.
+
+- [x] R72 Auto keeps consultants and the step-up helper at the shared Intelligence Index ceiling at all seven balance positions; Economy still shifts main, runtime, routine and monitor. Approved by the person in ma3eea1; focused checks pass.
+- [x] R73 Restoration skips repeating a carry-over whose ID is already present in the native compaction summary, while preserving recent conversation verbatim. Approved by the person in m9f4b5a; Claude summary and original-carry regression checks pass.
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar
 

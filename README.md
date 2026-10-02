@@ -7,6 +7,13 @@ for you across them.
 
 And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects with one strong agent.
 
+### Leads and completed versions
+
+Each project has one agent responsible for its roadmap by default. If you add another agent to the same folder, choose **Add helper** or **Switch lead**. Shared agents read one canonical Vision and roadmap; the lead assigns individual items when work is split. The completing agent integrates and delivers its tested work, and Colony synchronizes helpers only when they are engaged. A project with one provider needs no coordination setup.
+
+During the Vision conversation, your agent proposes a few useful completed versions and where to pause for you. Codex continues with a bounded native goal; the board shows **Pause work**, the current version and its candidate when ready. Approving a version can stop there or explicitly release a planned next one. Clearing a review card leaves it unapproved. [Mechanics and commands](docs/project-lead-spec.md).
+
+
 ## Quick start
 
     git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start

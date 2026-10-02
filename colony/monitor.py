@@ -725,8 +725,9 @@ class Watcher:
         context.tick_all()
 
     def tick(self):
-        from . import vision
+        from . import vision, continuation
         vision.observe_all()
+        continuation.tick_all()
         self.freshen()
         if not self.enabled:
             self.mail()  # project delivery is independent of the monitor agent

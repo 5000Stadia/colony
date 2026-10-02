@@ -85,6 +85,12 @@ class ClaudeCode:
         with resume, back in that conversation."""
         from .board import PERMISSIONS
         parts = ["claude"] + (["--resume", shlex.quote(resume)] if resume else [])
+        if root:
+            from . import lead
+            if str(Path(root).resolve()) == lead.info(root)['lead'] and lead.plan_root(root) != Path(root):
+                parts += ['--add-dir', shlex.quote(str(lead.plan_root(root)))]
+            for workspace in lead.workspaces(root):
+                parts += ['--add-dir', shlex.quote(str(workspace))]
         if self.token():
             # the long-lived sign-in, read from its file as the console starts: never written into the command
             parts.insert(0, f'{self.TOKEN_ENV}="$(cat {shlex.quote(str(self.token_path()))})"')
