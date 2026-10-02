@@ -154,6 +154,30 @@ class ContextTest(unittest.TestCase):
         self.assertEqual(context.transcript(self.s)['offset'], snap['offset'])
         self.assertEqual(context.tail(context.transcript(self.s))[0]['text'], 'Preserve  two spaces.')
 
+    def test_claude_summary_carry_is_not_reinjected_but_verbatim_tail_survives(self):
+        self.s['provider'] = 'claude'
+        atomic_json(context.file(self.root, 'context-session.json'), self.s)
+        self.state('prepared', tail=[dict(role='user', text='Keep the exact recent words.')], boundary=0)
+        carry = '<colony-carry id="1234567890abcdef">Already sent the invoice; do not repeat.</colony-carry>'
+        events = [dict(type='assistant', message=dict(content=carry)),
+                  dict(type='system', subtype='compact_boundary'),
+                  dict(type='user', isCompactSummary=True, message=dict(content='Native summary: ' + carry))]
+        self.path.write_text(''.join(json.dumps(e) + '\n' for e in events))
+        payload = dict(self.payload, hook_event_name='SessionStart', source='compact')
+        with patch.object(context, 'register', return_value=True):
+            restored = context.on_prompt(self.root, 'claude', payload)
+        self.assertNotIn('Already sent the invoice', restored)
+        self.assertIn('Keep the exact recent words.', restored)
+        self.assertIn('native summary already retains', restored)
+        context._cache.clear()
+        self.assertIn('1234567890abcdef', context.transcript(self.s)['summary_carries'])
+
+    def test_original_carry_before_compaction_is_not_mistaken_for_summary(self):
+        self.message('user', 'Original words')
+        self.message('assistant', '<colony-carry id="1234567890abcdef">Original carry.</colony-carry>')
+        self.event('compacted', dict(message='A native summary without that carry.'))
+        self.assertNotIn('1234567890abcdef', context.transcript(self.s)['summary_carries'])
+
     def test_safety_checks_busy_attached_drafts_pauses_and_pending_delivery(self):
         from colony import usage, mail
         with patch.object(console, 'running', return_value=True), patch.object(console, 'attached', return_value=False), \

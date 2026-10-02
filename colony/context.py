@@ -118,10 +118,11 @@ def _transcript(s, cache_file):
     cached = read(cache_file) or _cache.get(key)
     if cached:
         cached['markers'] = set(cached['markers'])
+        cached['summary_carries'] = set(cached.get('summary_carries', []))
         cached['current'] = cached['exchanges'][-1] if cached['current'] and cached['exchanges'] else None
     if not cached or cached['inode'] != stat.st_ino or cached['offset'] > stat.st_size:
         cached = dict(inode=stat.st_ino, offset=0, exchanges=[], current=None, tokens=None,
-                      window=None, usage_at=0, markers=set(), compact=0)
+                      window=None, usage_at=0, markers=set(), summary_carries=set(), compact=0)
         _cache[key] = cached
     if cached['offset'] == stat.st_size:
         return cached
@@ -142,6 +143,9 @@ def _transcript(s, cache_file):
                     cached['markers'].update(re.findall(r'colony-restored-([a-f0-9]{16})', line))
                 if event.get('type') == 'system' and event.get('subtype') == 'compact_boundary':
                     cached.update(tokens=None, usage_at=0, compact=cached['offset'])
+                    cached['summary_carries'].clear()
+                if event.get('isCompactSummary') or (event.get('type') == 'system' and event.get('subtype') == 'compact_boundary'):
+                    cached['summary_carries'].update(re.findall(r'<colony-carry id=\\?["\']([a-f0-9]{16})', line))
                 message = event.get('message') or {}
                 if event.get('type') == 'assistant' and (usage := message.get('usage')):
                     cached['tokens'] = sum(usage.get(k, 0) or 0 for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'))
@@ -158,6 +162,7 @@ def _transcript(s, cache_file):
                         cached['markers'].update(re.findall(r'colony-restored-([a-f0-9]{16})', text))
                 if event.get('type') == 'compacted':
                     cached.update(tokens=None, usage_at=0, compact=cached['offset'])
+                    cached['summary_carries'] = set(re.findall(r'<colony-carry id=\\?["\']([a-f0-9]{16})', line))
                 if event.get('type') == 'event_msg':
                     kind = payload.get('type')
                     if kind == 'task_started':
@@ -183,7 +188,7 @@ def _transcript(s, cache_file):
                 cached['current'] = exchange
             elif role == 'assistant' and cached['current'] is not None:
                 cached['current'].append(dict(role='assistant', text=text))
-    atomic_json(cache_file, dict(cached, markers=list(cached['markers'])))
+    atomic_json(cache_file, dict(cached, markers=list(cached['markers']), summary_carries=list(cached['summary_carries'])))
     return cached
 
 
@@ -282,13 +287,14 @@ def before_compact(root, key, payload):
         atomic_json(file(root), st)
 
 
-def historical(root, job):
+def historical(root, job, *, omit_carry=False):
     marker = 'colony-restored-' + job['id']
     text = (f'[{marker}] Historical context restored after compaction, not a new request. '
             'Do not redo actions from these exchanges. Current user instructions take precedence. '
             'The carry-over may predate the native summary; use that summary for newer progress. '
             'Read the current Vision, roadmap, notes and gates for durable project state.\n'
-            f"Carry-over recorded {job.get('written') or 'before this refresh'}:\n{job.get('carry') or '(none)'}\n\n")
+            + ('The native summary already retains this carry-over; its text is not repeated here.\n\n' if omit_carry else
+               f"Carry-over recorded {job.get('written') or 'before this refresh'}:\n{job.get('carry') or '(none)'}\n\n"))
     text += '\n\n'.join(m['role'] + ' (verbatim historical text):\n' + m['text'] for m in job.get('tail', []))
     if job.get('tail_deferred'):
         text += '\n\nThe complete recent exchange is retained in ' + job['source'] + '; ' + job['tail_deferred']
@@ -323,7 +329,7 @@ def on_prompt(root, key, payload):
             return ''
         if not compact_start and snap['compact'] <= job.get('boundary', snap['offset']):
             return ''  # PreCompact is not evidence that compaction succeeded.
-        text = historical(root, job)
+        text = historical(root, job, omit_carry=job['id'] in snap.get('summary_carries', set()))
         if len(text.encode()) > OUTPUT_BUDGET:
             raise ValueError('Restoration exceeds the provider output budget; retained for recovery.')
         return text
