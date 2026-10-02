@@ -2962,6 +2962,55 @@ class ConsultationGateTest(BoardBase):
             self.consult.run(self.root, 'R3', 'Check', 'd', plan='p', rnd=2)
         self.assertEqual(len(self.calls), 2)
 
+    def test_clear_closes_a_consultant_gate_without_assuming_choices_or_allowing_a_check(self):
+        gate = self.gate()
+        port = self.server()
+        request = urllib.request.Request(f'http://127.0.0.1:{port}/clear',
+                                         data=urllib.parse.urlencode(dict(p=0, key='gate:' + gate['id'])).encode())
+        with urllib.request.urlopen(request) as response:
+            self.assertEqual(response.status, 200)
+        saved = board.gates(self.root)[0]
+        self.assertTrue(saved['cleared'])
+        self.assertIsNone(saved['point_decisions'])
+        self.assertFalse([w for w in board.waiting_items(self.root) if w['kind'] == 'gate'])
+        page = board.render_item(board.registry(), 0, 'R3')
+        self.assertIn('Cleared without an answer.', page)
+        self.assertIn('No decision', page)
+        self.assertNotIn("<span class='badge'>Rejected</span>", page)
+        self.assertIsNone(self.consult.records(self.root)[0]['adopted'])
+        with self.assertRaisesRegex(ValueError, 'accepted a change'):
+            self.consult.run(self.root, 'R3', 'Check', 'd', plan='p', rnd=2)
+        [note] = [n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']]
+        self.assertTrue(note['quiet'])
+        self.assertEqual(len(self.calls), 2, 'Clearing, rendering and a refused checking round call no models.')
+        self.post(port, gate=gate['id'], point_P1='accept', point_P2='reject')
+        self.assertFalse(board.gates(self.root)[0]['cleared'])
+        self.assertEqual(self.consult.records(self.root)[0]['adopted'], 'P1: Retain reminder history.')
+        self.assertEqual(len([r for r in board.read(self.root, 'gates.jsonl') if r['type'] == 'answer']), 2)
+
+    def test_clear_retry_repairs_its_quiet_note_and_cannot_erase_an_explicit_answer(self):
+        from unittest.mock import patch
+        gate = self.gate()
+        append = board.append
+        def fail_note(root, filename, value):
+            if filename == 'notes.jsonl':
+                raise OSError('temporary note write failure')
+            return append(root, filename, value)
+        with patch.object(board, 'append', side_effect=fail_note), self.assertRaises(OSError):
+            board.clear_waiting(self.root, 'gate:' + gate['id'])
+        rows = board.read(self.root, 'gates.jsonl')
+        board.clear_waiting(self.root, 'gate:' + gate['id'])
+        board.clear_waiting(self.root, 'gate:' + gate['id'])
+        self.assertEqual(board.read(self.root, 'gates.jsonl'), rows)
+        [note] = [n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']]
+        self.assertEqual(note['id'], rows[-1]['note_id'])
+        self.assertTrue(note['quiet'])
+        board.answer_gate(self.root, gate['id'], '', tell=False, decisions={'P1': 'accept', 'P2': 'reject'})
+        rows = board.read(self.root, 'gates.jsonl')
+        board.clear_waiting(self.root, 'gate:' + gate['id'])
+        self.assertEqual(board.read(self.root, 'gates.jsonl'), rows)
+        self.assertEqual(self.consult.records(self.root)[0]['adopted'], 'P1: Retain reminder history.')
+
     def test_conversation_choices_are_recorded_without_echoing_a_note_to_the_agent(self):
         gate = self.gate()
         result = self.cli('gate', 'Keep history; do not require resets.', '--answered', gate['id'],

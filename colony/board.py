@@ -780,11 +780,11 @@ def gates(root):
     out = {}
     for e in read(root, "gates.jsonl"):
         if e["type"] == "gate":
-            out[e["id"]] = dict(e, answer=None, answered_at=None, point_decisions=None, note_id=None, comment="")
+            out[e["id"]] = dict(e, answer=None, answered_at=None, point_decisions=None, note_id=None, comment="", cleared=False)
         elif e["type"] == "answer" and e["of"] in out:
             out[e["of"]].update(answer=e["text"], answered_at=e["at"],
                                 point_decisions=e.get("point_decisions"), note_id=e.get("note_id"),
-                                comment=e.get("comment", ""))
+                                comment=e.get("comment", ""), cleared=e.get("cleared", False))
     return list(out.values())
 
 
@@ -1010,10 +1010,11 @@ def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
         return _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
 
 
-def _gate_note(root, gate, ident, text, at):
+def _gate_note(root, gate, ident, text, at, *, author="person", quiet=False):
     if ident and not any(n["id"] == ident for n in notes(root)):
-        append(root, "notes.jsonl", dict(type="note", id=ident, at=at, author="person",
-            anchor={"gate": gate["id"], "item": gate.get("item")}, text=f"On \"{gate['question']}\": {text}"))
+        append(root, "notes.jsonl", dict(type="note", id=ident, at=at, author=author,
+            anchor={"gate": gate["id"], "item": gate.get("item")}, text=f"On \"{gate['question']}\": {text}",
+            **({"quiet": True} if quiet else {})))
 
 
 def _answer_gate(root, gate_id, text, *, tell, decisions):
@@ -1041,6 +1042,23 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
     if tell:
         _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"])
     return answer
+
+
+def clear_gate(root, gate_id):
+    """Close without inventing point choices; a retry repairs the quiet receipt."""
+    with gate_lock(root):
+        gate = next((g for g in gates(root) if g["id"] == gate_id), None)
+        if not gate or (gate["answer"] and not gate["cleared"]):
+            return  # A choice saved before Clear wins; it is never erased.
+        if not gate["answer"]:
+            answer = dict(type="answer", of=gate_id, at=now(), cleared=True,
+                          text="(cleared by the person without an answer)", note_id="n" + secrets.token_hex(3))
+            append(root, "gates.jsonl", answer)
+            gate.update(answer=answer["text"], answered_at=answer["at"], note_id=answer["note_id"], cleared=True)
+        _gate_note(root, gate, gate["note_id"],
+                   "The person cleared this gate from their list without answering. No consultant choices were made. "
+                   "Treat it as handled; if it still blocks you, open it again with the reason.",
+                   gate["answered_at"], author="colony", quiet=True)
 
 
 def open_notes(root, item=None):
@@ -1573,7 +1591,8 @@ def gate_body(root, pid, gate, back):
                   "<option value=''>Choose…</option>" + "".join(
                       f"<option value='{value}'{' selected' if choices.get(point['id']) == value else ''}>{label}</option>"
                       for value, label in (("accept", "Accept"), ("reject", "Reject"))) + "</select>")
-        control = (f"<span class='badge'>{'Accepted' if choices.get(point['id']) == 'accept' else 'Rejected'}</span>"
+        decision = {"accept": "Accepted", "reject": "Rejected"}.get(choices.get(point["id"]), "No decision")
+        control = (f"<span class='badge'>{decision}</span>"
                    if gate["answer"] else select)
         prefix = f"<div class='consult-point'><label><span><b>{e(point['id'])}</b> {e(point['text'])}</span>"
         suffix = f"</label><div class='who'>{e(sources)}</div></div>"
@@ -1589,7 +1608,8 @@ def gate_body(root, pid, gate, back):
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
                 + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
     if gate["answer"]:
-        body += "".join(rows) + f"<div class='pre'>Your answer: {e(gate['answer'])}</div>"
+        answer_text = "Cleared without an answer." if gate.get("cleared") else f"Your answer: {e(gate['answer'])}"
+        body += "".join(rows) + f"<div class='pre'>{answer_text}</div>"
         if points:
             body += ("<p class='muted'>The checking round is already recorded; this decision has used both rounds.</p>"
                      if rec and rec.get("checking_round") else
@@ -2149,15 +2169,13 @@ def clear_waiting(root, key):
     """The person cleared something from what waits on them. A gate or a question is closed; an item to
     verify or a choice on screen is set aside until it goes. The agent hears of it quietly, on its next turn,
     without being woken: it may already be handled."""
+    if key.startswith("gate:"):
+        clear_gate(root, key[5:])
+        return
     w = next((w for w in waiting_items(root) if w["key"] == key), None)
     if not w:
         return
-    if w["kind"] == "gate":
-        g = w["gate"]
-        answer_gate(root, g["id"], "(cleared by the person without an answer)", tell=False)
-        add_note(root, {"gate": g["id"], "item": g.get("item")}, f"The person cleared your gate \"{g['question']}\" from "
-                 "their list without answering. Treat it as handled; if it still blocks you, open it again with the reason.", author='colony', quiet=True)
-    elif w["kind"] == "ask":
+    if w["kind"] == "ask":
         answer_asks(root, "cleared by the person")
         asked = [s.strip() for s in re.split(r"(?<=[.!?])\s+", w["ask"]["text"]) if s.strip().endswith("?")]
         add_note(root, None, f"The person cleared your question from their list: \"{(asked or [w['ask']['text'][-200:]])[-1]}\" "
