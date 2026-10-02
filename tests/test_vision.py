@@ -319,7 +319,7 @@ class VisionTest(BoardBase):
         [note] = board.notes(joined)
         self.assertFalse(note.get('quiet', False))
         self.assertIn('read how this project already plans', note['text'])
-        self.assertIn('do not publish a new roadmap path before we clearly agree', note['text'])
+        self.assertIn('do not publish a new roadmap path before you clearly agree', note['text'])
         self.assertIn('colony vision --file', note['text'])
         self.assertIn("project's own agent", note['text'])
         self.assertEqual((joined / 'ROADMAP.md').read_text(), ROADMAP)

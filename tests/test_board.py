@@ -95,6 +95,8 @@ class BoardTest(BoardBase):
         board.track(root)
         [note] = board.notes(root)
         self.assertEqual(note['author'], 'colony')
+        self.assertTrue(note['text'].startswith('The person has just added this project.'), "colony's note, in colony's voice")
+        self.assertNotIn("I've", board.JOIN + board.BEGIN)
 
     def test_the_persons_typed_words_are_theirs_and_colonys_receipts_are_colonys(self):
         board.track(self.root)
@@ -186,7 +188,7 @@ class BoardTest(BoardBase):
         self.assertFalse((old / "ROADMAP.md").exists(), "no empty placeholder beside the project's own plan")
         [n] = board.notes(old)
         self.assertIn("bring the roadmap on board", n["text"])
-        self.assertLess(n['text'].index('have a conversation with me'), n['text'].index('Only then bring the roadmap'))
+        self.assertLess(n['text'].index('have a conversation with the person'), n['text'].index('Only then bring the roadmap'))
         board.track(old)
         self.assertEqual(len(board.notes(old)), 1, "asked once, however often it is added")
         fresh = Path(self.tmp.name) / "fresh"

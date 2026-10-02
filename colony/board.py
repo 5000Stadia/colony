@@ -124,30 +124,30 @@ it went. Record the move and their original words in the dated vision history.
   quicker. Mail from the colony arrives by itself; answer a question with `colony reply ID "..."`.
 """
 
-# Left once, as the person, for a project that joins with work of its own: the notes deliver it on the agent's
-# next turn (the watcher starts or wakes the session), and its reply shows on the board.
-JOIN = """I've just added this project to my colony: the set of projects I follow and steer from one board, where \
-I leave notes and answer your gates, and where the projects can message each other. The new section of \
-CLAUDE.md, "This project is part of a colony", says how it works.
+# Left once by colony, which writes it (the person never typed it), for a project the person adds: the notes
+# deliver it on the agent's next turn (the watcher starts or wakes the session), and its reply shows on the board.
+JOIN = """The person has just added this project to their colony: the set of projects they follow and steer from \
+one board, where they leave notes and answer your gates, and where the projects can message each other. The new \
+section of CLAUDE.md, "This project is part of a colony", says how it works.
 
 First, read how this project already plans its work (its plan and spec documents, notes, open work and \
-recent history), so you arrive informed. Then have a conversation with me about our shared vision: \
-draw out the image of the finished work with me. This is between you, this project's own agent, and me; \
-the monitor's setup does not stand in for it. Leave distant details open until the work depends on them. \
-Keep existing plans intact and do not publish a new roadmap path before we clearly agree the vision. \
+recent history), so you arrive informed. Then have a conversation with the person about your shared vision: \
+draw out the image of the finished work with them. This is between you, this project's own agent, and the \
+person; the monitor's setup does not stand in for it. Leave distant details open until the work depends on \
+them. Keep existing plans intact and do not publish a new roadmap path before you clearly agree the vision. \
 Once agreed, record it with `colony vision --file PATH --words "the person's words agreeing it"`.
 
 Only then bring the roadmap on board. Write ROADMAP.md in the colony format: milestones as \
 `## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` only for what \
-waits on my own eye; what you can check yourself, check. Include what's \
-done, what's under way, and features we've discussed but not built, as unchecked items under a later \
-milestone. Point each item at the document its detail lives in rather than copying it; the project's own \
-documents stay where they are. Show me the milestones before treating them as settled."""
+waits on the person's own eye; what you can check yourself, check. Include what's done, what's under way, and \
+features discussed but not built, as unchecked items under a later milestone. Point each item at the document \
+its detail lives in rather than copying it; the project's own documents stay where they are. Show the person \
+the milestones before treating them as settled."""
 
-BEGIN = """I've just added this project. Your first piece of work is a conversation with me about its vision:
-draw out our shared image of the finished work with me. This is between you, this project's own agent,
-and me; the monitor's setup does not stand in for it. Leave distant details open until the work depends
-on them. Once we clearly agree the vision, record it with
+BEGIN = """The person has just added this project. Your first piece of work is a conversation with them about its
+vision: draw out your shared image of the finished work together. This is between you, this project's own
+agent, and the person; the monitor's setup does not stand in for it. Leave distant details open until the
+work depends on them. Once you clearly agree the vision, record it with
 `colony vision --file PATH --words "the person's words agreeing it"`. Only then lay the roadmap toward it.
 Do not publish a roadmap path before that agreement."""
 
