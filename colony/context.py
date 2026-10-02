@@ -118,11 +118,12 @@ def _transcript(s, cache_file):
     cached = read(cache_file) or _cache.get(key)
     if cached:
         cached['markers'] = set(cached['markers'])
-        cached['summary_carries'] = set(cached.get('summary_carries', []))
+        cached.pop('summary_carries', None)
+        cached.setdefault('summary', '')
         cached['current'] = cached['exchanges'][-1] if cached['current'] and cached['exchanges'] else None
     if not cached or cached['inode'] != stat.st_ino or cached['offset'] > stat.st_size:
         cached = dict(inode=stat.st_ino, offset=0, exchanges=[], current=None, tokens=None,
-                      window=None, usage_at=0, markers=set(), summary_carries=set(), compact=0)
+                      window=None, usage_at=0, markers=set(), summary='', compact=0)
         _cache[key] = cached
     if cached['offset'] == stat.st_size:
         return cached
@@ -142,11 +143,10 @@ def _transcript(s, cache_file):
                 if event.get('type') == 'attachment' and (event.get('attachment') or {}).get('type') == 'hook_success':
                     cached['markers'].update(re.findall(r'colony-restored-([a-f0-9]{16})', line))
                 if event.get('type') == 'system' and event.get('subtype') == 'compact_boundary':
-                    cached.update(tokens=None, usage_at=0, compact=cached['offset'])
-                    cached['summary_carries'].clear()
-                if event.get('isCompactSummary') or (event.get('type') == 'system' and event.get('subtype') == 'compact_boundary'):
-                    cached['summary_carries'].update(re.findall(r'<colony-carry id=\\?["\']([a-f0-9]{16})', line))
+                    cached.update(tokens=None, usage_at=0, compact=cached['offset'], summary='')
                 message = event.get('message') or {}
+                if event.get('isCompactSummary'):
+                    cached['summary'] = _text(message.get('content'))
                 if event.get('type') == 'assistant' and (usage := message.get('usage')):
                     cached['tokens'] = sum(usage.get(k, 0) or 0 for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'))
                     cached['usage_at'] = cached['offset']
@@ -161,8 +161,8 @@ def _transcript(s, cache_file):
                     if role == 'developer':
                         cached['markers'].update(re.findall(r'colony-restored-([a-f0-9]{16})', text))
                 if event.get('type') == 'compacted':
-                    cached.update(tokens=None, usage_at=0, compact=cached['offset'])
-                    cached['summary_carries'] = set(re.findall(r'<colony-carry id=\\?["\']([a-f0-9]{16})', line))
+                    # Only the summary itself: its replacement history keeps colony's own request verbatim.
+                    cached.update(tokens=None, usage_at=0, compact=cached['offset'], summary=payload.get('message') or '')
                 if event.get('type') == 'event_msg':
                     kind = payload.get('type')
                     if kind == 'task_started':
@@ -188,8 +188,14 @@ def _transcript(s, cache_file):
                 cached['current'] = exchange
             elif role == 'assistant' and cached['current'] is not None:
                 cached['current'].append(dict(role='assistant', text=text))
-    atomic_json(cache_file, dict(cached, markers=list(cached['markers']), summary_carries=list(cached['summary_carries'])))
+    atomic_json(cache_file, dict(cached, markers=list(cached['markers'])))
     return cached
+
+
+def retained(carry, summary):
+    """The native summary holds the carry-over's own words; its id alone also appears in colony's request."""
+    words = ' '.join((carry or '').split())
+    return bool(words) and words in ' '.join((summary or '').split())
 
 
 def tail(snapshot, budget=TAIL_BUDGET, skip_pending=False):
@@ -329,7 +335,7 @@ def on_prompt(root, key, payload):
             return ''
         if not compact_start and snap['compact'] <= job.get('boundary', snap['offset']):
             return ''  # PreCompact is not evidence that compaction succeeded.
-        text = historical(root, job, omit_carry=job['id'] in snap.get('summary_carries', set()))
+        text = historical(root, job, omit_carry=retained(job.get('carry'), snap.get('summary')))
         if len(text.encode()) > OUTPUT_BUDGET:
             raise ValueError('Restoration exceeds the provider output budget; retained for recovery.')
         return text
