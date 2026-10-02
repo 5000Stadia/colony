@@ -32,6 +32,15 @@ The person's words: "Approve on the colony roadmap items however before each new
 inplemented pleasse surface to me the proposed improvement, overhead in use, if its still relevant and
 if Claude still agreed its the smartest next step".
 
+Agreed 2026-10-02: keep this conversation and its pending-approval checks scoped to the shared Colony
+project. Do not aggregate other projects' approvals or follow their approval acknowledgements here.
+Bring another project's information in only for a specific Colony dependency or an explicit request.
+Claude's paired review of Colony's work belongs to this shared project.
+
+The person's words: "Additionally, mucking up your context with other projects approvals is not something
+that should be a colony board behavior. I probably shouldn’t have. Had you concern yourself with any
+updates on any other projects. Let’s just refocus here."
+
 ## M1 — A harness that earns its shape
 
 - [x] R1 Intention and blueprint, from the garden pilots' measurements — design/intention.md, design/blueprint.md
@@ -70,7 +79,7 @@ if Claude still agreed its the smartest next step".
 - [x] R33 Not yet takes an item off the person's list until the agent says it's ready again
 - [x] R34 The overview line reads Roadmap: #/# · Active: the agent's time at work, all told
 - [x] R71 One switchable primary and canonical Vision/roadmap for a shared project, inherited item owners with explicit exceptions, bounded native Codex goals and human checkpoints at completed versions. Built: engagement sync to the last tested integration with preserved checkpoints and routed Git conflict hashes; the completing agent integrates, tests and delivers under a shared lock. Single-provider projects use their existing agent without secondary-provider coordination. Specification: docs/project-lead-spec.md.
-  Approved in m1222c6 / g99da32, refined by mc2b869, mb3fb46 and mdd202f; consultations cd37d08 ($0.96) and c97f627 ($1.28) complete. The requested live lead switch to colony-codex has landed. The person's notification refinement is built: explicit source records suppress own changes, relevant updates wait quietly during idle periods, and engagement delivers one complete catch-up with receipts after output. Lead and helper catch-up preserve unread history across assignments and handoffs; staged generated instructions stay out of checkpoints. Anthropic peer review m7f1e8a informed that refinement. All 318 regression checks pass, including isolated Git and native-goal lifecycle coverage of ownership, exclusive handoff, synchronization, review and recovery. The person approved completed version M4-R71 in conversation on 2026-10-02.
+  Approved in m1222c6 / g99da32, refined by mc2b869, mb3fb46 and mdd202f; consultations cd37d08 ($0.96) and c97f627 ($1.28) complete. The requested live lead switch to colony-codex has landed. The person's notification refinement is built: explicit source records suppress own changes, relevant updates wait quietly during idle periods, and engagement delivers one complete catch-up with receipts after output. Lead and helper catch-up preserve unread history across assignments and handoffs; staged generated instructions stay out of checkpoints. Anthropic peer review m7f1e8a informed that refinement. All 318 regression checks pass, including isolated Git and native-goal lifecycle coverage of ownership, exclusive handoff, synchronization, review and recovery. The person approved completed version M4-R71 in conversation on 2026-10-02. Requested follow-up: generated receipts identify Colony explicitly, and known approval/correction decisions do not echo back to the recording lead. Catch-up acknowledges only the exact flushed snapshot and preserves unread outside changes through retries and assignment switches. Anthropic review mdf7eb8 recommends this as a bug fix with no model calls in normal use.
 
 ## M5 — Public: anyone can start with it
 
