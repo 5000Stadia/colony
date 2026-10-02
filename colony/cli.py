@@ -842,7 +842,9 @@ def cmd_notes(a):
             board.said(root, prompt)                         # their own words, for the monitor to catch up on
         from . import bench
         standing = bench.plan_text(root) if a.session else ""       # the helper tiers, every session
-        fresh, still = board.deliver(root, session=a.session)
+        fresh, still = board.deliver(root, session=a.session, mark=False)
+        fresh, own = vision.delivery(root, fresh)
+        still, earlier_own = vision.delivery(root, still)
         if any(not n.get("quiet") and not n["anchor"] and n.get('author') != 'observation' for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
@@ -850,7 +852,7 @@ def cmd_notes(a):
             standing,
             lead.role_text(root) if a.session else '',
             progress.GUIDANCE if a.session and (not lead.group(root) or str(root) == lead.info(root)['lead']) else '',
-            lead.engage(root),
+            lead.engage(root, mark=False),
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
@@ -860,7 +862,10 @@ def cmd_notes(a):
     else:
         text = board.render_notes(board.open_notes(root, a.item), "Open notes:") or "No open notes."
     if text:
-        print(text)
+        print(text, flush=True)
+    if a.deliver:
+        board.delivered(root, fresh, own + earlier_own)
+        lead.acknowledge_engagement(root)
     return 0
 
 
@@ -870,8 +875,9 @@ def cmd_noted(a):
     if a.id not in {n["id"] for n in board.notes(root)}:
         print(f"no note {a.id}", file=sys.stderr)
         return 2
-    board.append(root, "notes.jsonl", {"type": "addressed", "of": a.id, "at": board.now(), "text": a.text})
     note = next(n for n in board.notes(root) if n["id"] == a.id)
+    for ident in note.get('batch_ids') or [a.id]:
+        board.append(root, "notes.jsonl", {"type": "addressed", "of": ident, "at": board.now(), "text": a.text})
     if note.get("author") == "suggestion":            # the monitor made it, so the answer is the monitor's to hear
         from . import monitor
         monitor.queue(f"{root.name} answered your suggestion ({note['text'][:80]}...): {a.text}")

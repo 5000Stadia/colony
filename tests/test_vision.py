@@ -3,6 +3,7 @@ import concurrent.futures
 import html
 from pathlib import Path
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 import urllib.error
@@ -10,7 +11,7 @@ import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-from colony import board, console, consult, monitor, vision
+from colony import board, cli, console, consult, lead, monitor, vision
 from tests.test_board import BoardBase, ROADMAP
 
 
@@ -85,7 +86,7 @@ class VisionTest(BoardBase):
         vision.observe(self.root)
         self.assertEqual(board.notes(self.root), [])
 
-    def test_file_changes_are_neutral_through_history_hook_board_and_wake(self):
+    def test_file_changes_are_neutral_and_wait_for_engagement(self):
         vision.save(self.root, 'First.', how='conversation', words='First is agreed.')
         self.path.write_text(vision.replace(self.path.read_text(), 'An external revision.'))
         vision.observe(self.root)
@@ -96,8 +97,7 @@ class VisionTest(BoardBase):
         self.assertIn('file change observed', board.thread([note]))
         with patch.object(console, 'snapshot', return_value={'state': 'idle'}), patch.object(console, 'type_into', return_value=True) as send:
             monitor.Watcher(enabled=False).mail()
-        self.assertIn('observed file change', send.call_args.args[1])
-        self.assertNotIn('person', send.call_args.args[1])
+        send.assert_not_called()
         board.record_ask(self.root, 'ask', 'Which chapter should come next?', explicit=True)
         result = self.cli('notes', '--deliver')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -107,6 +107,100 @@ class VisionTest(BoardBase):
         self.assertEqual(len(board.asks(self.root)), 1)
         vision.observe(self.root)
         self.assertEqual(len(board.notes(self.root)), 1)
+
+    def test_stamped_own_commit_is_not_echoed_but_external_edit_is(self):
+        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        self.commit('Agreed baseline')
+        self.path.write_text(vision.replace(self.path.read_text(), 'My revision.'))
+        # The watcher can see a change before the agent commits it.
+        vision.observe(self.root)
+        self.git('add', 'ROADMAP.md')
+        self.git('commit', '-m', 'My revision', '--trailer', 'Colony-Agent: ' + self.root.name)
+        result = self.cli('notes', '--deliver')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('Observed file changes', result.stdout)
+        self.assertEqual(board.open_notes(self.root), [])
+        self.path.write_text(vision.replace(self.path.read_text(), 'Outside revision.'))
+        self.commit('Unstamped outside edit')
+        vision.observe(self.root)
+        result = self.cli('notes', '--deliver')
+        self.assertIn('Outside revision.', result.stdout)
+        self.assertNotIn('Outside revision.', self.cli('notes', '--deliver').stdout)
+
+    def test_idle_changes_make_one_complete_catch_up_and_keep_history(self):
+        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        for number in range(5):
+            vision.save(self.root, f'Revision {number}.', how='board')
+        original_history = vision.history(self.root)
+        with patch.object(console, 'snapshot', return_value={'state': 'idle'}), patch.object(console, 'type_into') as send:
+            monitor.Watcher(enabled=False).mail()
+            send.assert_not_called()
+        result = self.cli('notes', '--deliver')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('5 pending change(s)', result.stdout)
+        self.assertEqual(result.stdout.count('Current Vision:'), 1)
+        self.assertIn('Before:\nFirst.', result.stdout)
+        self.assertIn('Current Vision:\nRevision 4.', result.stdout)
+        self.assertEqual(vision.history(self.root), original_history)
+        self.assertTrue(all(n['delivered_at'] for n in board.notes(self.root)))
+        representative = board.notes(self.root)[-1]['id']
+        self.assertEqual(self.cli('noted', representative, 'Applied the current direction.').returncode, 0)
+        self.assertEqual(board.open_notes(self.root), [])
+
+    def test_persons_board_edit_is_still_delivered_when_lead_commits_it(self):
+        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        self.commit('Baseline')
+        vision.save(self.root, 'The person changed this.', how='board')
+        self.git('add', 'ROADMAP.md')
+        self.git('commit', '-m', 'Record board edit', '--trailer', 'Colony-Agent: ' + self.root.name)
+        result = self.cli('notes', '--deliver')
+        self.assertIn('The person saved the vision on the board.', result.stdout)
+        self.assertIn('The person changed this.', result.stdout)
+
+    def test_historical_own_stamp_does_not_claim_new_unstamped_repeated_edit(self):
+        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        self.commit('Baseline')
+        self.path.write_text(vision.replace(self.path.read_text(), 'My revision.'))
+        self.git('add', 'ROADMAP.md')
+        self.git('commit', '-m', 'My revision', '--trailer', 'Colony-Agent: ' + self.root.name)
+        vision.observe(self.root)
+        self.assertEqual(board.notes(self.root), [])
+        for text in ('First.', 'My revision.'):
+            self.path.write_text(vision.replace(self.path.read_text(), text))
+            vision.observe(self.root)
+            self.assertIsNone(vision.history(self.root)[-1]['source'])
+        result = self.cli('notes', '--deliver')
+        self.assertIn('2 pending change(s)', result.stdout)
+        self.assertIn('Current Vision:\nMy revision.', result.stdout)
+
+    def test_failed_hook_output_does_not_consume_changes(self):
+        vision.save(self.root, 'Retry this update.', how='board')
+        args = SimpleNamespace(deliver=True, session=False, console=None)
+        with patch.object(board, 'root_of', return_value=self.root), patch.object(cli, '_hook_input', return_value={}), patch('builtins.print', side_effect=BrokenPipeError):
+            with self.assertRaises(BrokenPipeError):
+                cli.cmd_notes(args)
+        self.assertIsNone(board.notes(self.root)[0]['delivered_at'])
+        result = self.cli('notes', '--deliver')
+        self.assertIn('Retry this update.', result.stdout)
+        self.assertIsNotNone(board.notes(self.root)[0]['delivered_at'])
+
+    def test_conversation_source_does_not_echo_to_lead_but_reaches_helper(self):
+        helper = board.sharing(self.root, 'garden-review', {'provider': 'codex'})
+        before = {n['id'] for n in board.notes(helper)}
+        lead_notes = board.notes(self.root)
+        event = vision.save(self.root, 'The new shared horizon.', how='conversation', words='Yes.')
+        self.assertEqual(event['source'], str(self.root))
+        self.assertEqual(board.notes(self.root), lead_notes)
+        changes = [n for n in board.notes(helper) if n['id'] not in before]
+        self.assertEqual(len(changes), 1)
+        self.assertTrue(changes[0]['quiet'])
+        self.assertIn('The new shared horizon.', changes[0]['text'])
+
+    def test_item_notes_wait_until_relevant_work_begins(self):
+        note = board.add_note(self.root, {'item': 'R3'}, 'Needed when reminders begin.', quiet=True)
+        self.assertNotIn(note['id'], [n['id'] for n in board.open_notes(self.root)])
+        self.path.write_text(self.path.read_text().replace('[ ] R3', '[~] R3'))
+        self.assertIn(note['id'], [n['id'] for n in board.open_notes(self.root)])
 
     def test_missing_notification_recovers_and_replay_never_reopens_handled_note(self):
         append = board.append
@@ -190,8 +284,9 @@ class VisionTest(BoardBase):
         with patch.object(console, 'snapshot', return_value={'state': 'idle'}), patch.object(console, 'type_into', return_value=True) as send:
             watcher.tick()
             watcher.tick()
-            send.assert_called_once()
-        self.assertEqual(len([n for n in board.notes(self.root) if not n.get('quiet')]), 1)
+            send.assert_not_called()
+        self.assertTrue(all(n.get('quiet') for n in board.notes(self.root)))
+        self.assertIn('Changed outside.', self.cli('notes', '--deliver').stdout)
 
     def test_existing_vision_receives_quiet_mechanics_note_without_redrafting(self):
         vision.save(self.root, 'Already agreed.', how='conversation', words='Yes.')
@@ -231,7 +326,7 @@ class VisionTest(BoardBase):
         self.assertIn('move item-level detail from Vision', board.PROTOCOL)
         self.assertIn('## Vision', board.SKELETON)
 
-    def test_http_multiline_save_noop_stale_recovery_and_immediate_wake(self):
+    def test_http_multiline_save_noop_stale_recovery_and_quiet_update(self):
         vision.save(self.root, 'First.\nSecond.', how='conversation', words='Yes.')
         httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
         httpd.watcher = Mock()
@@ -244,6 +339,7 @@ class VisionTest(BoardBase):
             with post('First.\r\nSecond.', 'New.\r\nMore.') as response:
                 self.assertEqual(response.status, 200)
             httpd.watcher.mail.assert_called_once()
+            self.assertTrue(board.notes(self.root)[0]['quiet'])
             self.assertEqual(board.roadmap(self.root)['vision'], 'New.\nMore.')
             self.assertIsNone(vision.save(self.root, 'New.\r\nMore.', how='board', before='New.\r\nMore.'))
             self.assertEqual(len(board.notes(self.root)), 1)

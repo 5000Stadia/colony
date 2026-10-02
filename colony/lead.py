@@ -86,7 +86,8 @@ def commit_plan(root, message, *, actor=None):
     g = require_lead(root, actor)
     canonical = Path(g['canonical'])
     git(canonical, 'add', '--', 'ROADMAP.md')
-    git(canonical, 'commit', '--only', '-m', message, '--', 'ROADMAP.md')
+    git(canonical, 'commit', '--only', '-m', message,
+        '--trailer', 'Colony-Agent: ' + Path(g['lead']).name, '--', 'ROADMAP.md')
     return git(canonical, 'rev-parse', 'HEAD')
 
 
@@ -397,7 +398,8 @@ def sync_item(root, item, *, actor=None):
             git(workspace, 'add', '--all', '--', '.', ':(exclude).board', ':(exclude)ROADMAP.md',
                 ':(exclude).codex', ':(exclude).claude')
             if git(workspace, 'diff', '--cached', '--name-only'):
-                git(workspace, 'commit', '-m', f'Checkpoint {item} before Colony engagement sync')
+                git(workspace, 'commit', '-m', f'Checkpoint {item} before Colony engagement sync',
+                    '--trailer', 'Colony-Agent: ' + Path(value['owner']).name)
             before = git(workspace, 'rev-parse', 'HEAD')
             prior = value.get('conflict') or {}
             if prior.get('checkpoint') == before and prior.get('target') == target:
@@ -423,7 +425,45 @@ def sync_item(root, item, *, actor=None):
         update(root, change, generation=g['generation'])
         return value
 
-def engage(root):
+def catch_up_subjects(workspace, previous, target, member):
+    if not previous or not target or previous == target:
+        return []
+    raw = git(workspace, 'log', '--format=%s%x1f%(trailers:key=Colony-Agent,valueonly)%x00',
+              previous + '..' + target, check=False)
+    subjects = []
+    for entry in raw.split('\0'):
+        if '\x1f' not in entry:
+            continue
+        subject, source = entry.strip('\n').split('\x1f', 1)
+        if source.strip() not in (str(member), Path(member).name):
+            subjects.append(subject)
+    return subjects
+
+
+def _looked(value, target, items, revision, *, mark):
+    receipt = dict(looked_at=target, looked_items=items, looked_revision=revision)
+    if mark:
+        value.update(receipt)
+        value.pop('pending_look', None)
+    else:
+        value['pending_look'] = receipt
+
+
+def acknowledge_engagement(root):
+    """Advance only the catch-up actually flushed by the engagement hook."""
+    if not group(root):
+        return
+    mine = str(Path(root).resolve())
+    def acknowledge(g):
+        values = [a for a in g['assignments'].values() if a['owner'] == mine]
+        values.append(g.get('engagements', {}).get(mine, {}))
+        for value in values:
+            if value.get('pending_look'):
+                value.update(value.pop('pending_look'))
+    update(root, acknowledge)
+
+
+def engage(root, *, mark=True):
     """Called by a scoped delivery hook, never by a model or a periodic wake."""
     g = group(root)
     mine = str(Path(root).resolve())
@@ -431,29 +471,34 @@ def engage(root):
         return ''
     jobs = [a for a in g['assignments'].values() if a['owner'] == mine and a['state'] == 'working']
     if not jobs:
-        return engage_member(root)
+        return engage_member(root, mark=mark)
     job = jobs[0]
     target = g.get('integrated') or job['base']
     previous = job.get('looked_at') or job['base']
-    plan_changed = job['plan_revision'] != revision(root)
+    plan_changed = job.get('looked_revision', job['plan_revision']) != revision(root)
+    if not job.get('looked_at') or not job.get('looked_revision'):
+        # Keep the baseline even when sync succeeds but hook output fails.
+        update(root, lambda g: g['assignments'][job['item']].update(
+            looked_at=previous, looked_revision=job.get('looked_revision', job['plan_revision'])), generation=g['generation'])
     try:
         synced = sync_item(root, job['item'], actor=root)
     except ValueError as error:
         return str(error)
-    done = [iid for iid in g.get('completed_items', []) if iid not in job.get('looked_items', [])]
-    subjects = git(Path(job['workspace']), 'log', '--format=%s', previous + '..' + target, check=False).splitlines() if previous and target else []
-    synced.update(looked_at=target, looked_items=g.get('completed_items', []))
+    done = [iid for iid in g.get('completed_items', []) if iid not in job.get('looked_items', [])
+            and g['assignments'].get(iid, {}).get('owner') != mine]
+    subjects = catch_up_subjects(Path(job['workspace']), previous, target, mine)
+    _looked(synced, target, g.get('completed_items', []), revision(root), mark=mark)
     update(root, lambda g: g['assignments'].__setitem__(job['item'], synced), generation=g['generation'])
-    if previous == target and not done and not plan_changed:
+    if not subjects and not done and not plan_changed:
         return ''
     return ('Colony synchronized your item workspace to the last completed and tested integration ' + target
             + '. Since you last looked: ' + ('items ' + ', '.join(done) + '; ' if done else '')
-            + ('; '.join(subjects[-12:]) or 'no new commit subjects')
+            + ('; '.join(subjects) or 'no new commit subjects')
             + ('; canonical Vision/roadmap changed' if plan_changed else '')
             + '. Read only the canonical plan at ' + str(plan_path(root)) + '.')
 
 
-def engage_member(root):
+def engage_member(root, *, mark=True):
     """An existing helper branch catches up even without a development item.
 
     This runs only on engagement. It creates neither a goal nor an item workspace.
@@ -468,12 +513,16 @@ def engage_member(root):
         if not target or not before:
             return ''
         previous = value.get('looked_at') or before
+        if not value.get('looked_at'):
+            value['looked_at'] = previous
+            update(root, lambda g: g.setdefault('engagements', {}).__setitem__(mine, value), generation=g['generation'])
         source = Path(g.get('integration_root') or board.workdir(Path(g['canonical'])))
         if workspace.resolve() != source.resolve() and previous != target:
             git(workspace, 'add', '--all', '--', '.', ':(exclude).board', ':(exclude)ROADMAP.md',
                 ':(exclude).codex', ':(exclude).claude')
             if git(workspace, 'diff', '--cached', '--name-only'):
-                git(workspace, 'commit', '-m', 'Checkpoint helper before Colony engagement sync')
+                git(workspace, 'commit', '-m', 'Checkpoint helper before Colony engagement sync',
+                    '--trailer', 'Colony-Agent: ' + Path(mine).name)
             before = git(workspace, 'rev-parse', 'HEAD')
             conflict = value.get('conflict') or {}
             if conflict.get('checkpoint') == before and conflict.get('target') == target:
@@ -486,13 +535,14 @@ def engage_member(root):
                     return error
                 git(workspace, 'merge', '--abort', check=False)
                 return 'Engagement sync could not finish: ' + (result.stderr.strip() or result.stdout.strip())
-        done = [iid for iid in g.get('completed_items', []) if iid not in value.get('looked_items', [])]
-        subjects = git(workspace, 'log', '--format=%s', previous + '..' + target, check=False).splitlines()
-        plan_changed = value.get('plan_revision') != revision(root)
-        value.update(looked_at=target, looked_items=g.get('completed_items', []), plan_revision=revision(root))
+        done = [iid for iid in g.get('completed_items', []) if iid not in value.get('looked_items', [])
+                and g['assignments'].get(iid, {}).get('owner') != mine]
+        subjects = catch_up_subjects(workspace, previous, target, mine)
+        plan_changed = value.get('looked_revision', value.get('plan_revision')) != revision(root)
+        _looked(value, target, g.get('completed_items', []), revision(root), mark=mark)
         value.pop('sync_error', None)
         update(root, lambda g: g.setdefault('engagements', {}).__setitem__(mine, value), generation=g['generation'])
-        if previous == target and not done and not plan_changed:
+        if not subjects and not done and not plan_changed:
             return ''
         return (f'Colony engagement catch-up to tested integration {target}. '
                 + ('Completed items: ' + ', '.join(done) + '. ' if done else '')
@@ -508,7 +558,7 @@ def handback(root, item, *, actor=None):
     value.update(state='handback', commit=git(workspace, 'rev-parse', 'HEAD', check=False), handed_at=board.now())
     g = update(root, lambda g: g['assignments'].__setitem__(item, value), generation=info(root)['generation'])
     notify(g, f"{item} handed back by {Path(value['owner']).name} at {value['commit'] or workspace}. "
-              'The completing agent now integrates, tests and delivers it under Colony’s shared integration lock.', quiet=False,
+              'The completing agent now integrates, tests and delivers it under Colony’s shared integration lock.', quiet=True,
               exclude=[value['owner']])
     return value
 

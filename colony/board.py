@@ -788,17 +788,30 @@ def notes(root):
             out[e["of"]].update(reply=e["text"], addressed_at=e["at"])
         elif e["type"] == "delivered" and e["of"] in out:
             out[e["of"]]["delivered_at"] = e["at"]
+            if e.get('batch_ids'):
+                out[e['of']]['batch_ids'] = e['batch_ids']
     return list(out.values())
 
 
-def deliver(root, session=False):
+def delivered(root, handed, own=()):
+    """Receipt written after the hook output was flushed successfully."""
+    for n in handed:
+        batch = n.get('batch_ids') or [n['id']]
+        for ident in batch:
+            append(root, 'notes.jsonl', dict(type='delivered', of=ident, at=now(), batch_ids=batch))
+    for n in own:
+        append(root, 'notes.jsonl', dict(type='addressed', of=n['id'], at=now(),
+                                       text='Recorded as this agent’s own change; no notification needed.'))
+
+
+def deliver(root, session=False, *, mark=True):
     """What the agent should hear now: notes whose moment has come and that it has not been handed,
     marked as handed; at the start of a session also the ones handed but not yet acted on, so nothing
     sits unanswered however the agent works."""
     fresh = [n for n in open_notes(root) if not n["delivered_at"]]
     still = [n for n in open_notes(root) if n["delivered_at"]] if session else []
-    for n in fresh:
-        append(root, "notes.jsonl", {"type": "delivered", "of": n["id"], "at": now()})
+    if mark:
+        delivered(root, fresh)
     return fresh, still
 
 
@@ -964,7 +977,7 @@ def open_notes(root, item=None):
     """Notes the agent has not yet acted on. Without an item: everything except notes on roadmap items
     not yet started, which wait until the agent reaches them."""
     road_items = items(roadmap(root))
-    waiting = [n for n in notes(root) if not n["addressed_at"]]
+    waiting = [n for n in notes(root) if not n["addressed_at"] and n.get('source') != str(Path(root).resolve())]
     if item:
         return [n for n in waiting if (n["anchor"] or {}).get("item") == item]
     def due(n):

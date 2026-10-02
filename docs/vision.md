@@ -20,7 +20,7 @@ plans remain intact. The agent records the vision once clearly agreed, then lays
 Tracking queues this opening conversation once, including for projects that already have a roadmap,
 so `colony new`, the add form, clones and shared-folder projects follow the same sequence.
 
-- The project's Vision box saves directly to the file and records a dated change. A nonquiet note gives
+- The project's Vision box saves directly to the file and records a dated change. A quiet note gives
   the main agent the before and after. It considers the effect on current work, acts, and discusses
   unclear implications. There is no confirmation click, approval state or accepted snapshot.
 - Once a conversation change is clearly agreed, the agent runs
@@ -33,15 +33,24 @@ so `colony new`, the add form, clones and shared-folder projects follow the same
 - `colony vision --history` and the page's Vision history show when and how the text changed, including
   the person's words when recorded. The history is a record, not another source of authority.
 
-The watcher runs even when the monitor agent is disabled. A safe idle console is nudged immediately
-after a board save; a stopped console is started. Busy consoles receive notes through their delivery
-hooks or once idle. Existing protections for a person's half-typed input and usage pauses still apply.
+The watcher runs even when the monitor agent is disabled. File and Vision updates never wake an idle
+or stopped agent. The next engagement hook delivers one catch-up with the first pending state, the
+current Vision and the number of intervening changes. All original history remains available on the
+board. Notes on an unstarted item wait until that work becomes relevant; project Vision is relevant
+to every declared member. Ordinary messages, assignments and person questions can still engage agents.
+
+Conversation commands record the source agent and do not echo its own action. Programmatic plan
+and checkpoint commits include a `Colony-Agent` trailer. An exact matching committed Vision transition
+can identify an edit observed before that commit; unstamped outside edits keep their source unknown.
+There is no inference from an agent being busy, from its Git email, or from the prose. The delivery
+hook writes its receipt after flushing the catch-up; failed output leaves it available for retry.
+Acknowledging the catch-up's representative note also acknowledges its constituent notes.
 
 ## Persistence and rollout
 
-Each logical root owns `.board/vision.jsonl`, `vision.lock` and `vision-installed`. Projects sharing a
-working folder retain separate visions, histories and notes; their wired instructions name their own
-roadmap explicitly. No vision is inferred from a shared working directory.
+Each explicitly shared project owns one canonical `.board/vision.jsonl`, `vision.lock` and Vision in
+its canonical roadmap. Each member keeps its own delivery and acknowledgement records. Separate
+projects retain separate histories; sharing is declared, never inferred from a working directory.
 
 Board startup installs the protocol and quietly offers existing projects a starting draft from their
 legacy goal, to shape with the person in the next normal conversation. It does not publish that draft.

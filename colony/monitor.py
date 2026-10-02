@@ -560,12 +560,13 @@ class Watcher:
         gate answer from the person whose moment has come. Start its session if it isn't running, and once
         it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
         on a question, is left alone until its turn ends, unless the mail is urgent."""
-        from . import mail, usage
+        from . import mail, usage, vision
         for p in board.projects():
             if not p.exists():
                 continue
             letters = [m for m in mail.inbox(p) if not m["delivered_at"]]
-            notes = [n for n in board.open_notes(p) if not n["delivered_at"] and not n.get("quiet")]
+            notes = [n for n in board.open_notes(p) if not n["delivered_at"] and not n.get("quiet")
+                     and not vision.is_update(n)]
             waiting = {m["id"] for m in letters} | {n["id"] for n in notes}
             if not waiting or waiting <= self.nudged:
                 continue

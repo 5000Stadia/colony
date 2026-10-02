@@ -1,7 +1,7 @@
 # Colony
 
 This repository is colony: the board (colony/board.py), its consoles, the monitor, and `GUIDE.md`, the
-guidance it deploys. Tests: `python3 -m unittest tests.test_colony tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog`.
+guidance it deploys. Tests: `python3 -m unittest tests.test_colony tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_lead tests.test_continuation`.
 
 ## Building the board you run on
 

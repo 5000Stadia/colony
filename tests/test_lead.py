@@ -120,8 +120,34 @@ class LeadTest(unittest.TestCase):
         self.assertTrue((work / 'safe.txt').exists())
         self.assertFalse((work / 'untested.txt').exists())
         self.assertIn('Checkpoint R2', lead.git(work, 'log', '--format=%s'))
+        self.assertIn('Colony-Agent: ' + self.helper.name, lead.git(work, 'log', '--format=%B'))
         self.assertEqual(lead.engage(self.helper), '')
         self.assertNotEqual(tested, untested)
+
+    def test_engagement_retry_keeps_item_catch_up_until_output_receipt(self):
+        self.pair(); job = self.helper_job()
+        (self.root / 'safe.txt').write_text('completed lead work')
+        target = self.commit(self.root, 'Completed safe work')
+        lead.tested(self.root, target, 'passed')
+        first = lead.engage(self.helper, mark=False)
+        self.assertIn('Completed safe work', first)
+        self.assertEqual(lead.info(self.root)['assignments']['R2']['looked_at'], job['base'])
+        self.assertIn('Completed safe work', lead.engage(self.helper, mark=False))
+        lead.acknowledge_engagement(self.helper)
+        self.assertEqual(lead.engage(self.helper), '')
+
+    def test_git_catch_up_filters_own_sources_without_truncating_others(self):
+        before = self.initial
+        lead.git(self.root, 'commit', '--allow-empty', '-m', 'My own checkpoint',
+                 '--trailer', 'Colony-Agent: ' + self.helper.name)
+        for number in range(14):
+            lead.git(self.root, 'commit', '--allow-empty', '-m', f'Outside completed work {number}')
+        target = lead.git(self.root, 'rev-parse', 'HEAD')
+        subjects = lead.catch_up_subjects(self.root, before, target, self.helper)
+        self.assertEqual(len(subjects), 14)
+        self.assertNotIn('My own checkpoint', subjects)
+        self.assertIn('Outside completed work 0', subjects)
+        self.assertIn('Outside completed work 13', subjects)
 
     def test_real_conflict_routes_hashes_to_recent_file_developer_and_aborts(self):
         self.pair(); job = self.helper_job(); work = Path(job['workspace'])
@@ -161,12 +187,14 @@ class LeadTest(unittest.TestCase):
         lead.tested(self.root, target, 'passed')
         self.assertFalse((branch / 'completed.txt').exists(), 'dormant helper is untouched')
         (branch / 'unfinished.txt').write_text('preserve')
-        note = lead.engage(self.helper)
+        note = lead.engage(self.helper, mark=False)
         self.assertIn('Completed garden feature', note)
         self.assertIn('No item is assigned', note)
         self.assertTrue((branch / 'completed.txt').exists())
         self.assertTrue((branch / 'unfinished.txt').exists())
         self.assertEqual(lead.info(self.root)['assignments'], {})
+        self.assertIn('Completed garden feature', lead.engage(self.helper, mark=False))
+        lead.acknowledge_engagement(self.helper)
         self.assertEqual(lead.engage(self.helper), '')
 
     def test_unrelated_worktree_is_not_a_logical_agent_scope(self):

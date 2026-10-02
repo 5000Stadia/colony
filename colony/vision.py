@@ -76,10 +76,11 @@ def history(root):
     return board.read(lead.plan_root(root), 'vision.jsonl')
 
 
-def _record(root, before, after, how, words='', notify=True):
-    from . import board
+def _record(root, before, after, how, words='', notify=True, source=None):
+    from . import board, lead
     event = dict(id='v' + secrets.token_hex(6), at=board.now(), before=before, text=after,
-                 how=how, words=words, notify=notify)
+                 how=how, words=words, notify=notify, source=source,
+                 head=lead.git(root, 'rev-parse', 'HEAD', check=False))
     board.append(root, 'vision.jsonl', event)
     return event
 
@@ -87,21 +88,93 @@ def _record(root, before, after, how, words='', notify=True):
 def _notifications(root, events):
     """Replay missing notifications after a crash, with a stable note ID."""
     from . import board, lead
-    root = Path(lead.info(root)['lead'])
-    existing = {n['id'] for n in board.notes(root)}
-    for event in events:
-        ident = 'n-' + event['id']
-        if not event.get('notify') or ident in existing:
-            continue
-        origin = ('The person saved the vision on the board.' if event['how'] == 'board'
-                  else 'The roadmap vision changed in the file (for example, an edit or merge); its author is not inferred.')
-        text = (origin + '\n\nBefore:\n' + (event['before'] or '(no vision yet)')
-                + '\n\nAfter:\n' + (event['text'] or '(vision cleared)')
-                + '\n\nConsider the effect on the work at hand and the path ahead, and act accordingly. '
-                  'Discuss anything unclear with the person. Read the current Vision before acting; '
-                  'later changes may have followed this one. ' + SCOPE)
-        board.append(root, 'notes.jsonl', dict(type='note', id=ident, at=event['at'],
-                     author='person' if event['how'] == 'board' else 'observation', anchor=None, text=text))
+    for member in lead.info(root)['members']:
+        recipient = Path(member)
+        existing = {n['id'] for n in board.notes(recipient)}
+        for event in events:
+            ident = 'n-' + event['id']
+            if not event.get('notify') or ident in existing or event.get('source') == member:
+                continue
+            origin = ('The person saved the vision on the board.' if event['how'] == 'board'
+                      else 'The roadmap vision changed in the file (for example, an edit or merge); its author is not inferred.')
+            text = (origin + '\n\nBefore:\n' + (event['before'] or '(no vision yet)')
+                    + '\n\nAfter:\n' + (event['text'] or '(vision cleared)')
+                    + '\n\nConsider the effect on the work at hand and the path ahead, and act accordingly. '
+                      'Discuss anything unclear with the person. Read the current Vision before acting; '
+                      'later changes may have followed this one. ' + SCOPE)
+            board.append(recipient, 'notes.jsonl', dict(type='note', id=ident, at=event['at'],
+                         author='person' if event['how'] == 'board' else 'observation', anchor=None,
+                         text=text, quiet=True, change='vision', source=event.get('source')))
+
+
+def committed_source(root, before, after, *, since):
+    """Attribute an exact recorded transition only to an explicitly stamped commit.
+
+    An unstamped edit stays unknown, even in an agent's worktree. A later checkpoint
+    can establish provenance for changes the watcher saw before the commit.
+    """
+    from . import lead
+    if not since:
+        return None
+    root = lead.plan_root(root)
+    record = lead.git(root, 'log', '-1', '--format=%H%x1f%(trailers:key=Colony-Agent,valueonly)',
+                      since + '..HEAD', '--', 'ROADMAP.md', check=False)
+    if '\x1f' not in record:
+        return None
+    commit, agent = record.split('\x1f', 1)
+    members = lead.info(root)['members']
+    matches = [m for m in members if agent.strip() in (m, Path(m).name)]
+    if len(matches) != 1:
+        return None
+    current = lead.git(root, 'show', commit + ':ROADMAP.md', check=False)
+    parent = lead.git(root, 'show', commit + '^:ROADMAP.md', check=False)
+    if section(current)['text'] == after and section(parent)['text'] == before and before != after:
+        return matches[0]
+    return None
+
+
+def is_update(note):
+    # Include notices produced by an older watcher during an upgrade.
+    return note.get('change') == 'vision' or note.get('author') == 'observation' or note['id'].startswith('n-v')
+
+
+def delivery(root, notes):
+    """One complete Vision catch-up, preserving every original event and note."""
+    from . import lead
+    mine = str(Path(root).resolve())
+    recorded = history(root)
+    events = {event['id']: event for event in recorded}
+    updates, ordinary, own = [], [], []
+    for note in notes:
+        event = events.get(note['id'][2:]) if is_update(note) else None
+        source = event.get('source') if event else None
+        if event and event['how'] == 'file' and not source:
+            source = committed_source(root, event['before'], event['text'], since=event.get('head'))
+        if event is None:
+            ordinary.append(note)
+        elif source == mine:
+            own.append(note)
+        else:
+            updates.append((note, event))
+    if updates:
+        # A checkpoint may cover several intermediate observations from one turn.
+        if (all(e['how'] == 'file' and not e.get('source') for _, e in updates)
+                and committed_source(root, updates[0][1]['before'], updates[-1][1]['text'],
+                                     since=updates[0][1].get('head')) == mine):
+            own.extend(n for n, _ in updates)
+        else:
+            note, last = updates[-1]
+            first = updates[0][1]
+            digest = dict(note, batch_ids=[n['id'] for n, _ in updates])
+            origin = ('The person saved the vision on the board.' if any(e['how'] == 'board' for _, e in updates)
+                      else 'The roadmap vision changed in the file; no author or agreement is inferred.')
+            digest['text'] = (origin + f"\n\n{len(updates)} pending change(s); complete history is on the board."
+                              + '\n\nBefore:\n' + (first['before'] or '(no vision yet)')
+                              + '\n\nCurrent Vision:\n' + (recorded[-1]['text'] or '(vision cleared)')
+                              + '\n\nConsider the effect on your current work and the path ahead. '
+                                'Discuss anything unclear with the person. ' + SCOPE)
+            ordinary.append(digest)
+    return ordinary, own
 
 
 def _observe(root):
@@ -115,7 +188,9 @@ def _observe(root):
     if not events:
         events.append(_record(root, '', text, 'baseline', notify=False))
     elif events[-1]['text'] != text:
-        events.append(_record(root, events[-1]['text'], text, 'file'))
+        before = events[-1]['text']
+        events.append(_record(root, before, text, 'file',
+                              source=committed_source(root, before, text, since=events[-1].get('head'))))
     _notifications(root, events)
     return events
 
@@ -132,6 +207,7 @@ def save(root, text, *, how, words='', before=None):
     if how not in ('board', 'conversation'):
         raise ValueError('A vision is saved from the board or an agreed conversation.')
     from . import lead
+    actor = str(Path(root).resolve())
     if how == 'conversation':
         lead.require_lead(root, root)
     root = lead.plan_root(root)
@@ -162,7 +238,8 @@ def save(root, text, *, how, words='', before=None):
             os.replace(temporary, path)
         finally:
             Path(temporary).unlink(missing_ok=True)
-        event = _record(root, current or section(old)['legacy'], text, how, words.strip(), notify=how == 'board')
+        event = _record(root, current or section(old)['legacy'], text, how, words.strip(),
+                        source=actor if how == 'conversation' else None)
         _notifications(root, [event])
         return event
 
