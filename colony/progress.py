@@ -95,8 +95,8 @@ def objective(root, member):
                     'Wait for assigned hand-ins. ' if len(g['members']) > 1 else ' ')
     return (f"Colony {g['id']} generation {g['generation']} {c['id']} run {c['run']}: {c['outcome']}. "
             f"Done means: {c['definition']}. Work only on {', '.join(scope)}." + coordination +
-            f"Read the canonical Vision and roadmap at {lead.plan_path(root)}. Stop at the integrated completed version "
-            'for human review with colony progress --ready. Respect open decisions and usage resets. '
+            'Stop at the integrated completed version for human review with colony progress --ready. '
+            'Respect open decisions and usage resets. '
             'Do not continue into another version or Later without the person’s direction.')
 
 
@@ -120,8 +120,7 @@ def hold(root, member):
     from . import usage, context
     if member in usage.paused():
         return 'usage pause'
-    job = context.read(context.file(member)).get('job') or {}
-    if job.get('phase') in ('requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown'):
+    if context.refreshing(member):
         return 'context refresh'
     for source in g['members']:
         if any(not gate['answer'] and (not gate.get('item') or gate['item'] in c['items']) for gate in board.gates(Path(source))):

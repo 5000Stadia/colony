@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -95,7 +96,7 @@ class ContinuationTest(unittest.TestCase):
         for root, tid in ((self.root, self.tid), (self.helper, 'helper-thread')):
             atomic_json(context.file(root, 'context-session.json'), dict(provider='codex', id=tid, path=str(root / 'rollout.jsonl')))
         self.patches = [patch.object(continuation, 'safe_arm', return_value=True),
-                        patch.object(continuation, 'Client', return_value=self.client),
+                        patch('colony.codex_rpc.Client', return_value=self.client),
                         patch('colony.codex_remote.socket_for', return_value=self.socket)]
         for mocked in self.patches:
             mocked.start()
@@ -403,7 +404,7 @@ class ContinuationTest(unittest.TestCase):
         self.reconcile()
         self.assertEqual(self.client.setters()[-1]['status'], 'active')
 
-    def test_context_hold_pauses_once_and_release_resumes_after_restore(self):
+    def test_context_hold_pauses_once_and_lifts_with_the_live_refresh_job(self):
         self.own()
         atomic_json(context.file(self.root), dict(job=dict(session=self.tid, phase='requested')))
         self.assertTrue(continuation.hold(self.root))
@@ -411,27 +412,75 @@ class ContinuationTest(unittest.TestCase):
         self.assertEqual(paused['paused_by'], 'context refresh')
         self.assertEqual(self.client.goals[self.tid]['status'], 'paused')
         self.assertTrue(continuation.hold(self.root))
+        continuation.tick(self.root, force=True)
         self.assertEqual(len(self.client.setters()), 1)
-        # Removing the explicit hold early cannot bypass the actual refresh job.
-        continuation.release(self.root)
-        self.assertEqual(self.client.goals[self.tid]['status'], 'paused')
-        self.assertEqual(len(self.client.setters()), 1)
-        continuation.hold(self.root)
         atomic_json(context.file(self.root), dict(job=dict(session=self.tid, phase='restored')))
-        continuation.release(self.root)
+        continuation.tick(self.root)
         self.assertEqual(self.client.goals[self.tid]['status'], 'active')
         self.assertEqual(len(self.client.setters()), 2)
 
-    def test_context_refresh_cannot_adopt_foreign_or_release_person_pause(self):
+    def test_context_refresh_cannot_adopt_foreign_or_lift_person_pause(self):
         self.client.goals[self.tid] = dict(objective='Personal', status='active', createdAt=55)
         self.assertFalse(continuation.hold(self.root))
-        continuation.release(self.root)
+        continuation.tick(self.root, force=True)
         self.assertEqual(self.client.setters(), [])
         self.own('paused')
         self.assertTrue(continuation.hold(self.root))
-        continuation.release(self.root)
+        continuation.tick(self.root, force=True)
         self.assertTrue(continuation.status(self.root)['manual_stop'])
         self.assertEqual(self.client.setters(), [])
+
+    def rollout(self, tokens, *exchange):
+        events = [dict(type='response_item', payload=dict(type='message', role='user', content=[dict(type='input_text', text=exchange[0])])),
+                  dict(type='event_msg', payload=dict(type='item_completed', item=dict(type='AgentMessage', content=[dict(type='Text', text=exchange[1])])))
+                  ] if exchange else []
+        events.append(dict(type='event_msg', payload=dict(type='token_count', info=dict(
+            last_token_usage=dict(total_tokens=tokens), model_context_window=200_000))))
+        (self.root / 'rollout.jsonl').write_text(''.join(json.dumps(e) + '\n' for e in events))
+
+    def test_new_conversation_mid_refresh_leaves_no_hold(self):
+        self.own()
+        self.rollout(10)
+        atomic_json(context.file(self.root), dict(job=dict(id='0123456789abcdef', session=self.tid,
+                                                          phase='requested', asked=time.time())))
+        self.assertTrue(continuation.hold(self.root))
+        self.assertEqual(self.client.goals[self.tid]['status'], 'paused')
+        result = self.reconcile(tid='new-thread')
+        self.assertIsNone(progress.hold(self.root, self.root))
+        self.assertEqual(self.client.goals.get('new-thread', {}).get('status'), 'active')
+        self.assertIsNone(result['hold'])
+        context.tick(self.root)
+        self.assertNotIn('job', context.read(context.file(self.root)))
+
+    def test_refresh_that_stays_above_threshold_does_not_flap_continuation(self):
+        self.own()
+        self.rollout(150_000)
+        atomic_json(context.file(self.root), dict(last=time.time(), retry_after=0, ineffective='Still above.',
+                                                  job=dict(id='0123456789abcdef', session=self.tid, phase='restored')))
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into') as typed:
+            for _ in range(3):
+                context.tick(self.root)
+                continuation.tick(self.root)
+        typed.assert_not_called()
+        self.assertEqual(self.client.setters(), [])
+        self.assertEqual(self.client.goals[self.tid]['status'], 'active')
+
+    def test_due_refresh_holds_continuation_until_its_request_is_sent(self):
+        self.own()
+        self.rollout(150_000, 'Keep going.', 'Done.')
+        with patch.object(context, 'safe', return_value=False), patch.object(console, 'type_into') as typed:
+            context.tick(self.root)
+            for _ in range(3):
+                continuation.tick(self.root)  # Busy input finishing its turn; nothing may re-arm meanwhile.
+            typed.assert_not_called()
+        self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'due')
+        self.assertEqual(self.client.goals[self.tid]['status'], 'paused')
+        self.assertEqual(len(self.client.setters()), 1)
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+        self.assertIn('Context carry-over', typed.call_args.args[1])
+        self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'requested')
+        self.assertEqual(len(self.client.setters()), 1)
 
     def test_new_conversation_drains_owned_old_goal_before_activation(self):
         self.own()
@@ -474,15 +523,18 @@ class ContinuationTest(unittest.TestCase):
         self.assertEqual(self.client.setters(), [])
         self.assertEqual(self.client.goals[self.tid]['status'], 'budgetLimited')
 
-    def test_new_version_does_not_arm_while_retired_goal_is_active(self):
+    def test_previous_conversation_goal_is_paused_once_then_forgotten(self):
         self.own()
         self.reconcile(tid='new-thread')
+        self.assertEqual(self.client.goals[self.tid]['status'], 'paused')
         self.client.calls.clear()
-        self.client.goals[self.tid]['status'] = 'active'
+        self.client.goals[self.tid]['status'] = 'active'  # The person resumed it there themselves.
         lead.update(self.root, lambda g: g['checkpoints'][0].update(run=2))
         result = self.reconcile(tid='new-thread')
-        self.assertIn('earlier conversation', result['error'])
-        self.assertEqual(self.client.setters(), [])
+        self.assertNotIn(self.tid, [params['threadId'] for _, params in self.client.calls])
+        self.assertNotIn('retired', result)
+        self.assertEqual(self.client.goals['new-thread']['objective'], self.objective())
+        self.assertEqual(self.client.goals[self.tid]['status'], 'active')
 
     def test_helper_delivery_or_sync_conflict_pauses_owned_continuation(self):
         self.assigned()
@@ -518,21 +570,19 @@ class ContinuationTest(unittest.TestCase):
     def test_lone_project_without_selected_checkpoint_has_no_provider_or_rpc_calls(self):
         lead.update(self.root, lambda g: g.update(members=[str(self.root)], checkpoints=[], goals={}))
         lead.update(self.root, lambda g: g.pop('active_checkpoint', None))
-        with patch.object(providers, 'of') as provider, patch.object(continuation, 'Client') as rpc:
+        with patch.object(providers, 'of') as provider, patch('colony.codex_rpc.Client') as rpc:
             continuation.tick(self.root)
             continuation.after_turn(self.root)
             continuation.tick_all()
             continuation.hold(self.root)
-            continuation.release(self.root)
             provider.assert_not_called()
             rpc.assert_not_called()
 
     def test_dormant_unassigned_helper_has_no_provider_or_rpc_calls(self):
-        with patch.object(providers, 'of') as provider, patch.object(continuation, 'Client') as rpc:
+        with patch.object(providers, 'of') as provider, patch('colony.codex_rpc.Client') as rpc:
             continuation.tick(self.helper)
             continuation.after_turn(self.helper)
             continuation.hold(self.helper)
-            continuation.release(self.helper)
             provider.assert_not_called()
             rpc.assert_not_called()
 
@@ -548,6 +598,36 @@ class ContinuationTest(unittest.TestCase):
                         continuation.tick(self.root)
                     self.assertEqual(self.client.calls, [])
                     typed.assert_not_called()
+
+    def test_console_lead_is_woken_again_only_after_its_work_changes(self):
+        (self.root / '.board' / 'settings.json').write_text(json.dumps(dict(provider='claude')))
+        (self.root / '.gitignore').write_text('.board/\n')
+        for args in (('init', '-q'), ('config', 'user.name', 'Fixture'),
+                     ('config', 'user.email', 'fixture@users.noreply.github.com'), ('add', '--all'), ('commit', '-qm', 'Start')):
+            lead.git(self.root, *args)
+        plan = self.root / 'ROADMAP.md'
+        with patch.object(console, 'type_into', return_value=True) as typed:
+            continuation.tick(self.root)
+            for _ in range(3):
+                continuation.after_turn(self.root)  # Turns that changed nothing earn no wake.
+            self.assertEqual(typed.call_count, 1)
+            self.assertNotIn('Read the canonical', typed.call_args.args[1])
+            (self.root / 'work.txt').write_text('progress')
+            lead.git(self.root, 'add', '--all'); lead.git(self.root, 'commit', '-qm', 'Progress')
+            continuation.after_turn(self.root)
+            plan.write_text(plan.read_text().replace('[ ] R2', '[~] R2'))
+            continuation.after_turn(self.root)
+            lead.update(self.root, lambda g: g['assignments'].update(R9=dict(item='R9', owner=str(self.helper), state='working')))
+            continuation.after_turn(self.root)
+            self.assertEqual(typed.call_count, 4)
+            progress.pause(self.root, True)
+            continuation.after_turn(self.root)
+            self.assertEqual(continuation.status(self.root)['hold'], 'person paused')
+            progress.pause(self.root, False)
+            continuation.tick(self.root)
+            continuation.after_turn(self.root)
+            self.assertEqual(typed.call_count, 5)
+        self.assertEqual(self.client.calls, [])
 
     def handoff_record(self):
         lead.update(self.root, lambda g: g.update(generation=1, handoff=dict(outgoing=str(self.root),
@@ -596,7 +676,7 @@ class ContinuationTest(unittest.TestCase):
                 self.assertFalse(continuation.handoff(self.root))
             finish.assert_not_called()
 
-    def test_handoff_blocks_unconfirmed_pause_and_active_retired_goal(self):
+    def test_handoff_blocks_unconfirmed_pause(self):
         self.own()
         self.handoff_record()
         self.client.reject = True
@@ -606,14 +686,10 @@ class ContinuationTest(unittest.TestCase):
             self.assertFalse(continuation.handoff(self.root))
             finish.assert_not_called()
         self.client.goals[self.tid]['status'] = 'paused'
-        self.reconcile(forced_hold='lead handoff')
-        receipt = continuation.status(self.root)
-        receipt['retired'] = [dict(thread='earlier', objective='Old', native_created=10)]
-        continuation.save(self.root, receipt, 1)
-        self.client.goals['earlier'] = dict(objective='Old', status='active', createdAt=10)
-        with patch.object(lead, 'finish_handoff') as finish:
-            self.assertFalse(continuation.handoff(self.root))
-            finish.assert_not_called()
+        with patch.object(console, 'running', return_value=False), patch.object(lead, 'clean', return_value=True), \
+                patch.object(lead, 'finish_handoff') as finish:
+            self.assertTrue(continuation.handoff(self.root))
+            finish.assert_called_once_with(self.root, 1)
 
 
 if __name__ == '__main__':

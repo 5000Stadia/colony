@@ -20,6 +20,7 @@ OUTPUT_BUDGET = 9_000
 DAILY = 20 * 3600
 TIMEOUT = 15 * 60
 COOLDOWN = 3600
+LIVE = ('due', 'requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown')
 _cache = {}
 
 
@@ -358,6 +359,21 @@ def safe(root):
     return not any(not n['delivered_at'] and not n.get('quiet') for n in board.open_notes(root)) and not any(not m['delivered_at'] for m in mail.inbox(root))
 
 
+def refreshing(root):
+    """Only a live refresh of the current conversation holds continuation; a dropped or finished one never does."""
+    s, job = session(root), read(file(root)).get('job') or {}
+    return bool(s and job.get('session') == s['id'] and job.get('phase') in LIVE)
+
+
+def due(root, st, tokens, window, now):
+    """The one test that both holds continuation for a new refresh and starts it."""
+    if now < st.get('retry_after', 0) or st.get('await_usage') is not None or st.get('ineffective'):
+        return None
+    if is_monitor(root) and now - st.get('last', now) >= DAILY:
+        return 'daily'
+    return 'context threshold' if window and tokens is not None and tokens >= window * SOFT else None
+
+
 def tick(root):
     s = session(root)
     if not s:
@@ -365,17 +381,6 @@ def tick(root):
     snap = transcript(s)
     tokens, window = occupancy(root, s, snap)
     now = time.time()
-    from . import continuation
-    previous = read(file(root))
-    pending = previous.get('job') or {}
-    needs_refresh = (pending.get('phase') in ('requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown') or
-                     (window and tokens is not None and tokens >= window * SOFT and now >= previous.get('retry_after', 0)) or
-                     (is_monitor(root) and now - previous.get('last', now) >= DAILY))
-    if needs_refresh and not continuation.hold(root, reason='context refresh'):
-        return
-    if not safe(root):
-        return
-    action = None
     with locked(root):
         st = read(file(root)) or dict(last=now)
         job = st.get('job') or {}
@@ -394,39 +399,42 @@ def tick(root):
                 log(root, job, 'deferred', st['ineffective'], after=tokens)
         if window and tokens is not None and tokens < window * SOFT:
             st.pop('ineffective', None)
-        if phase == 'requested':
-            if now - job['asked'] > TIMEOUT:
-                job.update(phase='deferred', reason='No fresh carry-over arrived; conversation left intact.')
-                st['retry_after'] = now + COOLDOWN
-                log(root, job, 'deferred', job['reason'])
-        elif phase == 'ready':
-            try:
-                job['tail'] = tail(snap, min(TAIL_BUDGET, int((window or 200_000) * .08)))
-                job['phase'] = 'compacting'
-                action = 'compact'
-            except ValueError as err:
-                job.update(phase='deferred', reason=str(err))
-                st['retry_after'] = now + COOLDOWN
-                log(root, job, 'deferred', str(err))
-        elif phase not in ('compacting', 'prepared', 'emitted', 'unknown') and now >= st.get('retry_after', 0):
-            threshold = bool(window and tokens is not None and tokens >= window * SOFT)
-            daily = is_monitor(root) and now - st.get('last', now) >= DAILY
-            if st.get('await_usage') is not None or st.get('ineffective'):
-                threshold = daily = False
-            if threshold or daily:
-                try:
-                    recent = tail(snap, min(TAIL_BUDGET, int((window or 200_000) * .08)))
-                except ValueError as err:
-                    st['retry_after'] = now + COOLDOWN
-                    log(root, {}, 'deferred', str(err))
-                else:
-                    job = dict(id=secrets.token_hex(8), session=s['id'], phase='requested', asked=now,
-                               tail=recent, before=tokens, reason='daily' if daily else 'context threshold')
-                    st['job'] = job
-                    action = 'carry'
+        reason = due(root, st, tokens, window, now)
+        if phase == 'requested' and now - job['asked'] > TIMEOUT:
+            job.update(phase='deferred', reason='No fresh carry-over arrived; conversation left intact.')
+            st['retry_after'] = now + COOLDOWN
+            log(root, job, 'deferred', job['reason'])
+        elif phase == 'due' and not reason:
+            st.pop('job')
+            job = {}
+        elif phase not in LIVE and reason:
+            # Recorded before anything is sent, so continuation stays held while the input becomes idle.
+            job = st['job'] = dict(id=secrets.token_hex(8), session=s['id'], phase='due', before=tokens, reason=reason)
         atomic_json(file(root), st)
-    if job.get('phase') in ('restored', 'deferred'):
-        continuation.release(root, reason='context refresh')
+    if job.get('phase') not in ('due', 'ready'):
+        return
+    from . import continuation
+    if not continuation.hold(root, reason='context refresh'):
+        defer(root, job, 'Native work did not stop; refresh postponed.')
+        return
+    if not safe(root):
+        return
+    action, ident = None, job['id']
+    with locked(root):
+        st = read(file(root))
+        job = st.get('job') or {}
+        if job.get('id') != ident or job.get('phase') not in ('due', 'ready'):
+            return
+        try:
+            recent = tail(snap, min(TAIL_BUDGET, int((window or 200_000) * .08)))
+        except ValueError as err:
+            job.update(phase='deferred', reason=str(err))
+            st['retry_after'] = now + COOLDOWN
+            log(root, job, 'deferred', str(err))
+        else:
+            action = 'carry' if job['phase'] == 'due' else 'compact'
+            job.update(tail=recent, **(dict(phase='requested', asked=now) if action == 'carry' else dict(phase='compacting')))
+        atomic_json(file(root), st)
     if action and not safe(root):
         defer(root, job, 'Input became busy before dispatch; refresh postponed.')
         return
@@ -465,7 +473,7 @@ def defer(root, job, reason, unknown=False):
     with locked(root):
         st = read(file(root))
         current = st.get('job') or {}
-        if current.get('id') == job['id'] and current.get('phase') in ('compacting', 'requested'):
+        if current.get('id') == job['id'] and current.get('phase') in ('due', 'ready', 'compacting', 'requested'):
             current.update(phase='unknown' if unknown else 'deferred', reason=reason)
             st['retry_after'] = time.time() + COOLDOWN
             log(root, current, current['phase'], reason)

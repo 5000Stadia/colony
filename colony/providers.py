@@ -44,6 +44,9 @@ what it assumes and what a second provider needs there. What a provider supplies
   draft(screen)            what the person has half-typed in its input and not sent, from a screen captured with
                            its styles; "" if nothing, None if it can't tell. Nothing is typed into a session while
                            there is one: it would land on the draft and send it.
+  goal_client(root)        a client for the CLI's own goal per conversation, which bounded continuation pauses and
+                           resumes (optional; continuation.py speaks Codex's thread goals). Without it, colony
+                           continues a version by typing a wake into the idle console after work changes.
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -833,6 +836,16 @@ class Codex:
 
     def conversation(self, payload):
         return payload.get("session_id"), payload.get("transcript_path")
+
+    @staticmethod
+    def goal_client(root, timeout=15):
+        """Codex keeps one native goal per thread, read and set over its app-server control socket."""
+        from . import codex_remote
+        from .codex_rpc import Client
+        socket = codex_remote.socket_for(codex_remote.home_for(root))
+        if not socket.exists():
+            raise FileNotFoundError("Native goal control is unavailable; bounded continuation is not active.")
+        return Client(socket, timeout=timeout)
 
     def history_text(self, root, limit=200_000):
         return None
