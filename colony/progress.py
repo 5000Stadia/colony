@@ -7,19 +7,37 @@ import urllib.request
 
 from . import board, lead
 
+LATER = re.compile(r'\blater\b', re.I)
+
 
 def current(root):
     g = lead.info(root)
     return next((c for c in g['checkpoints'] if c['id'] == g.get('active_checkpoint')), None)
 
 
+def unscheduled(root):
+    """Items no default version takes: under a heading that is no M-numbered milestone, or one named Later."""
+    path, out, section, sub = lead.plan_path(root), set(), '', ''
+    for line in (path.read_text() if path.exists() else '').splitlines():
+        if line.startswith('## '):
+            section, sub = line, ''
+        elif line.startswith('###'):
+            sub = line
+        elif (m := board.ITEM.match(line)) and (not board.MILESTONE.match(section) or LATER.search(section + sub)):
+            out.add(m[2])
+    return out
+
+
 def define(root, milestone, outcome, definition, check='', *, items=None, mode='approval', words='', actor=None):
     g = lead.require_lead(root, actor)
     m = next((m for m in board.roadmap(root)['milestones'] if m['id'] == milestone), None)
-    if not m or 'later' in m['title'].lower():
+    if not m or LATER.search(m['title']):
         raise ValueError('Choose an authorized milestone; Later does not start automatically.')
-    selected = list(items) if items else [i['id'] for i in m['items'] if i['state'] != 'done']
-    if not selected or not set(selected) <= {i['id'] for i in m['items'] if i['state'] != 'done'}:
+    if not items and not re.fullmatch(r'M\d+(?:\.\d+)?', milestone):
+        raise ValueError('Only an M-numbered milestone supplies its items by default; name them with --items.')
+    unfinished = [i['id'] for i in m['items'] if i['state'] != 'done']
+    selected = list(items) if items else [i for i in unfinished if i not in unscheduled(root)]
+    if not selected or not set(selected) <= set(unfinished):
         raise ValueError('The checkpoint must include unfinished items in that milestone.')
     if not outcome.strip() or not definition.strip() or mode not in ('approval', 'check-in'):
         raise ValueError('Name the completed form, its definition of done and approval/check-in mode.')
@@ -77,8 +95,8 @@ def objective(root, member):
                     'Wait for assigned hand-ins. ' if len(g['members']) > 1 else ' ')
     return (f"Colony {g['id']} generation {g['generation']} {c['id']} run {c['run']}: {c['outcome']}. "
             f"Done means: {c['definition']}. Work only on {', '.join(scope)}." + coordination +
-            f"Read the canonical Vision and roadmap at {lead.plan_path(root)}. Stop at the integrated completed version "
-            'for human review with colony progress --ready. Respect open decisions and usage resets. '
+            'Stop at the integrated completed version for human review with colony progress --ready. '
+            'Respect open decisions and usage resets. '
             'Do not continue into another version or Later without the person’s direction.')
 
 
@@ -102,8 +120,7 @@ def hold(root, member):
     from . import usage, context
     if member in usage.paused():
         return 'usage pause'
-    job = context.read(context.file(member)).get('job') or {}
-    if job.get('phase') in ('requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown'):
+    if context.refreshing(member):
         return 'context refresh'
     for source in g['members']:
         if any(not gate['answer'] and (not gate.get('item') or gate['item'] in c['items']) for gate in board.gates(Path(source))):
@@ -208,26 +225,10 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None, source=No
     if next_checkpoint:
         if action != 'approve' or not any(v['id'] == next_checkpoint and v['state'] == 'planned' for v in g['checkpoints']):
             raise ValueError('Choose an explicitly planned next version after approving this one.')
-    if action == 'approve':
-        # This is the person's explicit bundled approval, never a dismissed gate.
-        path = lead.plan_path(root)
-        old_bytes = path.read_bytes()
-        old = old_bytes.decode('utf-8')
-        ids = set(c['items'])
-        lines = []
-        for line in old.splitlines(keepends=True):
-            match = board.ITEM.match(line.rstrip('\n'))
-            if match and match[2] in ids and match[1] == '?':
-                line = line.replace('[?]', '[x]', 1)
-            lines.append(line)
-        approved = ''.join(lines)
-        if approved != old:
-            path.write_text(approved, encoding='utf-8')
-            if lead.git(path.parent, 'rev-parse', '--is-inside-work-tree', check=False) == 'true':
-                lead.commit_plan(root, 'Approve ' + c['id'] + ' completed version', source=source,
-                                 before_revision=hashlib.sha256(old_bytes).hexdigest(),
-                                 expected_revision=hashlib.sha256(approved.encode('utf-8')).hexdigest())
     def change(g):
+        # The guarded record comes first: a landing handoff or a new lead leaves the plan untouched.
+        if g.get('handoff'):
+            raise ValueError('The lead handoff is still landing; decide after it lands.')
         active = next((value for value in g['checkpoints'] if value['id'] == g.get('active_checkpoint')), None)
         if not active or active['state'] != 'review' or active['candidate']['id'] != candidate:
             raise ValueError('The review changed; inspect its current candidate.')
@@ -240,15 +241,46 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None, source=No
         if action == 'approve':
             g.pop('active_checkpoint', None)
     updated = lead.update(root, change, generation=g['generation'])
+    if action == 'approve':
+        approve_plan(root, c, source)  # The person's explicit bundled approval, never a dismissed gate.
     # Keep the decision in the checkpoint history without echoing it to the
-    # agent that just recorded it. An outside decision still reaches the lead.
+    # agent that just recorded it. An outside decision still reaches the lead;
+    # only corrections wake it, and the words in it are the person's own.
     if source is None or str(Path(source).resolve()) != updated['lead']:
         board.add_note(Path(updated['lead']), None, f"The person {'approved' if action == 'approve' else 'requests corrections to'} "
                        f"{c['outcome']} (candidate {candidate}). {text}"
-                       + (' Stop here; no next version was released.' if action == 'approve' and not next_checkpoint else ''), author='colony')
+                       + (' Stop here; no next version was released.' if action == 'approve' and not next_checkpoint else ''),
+                       author='person' if text.strip() else 'colony', quiet=action == 'approve')
     if next_checkpoint:
         start(root, next_checkpoint, source=source)
     return updated
+
+
+def approve_plan(root, c, source):
+    path = lead.plan_path(root)
+    old_bytes = path.read_bytes()
+    old = old_bytes.decode('utf-8')
+    lines = []
+    for line in old.splitlines(keepends=True):
+        match = board.ITEM.match(line.rstrip('\n'))
+        if match and match[2] in c['items'] and match[1] == '?':
+            line = line.replace('[?]', '[x]', 1)
+        lines.append(line)
+    approved = ''.join(lines)
+    if approved == old:
+        return
+    path.write_text(approved, encoding='utf-8')
+    if lead.git(path.parent, 'rev-parse', '--is-inside-work-tree', check=False) != 'true':
+        return
+    try:
+        lead.commit_plan(root, 'Approve ' + c['id'] + ' completed version', source=source,
+                         before_revision=hashlib.sha256(old_bytes).hexdigest(),
+                         expected_revision=hashlib.sha256(approved.encode('utf-8')).hexdigest())
+    except ValueError:
+        # A plan left dirty would block integration and the handoff that interrupted it.
+        path.write_bytes(old_bytes)
+        lead.git(path.parent, 'reset', '-q', '--', 'ROADMAP.md', check=False)
+        raise
 
 
 def pause(root, on):

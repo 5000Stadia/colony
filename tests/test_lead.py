@@ -216,13 +216,14 @@ class LeadTest(unittest.TestCase):
         (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(self.root))))
         self.assertIn('canonical plan changed', lead.engage(self.helper))
 
-    def test_outside_approval_is_a_colony_receipt_and_still_reaches_lead(self):
+    def test_outside_approval_reaches_lead_quietly_in_the_persons_words(self):
         c = self.completed_candidate()
         lead.engage(self.root)
         before = len(board.notes(self.root))
         progress.decide(self.root, c['candidate']['id'], 'approve', text='Approved on the board.')
         [note] = board.notes(self.root)[before:]
-        self.assertEqual(note['author'], 'colony')
+        self.assertEqual(note['author'], 'person')
+        self.assertTrue(note['quiet'], 'an approval that releases nothing never wakes the lead')
         self.assertIn('Approved on the board.', note['text'])
         self.assertIn('canonical plan changed', lead.engage(self.root))
 
@@ -235,6 +236,44 @@ class LeadTest(unittest.TestCase):
         self.assertEqual(progress.current(self.root)['id'], following['id'])
         self.assertEqual(progress.current(self.root)['state'], 'active')
 
+    def test_approval_during_handoff_leaves_plan_and_review_intact(self):
+        c = self.completed_candidate()
+        plan, head = (self.root / 'ROADMAP.md').read_bytes(), lead.git(self.root, 'rev-parse', 'HEAD')
+        lead.switch(self.root, self.helper)
+        with self.assertRaisesRegex(ValueError, 'handoff'):
+            progress.decide(self.root, c['candidate']['id'], 'approve', text='Yes.')
+        self.assertEqual((self.root / 'ROADMAP.md').read_bytes(), plan)
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(progress.current(self.root)['state'], 'review')
+        lead.finish_handoff(self.root, lead.info(self.root)['generation'])
+        progress.decide(self.root, c['candidate']['id'], 'approve', text='Yes.')
+        self.assertEqual(lead.info(self.root)['checkpoints'][0]['state'], 'accepted')
+        self.assertEqual(board.items(board.roadmap(self.root))['R2']['state'], 'done')
+        self.assertTrue(lead.clean(self.root))
+
+    def test_lead_change_during_approval_leaves_plan_untouched(self):
+        c = self.completed_candidate()
+        plan, head = (self.root / 'ROADMAP.md').read_bytes(), lead.git(self.root, 'rev-parse', 'HEAD')
+        real = progress.artifact_identity
+        def meanwhile(artifact):
+            lead.update(self.root, lambda g: g.update(generation=g['generation'] + 1))
+            return real(artifact)
+        with patch.object(progress, 'artifact_identity', side_effect=meanwhile):
+            with self.assertRaisesRegex(ValueError, 'lead changed'):
+                progress.decide(self.root, c['candidate']['id'], 'approve')
+        self.assertEqual((self.root / 'ROADMAP.md').read_bytes(), plan)
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(progress.current(self.root)['state'], 'review')
+
+    def test_default_version_never_takes_later_or_unnumbered_items(self):
+        (self.root / 'ROADMAP.md').write_text(
+            '# Roadmap\n\n## Vision\nA usable garden.\n\n'
+            '## M1 — Useful version\n- [x] R1 Foundation\n- [ ] R2 Water log\n### Later\n- [ ] R5 Someday\n\n'
+            '## Ideas\n- [ ] R6 Maybe\n\n'
+            '## M2 — Complete version\n- [ ] R4 Sharing\n\n## Later\n- [ ] R7 Eventually\n')
+        self.assertEqual(progress.define(self.root, 'M1', 'Water log', 'It works')['items'], ['R2'])
+        self.assertEqual(progress.define(self.root, 'M2', 'Sharing', 'It works')['items'], ['R4'])
+
     def test_progress_cli_suppresses_only_the_matching_consoles_correction_receipt(self):
         c = self.completed_candidate()
         for seat, expected in ((console.session_name(self.root), 0), (console.session_name(self.helper), 1), ('', 1)):
@@ -246,7 +285,8 @@ class LeadTest(unittest.TestCase):
                     self.assertEqual(cli.main(['progress', '--changes', c['candidate']['id'], '--text', 'Fix the wording.']), 0)
                 self.assertEqual(len(board.notes(self.root)), before + expected)
                 if expected:
-                    self.assertEqual(board.notes(self.root)[-1]['author'], 'colony')
+                    self.assertEqual(board.notes(self.root)[-1]['author'], 'person')
+                    self.assertNotIn('quiet', board.notes(self.root)[-1], 'corrections wake the lead')
                 self.assertEqual(progress.current(self.root)['decision'], 'Fix the wording.')
                 progress.start(self.root, c['id'], source=self.root)
                 c = progress.ready(self.root, c['candidate']['artifact'], c['candidate']['commit'], 'fixture passed')

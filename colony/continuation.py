@@ -3,15 +3,21 @@
 Every setter has a durable intent before dispatch. A lost response is resolved
 by observing the native goal, never by retrying the setter. Native stops and
 person pauses remain stops until an explicit continuation request.
+
+PROVIDER: the native goal protocol here is Codex's thread goals (thread/goal/get,
+set, clear), reached through providers.Codex.goal_client. A program without
+native goals continues by a wake typed into its idle console instead.
 """
 from contextlib import contextmanager
 from copy import deepcopy
 import fcntl
+import hashlib
+import json
 from pathlib import Path
 import time
 
 from . import board, console, context, lead, progress, providers
-from .codex_rpc import Client, RPCError
+from .codex_rpc import RPCError
 
 _last = {}
 NATIVE_STOPS = ('blocked', 'usageLimited', 'budgetLimited')
@@ -110,7 +116,7 @@ def dispatch(root, client, tid, params, receipt, generation, *, before=None):
         if live['generation'] != generation:
             raise ValueError('Lead changed before goal dispatch; no mutation sent.')
         if params.get('status') == 'active':
-            if (live.get('handoff') or live.get('paused') or receipt.get('requested_holds')
+            if (live.get('handoff') or live.get('paused')
                     or progress.hold(root, root) or progress.objective(root, root) != params.get('objective')):
                 raise ValueError('The project stopped or its boundary changed before goal dispatch; no continuation started.')
             session = context.session(root)
@@ -204,11 +210,6 @@ def native_stop(receipt, goal, *, missing=False):
     return False
 
 
-def _reason(root, receipt, forced_hold):
-    holds = receipt.get('requested_holds') or []
-    return forced_hold or (holds[0] if holds else None) or progress.hold(root, root)
-
-
 def reconcile(root, client, tid, *, forced_hold=None):
     with locked(root):
         return _reconcile(root, client, tid, forced_hold=forced_hold)
@@ -221,7 +222,7 @@ def _reconcile(root, client, tid, *, forced_hold=None):
     receipt['native_stopped'] = False
     receipt.pop('error', None)
     desired = progress.objective(root, root)
-    reason = _reason(root, receipt, forced_hold)
+    reason = forced_hold or progress.hold(root, root)
     current_scope = scope(g, root)
     if (receipt.get('cleared') and current_scope is not None and receipt.get('scope') is not None
             and receipt['scope'] != current_scope):
@@ -235,6 +236,7 @@ def _reconcile(root, client, tid, *, forced_hold=None):
         return receipt
 
     # A new authoritative conversation cannot leave the previous owned goal on.
+    # It is paused once, here, and then forgotten.
     previous = receipt.get('thread')
     if previous and previous != tid and (receipt.get('objective') or receipt.get('pending')):
         old = client.call('thread/goal/get', {'threadId': previous}).get('goal')
@@ -256,23 +258,10 @@ def _reconcile(root, client, tid, *, forced_hold=None):
             if old['status'] == 'active':
                 receipt['error'] = 'The previous native goal has not stopped; continuation waits.'
                 return finish()
-        receipt.setdefault('retired', []).append(dict(thread=previous, objective=receipt.get('objective'),
-                                                       native_created=receipt.get('native_created')))
         for key in ('thread', 'objective', 'native_created', 'last_status', 'paused_by', 'foreign'):
             receipt.pop(key, None)
         if stop:
             receipt['manual_stop'] = receipt.get('manual_stop', False)
-
-    # A handoff verifies retired native goals too; a person may have resumed one.
-    if forced_hold == 'lead handoff':
-        for retired in receipt.get('retired', []):
-            if retired['thread'] in receipt['observations'] or retired['thread'] == tid:
-                continue
-            old = client.call('thread/goal/get', {'threadId': retired['thread']}).get('goal')
-            observe(receipt, retired['thread'], old)
-            if old and old['status'] == 'active':
-                receipt['error'] = 'An earlier conversation has an active native goal; stop it before handing over.'
-                return finish()
 
     goal = client.call('thread/goal/get', {'threadId': tid}).get('goal')
     observe(receipt, tid, goal)
@@ -287,14 +276,10 @@ def _reconcile(root, client, tid, *, forced_hold=None):
     # opening a different thread. The origin must first leave that stop itself.
     stopped_thread = receipt.get('native_stop_thread')
     if receipt.get('native_stop') and stopped_thread and stopped_thread != tid:
-        prior = next((v for v in receipt.get('retired', []) if v['thread'] == stopped_thread), None)
         stopped = client.call('thread/goal/get', {'threadId': stopped_thread}).get('goal')
         observe(receipt, stopped_thread, stopped)
         if stopped and (stopped['status'] in NATIVE_STOPS or stopped['status'] == 'active'):
             receipt['error'] = 'The previous conversation still has a native stop or active goal; resolve it before continuing.'
-            return finish()
-        if stopped and prior and not owned(stopped, prior, stopped_thread):
-            receipt['error'] = 'The stopped goal was replaced by the person; resolve it explicitly before continuing.'
             return finish()
     if native_stop(receipt, goal, missing=goal is None and receipt.get('thread') == tid
                    and receipt.get('outcome') == 'confirmed'):
@@ -316,14 +301,6 @@ def _reconcile(root, client, tid, *, forced_hold=None):
             receipt['last_status'] = goal['status']
         return finish()
     if not goal or goal['objective'] != desired or goal['status'] == 'paused':
-        for retired in receipt.get('retired', []):
-            if retired['thread'] in receipt['observations'] or retired['thread'] == tid:
-                continue
-            previous = client.call('thread/goal/get', {'threadId': retired['thread']}).get('goal')
-            observe(receipt, retired['thread'], previous)
-            if previous and previous['status'] == 'active':
-                receipt['error'] = 'An earlier conversation still has an active native goal; stop it before continuing.'
-                return finish()
         receipt.update(hold=None, manual_stop=False)
         if receipt.get('resume_requested'):
             receipt.pop('native_stop', None)
@@ -355,7 +332,8 @@ def _draining(receipt):
 
 
 def _quiet(root, g, receipt, tid, desired, reason):
-    if receipt.get('pending') or _draining(receipt):
+    """A settled stop needs no socket, RPC or record write on each watcher tick."""
+    if _draining(receipt):
         return False
     settled = dict(thread=tid, objective=desired, reason=reason, scope=scope(g, root))
     if receipt.get('settled') != settled:
@@ -375,29 +353,19 @@ def tick(root, *, forced_hold=None, force=False):
     if not forced_hold and not _engaged(g, root) and not _draining(receipt):
         return receipt
     desired = progress.objective(root, root)
-    reason = _reason(root, receipt, forced_hold)
-    if providers.key(providers.of(root)) != 'codex':
-        if desired and not reason and safe_arm(root) and receipt.get('wake') != desired:
-            if console.type_into(console.session_name(root), '[colony] ' + desired):
-                receipt.update(wake=desired, hold=None)
-                save(root, receipt, g['generation'])
-        return receipt
+    reason = forced_hold or progress.hold(root, root)
+    provider = providers.of(root)
+    if not hasattr(provider, 'goal_client'):
+        return wake(root, g, receipt, desired, reason)
     s = context.session(root)
-    if not s or s['provider'] != 'codex':
+    if not s or s['provider'] != providers.key(provider):
         value = dict(receipt, native_stopped=False, error='The authoritative Codex conversation is unavailable.')
         save(root, value, g['generation'])
         return value
     if not force and not forced_hold and _quiet(root, g, receipt, s['id'], desired, reason):
         return receipt
-    from . import codex_remote
-    socket = codex_remote.socket_for(codex_remote.home_for(root))
-    if not socket.exists():
-        value = dict(receipt, native_stopped=False,
-                     error='Native goal control is unavailable; bounded continuation is not active.')
-        save(root, value, g['generation'])
-        return value
     try:
-        with Client(socket, timeout=3) as client:
+        with provider.goal_client(root, timeout=3) as client:
             return reconcile(root, client, s['id'], forced_hold=forced_hold)
     except (RPCError, OSError, ValueError, KeyError) as error:
         value = dict(status(root), native_stopped=False, error=str(error))
@@ -408,14 +376,37 @@ def tick(root, *, forced_hold=None, force=False):
         return value
 
 
+def mark(root, g, desired):
+    """What a wake answers to: the objective, the HEAD of the member's work, the plan and the item states."""
+    work = (scope(g, root) or {}).get('workspace') or board.workdir(root)
+    value = [desired, lead.git(work, 'rev-parse', 'HEAD', check=False), lead.revision(root),
+             {a['item']: a['state'] for a in g['assignments'].values()}]
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def wake(root, g, receipt, desired, reason):
+    """Without native goals, an idle console is woken once per change in the work, never after a turn that
+    changed nothing. A hold ends the current wake, so its lifting wakes again."""
+    if reason:
+        if 'wake' in receipt or receipt.get('hold') != reason:
+            receipt.pop('wake', None)
+            receipt['hold'] = reason
+            save(root, receipt, g['generation'])
+    elif desired and safe_arm(root):
+        value = mark(root, g, desired)
+        if receipt.get('wake') != value and console.type_into(console.session_name(root), '[colony] ' + desired):
+            receipt.update(wake=value, hold=None)
+            save(root, receipt, g['generation'])
+    return receipt
+
+
 def adopt(root):
     """Only an explicit request can make an existing native goal ours."""
     with locked(root):
         s, g = context.session(root), lead.info(root)
         if not s or s['provider'] != 'codex':
             raise ValueError('Start this project’s Codex conversation before adopting its goal.')
-        from . import codex_remote
-        with Client(codex_remote.socket_for(codex_remote.home_for(root))) as client:
+        with providers.get(s['provider']).goal_client(root) as client:
             goal = client.call('thread/goal/get', {'threadId': s['id']}).get('goal')
         if not goal:
             raise ValueError('This conversation has no goal to adopt.')
@@ -437,8 +428,8 @@ def resume(root):
         if value.get('pending'):
             raise ValueError('The previous native goal update is uncertain; read/adopt or clear it before continuing.')
         value.update(manual_stop=False, resume_requested=True, hold='explicit resume')
-        value.pop('error', None)
-        value.pop('settled', None)
+        for key in ('error', 'settled', 'wake'):
+            value.pop(key, None)
         save(root, value, g['generation'])
     progress.pause(root, False)
     return tick(root, force=True)
@@ -453,8 +444,7 @@ def clear(root):
         receipt = status(root)
         receipt.setdefault('scope', scope(g, root))
         tid = receipt.get('pending_thread') or receipt.get('thread') or s['id']
-        from . import codex_remote
-        with Client(codex_remote.socket_for(codex_remote.home_for(root))) as client:
+        with providers.get(s['provider']).goal_client(root) as client:
             goal = client.call('thread/goal/get', {'threadId': tid}).get('goal')
             observe(receipt, tid, goal)
             if receipt.get('pending', {}).get('clear'):
@@ -494,39 +484,14 @@ def clear(root):
 
 
 def hold(root, reason='context refresh'):
-    """Pause only owned continuation; return fresh proof that native work stopped."""
+    """Pause only owned continuation now; return fresh proof that native work stopped.
+    What keeps it paused is the hold itself (progress.hold), never a record of this request."""
     g = lead.group(root)
-    if not g:
+    if not g or (not _engaged(g, root) and not _draining(status(root))):
         return True
-    with locked(root):
-        receipt = status(root)
-        if not _engaged(g, root) and not _draining(receipt):
-            return True
-        holds = list(receipt.get('requested_holds') or [])
-        if reason not in holds:
-            holds.append(reason)
-        receipt['requested_holds'] = holds
-        save(root, receipt, g['generation'])
     receipt = tick(root, forced_hold=reason, force=True)
-    if providers.key(providers.of(root)) != 'codex':
-        return True
-    return bool(receipt.get('native_stopped') and not receipt.get('pending'))
-
-
-def release(root, reason='context refresh'):
-    """A completed/deferred refresh releases its hold, retaining native/user stops."""
-    g = lead.group(root)
-    if not g:
-        return {}
-    with locked(root):
-        receipt = status(root)
-        holds = receipt.get('requested_holds') or []
-        if reason not in holds:
-            return receipt
-        receipt['requested_holds'] = [h for h in holds if h != reason]
-        receipt.pop('settled', None)
-        save(root, receipt, g['generation'])
-    return tick(root, force=True)
+    return (not hasattr(providers.of(root), 'goal_client')
+            or bool(receipt.get('native_stopped') and not receipt.get('pending')))
 
 
 def handoff(root):
@@ -536,7 +501,7 @@ def handoff(root):
         return False
     outgoing = Path(hand['outgoing'])
     receipt = tick(outgoing, forced_hold='lead handoff', force=True)
-    if providers.key(providers.of(outgoing)) == 'codex':
+    if hasattr(providers.of(outgoing), 'goal_client'):
         # A stale receipt, absent socket, foreign active goal or uncertain pause
         # is never evidence that the outgoing continuation has stopped.
         if not receipt.get('native_stopped') or receipt.get('pending'):
@@ -553,16 +518,7 @@ def handoff(root):
 
 
 def after_turn(root):
-    g = lead.group(root)
-    if not g:
-        return
-    receipt = status(root)
-    if not _engaged(g, root) and not _draining(receipt):
-        return
-    if providers.key(providers.of(root)) == 'claude':
-        # One new wake per completed work turn, never per idle watcher tick.
-        receipt.pop('wake', None)
-        save(root, receipt, g['generation'])
+    """A finished turn reconciles at once; it earns a new wake only if it changed the work."""
     return tick(root, force=True)
 
 
