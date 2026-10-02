@@ -661,6 +661,21 @@ class LeadTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             progress.define(self.root, 'Later', 'Someday', 'Done')
 
+    def test_r74_a_failed_sync_never_loses_the_turns_mail(self):
+        from colony import mail
+        self.pair()
+        board.append(self.root, mail.FILE, dict(type='message', id='m1', at=board.now(), to=mail.address(self.root),
+                     text='Please look at the water log.', ask=False, re=None, urgent=False, **{'from': 'garden-codex'}))
+        out = io.StringIO()
+        here = os.getcwd(); os.chdir(self.root); self.addCleanup(os.chdir, here)
+        self.assertEqual(board.root_of(), self.root.resolve(), 'the hook runs against the fixture, not this repository')
+        with patch.object(lead, 'engage', side_effect=RuntimeError('hook rejected')), \
+                patch.dict(os.environ, COLONY_PROJECT=str(self.root)), patch('sys.stdin', io.StringIO('{}')), redirect_stdout(out):
+            cli.main(['notes', '--deliver'])
+        self.assertIn('could not sync', out.getvalue())
+        self.assertIn('water log', out.getvalue())
+        self.assertFalse([m for m in mail.inbox(self.root) if not m['delivered_at']], 'marked only once shown')
+
     def test_parallel_finishers_wait_sync_and_test_in_order(self):
         self.pair(); lead.pair(self.root, self.other)
         for iid, who in (('R2', self.helper), ('R3', self.other)):

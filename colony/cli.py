@@ -871,8 +871,11 @@ def cmd_notes(a):
         still, earlier_own = vision.delivery(root, still)
         if any(board.answers_ask(n) for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
-        new_mail, open_asks = mail.deliver(root, session=a.session)
-        engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
+        new_mail, open_asks = mail.deliver(root, session=a.session, mark=False)
+        try:
+            engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
+        except Exception as error:                      # a sync problem never costs the turn its notes and mail
+            engagement, engagement_receipt = f"Colony could not sync this workspace: {error}", None
         text = "\n\n".join(filter(None, [
             standing,
             lead.role_text(root) if a.session else '',
@@ -891,6 +894,7 @@ def cmd_notes(a):
         print(text, flush=True)
     if a.deliver:
         board.delivered(root, fresh, own + earlier_own)
+        mail.delivered(root, new_mail)
         lead.acknowledge_engagement(root, engagement_receipt)
     return 0
 
