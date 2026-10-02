@@ -615,6 +615,14 @@ class LeadTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'R4'):
             lead.start_item(self.root, 'R5', actor=self.root)
 
+    def test_r74_a_plain_later_heading_is_its_own_section(self):
+        (self.root / 'ROADMAP.md').write_text(PLAN + '\n## Notes\nprose\n\n## Later\n- [ ] R10 Someday\n')
+        road = board.roadmap(self.root)
+        self.assertEqual([m['id'] for m in road['milestones']], ['M1', 'M2', 'M9', 'Later'])
+        self.assertEqual([i['id'] for i in road['milestones'][2]['items']], ['R9'])
+        with self.assertRaises(ValueError):
+            progress.define(self.root, 'Later', 'Someday', 'Done')
+
     def test_parallel_finishers_wait_sync_and_test_in_order(self):
         self.pair(); lead.pair(self.root, self.other)
         for iid, who in (('R2', self.helper), ('R3', self.other)):
