@@ -202,6 +202,11 @@ def finish_handoff(root, generation):
         if not handoff or handoff['generation'] != generation:
             raise ValueError('This handoff is no longer current.')
         g['lead'] = handoff['incoming']
+        for item, value in g['assignments'].items():
+            if (item not in g['owners'] and value['owner'] == handoff['outgoing']
+                    and value['state'] in ('working', 'handback', 'testing', 'deploying')):
+                value.update(owner=handoff['incoming'], generation=g['generation'],
+                             previous_owner=handoff['outgoing'])
         g['last_handoff'] = dict(handoff, state='landed', landed_at=board.now())
         g.pop('handoff')
     g = update(root, change, generation=generation)

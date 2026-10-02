@@ -85,6 +85,7 @@ class LeadTest(unittest.TestCase):
 
     def test_one_plan_owner_inheritance_and_generation(self):
         self.pair()
+        active = lead.start_item(self.root, 'R2', actor=self.root)
         lead.assign(self.root, 'R3', self.root, actor=self.root)
         (self.helper / 'ROADMAP.md').write_text('stale unrelated branch plan')
         self.assertEqual(board.roadmap(self.helper), board.roadmap(self.root))
@@ -95,6 +96,8 @@ class LeadTest(unittest.TestCase):
         lead.finish_handoff(self.root, g['generation'])
         self.assertEqual(lead.owner(self.root, 'R2'), self.helper)
         self.assertEqual(lead.owner(self.root, 'R3'), self.root)
+        self.assertEqual(lead.info(self.root)['assignments']['R2']['owner'], str(self.helper))
+        self.assertEqual(lead.info(self.root)['assignments']['R2']['workspace'], active['workspace'])
         with self.assertRaisesRegex(ValueError, 'lead changed'):
             lead.update(self.root, lambda g: g.update(lead=str(self.root)), generation=0)
         self.assertEqual(lead.plan_path(self.helper), self.root / 'ROADMAP.md')
