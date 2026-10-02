@@ -41,6 +41,14 @@ The person's words: "Additionally, mucking up your context with other projects a
 that should be a colony board behavior. I probably shouldn’t have. Had you concern yourself with any
 updates on any other projects. Let’s just refocus here."
 
+Agreed 2026-10-02: the primary Codex agent keeps its goal aimed at the next agreed pause and refreshes
+it automatically when the next scope is authorised or a required check-in is cleared. The person should
+not need to issue another `/goal`. This preserves the approval required before each new Colony item;
+goal updates do not release unapproved work. This clarifies R71, rather than adding an upcoming item.
+
+The person's words: "Also codex goals should be encouraged to automatically be updated to the next
+expected pause.  Im not sure if we specced that in upcoming or not".
+
 ## M1 — A harness that earns its shape
 
 - [x] R1 Intention and blueprint, from the garden pilots' measurements — design/intention.md, design/blueprint.md
