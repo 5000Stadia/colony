@@ -40,6 +40,10 @@ points cannot grant approval. The comment is optional. Accepted points automatic
 become the consultation's adoption record. Rejecting every point closes the gate
 without authorising a checking round.
 
+**Clear** closes a gate without choosing for any point. Its record says **No decision**,
+and no checking round is allowed. The agent hears quietly on its next turn. The person
+can still open the saved gate and make explicit choices later.
+
 If the person settles it in conversation, record the actual choices without sending
 a receipt back to yourself:
 
