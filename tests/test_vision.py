@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -195,6 +195,18 @@ class VisionTest(BoardBase):
         self.assertEqual(len(changes), 1)
         self.assertTrue(changes[0]['quiet'])
         self.assertIn('The new shared horizon.', changes[0]['text'])
+        self.assertEqual(changes[0]['author'], 'colony')
+        self.assertTrue(changes[0]['text'].startswith('The lead recorded a vision change agreed with the person'))
+
+    def test_board_save_notice_is_colonys_and_the_change_stays_the_persons(self):
+        vision.save(self.root, 'A garden that waters itself.', how='board')
+        [note] = board.notes(self.root)
+        self.assertEqual(note['author'], 'colony')
+        self.assertIn('The person saved the vision on the board.', note['text'])
+        self.assertIn('A garden that waters itself.', monitor.catch_up(self.root), "the monitor still sees the person's edit")
+        result = self.cli('notes', '--deliver')
+        self.assertIn('Colony, the harness the person set up and trusts', result.stdout)
+        self.assertNotIn('The person left notes', result.stdout)
 
     def test_item_notes_wait_until_relevant_work_begins(self):
         note = board.add_note(self.root, {'item': 'R3'}, 'Needed when reminders begin.', quiet=True, author='person')
@@ -329,17 +341,18 @@ class VisionTest(BoardBase):
     def test_http_multiline_save_noop_stale_recovery_and_quiet_update(self):
         vision.save(self.root, 'First.\nSecond.', how='conversation', words='Yes.')
         httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
-        httpd.watcher = Mock()
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         base = f'http://127.0.0.1:{httpd.server_address[1]}'
         def post(before, text):
             data = urllib.parse.urlencode(dict(p=0, before=before, text=text)).encode()
             return urllib.request.urlopen(urllib.request.Request(base + '/vision', data=data))
         try:
-            with post('First.\r\nSecond.', 'New.\r\nMore.') as response:
-                self.assertEqual(response.status, 200)
-            httpd.watcher.mail.assert_called_once()
+            with patch.object(console, 'type_into') as typed:
+                with post('First.\r\nSecond.', 'New.\r\nMore.') as response:
+                    self.assertEqual(response.status, 200)
+            typed.assert_not_called()
             self.assertTrue(board.notes(self.root)[0]['quiet'])
+            self.assertEqual(board.notes(self.root)[0]['author'], 'colony')
             self.assertEqual(board.roadmap(self.root)['vision'], 'New.\nMore.')
             self.assertIsNone(vision.save(self.root, 'New.\r\nMore.', how='board', before='New.\r\nMore.'))
             self.assertEqual(len(board.notes(self.root)), 1)

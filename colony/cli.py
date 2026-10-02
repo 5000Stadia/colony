@@ -562,10 +562,12 @@ def cmd_gate(a):
         return 2
     gid = gate["id"]
     from . import lead, continuation
-    g = lead.group(root)
-    if g and len(g['members']) > 1:
-        lead.notify(g, f"Costly decision for {a.item or 'the project'}: {a.question}. Reason: {a.why}. "
-                       f"Gate {gid} is owned by {root.name}; keep work affected by it stopped.", quiet=False, exclude=[str(root)])
+    # Only the member at work on the gate's item hears of it, on its next turn: no one is woken for it.
+    job = lead.info(root)['assignments'].get(a.item) if a.item else None
+    owner = Path(job['owner']) if job and job['state'] in continuation.ASSIGNMENT_ACTIVE else None
+    if owner and owner != Path(root).resolve() and owner.exists():
+        board.add_note(owner, None, f"Costly decision for {a.item}: {a.question}. Reason: {a.why}. "
+                       f"Gate {gid} is owned by {root.name}; keep work affected by it stopped.", author='colony', quiet=True)
     continuation.tick(root, forced_hold='blocking decision')
     print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note")
     return 0
@@ -867,7 +869,7 @@ def cmd_notes(a):
         fresh, still = board.deliver(root, session=a.session, mark=False)
         fresh, own = vision.delivery(root, fresh)
         still, earlier_own = vision.delivery(root, still)
-        if any(not n.get("quiet") and not n["anchor"] and n.get('author') != 'observation' for n in fresh):
+        if any(board.answers_ask(n) for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session)
         engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)

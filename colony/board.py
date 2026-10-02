@@ -752,6 +752,11 @@ def answer_asks(root, how):
         append(root, "asks.jsonl", {"type": "answered", "of": a["id"], "at": now(), "how": how})
 
 
+def answers_ask(n):
+    """A note that answers the agent's open question: the person's own words, or their monitor's, on the project."""
+    return not n.get("quiet") and not n["anchor"] and n.get("author") in ("person", "monitor")
+
+
 # ---------------------------------------------------------------- what's ready for the person's OK, in their words
 
 def ready_notes(root):
@@ -965,7 +970,7 @@ def said_reply(root, text):
     append(root, "said.jsonl", {"at": now(), "reply": ("…" + tail[-600:]) if len(tail) > 600 else tail})
 
 
-def add_note(root, anchor, text, author, quiet=False):
+def add_note(root, anchor, text, *, author, quiet=False):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
             "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {})}
@@ -1010,7 +1015,7 @@ def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
         return _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
 
 
-def _gate_note(root, gate, ident, text, at, *, author="person", quiet=False):
+def _gate_note(root, gate, ident, text, at, *, author, quiet=False):
     if ident and not any(n["id"] == ident for n in notes(root)):
         append(root, "notes.jsonl", dict(type="note", id=ident, at=at, author=author,
             anchor={"gate": gate["id"], "item": gate.get("item")}, text=f"On \"{gate['question']}\": {text}",
@@ -1031,7 +1036,7 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
         if gate["answer"]:
             if gate["answer"] == answer["text"] and gate["point_decisions"] == decisions:
                 if tell:
-                    _gate_note(root, gate, gate.get("note_id"), gate["answer"], gate["answered_at"])
+                    _gate_note(root, gate, gate.get("note_id"), gate["answer"], gate["answered_at"], author="person")
                 return gate  # A retried submission creates neither another decision nor another notice.
     elif decisions:
         raise ValueError("This gate has no consultant points.")
@@ -1040,7 +1045,7 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
     answer["note_id"] = "n" + secrets.token_hex(3) if tell else None
     append(root, "gates.jsonl", answer)
     if tell:
-        _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"])
+        _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"], author="person")
     return answer
 
 
@@ -2153,9 +2158,10 @@ def waiting_items(p, snap=None):
 
 
 def tell_pinned(root, pin, comment=""):
-    """The agent hears of the person's pin: with a comment, as a message; without one, quietly."""
+    """The agent hears of the person's pin: with a comment, as a message in their words; without one, quietly."""
     text = f"The person pinned {pins.describe(pin)} on the board."
-    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""), author='colony', quiet=not comment)
+    add_note(root, {"pin": pin["id"]}, text + (f" Their comment: {comment}" if comment else ""),
+             author='person' if comment else 'colony', quiet=not comment)
 
 
 def dismissed(root):
@@ -3341,9 +3347,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, shell(reg, pid, f"<h1>Vision</h1><p>{e(str(err))}</p>"
                                             f"<p>Your unsaved revision:</p><pre>{e(form.get('text', ''))}</pre>"
                                             f"<p><a href='/?p={pid}'>Back to the project</a></p>").encode())
-            watcher = getattr(self.server, 'watcher', None)
-            if watcher is not None:
-                watcher.mail()  # wake immediately if safe; otherwise the next hook delivers the note
         elif path == "/note" and text:
             kind, ref = form.get("kind"), form.get("ref")
             from . import lead
@@ -3397,11 +3400,13 @@ class Handler(BaseHTTPRequestHandler):
             if iid in progress.held_items(root):
                 return self._send(409, b'Approve the completed version using its current candidate.')
             # either way it leaves the person's list now: "not yet" is back with the agent until it says ready again
+            # What the person typed is theirs; a bare verdict is colony's receipt of the click.
             if form.get("verdict") == "not-yet":
                 add_note(root, {"item": iid}, f"Not yet, on {iid}" + (f": {text}" if text else ".")
-                         + " When it's ready again, say so with colony ready.", author='colony')
+                         + " When it's ready again, say so with colony ready.", author='person' if text else 'colony')
             else:
-                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.", author='colony')
+                add_note(root, {"item": iid}, f"The person approved {iid}" + (f": {text}" if text else ".") + " Mark it done.",
+                         author='person' if text else 'colony')
             append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
             if not console.type_into(console.session_name(root), text):
@@ -3423,9 +3428,8 @@ def serve(port, lan=False, monitor=True):
     from . import monitor as mon, vision
     vision.install_all()
     rewire_projects()
-    watcher = mon.start(enabled=monitor and registry()["settings"]["monitor"])
+    mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
-    httpd.watcher = watcher
     httpd.lan = lan
     where = "every address on this machine (your home network can open it)" if lan else "http://127.0.0.1"
     print(f"board: {where}, port {httpd.server_address[1]}  (ctrl-c to stop)", flush=True)

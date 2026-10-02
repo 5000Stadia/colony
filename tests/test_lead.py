@@ -481,6 +481,24 @@ class LeadTest(unittest.TestCase):
         self.assertIsNone(file['ours'])
         self.assertTrue(file['base'] and file['theirs'] and file['both_changed'])
 
+    def test_a_gate_quietly_reaches_only_the_member_at_work_on_its_item(self):
+        self.pair()
+        lead.pair(self.root, self.other, actor=self.root)
+        self.helper_job('R2')
+        members = (self.root, self.helper, self.other)
+        before = {m: len(board.notes(m)) for m in members}
+        def gate(root, *args):
+            with patch.object(board, 'root_of', return_value=root), patch.object(continuation, 'tick'), redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(['gate', *args]), 0)
+        gate(self.root, 'Keep the log format?', '--item', 'R2', '--why', 'R2 stores it')
+        gate(self.root, 'Email or SMS?', '--item', 'R3', '--why', 'Nobody works on R3 yet')
+        gate(self.root, 'Rename the project?', '--why', 'No item')
+        gate(self.helper, 'Index the log?', '--item', 'R2', '--why', 'Its own item')
+        [note] = board.notes(self.helper)[before[self.helper]:]
+        self.assertEqual((note['author'], note.get('quiet')), ('colony', True))
+        self.assertIn('Keep the log format?', note['text'])
+        self.assertEqual([len(board.notes(m)) for m in (self.root, self.other)], [before[self.root], before[self.other]])
+
     def test_single_agent_checkpoint_does_not_set_up_integration_locks(self):
         c = progress.define(self.root, 'M1', 'Usable garden', 'Works', items=['R2'])
         progress.start(self.root, c['id'])
