@@ -60,7 +60,7 @@ class EffortPolicyTest(unittest.TestCase):
                 pick = policy.pick('claude', role, self.points, position)
                 self.assertEqual((pick['model'], pick['effort']), (balanced['model'], balanced['effort']))
                 self.assertEqual(pick['evidence']['goal'], pick['evidence']['ceiling'])
-        for role in ('main', 'runtime', 'routine', 'monitor'):
+        for role in ('main', 'routine', 'monitor'):
             self.assertLess(policy.pick('claude', role, self.points, 6)['evidence']['goal'],
                             policy.pick('claude', role, self.points, 3)['evidence']['goal'])
 

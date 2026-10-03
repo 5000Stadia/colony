@@ -123,6 +123,14 @@ class SelectionTest(unittest.TestCase):
         self.assertIn('recovery', selection.read())
         self.assertTrue(selection.reconcile()['pending'])
 
+    def test_a_retired_roles_seat_is_dropped_and_live_seats_stay(self):
+        selection.reconcile()
+        with selection.transaction() as state:
+            state['accepted']['test:runtime'] = dict(self.a)
+        accepted = selection.reconcile()['accepted']
+        self.assertNotIn('test:runtime', accepted)
+        self.assertEqual(set(accepted), {'test:main', 'test:monitor'})
+
 
 from tests.test_board import BoardBase
 
@@ -138,14 +146,14 @@ class IntegrationTest(BoardBase):
                 patch.object(selection.bench, 'role_pick', side_effect=picked):
             selection.reconcile()
             with selection.transaction() as state:
-                for role in ('monitor', 'runtime'):
+                for role in ('monitor', 'main'):
                     state['accepted']['codex:' + role]['effort'] = 'medium'
             settled = selection.reconcile()
             self.assertEqual(settled['accepted']['codex:monitor']['effort'], 'xhigh')
-            self.assertEqual(settled['accepted']['codex:runtime']['effort'], 'high')
+            self.assertEqual(settled['accepted']['codex:main']['effort'], 'high')
             self.assertEqual(board.registry()['settings']['provider'], 'claude')
             self.assertEqual(selection.monitor()['model'], 'claude-opus-5-5')
-            self.assertEqual(selection.runtime()['model'], 'claude-opus-5-5')
+            self.assertEqual(selection.main()['model'], 'claude-opus-5-5')
 
     def test_legacy_form_pins_and_aliases_migrate_once_real_pins_survive(self):
         root = self.root
@@ -299,24 +307,18 @@ class GoalSliderTest(BoardBase):
         self.other.mkdir()
         board.track(self.other)
         board.project_settings(self.other, {'provider':'codex'})
-        for root in (self.root,self.other):
-            (root/'.colony').mkdir()
-            (root/'.colony'/'config.json').write_text('{}')
         selection.reconcile()
 
-    def test_project_slider_changes_main_helpers_and_claude_runtime_only_for_that_project(self):
+    def test_project_slider_changes_main_helpers_only_for_that_project(self):
         self.assertEqual(selection.main(self.root)['effort'],'max')
         board.project_settings(self.root, {'auto_balance':'6'})
         self.assertEqual(selection.main(self.root)['effort'],'medium')
         self.assertEqual(selection.main(self.other)['effort'],'max')
-        self.assertEqual(selection.runtime(self.root)['model'],'claude-sonnet-5-5')
-        self.assertEqual(selection.runtime(self.other)['model'],'claude-opus-5-5')
-        ident=selection.key('claude','runtime',self.root)
-        affected=selection.affected(ident, None, selection.runtime(self.root))
+        ident=selection.key('codex','main',self.root)
+        affected=selection.affected(ident, None, selection.main(self.root))
         self.assertEqual([s['root'] for s in affected],[str(self.root)])
         board.project_settings(self.root, {'auto_balance':''})
         self.assertEqual(selection.main(self.root)['effort'],'max')
-        self.assertEqual(selection.runtime(self.root)['model'],'claude-opus-5-5')
 
     def test_slider_keeps_pins_and_scopes_effort_rollback(self):
         board.project_settings(self.root, {'model':'gpt-6-astra','effort':'max','auto_balance':'6'})
@@ -351,6 +353,7 @@ class GoalSliderTest(BoardBase):
 
     def test_scoped_new_model_approval_is_invalidated_when_slider_changes(self):
         board.set_setting('model_adoption','ask')
+        board.project_settings(self.root, {'provider':'claude'})
         with selection.transaction() as state:
             state['approved'].remove('claude-sonnet-5-5')
             held=state['accepted']['claude:main']
@@ -359,11 +362,11 @@ class GoalSliderTest(BoardBase):
         board.project_settings(self.root, {'auto_balance':'6'})
         state=selection.read()
         proposal=state['pending']['claude-sonnet-5-5']
-        ident=selection.key('claude','runtime',self.root)
+        ident=selection.key('claude','main',self.root)
         self.assertIn(ident,proposal['roles'])
-        self.assertEqual(selection.runtime(self.root)['model'],'claude-opus-5-5')
+        self.assertEqual(selection.main(self.root)['model'],'claude-opus-5-5')
         old=proposal['id']
         board.project_settings(self.root, {'auto_balance':'5'})
         with self.assertRaisesRegex(ValueError,'changed'):
             selection.decide('claude-sonnet-5-5',old,'approve')
-        self.assertEqual(selection.runtime(self.other)['effort'],'high')
+        self.assertEqual(selection.main(self.other)['effort'],'max')

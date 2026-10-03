@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
-OFFSETS = {'main': 4, 'runtime': 4, 'routine': 10, 'step-up': 0, 'consultant': 0, 'monitor': 2}
+OFFSETS = {'main': 4, 'routine': 10, 'step-up': 0, 'consultant': 0, 'monitor': 2}
 POSITIONS = ('Intelligence', 'Intelligence + 1', 'Intelligence + 2', 'Balanced', 'Economy − 2', 'Economy − 1', 'Economy')
 TOLERANCE = 1
 
