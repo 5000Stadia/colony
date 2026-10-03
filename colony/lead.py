@@ -668,7 +668,8 @@ def _engage_member(root, *, mark):
         return (f'Colony engagement catch-up to tested integration {target}. '
                 + ('Completed items: ' + ', '.join(done) + '. ' if done else '')
                 + '; '.join(subjects) + ('; canonical plan changed' if plan_changed else '')
-                + ('. Continue only the current bounded version.' if mine == g['lead'] else
+                + ('.' if mine == g['lead'] and not g.get('active_checkpoint') else
+                   '. Continue only the current bounded version.' if mine == g['lead'] else
                    '. No item is assigned; continue only this conversation, without a project goal.')), token
 
 
