@@ -550,14 +550,14 @@ class LeadTest(unittest.TestCase):
             self.assertTrue(lead.role_text(member))
             self.assertNotIn(lead.role_text(member), text, 'who leads reaches the agent fresh at each session start')
             self.assertNotIn('Ownership generation', text)
-            self.assertEqual(text.count('natural completed versions'), 1)
+            self.assertEqual(text.count('A pause point agreed with the person'), 1)
             self.assertEqual('/goal' in text, key == 'codex', 'only Codex has a native goal')
-        self.assertNotIn('natural completed versions', board.BEGIN + board.JOIN)
+        self.assertNotIn('A pause point agreed with the person', board.BEGIN + board.JOIN)
         with (patch.object(board, 'root_of', return_value=self.root), patch.object(cli, '_hook_input', return_value={}),
               patch.object(providers, 'discover'), redirect_stdout(io.StringIO()) as out):
             self.assertEqual(cli.main(['notes', '--deliver', '--session']), 0)
         self.assertIn(lead.role_text(self.root), out.getvalue())
-        self.assertNotIn('natural completed versions', out.getvalue(), 'the instruction file already holds it')
+        self.assertNotIn('A pause point agreed with the person', out.getvalue(), 'the instruction file already holds it')
 
     def test_single_agent_checkpoint_does_not_set_up_integration_locks(self):
         c = progress.define(self.root, 'M1', 'Usable garden', 'Works', items=['R2'])

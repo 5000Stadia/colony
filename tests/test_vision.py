@@ -337,11 +337,12 @@ class VisionTest(BoardBase):
         self.assertEqual(board.open_notes(joined), [])
 
     def test_protocol_preserves_revision_prompt_and_scopes_local_details(self):
-        self.assertIn("When the work shows the vision differently than it's written, propose a revision to the person.", board.PROTOCOL)
+        self.assertIn("When the work shows the vision differently, propose a revision", " ".join(board.PROTOCOL.split()))
         for text in (board.PROTOCOL, vision.MIGRATION, monitor.ROLE):
             self.assertIn('brainstorming', text)
+        for text in (vision.MIGRATION, monitor.ROLE):
             self.assertIn('specifications', text)
-        self.assertIn('move item-level detail from Vision', board.PROTOCOL)
+        self.assertIn('detail that matters to a few items lives in those items', ' '.join(board.PROTOCOL.split()))
         self.assertIn('## Vision', board.SKELETON)
 
     def test_http_multiline_save_noop_stale_recovery_and_quiet_update(self):

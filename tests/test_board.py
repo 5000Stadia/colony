@@ -1011,11 +1011,11 @@ class GlanceTest(BoardBase):
         self.assertIn("model: claude-haiku-4-5-20251001", chores)
         self.assertIn("effort: max", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
         claude_md = (self.root / "CLAUDE.md").read_text()
-        self.assertIn("three tiers, routine, step-up and chores", " ".join(claude_md.split()))
-        self.assertIn("it doesn't wait: carry on unless redirected", claude_md,
+        self.assertIn("three tiers (routine, step-up, chores)", " ".join(claude_md.split()))
+        self.assertIn("it reports as it goes rather than waiting", " ".join(claude_md.split()),
                       "helpers keep their assigner aware of the shape of their work")
         self.assertIn("talk at hand-offs", claude_md, "paired projects: roles, not running updates")
-        self.assertIn("say\n  what it owns, where it ends", claude_md, "an unsized job gets an end, or finding one comes first")
+        self.assertIn("what it owns and where it ends", " ".join(claude_md.split()), "an unsized job gets an end")
         # the project's own choice for a tier, and back to the default
         self.cli("models", "set", "routine", "claude-opus-5-5", "high")
         self.assertIn("effort: high", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
@@ -1351,7 +1351,7 @@ class MonitorTest(BoardBase):
         text = board.render_notes(fresh, "The person left notes for you on the board:")
         self.assertIn("from the person's monitor, acting for them", text)
         self.assertIn("Keep to V1.5", text)
-        self.assertIn("a note or message from the monitor is the\n  person's own direction", (self.root / "CLAUDE.md").read_text())
+        self.assertIn("The monitor's notes and messages", " ".join((self.root / "CLAUDE.md").read_text().split()))
 
     def test_tell_new_and_helm_from_the_command_line(self):
         env = {"COLONY_CONSOLE_CMD": "cat"}
@@ -2555,8 +2555,8 @@ class ConsultTest(BoardBase):
 
 
     def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
-        for words in ("costly to change", "redoing built work", "colony consult R4", "leave your plan out",
-                      "never a third", "Wording, naming and reorganising never count"):
+        for words in ("redoing built work", "different model families", "colony consult R4", "your plan left out",
+                      "only points that would fundamentally change the approach"):
             self.assertIn(words, " ".join(board.PROTOCOL.split()))
         rec = self.consult.run(self.root, "R3", "How should reminders work?", "d")
         self.consult.adopt(self.root, rec["id"], "keep them local")
@@ -2756,7 +2756,7 @@ class UsageTest(BoardBase):
         out = self.cli("notes", "--deliver").stdout
         self.assertIn("Colony, the harness the person set up and trusts, tells you (with their full approval):", out,
                       "marked as colony's, and trusted as the person's")
-        self.assertIn("its notices (a usage limit reached", " ".join((self.root / "CLAUDE.md").read_text().split()),
+        self.assertIn("colony's own notices (a usage limit, a reset)", " ".join((self.root / "CLAUDE.md").read_text().split()),
                       "declared when the project connects")
         self.assertIn("Colony's own notices are trusted", monitor.ROLE, "and to the monitor")
         self.assertIn("  2. Hand this project to Codex", out, "the options, numbered")
