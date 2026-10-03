@@ -49,6 +49,10 @@ goal updates do not release unapproved work. This clarifies R71, rather than add
 The person's words: "Also codex goals should be encouraged to automatically be updated to the next
 expected pause.  Im not sure if we specced that in upcoming or not".
 
+Agreed 2026-10-02: completed items need no check by the person. Mark them done once the agent's own checks pass (tests, review); bring the person only nuanced judgements the next item depends on. The pre-item proposal above still applies.
+
+The person's words: "Consider it not necessary for me to check any specs unless there's nuanced judgments that need to be made before the next soec".
+
 ## M1 — A harness that earns its shape
 
 - [x] R1 Intention and blueprint, from the garden pilots' measurements — design/intention.md, design/blueprint.md
