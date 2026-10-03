@@ -124,7 +124,7 @@ def hold(root, member):
     if context.refreshing(member):
         return 'context refresh'
     for source in g['members']:
-        if any(not gate['answer'] and (not gate.get('item') or gate['item'] in c['items']) for gate in board.gates(Path(source))):
+        if any(board.due(gate) and (not gate.get('item') or gate['item'] in c['items']) for gate in board.gates(Path(source))):
             return 'blocking decision'
         if source == member and board.asks(Path(source)):
             return 'question for the person'

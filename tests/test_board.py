@@ -85,6 +85,21 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_r76_a_question_waits_for_its_moment_then_reaches_the_person_once(self):
+        road = self.root / "ROADMAP.md"
+        road.write_text(road.read_text() + "\n## M8 \u2014 Later work\n\n- [ ] R12 The final chapter\n")
+        result = self.cli("gate", "How does the best friend die?", "--when", "R12")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("waits until R12 starts", result.stdout)
+        [gate] = [g for g in board.gates(self.root) if g.get("when") == "R12"]
+        self.assertEqual(gate["item"], "R12")
+        self.assertFalse(board.due(gate))
+        self.assertNotIn("gate:" + gate["id"], [w["key"] for w in board.waiting_items(self.root)])
+        road.write_text(road.read_text().replace("- [ ] R12", "- [~] R12"))
+        [gate] = [g for g in board.gates(self.root) if g["id"] == gate["id"]]
+        self.assertTrue(board.due(gate))
+        self.assertIn("gate:" + gate["id"], [w["key"] for w in board.waiting_items(self.root)])
+
     def test_r77_a_gate_settled_in_conversation_keeps_the_agents_reading_beside_their_words(self):
         gate = board.add_gate(self.root, 'Which colour?')
         result = self.cli('gate', 'Blue, obviously', '--answered', gate['id'], '--context', 'They want the calm palette from the mockup.')

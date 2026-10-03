@@ -558,11 +558,14 @@ def cmd_gate(a):
         if bool(a.consult) != bool(a.points):
             raise ValueError("Use --consult ID and --points FILE together.")
         points = json.loads(sys.stdin.read() if a.points == "-" else Path(a.points).read_text()) if a.points else None
-        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points)
+        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when)
     except (ValueError, OSError) as err:
         print(str(err), file=sys.stderr)
         return 2
     gid = gate["id"]
+    if a.when and next(g for g in board.gates(root) if g["id"] == gid).get("waits_for"):
+        print(f"gate {gid} waits until {a.when} starts, off the person's list; carry on meanwhile")
+        return 0
     from . import lead, continuation
     # Only the member at work on the gate's item hears of it, on its next turn: no one is woken for it.
     job = lead.info(root)['assignments'].get(a.item) if a.item else None
@@ -1345,6 +1348,7 @@ def main(argv=None):
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")
+    p.add_argument("--when", metavar="ITEM", help="the question waits, off the person's list, until roadmap ITEM starts")
     p.add_argument("--consult", metavar="ID", help="the first-round consultation that supplied this gate's points")
     p.add_argument("--points", metavar="FILE", help="JSON list of points with text and consultant numbers (- for stdin)")
     p.add_argument("--accept", action="append", default=[], metavar="POINT", help="with --answered: a point the person accepted, e.g. P1")

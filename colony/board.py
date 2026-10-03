@@ -48,7 +48,8 @@ steer all of them from one board, and the projects can write to each other.
   needs has no place on it (a house with no wiring), bring it up with the person to detail and place, rather than
   building past it. Before each step, ask whether it is still the smartest next one toward the vision. Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and
   Later waits for them. Build each step to fit the finished whole, finish what you take on, and check what you
-  can check yourself.
+  can check yourself. A question that matters only later waits for its moment; when an item's time comes and
+  nothing else needs the person, you may offer a question or two from curiosity about the open options there.
 - **The person's decisions.** What is costly to undo, or leaves their hands, is theirs: ask, and wait on that
   point. The rest is yours; say what you decided.
 - **Fresh eyes where change is costly.** Before a decision that would mean redoing built work, get two fresh
@@ -70,7 +71,7 @@ steer all of them from one board, and the projects can write to each other.
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"`; the answer
-  arrives as a note. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
+  arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
@@ -739,7 +740,9 @@ def plain(text):
 
 
 def gates(root):
-    out = {}
+    """Every gate with its answer. One that waits for its moment (`when`) keeps `waits_for` until that item starts:
+    it is no one's question yet. An item that isn't on the roadmap doesn't hold a question back."""
+    out, later = {}, None
     for e in read(root, "gates.jsonl"):
         if e["type"] == "gate":
             out[e["id"]] = dict(e, answer=None, answered_at=None, point_decisions=None, note_id=None, comment="", cleared=False)
@@ -747,7 +750,17 @@ def gates(root):
             out[e["of"]].update(answer=e["text"], answered_at=e["at"],
                                 point_decisions=e.get("point_decisions"), note_id=e.get("note_id"),
                                 comment=e.get("comment", ""), cleared=e.get("cleared", False))
+    for g in out.values():
+        if g.get("when"):
+            if later is None:
+                later = {iid for iid, it in items(roadmap(root)).items() if it["state"] == "todo"}
+            g["waits_for"] = g["when"] if g["when"] in later else None
     return list(out.values())
+
+
+def due(g):
+    """An unanswered gate whose moment has come: the person's question now."""
+    return not g["answer"] and not g.get("waits_for")
 
 
 def notes(root):
@@ -945,14 +958,14 @@ def gate_lock(root):
         yield
 
 
-def add_gate(root, question, item=None, why="", *, consultation=None, points=None):
+def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None):
     with gate_lock(root):
-        return _add_gate(root, question, item, why, consultation=consultation, points=points)
+        return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when)
 
 
-def _add_gate(root, question, item, why, *, consultation, points):
+def _add_gate(root, question, item, why, *, consultation, points, when=None):
     gate = dict(type="gate", id="g" + secrets.token_hex(3), at=now(),
-                question=question.strip(), item=item, why=why.strip())
+                question=question.strip(), item=item or when, why=why.strip(), **({"when": when} if when else {}))
     if not gate["question"]:
         raise ValueError("A gate needs its question.")
     if consultation:
@@ -1369,7 +1382,7 @@ def render(reg, pid, view="overview"):
                     i = order.index(it["id"])
                     default = [order[i - 1]] if i else []
                     ns = by("item", it["id"])
-                    waiting = sum(1 for g in gs if g.get("item") == it["id"] and not g["answer"])
+                    waiting = sum(1 for g in gs if g.get("item") == it["id"] and due(g))
                     unlocks = [x for x, y in its.items() if it["id"] in y["after"]]
                     out.append(
                         f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
@@ -1474,7 +1487,7 @@ def roadmap_map(road, pid, all_notes, gs):
     for iid, it in its.items():
         x, y = xy(iid)
         n_notes = sum(1 for n in all_notes if (n["anchor"] or {}).get("item") == iid)
-        n_gates = sum(1 for g in gs if g.get("item") == iid and not g["answer"])
+        n_gates = sum(1 for g in gs if g.get("item") == iid and due(g))
         flags = (f"<span class='badge gate'>{n_gates} waiting</span>" if n_gates else "") + \
                 (f"<span class='badge'>{n_notes} notes</span>" if n_notes else "")
         nodes.append(
@@ -1517,6 +1530,9 @@ def render_item(reg, pid, iid):
     if gs:
         body.append("<h2>Gates</h2>")
         for g in gs:
+            if g.get("waits_for"):
+                body.append(f"<div class='card'><p class='muted'>Waits for {e(g['waits_for'])} to start:</p><p>{e(g['question'])}</p></div>")
+                continue
             body.append(f"<div class='card{' gate' if not g['answer'] else ''}'>"
                         + gate_body(root, pid, g, f"/item?p={pid}&id={iid}") + "</div>")
     from . import consult
@@ -2082,7 +2098,7 @@ def waiting_items(p, snap=None):
     if not p.exists():
         return []
     out = [{"kind": "gate", "key": "gate:" + g["id"], "gate": g, "summary": f"opened a gate: {g['question']}"}
-           for g in gates(p) if not g["answer"]]
+           for g in gates(p) if due(g)]
     snap = snap or console.snapshot(p, lines=4)
     if snap["state"] == "needs you":
         found = providers.of(p).choice(console.screen(console.session_name(p)))
