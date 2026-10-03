@@ -3024,14 +3024,12 @@ class MonitorUpkeepTest(BoardBase):
 
 class FollowsNewModelsTest(BoardBase):
     def test_no_model_is_written_in_and_the_data_is_refreshed_daily(self):
-        from colony import bench, project
+        from colony import bench, selection
         from unittest.mock import patch
-        self.assertIsNone(project.DEFAULTS["model"])
-        self.assertEqual(project.strongest(), "claude-fable-5-1", "no data: a fixed catalog model, never an alias")
+        self.assertEqual(selection.main()["model"], "claude-fable-5-1", "no data: a fixed catalog model, never an alias")
         with patch.object(bench, "role_pick", lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5", "effort": "high"}):
-            from colony import selection
             selection.reconcile()
-            self.assertEqual(project.strongest(), "claude-opus-5-5")
+            self.assertEqual(selection.main()["model"], "claude-opus-5-5")
         self.assertGreater(bench.days_since_fetch(), 7, "never fetched")
         (board.home() / "bench").mkdir(parents=True, exist_ok=True)
         (board.home() / "bench" / "fetched.json").write_text(json.dumps({"at": board.now()}))

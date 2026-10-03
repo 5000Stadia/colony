@@ -241,14 +241,10 @@ class IntegrationTest(BoardBase):
             server.shutdown()
             server.server_close()
 
-    def test_runtime_and_codex_helpers_use_the_same_accepted_pairs(self):
+    def test_monitor_consultant_and_codex_helpers_use_the_same_accepted_pairs(self):
         from colony import bench, console, consult, monitor
-        from colony.project import Project
         board.track(self.root)
         with patch.object(console, 'COMMAND', None):
-            chosen = selection.auto('claude', 'runtime')
-            cfg = Project(self.root).config()
-            self.assertEqual(selection.pair(cfg), selection.pair(chosen))
             self.assertEqual(monitor.choice()[:2], tuple(selection.pair(selection.auto('claude', 'monitor')).values()))
             self.assertEqual(consult.pick('codex')[:2], tuple(selection.pair(selection.auto('codex', 'consultant')).values()))
             board.project_settings(self.root, {'provider': 'codex'})
