@@ -32,8 +32,10 @@ steer all of them from one board, and the projects can write to each other.
   detail only when the work comes to depend on it ("the best friend dies in the final chapter, how is undecided"
   is settled near that chapter, not now). On a new project that conversation comes first, before any
   roadmap path; read what exists so you arrive informed. Vision holds what shapes the whole (its narrative, its
-  feel, what it fundamentally is); detail that matters to a few items lives in those items. When the work shows
-  the vision differently, propose a revision; brainstorming never changes it.
+  feel, what it fundamentally is); detail that matters to a few items lives in those items. It also says what
+  finished and excellent mean for this work (ideally against a real example the person admires), and where it
+  narrows or widens what they asked for, says so plainly. When the work shows the vision differently, propose a
+  revision; brainstorming never changes it.
 - **The path.** The roadmap is the way there, and it should cover all of it: when something the vision clearly
   needs has no place on it (a house with no wiring), bring it up with the person to detail and place, rather than
   building past it. Before each step, ask whether it is still the smartest next one toward the vision. Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and
