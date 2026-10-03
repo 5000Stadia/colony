@@ -2587,51 +2587,104 @@ class HelperTierTest(BoardBase):
 
 
 class ScoutTest(BoardBase):
-    """The monitor's web reading is its scout's: a helper that can only search and fetch, at its program's routine
-    tier, whose report carries colony's safety notice; the monitor judges from its fields and opens no pages itself."""
+    """The monitor's web reading is its scout's: `colony scout` runs one fresh, stateless scout apart from the monitor,
+    which its program itself holds to searching and reading the web, in an empty folder with none of the person's
+    settings or project instructions; its report ends with colony's safety notice, once."""
 
-    def test_the_scout_can_only_search_and_fetch_on_each_program_at_its_routine_tier(self):
-        import tomllib
-        from colony import selection, supports
-        monitor.write_scout()
-        claude = (monitor.home() / ".claude" / "agents" / "colony-scout.md").read_text()
-        front = claude.split("---\n")[1]
-        self.assertEqual(re.search(r"^tools: (.*)$", front, re.M).group(1).split(", "), ["WebSearch", "WebFetch"],
-                         "Claude Code gives it exactly these")
-        for acting in ("Bash", "Write", "Edit", "NotebookEdit", "Agent", "mcp__"):
-            self.assertNotIn(acting, front, "no shell, no edits, nothing that acts")
-        self.assertIn(f"model: {selection.scout('claude')['model']}\n", front, "the routine tier: reading, not judgement")
-        self.assertIn("omitClaudeMd: true\n", front, "the monitor's role, in its folder, isn't the scout's")
-        overlay = monitor.home() / ".codex" / "agents" / "colony-scout.toml"
-        codex = tomllib.loads(overlay.read_text())
-        self.assertEqual((codex["sandbox_mode"], codex["approval_policy"], codex["web_search"]), ("read-only", "never", "indexed"),
-                         "Codex has no tool list: a sandbox it can't ask its way out of, and search only")
-        self.assertEqual(codex["project_doc_max_bytes"], 0, "nor the monitor's AGENTS.md")
-        self.assertEqual((codex["name"], codex["model"]), ("colony-scout", selection.scout("codex")["model"]))
-        for role in (claude, codex["developer_instructions"]):
-            self.assertEqual(role.count(supports.NOTICE), 1, "its report ends with the notice, once")
-        self.assertEqual(monitor.write_scout(), [], "unchanged: nothing rewritten")
-        before = console.fingerprint(monitor.home(), "monitor")
+    def test_each_program_holds_its_scout_to_searching_and_reading_the_web_in_an_empty_folder(self):
+        seen = {}
+
+        def run(cmd, **kw):
+            seen.update(cmd=cmd, kw=kw, files=os.listdir(kw["cwd"]))
+            if "-o" in cmd:
+                Path(cmd[cmd.index("-o") + 1]).write_text("- name: tidy")
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "- name: tidy"}), "")
+        flag = lambda name: seen["cmd"][seen["cmd"].index(name) + 1]
+        out = providers.get("claude").scout("the brief", "claude-sonnet-5", "high", run=run)
+        self.assertEqual(out, {"text": "- name: tidy", "error": None})
+        self.assertEqual(flag("--tools").split(","), ["WebSearch", "WebFetch"], "Claude Code gives it these and no others")
+        self.assertEqual(flag("--allowedTools").split(","), ["WebSearch", "WebFetch"])
+        self.assertEqual(set(flag("--disallowedTools").split(",")),
+                         {"Bash", "Edit", "Write", "NotebookEdit", "Read", "Grep", "Glob", "Agent"}, "no shell, edits or local files")
+        self.assertEqual((flag("--setting-sources"), flag("--permission-mode")), ("", "dontAsk"),
+                         "none of the person's settings, hooks or CLAUDE.md; whatever would ask is refused")
+        self.assertIn("--strict-mcp-config", seen["cmd"], "no MCP servers")
+        self.assertEqual((flag("--model"), flag("--effort"), seen["kw"]["input"]), ("claude-sonnet-5", "high", "the brief"))
+        self.assertEqual(seen["files"], [], "an empty folder")
+        self.assertFalse(Path(seen["kw"]["cwd"]).exists(), "gone afterwards")
+        for loose in ("--add-dir", "--dangerously-skip-permissions", "--permission-prompt-tool"):
+            self.assertNotIn(loose, seen["cmd"])
+        refused = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps({"is_error": True, "result": "API Error"}), "")
+        self.assertEqual(providers.get("claude").scout("b", "m", None, run=refused), {"text": "", "error": "API Error"})
+
+        out = providers.get("codex").scout("the brief", "gpt-6-astra", "medium", run=run)
+        self.assertEqual(out, {"text": "- name: tidy", "error": None}, "its answer, from the file it leaves")
+        self.assertEqual((seen["cmd"][:2], flag("-s")), (["codex", "exec"], "read-only"), "a read-only sandbox")
+        for strict in ("--ignore-user-config", "--ignore-rules", "--ephemeral", "--skip-git-repo-check"):
+            self.assertIn(strict, seen["cmd"], "none of the person's config or rules (a rule's command runs unsandboxed)")
+        off = {seen["cmd"][i + 1] for i, a in enumerate(seen["cmd"]) if a == "--disable"}
+        self.assertEqual(off, {"hooks", "shell_tool", "unified_exec", "apps", "plugins", "view_image", "image_generation", "goals"},
+                         "no hooks, shell, connectors, plugins, image tools or goals")
+        settings = {seen["cmd"][i + 1] for i, a in enumerate(seen["cmd"]) if a == "-c"}
+        self.assertEqual(settings, {'web_search="indexed"', "project_doc_max_bytes=0", "model_reasoning_effort=medium"},
+                         "it opens only what the search index knows, and reads no AGENTS.md")
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", seen["cmd"])
+        self.assertEqual((flag("-m"), seen["kw"]["input"], seen["files"]), ("gpt-6-astra", "the brief", []))
+        self.assertEqual(flag("-C"), str(seen["kw"]["cwd"]), "it works in the empty folder")
+        silent = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "warning\nERROR: not signed in\n")
+        self.assertEqual(providers.get("codex").scout("b", "m", None, run=silent), {"text": "", "error": "ERROR: not signed in"})
+
+    def test_colony_scout_runs_one_on_the_monitors_program_and_its_report_ends_with_the_notice_once(self):
+        from colony import supports
         reg = board.registry()
         reg["settings"]["helper_models"] = {"claude:routine": {"model": "claude-haiku-4-5-20251001", "effort": "low"}}
         board.save_registry(reg)
-        self.assertEqual([p.name for p in monitor.write_scout()], ["colony-scout.md"], "it follows the tier")
-        self.assertIn("model: claude-haiku-4-5-20251001\neffort: low\n", (monitor.home() / ".claude" / "agents" / "colony-scout.md").read_text())
-        self.assertNotEqual(console.fingerprint(monitor.home(), "monitor"), before, "so the monitor reloads onto it once idle")
-        board.set_setting("provider", "codex")
-        saved, console.COMMAND = console.COMMAND, None
+        bin_, log = Path(self.tmp.name) / "bin", Path(self.tmp.name) / "scout-calls.jsonl"
+        bin_.mkdir()
+        (bin_ / "claude").write_text(f"#!{sys.executable}\n" + "\n".join([
+            "import json, os, sys",
+            "prompt = sys.stdin.read()",
+            f"open({str(log)!r}, 'a').write(json.dumps(dict(argv=sys.argv[1:], files=os.listdir('.'), prompt=prompt)) + chr(10))",
+            "failed = 'nothing to find' in prompt",
+            f"print(json.dumps(dict(is_error=failed, result='API Error' if failed else '- name: tidy' + chr(10) * 2 + {supports.NOTICE!r})))"]))
+        (bin_ / "claude").chmod(0o755)
+        (self.root / "brief.txt").write_text("from a file")
+        env = dict(os.environ, PYTHONPATH=str(ROOT), PATH=f"{bin_}:{os.environ['PATH']}")
+        scout = lambda *a, stdin=None: subprocess.run([sys.executable, "-m", "colony", "scout", *a], cwd=self.root, input=stdin,
+                                                      capture_output=True, text=True, env=env)
+        for args, stdin, brief in ((["faster test runs, on GitHub"], None, "faster test runs, on GitHub"),
+                                   ([], "from stdin", "from stdin"), (["-"], "a dash", "a dash"),
+                                   (["--file", "brief.txt"], None, "from a file")):
+            with self.subTest(args=args):
+                r = scout(*args, stdin=stdin)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertTrue(r.stdout.rstrip().endswith(supports.NOTICE), r.stdout)
+                self.assertEqual(r.stdout.count(supports.NOTICE), 1, "the notice, once, though the scout wrote it too")
+                call = json.loads(log.read_text().splitlines()[-1])
+                self.assertTrue(call["prompt"].startswith(monitor.SCOUT_ROLE), "its own instructions, then the brief")
+                self.assertTrue(call["prompt"].rstrip().endswith(brief))
+                self.assertEqual(call["files"], [], "in an empty folder")
+                argv = call["argv"]
+                self.assertEqual((argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]),
+                                 ("claude-haiku-4-5-20251001", "low"), "at its program's routine tier")
+        r = scout("nothing to find")
+        self.assertEqual((r.returncode, r.stdout), (2, ""))
+        self.assertIn("the scout brought nothing back (API Error)", r.stderr)
+        self.assertIn("isn't one of colony's programs", scout("x", "--provider", "elsewhere").stderr)
+        codex = providers.PROVIDERS["codex"]
+        codex.scout = lambda brief, model, effort: {"text": "- name: tidy", "error": None}
         try:
-            args = shlex.split(console.command("monitor", None, folder=monitor.home()))
+            out = monitor.scout("a brief", "codex")
         finally:
-            console.COMMAND = saved
-        self.assertIn(f"agents.colony-scout.config_file={json.dumps(str(overlay))}", args, "registered as its console starts")
-        self.assertFalse(any("colony-routine" in a for a in args), "the monitor has no tiers of its own")
+            del codex.scout                          # the instance attribute: the class's method again
+        self.assertEqual(out, "- name: tidy\n\n" + supports.NOTICE, "a report without it gets the notice too")
 
-    def test_the_monitor_hands_the_reading_to_its_scout_and_opens_no_pages_itself(self):
+    def test_the_monitor_hands_the_reading_to_colony_scout_and_opens_no_pages_itself(self):
         flat = lambda text: " ".join(text.split())
         look = flat(monitor.ROLE.split("2. **Look,**")[1].split("3. **Deliberate")[0])
-        self.assertIn("through your scout: the `colony-scout` helper", look)
+        self.assertIn('through your scout: `colony scout "the brief"` runs a fresh one apart from you', look)
         self.assertIn("you never open strangers' pages yourself", look)
+        self.assertNotIn("colony-scout", monitor.ROLE, "no helper of its own to start")
         fields = ("name", "link", "kind", "what it does", "maintainer and license signals", "why it may fit")
         self.assertIn("name, link, kind, what it does, maintainer and license signals, and why it may fit", look)
         for field in fields:
@@ -2640,7 +2693,23 @@ class ScoutTest(BoardBase):
         for own_reading in ("gh search repos", "site:reddit.com", "read it yourself", "Everything you read"):
             self.assertNotIn(own_reading, look, "the monitor no longer searches or fetches the web itself")
         monitor.brief()
-        self.assertIn("`colony-scout` helper", (monitor.home() / "CLAUDE.md").read_text())
+        self.assertIn('`colony scout "the brief"`', (monitor.home() / "CLAUDE.md").read_text())
+
+    def test_an_earlier_in_session_scout_is_gone_from_the_monitors_folder_and_launch(self):
+        old = [monitor.home() / ".claude" / "agents" / "colony-scout.md", monitor.home() / ".codex" / "agents" / "colony-scout.toml"]
+        before = console.fingerprint(monitor.home(), "monitor")
+        for f in old:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("written by an earlier colony")
+        self.assertEqual(console.fingerprint(monitor.home(), "monitor"), before, "nothing in its folder is its setup")
+        board.set_setting("provider", "codex")
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertNotIn("colony-scout", console.command("monitor", None, folder=monitor.home()), "nor registered as it starts")
+        finally:
+            console.COMMAND = saved
+        monitor.ensure()
+        self.assertEqual([f for f in old if f.exists()], [], "removed")
 
 
 class UsageTest(BoardBase):
