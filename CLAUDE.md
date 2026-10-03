@@ -66,8 +66,10 @@ it went. Record the move and their original words in the dated vision history.
   whether it's what they wanted. Then tell them in plain words what's ready and how to see it: `colony
   ready R4 "what's ready" --check "how to check"`. They approve it or say what's wrong, and it reaches
   you as a note.
-- Record a clearly agreed conversation change with `colony vision --file PATH --words "the person's words"`:
-  it updates this project's Vision and its dated history together. An edit or merge made outside that command
+- Record a clearly agreed conversation change with `colony vision --file PATH --words "the person's words"
+  --context "your reading: what was discussed, what they meant, what it changes"`: it updates this project's
+  Vision and its dated history together. Wherever you record the person's words (here, a gate, an item), keep
+  your reading beside them: their words can be hard to act on later without it. An edit or merge made outside that command
   reaches you as a before-and-after note. Read the current vision and consider what it changes for your work.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
@@ -75,7 +77,7 @@ it went. Record the move and their original words in the dated vision history.
 - When something needs the person (a decision costly to undo, an act that leaves their hands), run
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note. If the person settles it with you in
-  conversation instead, record it: `colony gate --answered ID "what they decided"`.
+  conversation instead, record it: `colony gate --answered ID "their words" --context "your reading"`.
 - Before you commit to a decision that's costly to change (adding a milestone or spec, setting a project's
   main objective, choosing a structure or foundation others will build on, designing what others will
   depend on, planning what's hard to undo, a major redesign; in short, anything that would mean redoing
