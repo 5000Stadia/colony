@@ -1,6 +1,6 @@
 # colony
 
-**One page to run all your long projects with Claude Code.** Each project gets its own agent, live in
+**One page to run all your long projects with Claude Code or Codex.** Each project gets its own agent, live in
 the browser and on your phone. You see what each one is doing, what it's waiting on you for, and how
 far along its roadmap it is, and you steer them all from one board. A monitor agent can hold the helm
 for you across them.
@@ -19,11 +19,14 @@ During the Vision conversation, your agent proposes a few useful completed versi
     git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start
 
 That's it. It installs colony, starts the board and prints where to open it: on this machine, from
-your phone on the same network, and in the Claude app, where every project's session appears. You need
-[Claude Code](https://claude.com/claude-code), tmux and Python 3.10+.
+your phone on the same network, and in the Claude or ChatGPT app, where every project's session appears.
+The monitor, an agent of its own, then walks you through setup. You need
+[Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex), tmux and
+Python 3.10+.
 
 Then **+ Add project**: start a new one, pick a folder you already have, or clone one from GitHub. Its
-agent starts in its own console, and the project joins the board.
+agent starts working in its own console right away (it spends tokens from then on), and the project joins
+the board.
 
 `colony stop` ends everything. `~/colony/start` brings the board back, and each console returns to its
 conversation when you open it.
@@ -67,7 +70,7 @@ Accept or reject each point, with an optional comment; only accepting a change a
 the consultants' checking round. Choices and revisions stay in the decision's record.
 [How agents link consultant points to a gate](docs/consultation-gates.md).
 
-    colony board [--lan]     start the board (--lan: for other devices on your network)
+    colony board [--local]   start the board (open to your network by default; --local: this machine only)
     colony restart           reload the board after a change; consoles and the monitor keep running
     colony doctor            is everything up and wired? what to do if not
     colony urls              where the board answers
@@ -77,9 +80,9 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony settings          global settings; a project's own with `colony settings --project NAME`
 
 **Settings.** Each project can have its own model, effort, permissions and Remote Control; blank keeps
-the global choice. The **provider** (the CLI that runs the agent) is Claude Code today. Another joins by
-adding an entry to `colony/providers.py`, and every place that still assumes Claude Code is marked
-`PROVIDER:` in the code.
+the global choice. The **provider** (the program that runs the agent) is Claude Code or Codex. Another joins
+by adding an entry to `colony/providers.py`; every place specific to one program is marked `PROVIDER:` in
+the code.
 
 **Where projects live.** Any folder can be a project. Folders you put in `~/colony/projects` join the
 board by themselves, new projects are created there, and Settings adds other folders that work the same way.

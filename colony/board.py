@@ -1933,7 +1933,8 @@ def monitor_page(reg, view="overview"):
     """The monitor, like a project: Overview (what needs the person, every project's status, what the
     monitor decided), Helm (its stance toward each project), Console."""
     from . import monitor
-    monitor.ensure()
+    if MONITOR:                          # a board started without its monitor doesn't start one by being looked at
+        monitor.ensure()
     tab = lambda v, label: f"<a class='{'on' if view == v else ''}' href='/monitor?view={v}'>{label}</a>"
     on = monitor.helm()
     targets = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(projects(reg)))
@@ -3440,7 +3441,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
 
+MONITOR = True
+
+
 def serve(port, lan=False, monitor=True):
+    global MONITOR
+    MONITOR = monitor
     from . import monitor as mon, vision
     vision.install_all()
     rewire_projects()
