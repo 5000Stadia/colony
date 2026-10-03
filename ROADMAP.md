@@ -165,7 +165,6 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 ## M6 — Later
 
 - [ ] R24 When "the project is the memory" stops holding: at what size or shape does a very long project need another memory structure, and what is the smart one then? Triggered by evidence (decisions re-derived after compactions, a map no context holds), not by length alone. The person, 2026-10-03: "the project is the memory is a smart principle. We may want to think at what point is a monster of a project need an alternative memory structure and whats smart for that."
-- [ ] R25 Settle the map instruction (every builder asks `colony map` first) — design/blueprint.md "Under test"
 - [x] R26 A fresh reader for finished work about to leave the person's hands: a light encouragement in every project's instructions (and GUIDE.md's Review). The person, 2026-10-03: "can we just put a slight encouragement to review these types of documents".
 - [ ] R27 Run a non-code goal (a novel, a business) end to end — design/claims.md #10
 - [x] R29 Whether long-form work needs more than one agent: answered by GUIDE.md. A second agent comes in for importance and nuanced complexity in what was just made (fresh review of load-bearing work, a second model family at costly decisions), never by a project's length. The person, 2026-10-03: "Review polishes the shortcomings and different insight" … "Might even help for an everything and the kitchen sink brainstorm". Agent's reading: another model family's ideas widen an open brainstorm too; added to the fresh-eyes principle.
