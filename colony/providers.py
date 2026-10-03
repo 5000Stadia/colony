@@ -624,7 +624,7 @@ class Codex:
         here = tempfile.mkdtemp(prefix="colony-consult-")
         last = Path(here) / "answer.txt"
         cmd = [self.program, "exec", "-m", model, "-c", f"model_reasoning_effort={effort}", "-s", "read-only",
-               "--skip-git-repo-check", "--ephemeral", "--disable", "hooks", "--json", "-o", str(last), "-C", here, "-"]
+               "--skip-git-repo-check", "--ephemeral", "--ignore-rules", "--disable", "hooks", "--json", "-o", str(last), "-C", here, "-"]
         pin, pout = price or (0, 0)
         cost = lambda u: ((u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)) * pin
                           + u.get("cached_input_tokens", 0) * pin * 0.1 + u.get("output_tokens", 0) * pout) / 1e6
