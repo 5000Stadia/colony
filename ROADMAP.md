@@ -49,9 +49,9 @@ goal updates do not release unapproved work. This clarifies R71, rather than add
 The person's words: "Also codex goals should be encouraged to automatically be updated to the next
 expected pause.  Im not sure if we specced that in upcoming or not".
 
-Agreed 2026-10-02: completed items need no check by the person. Mark them done once the agent's own checks pass (tests, review); bring the person only nuanced judgements the next item depends on, or what needs their own eye (how it looks, feels or reads). The pre-item proposal above still applies.
+Agreed 2026-10-02: completed items need no check by the person. Mark them done once the agent's own checks pass (tests, review); bring the person only nuanced judgements the next item depends on, or what needs their own eye (how it looks, feels or reads). The pre-item proposal above is needed only for an item not already discussed and agreed with the person; one settled in conversation starts without another proposal.
 
-The person's words: "Consider it not necessary for me to check any specs unless there's nuanced judgments that need to be made before the next soec" … "Or my eye is important".
+The person's words: "Consider it not necessary for me to check any specs unless there's nuanced judgments that need to be made before the next soec" … "Or my eye is important" … "These specs are mostly things we've discussed already".
 
 ## M1 — A harness that earns its shape
 
