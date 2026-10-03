@@ -2287,7 +2287,7 @@ def support_rows():
         approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
         rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the monitor brought</span></div>"
                     f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
-                    f"<div class='asktext'>{e(a['text'])}</div>"
+                    f"<div class='asktext'>{e(a['text'])}</div><p class='muted'>{e(supports.NOTICE)}</p>"
                     f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"
                     f"{approve}<button name='verdict' value='test' class='{'quiet' if approve else ''}'>Test it</button>"
                     f"<input name='text' placeholder='anything to tell the monitor'>"

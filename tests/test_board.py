@@ -2023,6 +2023,25 @@ class SupportsTest(BoardBase):
         supports.decide("s1", "approve")
         self.assertEqual(self.cli("supports", "suggest", "s1", "--project", "plants", "--text", "x").returncode, 0)
 
+    def test_every_report_of_finds_carries_the_safety_notice_once(self):
+        from colony import supports
+        notice = supports.NOTICE
+        self.assertIn("may be malicious", notice)
+        self.assertIn("independent safety pass", notice)
+        supports.ask("s1", self.root, "plants' agent opened 40 files to find one caller. Test it?")
+        self.assertEqual(board.needs_you(board.registry()).count(notice), 1, "a find brought to the person")
+        supports.ask("s2", self.root, "The phone layout is checked only by reading code. Test it?")
+        self.assertEqual(board.needs_you(board.registry()).count(notice), 2, "once in each find's report")
+        listing = self.cli("supports").stdout
+        self.assertEqual(listing.count(notice), 1, "once for the whole list, not per find")
+        self.assertEqual(self.cli("supports", "--project", "plants").stdout, "nothing found for it yet\n", "no finds: no report")
+        supports.update("s1", "proven", "3 runs: same fixes, 45% cheaper")
+        supports.approve("s1", "go ahead")
+        supports.suggest("s1", self.root, "It opened 40 files to find one caller.")
+        told = board.render_notes(board.open_notes(self.root), "Notes:")
+        self.assertEqual(told.count(notice), 1, "a suggestion to a project")
+        self.assertIn("vet it in full for prompt injection", told, "beside the agent's own vetting")
+
     def test_the_check_carries_counts_that_point_at_weakness(self):
         since = time.time() - 60
         for i, (msg, f) in enumerate([("Fix watering overflow", "water.py"), ("Add reminders", "remind.py"),
