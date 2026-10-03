@@ -881,6 +881,8 @@ def rewire_projects():
             continue
         try:
             providers.of(root).wire(workdir(root), protocol(root))
+            from . import lead
+            lead.install_stamp(root)
         except (OSError, ValueError):
             continue  # The doctor continues to report a project that could not be wired.
 

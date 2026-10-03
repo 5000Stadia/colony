@@ -143,6 +143,32 @@ def notify(g, text, *, quiet=True, exclude=()):
             board.add_note(Path(member), None, text, author='colony', quiet=quiet)
 
 
+STAMP = '''#!/bin/sh
+# colony: stamp the agent that made this commit, so its own work isn't news to it in a catch-up (no tokens)
+name=$(colony whoami 2>/dev/null) || exit 0
+[ -n "$name" ] && git interpret-trailers --in-place --if-exists doNothing --trailer "Colony-Agent: $name" "$1"
+exit 0
+'''
+
+
+def install_stamp(root):
+    """In a shared project's repository, every commit names the agent that made it. A hook of the project's
+    own is left alone."""
+    g = info(root)
+    if len(g['members']) < 2:
+        return
+    hooks = git(source_of(g), 'rev-parse', '--path-format=absolute', '--git-path', 'hooks', check=False)
+    if not hooks:
+        return
+    path = Path(hooks) / 'prepare-commit-msg'
+    if path.exists() and 'colony: stamp' not in path.read_text():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists() or path.read_text() != STAMP:
+        path.write_text(STAMP)
+        path.chmod(0o755)
+
+
 def pair(root, member, *, actor=None):
     root, member = Path(root).resolve(), Path(member).resolve()
     require_lead(root, actor)
@@ -169,6 +195,7 @@ def pair(root, member, *, actor=None):
         for seat, baseline in baselines.items():
             g.setdefault('engagements', {}).setdefault(seat, baseline)
     g = update(root, add)
+    install_stamp(root)
     notify(g, f"One shared project: {Path(g['lead']).name} is the lead. Read the single canonical Vision and roadmap at "
               f"{plan_path(root)}; do not copy it or use the roadmap in your branch. Other agents work only on assigned items.")
     return g
@@ -515,7 +542,7 @@ SUBJECTS = 20                       # commit subjects in one catch-up; the rest 
 def catch_up_subjects(workspace, previous, target, member):
     if not previous or not target or previous == target:
         return []
-    raw = git(workspace, 'log', '--format=%s%x1f%(trailers:key=Colony-Agent,valueonly)%x00',
+    raw = git(workspace, 'log', '--no-merges', '--format=%s%x1f%(trailers:key=Colony-Agent,valueonly)%x00',
               previous + '..' + target, check=False)
     subjects = []
     for entry in raw.split('\0'):

@@ -919,6 +919,16 @@ def cmd_notes(a):
     return 0
 
 
+def cmd_whoami(a):
+    """The board project this runs in, by name, for colony's commit stamp; nothing outside one."""
+    from . import board
+    root = board.root_of()
+    if (root / ".board").is_dir() and root.resolve() in {p.resolve() for p in board.projects()}:
+        print(root.name)
+        return 0
+    return 1
+
+
 def cmd_noted(a):
     from . import board
     root = board.root_of()
@@ -1345,6 +1355,7 @@ def main(argv=None):
     p = sub.add_parser("urls"); p.add_argument("--port", type=int, default=8790); p.set_defaults(fn=cmd_urls)
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
+    sub.add_parser("whoami").set_defaults(fn=cmd_whoami)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")

@@ -62,9 +62,10 @@ class LeadTest(unittest.TestCase):
         vision.observe(self.root)
         self.initial = lead.git(self.root, 'rev-parse', 'HEAD')
 
-    def commit(self, root, text):
+    def commit(self, root, text, *, hooks=False):
+        # Fixture commits stand for any agent's work, so colony's commit stamp stays out unless a test wants it.
         lead.git(root, 'add', '--all')
-        lead.git(root, 'commit', '-qm', text)
+        lead.git(root, *(() if hooks else ('-c', 'core.hooksPath=/dev/null')), 'commit', '-qm', text)
         return lead.git(root, 'rev-parse', 'HEAD')
 
     def pair(self):
@@ -738,6 +739,21 @@ class LeadTest(unittest.TestCase):
         self.assertIn('[?] R2', (self.root / 'ROADMAP.md').read_text())
         progress.decide(self.root, c['candidate']['id'], 'approve')
         self.assertIn('[x] R2', (self.root / 'ROADMAP.md').read_text())
+
+    def test_own_unstamped_commits_are_stamped_by_the_hook_and_left_out_of_my_catch_up(self):
+        self.pair()
+        work = Path(self.helper_job()['workspace'])
+        (work / 'feature.txt').write_text('ready'); self.commit(work, 'Helper builds R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        lead.engage(self.root)
+        here = os.getcwd(); os.chdir(self.root); self.addCleanup(os.chdir, here)
+        (self.root / 'lead.txt').write_text('x'); self.commit(self.root, 'Lead plain commit', hooks=True)
+        self.assertIn('Colony-Agent: garden', lead.git(self.root, 'log', '-1', '--format=%B'))
+        lead.integrate(self.helper, 'R2', 'true', actor=self.helper)
+        text = lead.engage(self.root)
+        self.assertIn('Helper builds R2', text)
+        self.assertNotIn('Lead plain commit', text)
+        self.assertNotIn('Merge', text)
 
     def test_parallel_finishers_wait_sync_and_test_in_order(self):
         self.pair(); lead.pair(self.root, self.other)
