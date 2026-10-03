@@ -510,6 +510,11 @@ def accepts_hook(root, payload):
     if not expected and payload.get('session_id'):
         # The console's own new conversation: its first hook makes it the project's authoritative thread.
         atomic_json(home_for(root) / 'colony-thread.json', {'thread': payload['session_id']})
+        try:                                    # named for the project, as ChatGPT lists it
+            with Client(socket_for(home_for(root))) as client:
+                client.call('thread/name/set', {'threadId': payload['session_id'], 'name': Path(root).name})
+        except (RPCError, OSError, ValueError):
+            pass
         return True
     return not expected or payload.get('session_id') == expected
 
