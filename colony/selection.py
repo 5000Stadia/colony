@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import board, bench, providers
 
-ROLES = ('main', 'routine', 'step-up', 'chores', 'consultant', 'monitor', 'runtime')
+ROLES = ('main', 'routine', 'step-up', 'chores', 'consultant', 'monitor')
 _LOCK = threading.RLock()
 
 
@@ -122,8 +122,7 @@ def recommendations(state):
             if not providers.usable(provider):
                 continue
             for role in ROLES:
-                if root and (role in ('consultant', 'monitor') or
-                             (family != 'claude' if role == 'runtime' else providers.key(providers.of(root)) != family)):
+                if root and (role in ('consultant', 'monitor') or providers.key(providers.of(root)) != family):
                     continue
                 ident = key(family, role, root)
                 blocked = state['blocked'].get(ident, [])
@@ -176,6 +175,9 @@ def reconcile():
         if (root / '.board').exists():
             migrate(root)
     with transaction() as state:
+        # A seat whose role colony no longer has (the retired unattended runtime had one) is dropped, not kept up.
+        for ident in [i for i in state['accepted'] if i.split(':', 1)[1].split('@')[0] not in ROLES]:
+            del state['accepted'][ident]
         proposed = recommendations(state)
         initial = not state['accepted']
         for family, provider in providers.PROVIDERS.items():
@@ -197,8 +199,8 @@ def reconcile():
         for root in project_roots():
             if not root.exists() or not scope(root):
                 continue
-            for role in ('main', *bench.TIERS, 'runtime'):
-                family = 'claude' if role == 'runtime' else providers.key(providers.of(root))
+            family = providers.key(providers.of(root))
+            for role in ('main', *bench.TIERS):
                 ident = key(family, role, root)
                 inherited = state['accepted'].get(key(family, role))
                 if ident not in state['accepted'] and inherited:
@@ -344,9 +346,8 @@ def migrate(root=None):
                                            'effort': settings.get('effort')}
         if alias(settings.get('model')):
             settings['model'] = settings['effort'] = ''
-        for field in ('monitor_model', 'runtime_model'):
-            if alias((settings.get(field) or {}).get('model')):
-                settings[field] = {}
+        if alias((settings.get('monitor_model') or {}).get('model')):
+            settings['monitor_model'] = {}
         settings['consultants'] = {k: v for k, v in (settings.get('consultants') or {}).items() if not alias(v.get('model'))}
         settings.setdefault('main_models', {})[settings['provider']] = pair(settings) if settings.get('model') else {}
         settings['model_selection_version'] = 1
@@ -418,14 +419,6 @@ def scout(family):
     return resolve(family, 'routine', (board.registry()['settings'].get('helper_models') or {}).get(key(family, 'routine')))
 
 
-def runtime(root=None, pin=None):
-    migrate(root)
-    # PROVIDER: the unattended runtime currently executes through Claude Code only.
-    if pin and alias(pin.get('model')):
-        pin = None
-    return resolve('claude', 'runtime', pin or board.registry()['settings'].get('runtime_model'), root)
-
-
 def project_roots():
     """Read seats without registering projects (registration itself resolves helper models)."""
     reg = board.registry()
@@ -441,7 +434,7 @@ def role_label(ident):
     family, role = ident.split(':', 1)
     role, _, project = role.partition('@')
     project_name = next((r.name for r in project_roots() if key(family, role, r) == ident), project)
-    label = {'main': 'main agents', 'runtime': 'unattended runtime'}.get(role, role)
+    label = {'main': 'main agents'}.get(role, role)
     if role in bench.TIERS:
         label += ' helpers'
     return providers.get(family).label + ' · ' + label + (' · ' + project_name if project else '')
@@ -454,7 +447,7 @@ def affected(ident, before, after):
     out = []
     settings = board.registry()['settings']
     for root in project_roots():
-        if not root.exists() or (role != 'runtime' and providers.key(providers.of(root)) != family):
+        if not root.exists() or providers.key(providers.of(root)) != family:
             continue
         if key(family, role, scope(root)) != ident:
             continue
@@ -463,11 +456,6 @@ def affected(ident, before, after):
             pin = own if own.get('model') else settings if family == settings['provider'] else (settings.get('main_models') or {}).get(family) or {}
         elif role in bench.TIERS:
             pin = bench.plan(root).get(role) or (settings.get('helper_models') or {}).get(key(family, role)) or {}
-        elif role == 'runtime':
-            path = root / '.colony' / 'config.json'
-            if family != 'claude' or not path.exists():
-                continue
-            pin = json.loads(path.read_text())
         else:
             continue
         if pin.get('model') and same(pin, after):

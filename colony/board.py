@@ -157,7 +157,7 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "runtime_model": {}, "helper_models": {}, "auto_balance": 3}
+                    "helper_models": {}, "auto_balance": 3}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -177,7 +177,6 @@ SETTING_HELP = {
     "effort": "effort for a main-agent model pin (Auto chooses both model and effort)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
     "model_adoption": "when a new model becomes a recommendation: automatic or ask (one decision per model)",
-    "runtime_model": "the unattended runtime model, as MODEL:EFFORT (auto: colony chooses)",
     "helper_models": "provider-specific helper pins; edit the colony helper tiers in Settings",
     "monitor_model": "the monitor's model, as MODEL:EFFORT (blank: its program's step-up tier)",
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
@@ -187,7 +186,7 @@ SETTING_HELP = {
 
 
 def set_setting(key, value):
-    if key in ('model', 'effort', 'provider', 'monitor_model', 'runtime_model', 'consultants'):
+    if key in ('model', 'effort', 'provider', 'monitor_model', 'consultants'):
         from . import selection
         selection.migrate()
     reg = registry()
@@ -221,7 +220,7 @@ def set_setting(key, value):
             if not 0 < n <= 100:
                 raise KeyError(key)
             reg["settings"][key] = int(n) if n.is_integer() else n
-    elif key in ("monitor_model", "runtime_model"):
+    elif key == "monitor_model":
         model, _, effort = str(value).strip().rpartition(":") if ":" in str(value) else (str(value).strip(), "", "")
         reg["settings"][key] = {"model": model, "effort": effort or None} if model and model != "auto" else {}
     elif key == "consultants":
@@ -1739,8 +1738,8 @@ def auto_balance_fields(root=None):
     entries, state = bench.standings(), selection.read()
     ceiling = max((p['score'] for p in intelligence.pairs(entries)), default=None)
     eligible = [x for x in entries if x['model'] not in state['rejected']]
-    families = list(dict.fromkeys([providers.key(providers.of(root)), 'claude'])) if root else [k for k, p in providers.PROVIDERS.items() if providers.usable(p)]
-    roles = ('main', *bench.TIERS, 'runtime') if root else selection.ROLES
+    families = [providers.key(providers.of(root))] if root else [k for k, p in providers.PROVIDERS.items() if providers.usable(p)]
+    roles = ('main', *bench.TIERS) if root else selection.ROLES
     panels = []
     def describe(value):
         return value['model'] + (' at ' + value['effort'] if value.get('effort') else '') if value else 'No accepted pick'
@@ -1748,10 +1747,6 @@ def auto_balance_fields(root=None):
         rows = []
         for family in families:
             for role in roles:
-                if root and role != 'runtime' and family != providers.key(providers.of(root)):
-                    continue
-                if role == 'runtime' and family != 'claude':
-                    continue
                 ident = selection.key(family, role, root)
                 pick = bench.role_pick(family, role, eligible, balance=level, ceiling=ceiling, blocked=state['blocked'].get(ident, []))
                 held = state['accepted'].get(ident) or state['accepted'].get(selection.key(family, role))
@@ -2311,11 +2306,8 @@ def global_role_fields():
     helpers = settings.get('helper_models') or {}
     rows = ''.join(role_field(family, role, 'helper_' + family + ':' + role, helpers.get(family + ':' + role))
                    for family, provider in pv.PROVIDERS.items() if pv.usable(provider) for role in bench.TIERS)
-    # PROVIDER: the unattended runtime currently supports Claude Code only.
-    runtime = role_field('claude', 'runtime', 'runtime_model', settings.get('runtime_model')) if pv.usable(pv.get('claude')) else ''
     return ("<h2>Colony helper tiers</h2><form class='card options' method='post' action='/role-models'>" + rows
-            + "<button>Save</button></form>" + ("<h2>Unattended runtime</h2><form class='card options' method='post' action='/runtime-model'>"
-                                               + runtime + "<button>Save</button></form>" if runtime else ''))
+            + "<button>Save</button></form>")
 
 
 def model_changes(pending_only=False):
@@ -2407,8 +2399,6 @@ def models_page(reg):
     rows = []
     for family in families:
         for role in selection.ROLES:
-            if role == 'runtime' and family != 'claude':
-                continue
             pick = bench.role_pick(family, role, eligible, ceiling=ceiling,
                                    blocked=state['blocked'].get(selection.key(family, role), []))
             held = state['accepted'].get(selection.key(family, role))
@@ -3039,9 +3029,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', '0')
             self.end_headers()
             return
-        if path in ("/monitor-model", "/runtime-model"):
-            field = 'monitor_model' if path == '/monitor-model' else 'runtime_model'
-            set_setting(field, form.get(field, "auto"))
+        if path == "/monitor-model":
+            set_setting("monitor_model", form.get("monitor_model", "auto"))
             self.send_response(303)
             self.send_header("Location", "/settings")
             self.send_header("Content-Length", "0")
