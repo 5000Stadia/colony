@@ -412,6 +412,12 @@ def monitor():
     return resolve(s['provider'], 'monitor', s.get('monitor_model'))
 
 
+def scout(family):
+    """The monitor's scout reads at its program's routine tier: reading, not judgement."""
+    migrate()
+    return resolve(family, 'routine', (board.registry()['settings'].get('helper_models') or {}).get(key(family, 'routine')))
+
+
 def runtime(root=None, pin=None):
     migrate(root)
     # PROVIDER: the unattended runtime currently executes through Claude Code only.

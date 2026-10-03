@@ -2287,7 +2287,7 @@ def support_rows():
         approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
         rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the monitor brought</span></div>"
                     f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
-                    f"<div class='asktext'>{e(a['text'])}</div>"
+                    f"<div class='asktext'>{e(a['text'])}</div><p class='muted'>{e(supports.NOTICE)}</p>"
                     f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"
                     f"{approve}<button name='verdict' value='test' class='{'quiet' if approve else ''}'>Test it</button>"
                     f"<input name='text' placeholder='anything to tell the monitor'>"
@@ -3024,6 +3024,8 @@ class Handler(BaseHTTPRequestHandler):
                 for root in projects():
                     if root.exists():
                         selection.bench.write_helpers(root)
+                from . import monitor
+                monitor.write_scout()
             except ValueError as err:
                 return self._send(409, str(err).encode())
             self.send_response(303)
@@ -3062,6 +3064,8 @@ class Handler(BaseHTTPRequestHandler):
             save_registry(reg)
             for root in projects():
                 bench.write_helpers(root)
+            from . import monitor
+            monitor.write_scout()
             self.send_response(303)
             self.send_header('Location', '/settings')
             self.send_header('Content-Length', '0')

@@ -11,8 +11,13 @@ what it assumes and what a second provider needs there. What a provider supplies
                            models as (id, name) pairs
   model_name(value)        a model ID or alias as the model's own name, for showing "Default (Opus 5.5)"
   command(label, s)        the shell command that starts its interactive agent with the settings in `s`:
-                           provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off).
+                           provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off); for
+                           the monitor, also autocompact and helpers (the folder its scout was written in).
                            Map each to the CLI's own flags, and ignore any it has no equivalent for.
+  write_scout(root, tier, role)
+                           the monitor's scout as the CLI defines a helper: it can search the web and read pages,
+                           and nothing else (no shell, no edits, no other tools), so strangers' text never reaches
+                           the session that speaks for the person. Restrict it as tightly as the CLI allows.
   wire(root, protocol)     put the colony protocol where the CLI reads project instructions (AGENTS.md for
                            Codex) and arrange for `colony notes --deliver` output to reach the agent: at
                            session start (`--session`) and before each turn the person or the board types.
@@ -54,6 +59,25 @@ import json
 import sys
 import shlex
 from pathlib import Path
+
+# The monitor's scout (monitor.py, Scouting) reads the web for it and can do nothing else.
+SCOUT = "colony-scout"
+SCOUT_BRIEF = ("Colony's scout: reads the web for the monitor, search and fetch only, and returns each find as plain "
+               "fields. It can't run commands, change files or act anywhere.")
+
+
+def _keep(path, text):
+    """A file colony writes, rewritten only when it differs and removed when there is nothing to write: what changed."""
+    if not text:
+        if path.exists():
+            path.unlink()
+            return [path]
+        return []
+    if path.exists() and path.read_text() == text:
+        return []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return [path]
 
 
 class ClaudeCode:
@@ -211,8 +235,8 @@ class ClaudeCode:
         return _run([self.program, "update"], timeout=600)
 
     def startup_files(self, root):
-        """What Claude Code reads only when it starts, among what colony writes: the tier helpers."""
-        return [root / ".claude" / "agents" / f"{self.helper_name(t)}.md" for t in self.HELPER_BRIEF]
+        """What Claude Code reads only when it starts, among what colony writes: the tier helpers, the monitor's scout."""
+        return [root / ".claude" / "agents" / f"{name}.md" for name in [*map(self.helper_name, self.HELPER_BRIEF), SCOUT]]
     HELPER_BRIEF = {"routine": "ordinary work: building, editing, looking things up across files",
                     "step-up": "work that has stalled, been retried or redone, or needs the strongest reasoning here",
                     "chores": "clear, mechanical tasks: small edits, running a named test, copying, simple lookups"}
@@ -225,25 +249,27 @@ class ClaudeCode:
         """A helper definition per tier in .claude/agents, so a helper runs at exactly its tier's model and effort
         (the Agent tool picks a model only by alias, and no effort). Rewritten when a tier changes; a tier colony
         can't fill leaves no file. Returns the files it changed."""
-        folder = root / ".claude" / "agents"
         changed = []
         for tier, brief in self.HELPER_BRIEF.items():
-            path = folder / f"{self.helper_name(tier)}.md"
             t = tiers.get(tier)
-            if not t:
-                if path.exists():
-                    path.unlink()
-                    changed.append(path)
-                continue
-            text = (f"---\nname: {self.helper_name(tier)}\ndescription: Colony's {tier} tier: {brief}.\n"
-                    f"model: {t['model']}\n" + (f"effort: {t['effort']}\n" if t.get("effort") else "")
-                    + "---\n\nDo the task you are given within its brief, and hand in what you find and do.\n"
-                    "<!-- written by colony from this project's tiers (colony models); edits here are replaced -->\n")
-            if not path.exists() or path.read_text() != text:
-                folder.mkdir(parents=True, exist_ok=True)
-                path.write_text(text)
-                changed.append(path)
+            changed += _keep(root / ".claude" / "agents" / f"{self.helper_name(tier)}.md", t and (
+                f"---\nname: {self.helper_name(tier)}\ndescription: Colony's {tier} tier: {brief}.\n"
+                f"model: {t['model']}\n" + (f"effort: {t['effort']}\n" if t.get("effort") else "")
+                + "---\n\nDo the task you are given within its brief, and hand in what you find and do.\n"
+                "<!-- written by colony from this project's tiers (colony models); edits here are replaced -->\n"))
         return changed
+
+    # PROVIDER: Claude Code gives a helper exactly the tools its file lists. The scout's: no shell, no edits, no MCP
+    # tools, no helpers of its own, and no reading local files, so a page can't steer it into sending one out.
+    SCOUT_TOOLS = "WebSearch, WebFetch"
+
+    def write_scout(self, root, tier, role):
+        """The monitor's scout in .claude/agents, at a tier's model and effort; no tier, no scout. What changed.
+        It skips the CLAUDE.md files (Claude Code 2.1.271 and later): the monitor's role isn't the scout's."""
+        return _keep(root / ".claude" / "agents" / f"{SCOUT}.md", tier and (
+            f"---\nname: {SCOUT}\ndescription: {json.dumps(SCOUT_BRIEF)}\ntools: {self.SCOUT_TOOLS}\nmodel: {tier['model']}\n"
+            + (f"effort: {tier['effort']}\n" if tier.get("effort") else "") + "omitClaudeMd: true\n"
+            + f"---\n\n{role}\n<!-- written by colony for the monitor's scouting; edits here are replaced -->\n"))
 
     def version(self):
         return _run([self.program, "--version"])
@@ -704,8 +730,8 @@ class Codex:
         return _run([self.program, "update"], timeout=600)
 
     def startup_files(self, root):
-        """What Codex reads only when it starts, among what colony writes: the tier overlays."""
-        return [root / ".codex" / "agents" / f"{self.helper_name(t)}.toml" for t in self.HELPER_BRIEF]
+        """What Codex reads only when it starts, among what colony writes: the tier overlays, the monitor's scout."""
+        return [root / ".codex" / "agents" / f"{name}.toml" for name in [*map(self.helper_name, self.HELPER_BRIEF), SCOUT]]
 
     HELPER_CALL = "spawn one with agent_type set to its name and fork_turns \"none\"; its model and effort come from it"
     HELPER_BRIEF = {"routine": "Colony's routine tier: ordinary work, building, editing, looking things up across files",
@@ -720,27 +746,30 @@ class Codex:
         """A config overlay per tier in .codex/agents (model and reasoning effort), which the console command
         registers as a named agent; the agent spawns it by agent_type. Verified on Codex 0.154 by colony-codex
         (docs/codex-helper-tiers.md there). A new or changed tier takes hold when the console next starts."""
-        folder = root / ".codex" / "agents"
         changed = []
         for tier in self.HELPER_BRIEF:
-            path = folder / f"{self.helper_name(tier)}.toml"
             t = tiers.get(tier)
-            if not t:
-                if path.exists():
-                    path.unlink()
-                    changed.append(path)
-                continue
-            text = ("# written by colony from this project's tiers (colony models); edits here are replaced\n"
-                    # Codex 0.159 also finds these by itself in .codex/agents, as roles that must carry a name
-                    f"name = {json.dumps(self.helper_name(tier))}\n"
-                    f"description = {json.dumps(self.HELPER_BRIEF[tier])}\n"
-                    f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
-                    + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n')
-            if not path.exists() or path.read_text() != text:
-                folder.mkdir(parents=True, exist_ok=True)
-                path.write_text(text)
-                changed.append(path)
+            changed += _keep(root / ".codex" / "agents" / f"{self.helper_name(tier)}.toml", t and (
+                "# written by colony from this project's tiers (colony models); edits here are replaced\n"
+                # Codex 0.159 also finds these by itself in .codex/agents, as roles that must carry a name
+                f"name = {json.dumps(self.helper_name(tier))}\n"
+                f"description = {json.dumps(self.HELPER_BRIEF[tier])}\n"
+                f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
+                + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n'))
         return changed
+
+    def write_scout(self, root, tier, role):
+        """The monitor's scout as a role overlay, registered as its console starts; no tier, no scout. What changed.
+        PROVIDER: Codex can't give a helper a list of tools. Its read-only sandbox, with no asking its way out, keeps
+        the scout's commands from writing or reaching the network; it reads the web with Codex's own search, opening
+        only what the search index knows, so no address it makes up can carry anything out; it reads no AGENTS.md
+        (the monitor's role isn't the scout's). Each key checked on Codex 0.160 (codex exec --strict-config)."""
+        return _keep(root / ".codex" / "agents" / f"{SCOUT}.toml", tier and (
+            "# written by colony for the monitor's scouting; edits here are replaced\n"
+            f"name = {json.dumps(SCOUT)}\ndescription = {json.dumps(SCOUT_BRIEF)}\nmodel = {json.dumps(tier['model'])}\n"
+            + (f"model_reasoning_effort = {json.dumps(tier['effort'])}\n" if tier.get("effort") else "")
+            + 'sandbox_mode = "read-only"\napproval_policy = "never"\nweb_search = "indexed"\nproject_doc_max_bytes = 0\n'
+            + f"developer_instructions = {json.dumps(role)}\n"))
 
     def command(self, label, s, resume=None, root=None):
         if root:
@@ -770,14 +799,15 @@ class Codex:
             from .codex_remote import toml
             value = f'hooks.{event}={toml(entries)}'
             parts += ["-c", shlex.quote(value)]
-        # the helper tiers, registered for this session (a project file would need the project trusted first);
-        # each overlay holds its tier's model and effort (write_helpers)
+        # the helpers colony wrote, registered for this session (a project file would need the project trusted first):
+        # a project's tiers, each overlay holding its tier's model and effort (write_helpers); the monitor's scout
         from .board import workdir
-        for tier in (self.HELPER_BRIEF if root else ()):
-            overlay = workdir(root) / ".codex" / "agents" / f"{self.helper_name(tier)}.toml"
+        folder = workdir(root) if root else Path(s["helpers"]) if s.get("helpers") else None
+        briefs = {**{self.helper_name(t): b for t, b in self.HELPER_BRIEF.items()}, SCOUT: SCOUT_BRIEF}
+        for name, brief in (briefs.items() if folder else ()):
+            overlay = folder / ".codex" / "agents" / f"{name}.toml"
             if overlay.exists():
-                name = self.helper_name(tier)
-                parts += ["-c", shlex.quote(f"agents.{name}.description={json.dumps(self.HELPER_BRIEF[tier])}"),
+                parts += ["-c", shlex.quote(f"agents.{name}.description={json.dumps(brief)}"),
                           "-c", shlex.quote(f"agents.{name}.config_file={json.dumps(str(overlay))}")]
         if resume:
             parts += ["resume", shlex.quote(resume)]
