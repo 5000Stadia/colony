@@ -747,9 +747,14 @@ def cmd_tell(a):
     if not _caught_up(root):
         return 3
     board.add_note(root, None, a.text, author="monitor")
-    name = console.ensure(root)
-    if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
-        console.type_into(name, "[colony] You have a note from the person's monitor.")
+    try:
+        name = console.ensure(root)
+        if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
+            console.type_into(name, "[colony] You have a note from the person's monitor.")
+    except (OSError, subprocess.CalledProcessError):
+        # The note is kept either way: sending it again would deliver it twice.
+        print(f"sent to {a.name}; its console isn't ready, so the note waits for its next turn")
+        return 0
     print(f"sent to {a.name} as a note from the monitor, acting for the person")
     return 0
 
