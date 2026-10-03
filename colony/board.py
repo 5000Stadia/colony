@@ -83,6 +83,8 @@ steer all of them from one board, and the projects can write to each other.
 - A turn that ends with a question waits for the person on the board; if they ask you something first, answer
   it and ask yours again.
 - Helpers run at three tiers (routine, step-up, chores), handed to you at each session start.
+- How long work goes well, from colony's measured runs: `GUIDE_PATH`. Read it at a project's start, and again
+  when weighing structure (helpers, review, tests, memory).
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
   Mail arrives by itself.
 """
@@ -420,6 +422,10 @@ def sharing(path, name, chosen, role='helper'):
 def protocol(root):
     """The colony protocol as a project's agent reads it; for one sharing another project's folder, it says
     whose folder it is and where its own plan lives."""
+    return _protocol(root).replace("GUIDE_PATH", str(Path(__file__).resolve().parent.parent / "GUIDE.md"))
+
+
+def _protocol(root):
     root = Path(root)
     from . import lead
     shared = lead.group(root)
