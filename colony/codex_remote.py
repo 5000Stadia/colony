@@ -405,6 +405,11 @@ def launch(root, settings, resume=None):
             if previous.get('fingerprint') != fingerprint(config, source):
                 if not drain(home):
                     raise RemoteError('New settings are pending until the app turn finishes')
+        # A new conversation is started by the console itself: Codex writes a thread only once it has a turn, so
+        # a thread started here first could not be resumed. Its first hook records it (accepts_hook).
+        fresh = not resume
+        if fresh:
+            (home / 'colony-thread.json').unlink(missing_ok=True)
         if not alive(home):
             prepare_home(root, home, source)
             if resume and not owned:
@@ -412,11 +417,13 @@ def launch(root, settings, resume=None):
                 owned = True
             with start(root, home, source, config) as client:
                 trust_hooks(client, root, config)
-                resume = attach(client, root, config, resume)
+                if not fresh:
+                    resume = attach(client, root, config, resume)
         else:
             with Client(socket_for(home)) as client:
                 trust_hooks(client, root, config)
-                resume = attach(client, root, config, resume)
+                if not fresh:
+                    resume = attach(client, root, config, resume)
         (home / 'colony-owned').touch(mode=0o600)
         owned = True
         with Client(socket_for(home)) as client:
@@ -427,7 +434,7 @@ def launch(root, settings, resume=None):
         report(home, root, mode, server=remote_state.get('serverName'), thread=resume)
         offer_pairing(root)
         args = ['codex', '--remote', 'unix://' + str(socket_for(home)), '--no-alt-screen',
-                *flags(console_config(config)), 'resume', resume]
+                *flags(console_config(config)), *(['resume', resume] if resume else [])]
         os.execvpe(args[0], args, environment(root, home, source))
     except (RemoteError, RPCError, TransferError, OSError, ValueError, KeyError, sqlite3.Error, ImportError) as error:
         reason = str(error)
@@ -497,7 +504,13 @@ def accepts_hook(root, payload):
         return False
     if os.environ.get('COLONY_CONSOLE') != context.seat(root):
         return False
-    expected = None if context.is_monitor(root) else read_json(home_for(root) / 'colony-thread.json').get('thread')
+    if context.is_monitor(root):
+        return True
+    expected = read_json(home_for(root) / 'colony-thread.json').get('thread')
+    if not expected and payload.get('session_id'):
+        # The console's own new conversation: its first hook makes it the project's authoritative thread.
+        atomic_json(home_for(root) / 'colony-thread.json', {'thread': payload['session_id']})
+        return True
     return not expected or payload.get('session_id') == expected
 
 

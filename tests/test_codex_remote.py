@@ -115,6 +115,17 @@ class NativeRemoteTest(unittest.TestCase):
             bench.set_plan(root, 'routine', settings['model'], settings['effort'])
 
     @contextmanager
+    def test_a_new_conversation_is_adopted_from_its_first_hook(self):
+        root = Path(self.tmp.name) / 'fresh'
+        root.mkdir(exist_ok=True)
+        from colony import context
+        with patch.object(context, 'seat', return_value='console'), patch.object(context, 'is_monitor', return_value=False), \
+                patch.dict(os.environ, COLONY_CONSOLE='console'):
+            home = remote.home_for(root); home.mkdir(parents=True, exist_ok=True)
+            self.assertTrue(remote.accepts_hook(root, {'session_id': 'first', 'transcript_path': '/x'}))
+            self.assertEqual(remote.read_json(home / 'colony-thread.json')['thread'], 'first')
+            self.assertFalse(remote.accepts_hook(root, {'session_id': 'other', 'transcript_path': '/y'}))
+
     def native(self, root, settings, home=None, prepare=True):
         home = home or remote.home_for(root)
         config = remote.overrides(root, home, settings)
