@@ -19,6 +19,7 @@ These are defaults from measured runs, not rules. Where you see a better way, ta
 - Judge stakes by consequence and reversibility, never by subject.
 - If the work shows the plan or a milestone is wrong, say so with the reason. How to do a step is your call; scope and milestones are the person's.
 - Guard against what would fail silently or spoil what later work builds on; skip guards nobody would miss. Every extra layer is something later changes must work around.
+- Structure follows need. Tests, memory and review earn their place when the work calls for them, sized to it.
 - Finish what you take on: a piece is done when it does what it was meant to do, so resolve what stands in the way, however many turns it takes. Hold each milestone to what serves its purpose; other findings wait. Don't go looking for faults where nothing suggests one.
 - Where the running product has state that tests don't reach (a game world, a UI, a simulation), give yourself a way to read it as data, such as a debug export of the state as JSON, and check against that.
 
@@ -47,7 +48,7 @@ These are defaults from measured runs, not rules. Where you see a better way, ta
 
 ## As the project grows
 Reach for these when the symptom appears.
-- Re-deriving settled decisions or retrying rejected approaches after many compactions → record decisions in commit messages and put the relevant ones in the next step's brief.
+- The project is the memory. Keep decisions where the work is, and trust it. If missing context costs you more than once, design the lightest memory that fits that gap, inside the project, and tell the person.
 - Defending a failed approach → take the next step in a fresh session with only the plan and the repo.
 - The same mistake keeps coming back → a reviewer that keeps the lessons of its serious findings.
 - One area outgrows one context → its own lane, once the strain recurs.
