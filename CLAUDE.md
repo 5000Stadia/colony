@@ -83,8 +83,10 @@ it went. Record the move and their original words in the dated vision history.
   a digest of facts, each with its source, looking up first what you don't know, and leave your plan out.
   Then run `colony consult R4 "the decision" --digest FILE`, which adds the person's own words and asks
   each consultant what would fundamentally change or improve the approach. Bring the person only such
-  points, a few at most, as one gate. Wording, naming and reorganising never count. Record what they
-  accept with `colony consult R4 "their words" --adopt ID`. Only an accepted change earns a second round,
+  points, a few at most, as one gate: `colony gate "the question" --item R4 --consult ID --points FILE`.
+  The person accepts or rejects each point on the board; adoption is recorded automatically. If settled
+  in conversation, use `colony gate "their words" --answered ID --accept P1 --reject P2`, covering every
+  point. Wording, naming and reorganising never count. Only an accepted change earns a second round,
   which checks your revised approach (`--plan FILE`), and there is never a third. Most work holds no such
   decision; if consulting is off, go on.
 - Pin what the person will keep wanting to open (the running app's URL, a deliverable, a finished
@@ -112,7 +114,6 @@ it went. Record the move and their original words in the dated vision history.
   quicker. Mail from the colony arrives by itself; answer a question with `colony reply ID "..."`.
 
 
-Propose a small number of natural completed versions during the Vision/path conversation. For each, say succinctly what the person can use/read/see, what counts as done, and where you pause for their approval or check-in. Use existing milestones and preserve existing plans until agreed. Record the bounded next checkpoint with colony progress; as lead, establish its native goal and continue across ordinary items until that coherent completed version. Later is not automatic. Routine item reviews are collected there; judgement that subsequent work depends on stays an immediate gate.
+Propose a small number of natural completed versions during the Vision/path conversation. For each, say succinctly what the person can use/read/see, what counts as done, and where you pause for their approval or check-in. Use existing milestones and preserve existing plans until agreed. Record the bounded next checkpoint with colony progress; as lead, continue across ordinary items until that coherent completed version. Later is not automatic. When the person releases the next scope, select its bounded checkpoint. Honour any project-specific approval before starting a new item. Routine item reviews are collected there; judgement that subsequent work depends on stays an immediate gate.
 
-One shared project; only colony-codex is the lead. Canonical Vision and roadmap: /home/k/Projects/colony/ROADMAP.md. Never read/copy the roadmap in a helper branch. Ownership generation 1. You are a helper with no active item workspace. Wait for the lead to engage an assigned item with colony item Rn --start; do not take other project work or establish a project-wide goal.
-Only the lead edits that file. Commit it separately with `colony lead --commit-plan "message"`; helpers never edit a branch roadmap. Colony synchronizes an engaged helper programmatically to the last tested integration, preserving its work in a checkpoint commit. Read the short catch-up note; do not reread the project. Costly decisions reach all members.
+Only the lead edits the canonical plan. Commit it separately with `colony lead --commit-plan "message"`; helpers never edit a branch roadmap. Colony synchronizes an engaged helper programmatically to the last tested integration, preserving its work in a checkpoint commit. Read the short catch-up note; do not reread the project.

@@ -798,5 +798,5 @@ def role_text(root):
         text += '\nYou own only: ' + '; '.join(f"{a['item']} in {a['workspace']} ({a['state']})" for a in jobs)
         text += '. Colony syncs on engagement, without a model call. Propose Vision/roadmap/other-item changes to the lead.'
     else:
-        text += ' You are a helper with no active item workspace. Wait for the lead to engage an assigned item with colony item Rn --start; do not take other project work or establish a project-wide goal.'
+        text += ' You are a helper with no active item workspace: the person\'s direct requests come first; otherwise wait for an assigned item (colony item Rn --start), taking no other project work and setting no project-wide goal. Route plan and Vision changes to the lead.'
     return text

@@ -909,15 +909,14 @@ def track(path, register=True):
 
 
 def rewire_projects():
-    """Bring missing provider hooks up to date without restarting a project console."""
+    """Bring every project's instructions and hooks up to date in place, without restarting a console: a file
+    already current is rewritten unchanged."""
     from . import providers
     for root in projects():
         if not root.exists():
             continue
         try:
-            provider, folder = providers.of(root), workdir(root)
-            if not provider.wired(folder):
-                provider.wire(folder, protocol(root))
+            providers.of(root).wire(workdir(root), protocol(root))
         except (OSError, ValueError):
             continue  # The doctor continues to report a project that could not be wired.
 
