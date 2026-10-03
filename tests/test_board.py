@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from unittest.mock import patch  # noqa: E402
 from colony import board, console, mail, monitor, pins, providers  # noqa: E402
 import base64, socket, time  # noqa: E402
 
@@ -85,6 +86,19 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_each_project_shows_whether_its_app_reaches_it(self):
+        self.assertIn("Remote Control: on", board.remote_line(self.root))
+        from colony import codex_remote
+        with patch.object(providers, 'of', return_value=providers.get('codex')), \
+                patch.object(codex_remote, 'alive', return_value=True), \
+                patch.object(codex_remote, 'status', return_value={'mode': 'connected'}), \
+                patch('colony.codex_rpc.Client', side_effect=OSError):
+            line = board.remote_line(self.root)
+            self.assertIn("not paired yet", line)
+            self.assertIn("Connect to ChatGPT", line)
+            codex_remote.pairing_choice(self.root, 'paired')
+            self.assertIn("In ChatGPT: paired", board.remote_line(self.root))
+
     def test_r76_a_question_waits_for_its_moment_then_reaches_the_person_once(self):
         road = self.root / "ROADMAP.md"
         road.write_text(road.read_text() + "\n## M8 \u2014 Later work\n\n- [ ] R12 The final chapter\n")

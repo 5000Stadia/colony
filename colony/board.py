@@ -1339,7 +1339,7 @@ def render(reg, pid, view="overview"):
     secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
-               f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p></header>")
+               f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>{remote_line(root)}</header>")
     out.append(progress_panel(root, pid))
     if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
@@ -2511,6 +2511,31 @@ def signed_out():
         return json.loads((home() / "signed-out.json").read_text())
     except (OSError, ValueError):
         return {}
+
+
+def remote_line(root):
+    """Whether the project's console is reachable from the person's app, and the one step that connects it."""
+    if providers.of(root) is providers.get('codex'):
+        from . import codex_remote
+        from .codex_rpc import Client, RPCError
+        home = codex_remote.home_for(root)
+        mode = codex_remote.status(root).get('mode') or 'off'
+        if codex_remote.alive(home):
+            try:
+                with Client(codex_remote.socket_for(home), timeout=1) as client:
+                    mode = client.call('remoteControl/status/read')['status']
+            except (OSError, RPCError, KeyError):
+                mode = 'unreachable'
+        link = '' if mode == 'connected' else f" (its connection: {e(mode)})"
+        if codex_remote.pairing_choice(root) == 'paired':
+            return f"<p class='muted'>In ChatGPT: paired{link}</p>"
+        if codex_remote.alive(home):
+            return (f"<p class='muted'>In ChatGPT: not paired yet{link} · <form method='post' action='/codex-pair' "
+                    f"style='display:inline'><input type='hidden' name='project' value='{e(str(root))}'>"
+                    "<button>Connect to ChatGPT</button></form></p>")
+        return "<p class='muted'>In ChatGPT: open its console to connect</p>"
+    on = project_settings(root)[0].get('remote', True)
+    return f"<p class='muted'>Remote Control: {'on' if on else 'off'}</p>"
 
 
 def codex_pairing_options(reg):
