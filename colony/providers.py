@@ -12,12 +12,8 @@ what it assumes and what a second provider needs there. What a provider supplies
   model_name(value)        a model ID or alias as the model's own name, for showing "Default (Opus 5.5)"
   command(label, s)        the shell command that starts its interactive agent with the settings in `s`:
                            provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off); for
-                           the monitor, also autocompact and helpers (the folder its scout was written in).
-                           Map each to the CLI's own flags, and ignore any it has no equivalent for.
-  write_scout(root, tier, role)
-                           the monitor's scout as the CLI defines a helper: it can search the web and read pages,
-                           and nothing else (no shell, no edits, no other tools), so strangers' text never reaches
-                           the session that speaks for the person. Restrict it as tightly as the CLI allows.
+                           the monitor, also autocompact. Map each to the CLI's own flags, and ignore any it has
+                           no equivalent for.
   wire(root, protocol)     put the colony protocol where the CLI reads project instructions (AGENTS.md for
                            Codex) and arrange for `colony notes --deliver` output to reach the agent: at
                            session start (`--session`) and before each turn the person or the board types.
@@ -43,6 +39,11 @@ what it assumes and what a second provider needs there. What a provider supplies
   consult(brief, model, effort, project)
                            one fresh, stateless consultation: an empty folder, no settings or hooks, read-only, a
                            no cap: it takes what it takes; returns {"text", "cost", "usage", "error"} (colony consult uses it)
+  scout(brief, model, effort)
+                           one fresh, stateless scout for the monitor (colony scout): an empty folder, no settings,
+                           hooks or project instructions, and only searching the web and reading pages, held there
+                           by the program itself (no shell, edits or other tools), so strangers' text never reaches
+                           the session that speaks for the person; returns {"text", "error"}
   choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it;
                            with choice(), it also lets the watcher answer a session's start-up questions (starting())
   enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
@@ -59,11 +60,6 @@ import json
 import sys
 import shlex
 from pathlib import Path
-
-# The monitor's scout (monitor.py, Scouting) reads the web for it and can do nothing else.
-SCOUT = "colony-scout"
-SCOUT_BRIEF = ("Colony's scout: reads the web for the monitor, search and fetch only, and returns each find as plain "
-               "fields. It can't run commands, change files or act anywhere.")
 
 
 def _keep(path, text):
@@ -235,8 +231,8 @@ class ClaudeCode:
         return _run([self.program, "update"], timeout=600)
 
     def startup_files(self, root):
-        """What Claude Code reads only when it starts, among what colony writes: the tier helpers, the monitor's scout."""
-        return [root / ".claude" / "agents" / f"{name}.md" for name in [*map(self.helper_name, self.HELPER_BRIEF), SCOUT]]
+        """What Claude Code reads only when it starts, among what colony writes: the tier helpers."""
+        return [root / ".claude" / "agents" / f"{self.helper_name(t)}.md" for t in self.HELPER_BRIEF]
     HELPER_BRIEF = {"routine": "ordinary work: building, editing, looking things up across files",
                     "step-up": "work that has stalled, been retried or redone, or needs the strongest reasoning here",
                     "chores": "clear, mechanical tasks: small edits, running a named test, copying, simple lookups"}
@@ -258,18 +254,6 @@ class ClaudeCode:
                 + "---\n\nDo the task you are given within its brief, and hand in what you find and do.\n"
                 "<!-- written by colony from this project's tiers (colony models); edits here are replaced -->\n"))
         return changed
-
-    # PROVIDER: Claude Code gives a helper exactly the tools its file lists. The scout's: no shell, no edits, no MCP
-    # tools, no helpers of its own, and no reading local files, so a page can't steer it into sending one out.
-    SCOUT_TOOLS = "WebSearch, WebFetch"
-
-    def write_scout(self, root, tier, role):
-        """The monitor's scout in .claude/agents, at a tier's model and effort; no tier, no scout. What changed.
-        It skips the CLAUDE.md files (Claude Code 2.1.271 and later): the monitor's role isn't the scout's."""
-        return _keep(root / ".claude" / "agents" / f"{SCOUT}.md", tier and (
-            f"---\nname: {SCOUT}\ndescription: {json.dumps(SCOUT_BRIEF)}\ntools: {self.SCOUT_TOOLS}\nmodel: {tier['model']}\n"
-            + (f"effort: {tier['effort']}\n" if tier.get("effort") else "") + "omitClaudeMd: true\n"
-            + f"---\n\n{role}\n<!-- written by colony for the monitor's scouting; edits here are replaced -->\n"))
 
     def version(self):
         return _run([self.program, "--version"])
@@ -336,6 +320,31 @@ class ClaudeCode:
             return {"text": "", "cost": None, "error": f"{err.__class__.__name__}"}
         return {"text": d.get("result") or "", "cost": d.get("total_cost_usd"), "usage": d.get("usage"),
                 "error": None if not d.get("is_error") else (d.get("subtype") or "error")}
+
+    # PROVIDER: Claude Code holds a process to the tools it's given. The scout's: search and fetch, and nothing else
+    # (no shell, edits, local files, MCP servers or helpers); anything else that would ask is refused unasked.
+    SCOUT_TOOLS = "WebSearch,WebFetch"
+
+    def scout(self, brief, model, effort, run=None):
+        """One fresh, stateless scout in an empty folder, with none of the person's settings, hooks, MCP servers or
+        CLAUDE.md files: it can search the web and read pages, and nothing else (checked on Claude Code 2.1.288)."""
+        import os
+        import subprocess
+        import tempfile
+        cmd = [self.program, "-p", "--model", model, *(["--effort", effort] if effort else []), "--setting-sources", "",
+               "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", self.SCOUT_TOOLS,
+               "--allowedTools", self.SCOUT_TOOLS, "--disallowedTools", "Bash,Edit,Write,NotebookEdit,Read,Grep,Glob,Agent",
+               "--no-session-persistence", "--output-format", "json"]
+        with tempfile.TemporaryDirectory(prefix="colony-scout-") as here:
+            try:
+                env = dict(os.environ, **({self.TOKEN_ENV: self.token()} if self.token() else {}))
+                d = json.loads((run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, env=env,
+                                                       timeout=1800).stdout)
+            except (ValueError, OSError, subprocess.TimeoutExpired) as err:
+                return {"text": "", "error": err.__class__.__name__}
+        if d.get("is_error"):
+            return {"text": "", "error": str(d.get("result") or d.get("subtype") or "error")[:300]}
+        return {"text": d.get("result") or "", "error": None}
 
     def conversation(self, payload):
         """Which conversation a hook ran in, and where it is kept: for a console that must be restarted."""
@@ -638,6 +647,32 @@ class Codex:
         return {"text": last.read_text() if last.exists() else "", "cost": cost(usage) if price else None,
                 "usage": usage, "error": None if last.exists() else "no answer"}
 
+    # PROVIDER: Codex can't list a process's tools, so the ones the scout doesn't need are turned off (the shell,
+    # connectors, plugins, hooks, image tools, goals); what's left stays in its read-only sandbox, with none of the
+    # person's config or rules (a command a rule allows runs outside the sandbox). Its search opens only what the
+    # search index knows, so no address a page makes up can carry anything out. Checked on Codex 0.160.
+    SCOUT_OFF = ("hooks", "shell_tool", "unified_exec", "apps", "plugins", "view_image", "image_generation", "goals")
+
+    def scout(self, brief, model, effort, run=None):
+        """One fresh, stateless scout in an empty folder, reading no AGENTS.md: it searches the web and reads what the
+        search finds, and can act nowhere."""
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="colony-scout-") as here:
+            work, last = Path(here) / "work", Path(here) / "answer.txt"
+            work.mkdir()
+            cmd = [self.program, "exec", "-m", model, *(["-c", f"model_reasoning_effort={effort}"] if effort else []),
+                   "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+                   *[a for f in self.SCOUT_OFF for a in ("--disable", f)], "-c", 'web_search="indexed"',
+                   "-c", "project_doc_max_bytes=0", "-o", str(last), "-C", str(work), "-"]
+            try:
+                r = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=work, timeout=1800)
+            except (OSError, subprocess.TimeoutExpired) as err:
+                return {"text": "", "error": err.__class__.__name__}
+            text = last.read_text() if last.exists() else ""
+        why = ((r.stderr or "").strip().splitlines() or ["no answer"])[-1][:300]
+        return {"text": text, "error": None if text.strip() else why}
+
     def discover(self, run=None):
         """The models this account can run, from Codex's own catalog of them, with each one's effort levels;
         what it keeps hidden (internal models) is left out. Nothing is called."""
@@ -730,8 +765,8 @@ class Codex:
         return _run([self.program, "update"], timeout=600)
 
     def startup_files(self, root):
-        """What Codex reads only when it starts, among what colony writes: the tier overlays, the monitor's scout."""
-        return [root / ".codex" / "agents" / f"{name}.toml" for name in [*map(self.helper_name, self.HELPER_BRIEF), SCOUT]]
+        """What Codex reads only when it starts, among what colony writes: the tier overlays."""
+        return [root / ".codex" / "agents" / f"{self.helper_name(t)}.toml" for t in self.HELPER_BRIEF]
 
     HELPER_CALL = "spawn one with agent_type set to its name and fork_turns \"none\"; its model and effort come from it"
     HELPER_BRIEF = {"routine": "Colony's routine tier: ordinary work, building, editing, looking things up across files",
@@ -757,19 +792,6 @@ class Codex:
                 f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
                 + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n'))
         return changed
-
-    def write_scout(self, root, tier, role):
-        """The monitor's scout as a role overlay, registered as its console starts; no tier, no scout. What changed.
-        PROVIDER: Codex can't give a helper a list of tools. Its read-only sandbox, with no asking its way out, keeps
-        the scout's commands from writing or reaching the network; it reads the web with Codex's own search, opening
-        only what the search index knows, so no address it makes up can carry anything out; it reads no AGENTS.md
-        (the monitor's role isn't the scout's). Each key checked on Codex 0.160 (codex exec --strict-config)."""
-        return _keep(root / ".codex" / "agents" / f"{SCOUT}.toml", tier and (
-            "# written by colony for the monitor's scouting; edits here are replaced\n"
-            f"name = {json.dumps(SCOUT)}\ndescription = {json.dumps(SCOUT_BRIEF)}\nmodel = {json.dumps(tier['model'])}\n"
-            + (f"model_reasoning_effort = {json.dumps(tier['effort'])}\n" if tier.get("effort") else "")
-            + 'sandbox_mode = "read-only"\napproval_policy = "never"\nweb_search = "indexed"\nproject_doc_max_bytes = 0\n'
-            + f"developer_instructions = {json.dumps(role)}\n"))
 
     def command(self, label, s, resume=None, root=None):
         if root:
@@ -799,15 +821,14 @@ class Codex:
             from .codex_remote import toml
             value = f'hooks.{event}={toml(entries)}'
             parts += ["-c", shlex.quote(value)]
-        # the helpers colony wrote, registered for this session (a project file would need the project trusted first):
-        # a project's tiers, each overlay holding its tier's model and effort (write_helpers); the monitor's scout
+        # the helper tiers, registered for this session (a project file would need the project trusted first);
+        # each overlay holds its tier's model and effort (write_helpers)
         from .board import workdir
-        folder = workdir(root) if root else Path(s["helpers"]) if s.get("helpers") else None
-        briefs = {**{self.helper_name(t): b for t, b in self.HELPER_BRIEF.items()}, SCOUT: SCOUT_BRIEF}
-        for name, brief in (briefs.items() if folder else ()):
-            overlay = folder / ".codex" / "agents" / f"{name}.toml"
+        for tier in (self.HELPER_BRIEF if root else ()):
+            overlay = workdir(root) / ".codex" / "agents" / f"{self.helper_name(tier)}.toml"
             if overlay.exists():
-                parts += ["-c", shlex.quote(f"agents.{name}.description={json.dumps(brief)}"),
+                name = self.helper_name(tier)
+                parts += ["-c", shlex.quote(f"agents.{name}.description={json.dumps(self.HELPER_BRIEF[tier])}"),
                           "-c", shlex.quote(f"agents.{name}.config_file={json.dumps(str(overlay))}")]
         if resume:
             parts += ["resume", shlex.quote(resume)]

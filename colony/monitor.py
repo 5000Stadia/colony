@@ -139,10 +139,10 @@ out?**
    bar is confidence that the project would do worse without it, where worse includes the same quality
    in notably more time or cost; not that something could be better. Short of the bar, stop and say
    nothing. Most checks end here.
-2. **Look,** in one pass, wherever the answer may be, through your scout: the `colony-scout` helper,
-   started by its name with none of your conversation. It can only search and fetch; you never open
-   strangers' pages yourself. Brief it with the need and where to go, starting from what this project
-   has already taught you:
+2. **Look,** in one pass, wherever the answer may be, through your scout: `colony scout "the brief"`
+   runs a fresh one apart from you, with none of your conversation. It can only search and fetch; you
+   never open strangers' pages yourself. Brief it with the need and where to go, starting from what
+   this project has already taught you:
    - its past finds and where they came from (`colony supports --project NAME`), and its bookmarks with
      the general indexes (`colony supports sources --project NAME`, each with how far it is trusted;
      `claude plugin details NAME` shows what a plugin adds and its token cost);
@@ -346,19 +346,23 @@ End the report with this line, once:
 {supports.NOTICE}"""
 
 
-def write_scout():
-    """The scout, for each program that may run the monitor (whichever does finds its own), at that program's
-    routine tier. Returns the files it changed."""
+def scout(text, family=None):
+    """One fresh scout on the monitor's brief, apart from it (colony scout): on the monitor's program or another, at
+    that program's routine tier, held by the program itself to searching and reading the web. Its report, ending with
+    the notice once; ValueError if it can't run or brings nothing back."""
     from . import selection
-    changed = []
-    for k, p in providers.PROVIDERS.items():
-        if hasattr(p, "write_scout"):
-            try:
-                tier = selection.scout(k)
-            except selection.Unavailable:
-                tier = None
-            changed += p.write_scout(home(), tier, SCOUT_ROLE)
-    return changed
+    k = family or providers.key(provider())
+    if k not in providers.PROVIDERS:
+        raise ValueError(f"{k} isn't one of colony's programs ({', '.join(providers.PROVIDERS)})")
+    p = providers.PROVIDERS[k]
+    if not providers.usable(p):
+        raise ValueError(providers.unusable(p))
+    t = selection.scout(k)
+    out = p.scout(f"{SCOUT_ROLE}\n\nThe monitor's brief:\n\n{text.strip()}", t["model"], t["effort"])
+    report = out["text"].replace(supports.NOTICE, "").strip()
+    if not report:
+        raise ValueError(f"the scout brought nothing back ({out['error'] or 'an empty report'})")
+    return f"{report}\n\n{supports.NOTICE}"
 
 
 CONTEXT_CAP = "150k"            # PROVIDER: Claude Code's --autocompact; Codex compacts on its own
@@ -503,7 +507,8 @@ def ensure():
     (home() / ".board").mkdir(exist_ok=True)
     if providers.key(provider()) == "claude":
         provider().wire(home(), "")
-    write_scout()
+    for old in (".claude/agents/colony-scout.md", ".codex/agents/colony-scout.toml"):     # the scout runs apart now
+        (home() / old).unlink(missing_ok=True)
     return console.ensure(home(), name(), "monitor")
 
 
@@ -724,7 +729,6 @@ class Watcher:
         for p in board.projects():
             if p.exists():
                 bench.write_helpers(p)                  # the tiers follow the data: each project's helpers with them
-        write_scout()                                   # and the monitor's scout with its program's routine tier
         ready = bench.ready_to_announce()
         if not ready:
             return

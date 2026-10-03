@@ -3024,8 +3024,6 @@ class Handler(BaseHTTPRequestHandler):
                 for root in projects():
                     if root.exists():
                         selection.bench.write_helpers(root)
-                from . import monitor
-                monitor.write_scout()
             except ValueError as err:
                 return self._send(409, str(err).encode())
             self.send_response(303)
@@ -3064,8 +3062,6 @@ class Handler(BaseHTTPRequestHandler):
             save_registry(reg)
             for root in projects():
                 bench.write_helpers(root)
-            from . import monitor
-            monitor.write_scout()
             self.send_response(303)
             self.send_header('Location', '/settings')
             self.send_header('Content-Length', '0')

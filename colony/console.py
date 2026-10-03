@@ -54,7 +54,7 @@ def command(label, root=None, folder=None):
     if label == "monitor" and not root:
         from . import monitor, context
         model, effort, _ = monitor.choice()
-        s = dict(s, model=model, effort=effort, autocompact=monitor.CONTEXT_CAP, helpers=str(monitor.home()))
+        s = dict(s, model=model, effort=effort, autocompact=monitor.CONTEXT_CAP)
         known = context.session(monitor.home())
         if known and known['provider'] == providers.key(providers.of(None)) and Path(known['path']).exists():
             resume = known['id']
@@ -140,7 +140,8 @@ def fingerprint(root, label=None):
     cmd = command(label or Path(root).name, None if label else root, folder=root if label else None)
     cmd = re.sub(r" (--)?resume \S+", "", cmd)
     p = providers.of(None if label else root)
-    files = [f for f in (p.startup_files(board.workdir(root)) if hasattr(p, "startup_files") else []) if f.exists()]
+    files = [f for f in (p.startup_files(board.workdir(root)) if hasattr(p, "startup_files") and not label else [])
+             if f.exists()]
     h = hashlib.sha256(cmd.encode())
     for f in sorted(files):
         h.update(f.read_bytes())

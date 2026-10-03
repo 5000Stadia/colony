@@ -28,6 +28,7 @@ located signals and a project memory.
     colony choose NAME "OPTION"     pick an option a project is showing (trust question, permission prompt)
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony consult R4 "QUESTION" --digest FILE   two fresh views at a decision costly to change
+    colony scout "BRIEF"            (monitor) a fresh scout that can only search and read the web; its report
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
     colony setup                    the monitor walks you through first-time setup (again)
@@ -606,6 +607,21 @@ def cmd_consult(a):
         print(err, file=sys.stderr)
         return 2
     print(consult.report(rec))
+    return 0
+
+
+def cmd_scout(a):
+    """(monitor) One fresh scout on a brief, apart from you: it can only search and read the web; prints its report."""
+    from . import monitor
+    try:
+        text = (Path(a.file).expanduser().read_text() if a.file and a.file != "-" else a.brief if a.brief not in (None, "-")
+                else "" if sys.stdin.isatty() else sys.stdin.read())
+        if not text.strip():
+            raise SystemExit('colony scout "the brief" (or the brief on stdin, or --file FILE)')
+        print(monitor.scout(text, a.provider))
+    except (ValueError, OSError) as err:
+        print(f"colony scout: {err}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -1340,6 +1356,11 @@ def main(argv=None):
     p.add_argument("--adopt", metavar="ID", help="record which points of consultation ID the person accepted (DECISION is their words)")
     p.add_argument("--show", metavar="ID", help="show consultation ID again")
     p.set_defaults(fn=cmd_consult)
+    p = sub.add_parser("scout", help="(monitor) a fresh scout that can only search and read the web, on a brief")
+    p.add_argument("brief", nargs="?", help="the need and where to look (- or none: read from stdin)")
+    p.add_argument("--file", help="read the brief from a file")
+    p.add_argument("--provider", help="the program to run it on (default: the monitor's)")
+    p.set_defaults(fn=cmd_scout)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
