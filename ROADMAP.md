@@ -117,7 +117,6 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R62 Agent programs kept current: when Claude Code or Codex has an update, colony installs it and reloads each console on it only while that console is idle, resuming the same conversation; nothing mid-task is interrupted
 - [x] R63 Usage limits watched: each program's 5-hour and weekly use read without tokens (Codex's session files; Claude Code's status line) and shown on the board; a safe pause (98% by default): each agent on that program is told on its next turn to land what's in flight, save its work and tell the person where things stand and their options; woken at the reset; colony-wide or per project
   Follow-up: hold each blocking window through threshold rounding; resume when each resets or drops at least two percentage points below the configured threshold. Missing readings do not release a pause. The person's live setting is now 99%; the installation default remains 98%.
-- [ ] R22 A project keeps a helper seat run by another provider, messaged like a project and shown like any console; holo-emitter's painter first — design/seats.md
 
 ## M8 — Models chosen from evidence
 
@@ -162,14 +161,12 @@ The person's words: "Consider it not necessary for me to check any specs unless 
   Built: a few curated points with preserved consultant sources, individual choices and optional comments on all gate views, automatic adoption from the human's choices, checking-round snapshots and retained revisions. Incomplete or duplicate choices do not approve work; exact retries repair missing notifications without duplicate records. Fourteen isolated feature checks pass, including concurrent submissions and a single available provider. Clear closes a gate without inventing choices or allowing a checking round; retries repair its quiet receipt. Usage: docs/consultation-gates.md. Stop for the person's review after integrated checks and deployment.
   Authorised by the person in conversation on 2026-10-02: "Fully agree, please implement". Claude recommends this as the next item (mdf7eb8); reuse existing consultant answers without additional display or recording model calls. Stop at the tested, deployed R58 version for the person's review.
 - [x] R59 The rule in every project's instructions, with examples of costly decisions; each project's consultations and their cost on the board. Approved by the person in conversation on 2026-10-02.
-- [ ] R60 Each project's actual usage (reading against thinking and writing) beside its model plan
 
 ## M6 — Later
 
-- [ ] R23 Unattended runs at the scale they were built for decide whether the runtime stays — README.md "Unattended runs"
-- [ ] R24 A memory runner for a very long project, built only if a seeded long history shows it helps — design/blueprint.md "Under test"
+- [ ] R24 When "the project is the memory" stops holding: at what size or shape does a very long project need another memory structure, and what is the smart one then? Triggered by evidence (decisions re-derived after compactions, a map no context holds), not by length alone. The person, 2026-10-03: "the project is the memory is a smart principle. We may want to think at what point is a monster of a project need an alternative memory structure and whats smart for that."
 - [ ] R25 Settle the map instruction (every builder asks `colony map` first) — design/blueprint.md "Under test"
-- [ ] R26 A separate reviewer for a finished document about to leave the person's hands — design/blueprint.md "Under test"
+- [x] R26 A fresh reader for finished work about to leave the person's hands: a light encouragement in every project's instructions (and GUIDE.md's Review). The person, 2026-10-03: "can we just put a slight encouragement to review these types of documents".
 - [ ] R27 Run a non-code goal (a novel, a business) end to end — design/claims.md #10
 - [ ] R28 The extension test for structural quality — design/claims.md #12
-- [ ] R29 Whether long-form work needs more than a single agent — design/claims.md #14
+- [x] R29 Whether long-form work needs more than one agent: answered by GUIDE.md. A second agent comes in for importance and nuanced complexity in what was just made (fresh review of load-bearing work, a second model family at costly decisions), never by a project's length. The person, 2026-10-03: "Review polishes the shortcomings and different insight".
