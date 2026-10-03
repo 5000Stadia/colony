@@ -384,13 +384,25 @@ class PairingTest(unittest.TestCase):
             remote.offer_pairing(root)
             queued = (board.home() / 'to_monitor.jsonl').read_text().splitlines()
             self.assertEqual(len(queued), 1)
-            self.assertIn('even if you run through Claude', json.loads(queued[0])['text'])
+            self.assertIn('colony pair codex-project', json.loads(queued[0])['text'], 'the monitor relays a fresh code on yes')
+            self.assertIn('never in a note', json.loads(queued[0])['text'])
             self.assertEqual(remote.pairing_choice(root), 'offered')
             remote.pairing_choice(root, 'deferred')
             remote.offer_pairing(root)
             self.assertEqual((board.home() / 'to_monitor.jsonl').read_text().splitlines(), queued)
             self.assertEqual(remote.pairing_choice(root), 'deferred')
             client.assert_not_called()
+
+    def test_without_the_monitor_the_projects_own_agent_asks(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder):
+            board.save_registry({'roots': [], 'settings': {'provider': 'codex', 'monitor': False}})
+            root = Path(folder) / 'codex-project'
+            (root / '.board').mkdir(parents=True)
+            remote.offer_pairing(root)
+            self.assertFalse((board.home() / 'to_monitor.jsonl').exists())
+            [note] = board.notes(root)
+            self.assertEqual(note['author'], 'colony')
+            self.assertIn('colony pair codex-project', note['text'])
 
     def test_pair_and_check_use_existing_project_socket_and_only_return_manual_code(self):
         with patch.object(remote, 'home_for', return_value=Path('/owned/project')), \

@@ -63,6 +63,8 @@ own app, where it has one); each project also has its own session they can talk 
   `--model`, `--effort`, `--permissions` or `--provider` when they name one), then start its conversation the
   way the person would.
 - Settings, the person's global options: `colony settings`, and `colony settings KEY VALUE` when they ask.
+- A Codex project not yet paired with ChatGPT: on the person's yes, `colony pair NAME` prints a fresh code; give it
+  to them in your reply (never in a note), then confirm with `colony pair NAME --check CODE`.
 - **First-time setup**, when the board asks for it: one step at a time, a line or two each, applying each
   answer with `colony settings` and saying it can all change later in Settings. Secrets go into Settings,
   never into the conversation.

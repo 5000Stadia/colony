@@ -151,21 +151,24 @@ def pairing_choice(root, choice=None):
 
 
 def offer_pairing(root):
-    """First remote connection asks through the monitor, whatever runs it.
+    """A project's first remote connection: someone asks the person whether to connect it to ChatGPT and, on
+    yes, hands them a fresh code. The monitor relays it when it runs; otherwise the project's own agent asks.
 
-    launch() holds the project lock. A reconnect must not repeat the offer or
-    create a code while the person is still deciding.
+    launch() holds the project lock. A reconnect must not repeat the offer.
     """
-    from . import monitor
+    from . import board, monitor
     if pairing_choice(root) is not None:
         return
-    monitor.queue(f'First Codex connection for {Path(root).name}. Offer ChatGPT pairing now, even if you run '
-                  'through Claude. Ask whether the person wants to pair; do not generate a code in advance. '
-                  'Send them to Settings → Agent programs → Codex in ChatGPT (/settings#codex-pairing), '
-                  'where Yes, pair now generates the code only when they are ready, or Not now defers it. '
-                  'Then explain: in the app, open Codex → Add manually and enter the fresh code before it expires. '
-                  f'Before asking, check {home_for(root) / "colony-pairing.json"}; skip this offer if its choice '
-                  'is no longer offered. Never put a pairing code in a note or message.')
+    name = Path(root).name
+    ask = (f"Ask the person whether to connect {name} to ChatGPT now. On yes, run `colony pair {name}` and give them "
+           "the code it prints in your reply, with its steps: in the ChatGPT app, signed in to the same account, open "
+           f"Codex → Add manually and enter it before it expires. Then confirm with `colony pair {name} --check CODE`. "
+           "A code goes only in your reply, never in a note or message; on Not now, leave it, as the project page "
+           "keeps a Connect button.")
+    if board.registry()["settings"]["monitor"]:
+        monitor.queue(f"New Codex project {name} is connected for ChatGPT but not paired. " + ask)
+    else:
+        board.add_note(Path(root), None, ask.replace(f"connect {name}", "connect this project"), author="colony")
     pairing_choice(root, 'offered')
 
 

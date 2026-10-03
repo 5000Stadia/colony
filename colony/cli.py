@@ -671,6 +671,30 @@ def cmd_whoami(a):
     return 1
 
 
+def cmd_pair(a):
+    """A fresh ChatGPT pairing code for a Codex project, for the person to enter in the app; --check confirms it."""
+    from . import board, codex_remote, providers
+    root = _project(a.name) if a.name else board.root_of()
+    if providers.of(root) is not providers.get("codex"):
+        raise SystemExit(f"{root.name} runs on {providers.of(root).label}; only Codex projects pair with ChatGPT")
+    try:
+        if a.check:
+            if codex_remote.pair(root, a.check).get("claimed"):
+                codex_remote.pairing_choice(root, "paired")
+                print(f"{root.name} is paired with ChatGPT")
+            else:
+                print("not claimed yet: enter the code in the ChatGPT app, or get a fresh one if it expired")
+            return 0
+        result = codex_remote.pair(root)
+    except codex_remote.RemoteError as err:
+        raise SystemExit(str(err))
+    codex_remote.pairing_choice(root, "accepted")
+    expires = time.strftime("%-I:%M %p", time.localtime(result["expiresAt"]))
+    print(f"{result['manualPairingCode']}  (expires {expires}): in the ChatGPT app, signed in to the same account, "
+          "open Codex → Add manually and enter it")
+    return 0
+
+
 def cmd_noted(a):
     from . import board
     root = board.root_of()
@@ -1090,6 +1114,8 @@ def main(argv=None):
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     sub.add_parser("whoami").set_defaults(fn=cmd_whoami)
+    p = sub.add_parser("pair", help="a ChatGPT pairing code for a Codex project (--check CODE confirms it)")
+    p.add_argument("name", nargs="?"); p.add_argument("--check", metavar="CODE"); p.set_defaults(fn=cmd_pair)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")
