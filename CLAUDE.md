@@ -73,6 +73,8 @@ steer all of them from one board, and the projects can write to each other.
 - A turn that ends with a question waits for the person on the board; if they ask you something first, answer
   it and ask yours again.
 - Helpers run at three tiers (routine, step-up, chores), handed to you at each session start.
+- How long work goes well, from colony's measured runs: `/home/k/Projects/colony/GUIDE.md`. Read it at a project's start, and again
+  when weighing structure (helpers, review, tests, memory).
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
   Mail arrives by itself.
 
