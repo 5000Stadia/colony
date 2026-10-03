@@ -161,7 +161,7 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "helper_models": {}, "auto_balance": 3}
+                    "helper_models": {}, "auto_balance": 3, "remote_by": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -172,6 +172,7 @@ SETTING_HELP = {
     "provider": "which CLI runs new projects' agents (colony knows: claude, codex)",
     # PROVIDER: Claude uses Remote Control; Codex uses an isolated app-server host.
     "remote": "new consoles are reachable in their provider's app: Claude or ChatGPT",
+    "remote_by": "each program's default for new projects, as claude=on,codex=on (a project can turn its own off)",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
@@ -254,6 +255,16 @@ def set_setting(key, value):
         reg['settings'][key] = value
         for field in ('model', 'effort'):
             reg['settings'][field] = (saved.get(value) or {}).get(field) or ''
+    elif key == "remote_by":
+        # Each program's default for new projects' remote reach; one not named follows `remote`.
+        from .providers import PROVIDERS
+        chosen = {}
+        for pair in (x.strip() for x in str(value).split(",") if x.strip()):
+            prog, _, state = pair.partition("=")
+            if prog not in PROVIDERS:
+                raise KeyError(key)
+            chosen[prog] = state.lower() in ("on", "true", "yes", "1")
+        reg["settings"][key] = chosen
     elif key == "providers":
         from .providers import PROVIDERS
         on = [k.strip() for k in str(value).split(",") if k.strip()]
@@ -308,7 +319,9 @@ def project_settings(root, changes=None):
         path.write_text(json.dumps(own, indent=2) + "\n")
         if 'auto_balance' in changes:
             selection.reconcile()
-    merged = {k: registry()["settings"][k] for k in PROJECT_KEYS}
+    g = registry()["settings"]
+    merged = {k: g[k] for k in PROJECT_KEYS}
+    merged["remote"] = g["remote_by"].get(own.get("provider") or g["provider"], g["remote"])
     merged.update(own)
     return merged, own
 
@@ -1726,7 +1739,7 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
     opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
     g = registry()["settings"]
-    remote = "on" if own.get("remote", g["remote"]) else "off"
+    remote = "on" if own.get("remote", g["remote_by"].get(own.get("provider") or g["provider"], g["remote"])) else "off"
     names = {"ask": "ask each time", "edits": "accept edits", "all": "allow everything", "plan": "plan only"}
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
@@ -2535,7 +2548,7 @@ def remote_line(root):
             except (OSError, RPCError, KeyError):
                 mode = 'unreachable'
         link = '' if mode == 'connected' else f" (its connection: {e(mode)})"
-        if codex_remote.pairing_choice(root) == 'paired':
+        if codex_remote.paired(root):
             return f"<p class='muted'>In ChatGPT: paired{link}</p>"
         if codex_remote.alive(home):
             return (f"<p class='muted'>In ChatGPT: not paired yet{link} · <form method='post' action='/codex-pair' "
@@ -2670,8 +2683,11 @@ def settings_page(reg):
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
                   "you untick keep running. At least one stays on.</p><button>Save</button></form>")
     options = (f"<form method='post' action='/options' class='options'>"
-               f"<label><input type='checkbox' name='remote' value='on'{check('remote')}> Remote Control for new consoles "
-               f"<span class='muted'>(reach them from Claude or ChatGPT)</span></label>"
+               + "".join(f"<label><input type='checkbox' name='remote_{k}' value='on'"
+                         f"{' checked' if reg['settings']['remote_by'].get(k, reg['settings']['remote']) else ''}> "
+                         f"New {e(p.label)} projects are reachable from {'ChatGPT' if k == 'codex' else 'the Claude app'} "
+                         "<span class='muted'>(each project can turn it off)</span></label>"
+                         for k, p in pv.PROVIDERS.items() if pv.usable(p)) +
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
@@ -3119,7 +3135,8 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting('auto_balance', form['auto_balance'])
                 except KeyError:
                     return self._send(400, b'Auto balance must be from 0 to 6')
-            set_setting("remote", form.get("remote", "off"))
+            from . import providers as pv
+            set_setting("remote_by", ",".join(f"{k}={form.get('remote_' + k, 'off')}" for k, p in pv.PROVIDERS.items() if pv.usable(p)))
             set_setting("monitor", form.get("monitor", "off"))
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))

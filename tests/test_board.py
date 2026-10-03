@@ -86,6 +86,16 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_remote_reach_defaults_per_program_and_each_project_can_turn_it_off(self):
+        board.set_setting("remote_by", "claude=on,codex=off")
+        self.assertTrue(board.project_settings(self.root)[0]["remote"], "a Claude project follows Claude's default")
+        board.project_settings(self.root, {"provider": "codex"})
+        self.assertFalse(board.project_settings(self.root)[0]["remote"], "a Codex project follows Codex's default")
+        board.project_settings(self.root, {"remote": "on"})
+        self.assertTrue(board.project_settings(self.root)[0]["remote"], "the project's own choice wins")
+        with self.assertRaises(KeyError):
+            board.set_setting("remote_by", "nobody=on")
+
     def test_each_project_shows_whether_its_app_reaches_it(self):
         self.assertIn("Remote Control: on", board.remote_line(self.root))
         from colony import codex_remote
@@ -1566,7 +1576,8 @@ class SettingsTest(BoardBase):
             data = urllib.parse.urlencode({"monitor": "on", "model": "", "effort": "high", "new_root": ""}).encode()
             urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/options", data=data))
             s = board.registry()["settings"]
-            self.assertEqual((s["remote"], s["effort"]), (False, "high"), "an unticked box turns remote off")
+            self.assertEqual(s["effort"], "high")
+            self.assertTrue(s["remote_by"] and not any(s["remote_by"].values()), "an unticked box turns that program's remote off")
         finally:
             httpd.shutdown()
             httpd.server_close()

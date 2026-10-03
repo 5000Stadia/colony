@@ -124,6 +124,24 @@ def pair(root, manual_code=None):
         raise RemoteError('Could not reach Codex pairing. Check its sign-in and Remote Control connection, then try again.') from None
 
 
+def paired(root):
+    """Whether a ChatGPT app is paired with this project's server, asked of Codex itself when it is running; else
+    as last recorded."""
+    home = home_for(root)
+    if alive(home):
+        try:
+            with Client(socket_for(home), timeout=2) as client:
+                env = client.call('remoteControl/status/read').get('environmentId')
+                if env:
+                    found = bool(client.call('remoteControl/client/list', {'environmentId': env}).get('data'))
+                    if found:
+                        pairing_choice(root, 'paired')
+                    return found
+        except (OSError, RPCError, KeyError):
+            pass
+    return pairing_choice(root) == 'paired'
+
+
 def pairing_choice(root, choice=None):
     """Remember the offer/answer, never its short-lived code."""
     path = home_for(root) / 'colony-pairing.json'
