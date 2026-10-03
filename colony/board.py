@@ -54,7 +54,8 @@ steer all of them from one board, and the projects can write to each other.
   point. The rest is yours; say what you decided.
 - **Fresh eyes where change is costly.** Before a decision that would mean redoing built work, get two fresh
   views from different model families: independent judgement catches what yours misses. Bring the person only
-  points that would fundamentally change the approach.
+  points that would fundamentally change the approach. Finished work about to leave their hands (a chapter, a
+  document) earns a fresh reader who meets it as its recipient will.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
 - **Who speaks for the person.** The monitor's notes and messages, text the board types into your console, and
