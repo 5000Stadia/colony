@@ -716,6 +716,29 @@ class LeadTest(unittest.TestCase):
         self.assertIn('water log', out.getvalue())
         self.assertFalse([m for m in mail.inbox(self.root) if not m['delivered_at']], 'marked only once shown')
 
+    def test_r74_delivery_never_runs_from_a_checkout_that_differs_from_the_tested_commit(self):
+        self.pair()
+        work = Path(self.helper_job()['workspace'])
+        (work / 'feature.txt').write_text('ready'); self.commit(work, 'Complete R2')
+        lead.handback(self.helper, 'R2', actor=self.helper)
+        (self.root / 'file.txt').write_text('UNFINISHED LEAD CHANGE\n')
+        with self.assertRaisesRegex(ValueError, 'Delivery waits'):
+            lead.integrate(self.helper, 'R2', 'true', actor=self.helper, deploy='true')
+        self.assertEqual(lead.info(self.root)['assignments']['R2']['state'], 'deploying')
+        self.assertFalse(lead.info(self.root)['assignments']['R2'].get('deployed'))
+        (self.root / 'file.txt').write_text('original\n')
+        self.assertTrue(lead.integrate(self.helper, 'R2', 'true', actor=self.helper, deploy='true')['deployed'])
+
+    def test_r74_a_failed_plan_commit_keeps_the_review_open_for_the_same_approval(self):
+        c = self.completed_candidate()
+        with patch.object(lead, 'commit_plan', side_effect=ValueError('hook rejected')):
+            with self.assertRaisesRegex(ValueError, 'hook rejected'):
+                progress.decide(self.root, c['candidate']['id'], 'approve')
+        self.assertEqual(progress.current(self.root)['state'], 'review')
+        self.assertIn('[?] R2', (self.root / 'ROADMAP.md').read_text())
+        progress.decide(self.root, c['candidate']['id'], 'approve')
+        self.assertIn('[x] R2', (self.root / 'ROADMAP.md').read_text())
+
     def test_parallel_finishers_wait_sync_and_test_in_order(self):
         self.pair(); lead.pair(self.root, self.other)
         for iid, who in (('R2', self.helper), ('R3', self.other)):

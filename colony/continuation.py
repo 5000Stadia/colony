@@ -393,10 +393,15 @@ def wake(root, g, receipt, desired, reason):
             receipt['hold'] = reason
             save(root, receipt, g['generation'])
     elif desired and safe_arm(root):
-        value = mark(root, g, desired)
-        if receipt.get('wake') != value and console.type_into(console.session_name(root), '[colony] ' + desired):
-            receipt.update(wake=value, hold=None)
-            save(root, receipt, g['generation'])
+        # Hooks and the watcher race here: decide and send under the seat's lock, against the current lead record.
+        with locked(root):
+            now, receipt = lead.info(root), status(root)
+            if now['generation'] != g['generation'] or now.get('handoff') or progress.objective(root, root) != desired:
+                return receipt
+            value = mark(root, now, desired)
+            if receipt.get('wake') != value and console.type_into(console.session_name(root), '[colony] ' + desired):
+                receipt.update(wake=value, hold=None)
+                save(root, receipt, now['generation'])
     return receipt
 
 

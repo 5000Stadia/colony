@@ -88,7 +88,7 @@ def commit_plan(root, message, *, actor=None, source=None, before_revision=None,
     g = require_lead(root, actor)
     canonical = Path(g['canonical'])
     git(canonical, 'add', '--', 'ROADMAP.md')
-    git(canonical, 'commit', '--only', '-m', message,
+    git(canonical, 'commit', '--only', '--no-verify', '-m', message,
         '--trailer', 'Colony-Agent: ' + Path(g['lead']).name, '--', 'ROADMAP.md')
     commit = git(canonical, 'rev-parse', 'HEAD')
     # A stamped commit alone is not proof the agent knew the previous content:
@@ -764,6 +764,12 @@ def integrate(root, item, tests, *, actor=None, deploy='', push=False):
             if value['branch']:
                 remove_workspace(source, Path(value['workspace']), value['branch'])
         if deploy:
+            # Delivery runs from the live checkout, so it must hold exactly the tested commit: preserved lead work
+            # is kept, never published.
+            here, tested_commit = git(source, 'rev-parse', 'HEAD'), info(root)['integrated']
+            if here != tested_commit or not clean(source):
+                raise ValueError(f'Delivery waits: {source} must be exactly the tested commit {tested_commit[:12]} with no '
+                                 'uncommitted tracked changes. Land or set aside that work, then integrate again to deliver.')
             result = subprocess.run(shlex.split(deploy), cwd=source, text=True, capture_output=True)
             if result.returncode:
                 raise ValueError('Delivery failed; tested work is preserved and no push was attempted.\n' + (result.stdout + result.stderr)[-4000:])

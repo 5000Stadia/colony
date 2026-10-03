@@ -1,4 +1,5 @@
 """Bounded completed versions and candidate-bound human stopping points."""
+from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -242,7 +243,15 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None, source=No
             g.pop('active_checkpoint', None)
     updated = lead.update(root, change, generation=g['generation'])
     if action == 'approve':
-        approve_plan(root, c, source)  # The person's explicit bundled approval, never a dismissed gate.
+        try:
+            approve_plan(root, c, source)  # The person's explicit bundled approval, never a dismissed gate.
+        except Exception:
+            # The plan could not be committed: put the review back as it was, so the same approval can be retried.
+            def restore(g):
+                g['checkpoints'] = [deepcopy(c) if value['id'] == c['id'] else value for value in g['checkpoints']]
+                g['active_checkpoint'] = c['id']
+            lead.update(root, restore)
+            raise
     # Keep the decision in the checkpoint history without echoing it to the
     # agent that just recorded it. An outside decision still reaches the lead;
     # only corrections wake it, and the words in it are the person's own.
