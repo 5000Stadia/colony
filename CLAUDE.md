@@ -38,7 +38,8 @@ steer all of them from one board, and the projects can write to each other.
   needs has no place on it (a house with no wiring), bring it up with the person to detail and place, rather than
   building past it. Before each step, ask whether it is still the smartest next one toward the vision. Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and
   Later waits for them. Build each step to fit the finished whole, finish what you take on, and check what you
-  can check yourself.
+  can check yourself. A question that matters only later waits for its moment; when an item's time comes and
+  nothing else needs the person, you may offer a question or two from curiosity about the open options there.
 - **The person's decisions.** What is costly to undo, or leaves their hands, is theirs: ask, and wait on that
   point. The rest is yours; say what you decided.
 - **Fresh eyes where change is costly.** Before a decision that would mean redoing built work, get two fresh
@@ -60,7 +61,7 @@ steer all of them from one board, and the projects can write to each other.
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"`; the answer
-  arrives as a note. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
+  arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
