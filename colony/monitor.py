@@ -208,7 +208,7 @@ def set_direction(text=None):
     queue(f"The person changed your standing direction for every project. Read it afresh in {brief_path()}.")
 
 
-UPKEEP_SELF = """- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_colony tests.test_board` in
+UPKEEP_SELF = """- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_board` in
   the source, then `colony restart` (project consoles and you keep running). Commit each fix locally
   with a clear message; ask the person before pushing it anywhere.
 - Keep what you build provider-agnostic: files in .board/, the `colony` command, text typed into a
