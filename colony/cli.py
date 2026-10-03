@@ -542,7 +542,8 @@ def cmd_gate(a):
                     if ident in decisions:
                         raise ValueError("Give each consultant point exactly one decision.")
                     decisions[ident] = value
-            board.answer_gate(root, a.answered, a.question, tell=False, decisions=decisions or None)
+            text = a.question + (f"\nReading: {a.context.strip()}" if a.context and a.context.strip() else '')
+            board.answer_gate(root, a.answered, text, tell=False, decisions=decisions or None)
         except StopIteration:
             print(f"no gate {a.answered}", file=sys.stderr)
             return 2
@@ -581,7 +582,7 @@ def cmd_consult(a):
     root = board.root_of()
     if a.adopt:
         try:
-            consult.adopt(root, a.adopt, a.decision)
+            consult.adopt(root, a.adopt, a.decision + (f"\nReading: {a.context.strip()}" if a.context and a.context.strip() else ''))
         except KeyError:
             print(f"no consultation {a.adopt}", file=sys.stderr)
             return 2
@@ -1219,7 +1220,7 @@ def cmd_vision(a):
     if a.file:
         text = sys.stdin.read() if a.file == '-' else Path(a.file).expanduser().read_text()
         try:
-            event = vision.save(root, text, how='conversation', words=a.words or '')
+            event = vision.save(root, text, how='conversation', words=a.words or '', context=a.context or '')
         except ValueError as err:
             raise SystemExit(str(err))
         print('Vision updated from the agreed conversation.' if event else 'Vision is unchanged.')
@@ -1227,7 +1228,8 @@ def cmd_vision(a):
         vision.observe(root)
         if a.history:
             for event in vision.history(root):
-                print(f"{event['at']} · {event['how']}\n{event['text']}\n{event.get('words', '')}\n")
+                print(f"{event['at']} · {event['how']}\n{event['text']}\n{event.get('words', '')}"
+                      + (f"\nReading: {event['context']}" if event.get('context') else '') + '\n')
         else:
             print(board.roadmap(root)['goal'] or 'Shape the vision with the person.')
     return 0
@@ -1342,6 +1344,7 @@ def main(argv=None):
     p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
+    p.add_argument("--context", help="with --answered: your reading of what they meant")
     p.add_argument("--consult", metavar="ID", help="the first-round consultation that supplied this gate's points")
     p.add_argument("--points", metavar="FILE", help="JSON list of points with text and consultant numbers (- for stdin)")
     p.add_argument("--accept", action="append", default=[], metavar="POINT", help="with --answered: a point the person accepted, e.g. P1")
@@ -1354,6 +1357,7 @@ def main(argv=None):
     p.add_argument("--digest", metavar="FILE", help="your digest of the facts, each with its source (- for stdin)")
     p.add_argument("--plan", metavar="FILE", help="round two: your revised approach, for the consultants to check")
     p.add_argument("--adopt", metavar="ID", help="record which points of consultation ID the person accepted (DECISION is their words)")
+    p.add_argument("--context", help="with --adopt: your reading of what they meant")
     p.add_argument("--show", metavar="ID", help="show consultation ID again")
     p.set_defaults(fn=cmd_consult)
     p = sub.add_parser("scout", help="(monitor) a fresh scout that can only search and read the web, on a brief")
@@ -1430,6 +1434,7 @@ def main(argv=None):
     p = sub.add_parser('vision', help='read the vision or record a clearly agreed conversation change')
     p.add_argument('--file', help='new vision text (- reads stdin)')
     p.add_argument('--words', help='the person’s words agreeing the change; required with --file')
+    p.add_argument('--context', help='your reading: what was discussed, what they meant, what it changes; required with --file')
     p.add_argument('--history', action='store_true'); p.set_defaults(fn=cmd_vision)
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)

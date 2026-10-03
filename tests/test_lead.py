@@ -133,7 +133,7 @@ class LeadTest(unittest.TestCase):
         (self.helper / 'ROADMAP.md').write_text('stale unrelated branch plan')
         self.assertEqual(board.roadmap(self.helper), board.roadmap(self.root))
         with self.assertRaisesRegex(ValueError, 'Only garden'):
-            vision.save(self.helper, 'An unapproved helper vision', how='conversation', words='Yes')
+            vision.save(self.helper, 'An unapproved helper vision', how='conversation', words='Yes', context='Agreed in conversation.')
         g = lead.switch(self.root, self.helper)
         self.assertEqual(g['lead'], str(self.root))
         lead.finish_handoff(self.root, g['generation'])

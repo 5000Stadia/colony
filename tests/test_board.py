@@ -85,6 +85,14 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_r77_a_gate_settled_in_conversation_keeps_the_agents_reading_beside_their_words(self):
+        gate = board.add_gate(self.root, 'Which colour?')
+        result = self.cli('gate', 'Blue, obviously', '--answered', gate['id'], '--context', 'They want the calm palette from the mockup.')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        answer = next(g for g in board.gates(self.root) if g['id'] == gate['id'])['answer']
+        self.assertIn('Blue, obviously', answer)
+        self.assertIn('Reading: They want the calm palette', answer)
+
     def test_note_producers_must_choose_an_author_and_onboarding_is_from_colony(self):
         with self.assertRaises(TypeError):
             board.add_note(self.root, None, 'An accidental unattributed receipt')

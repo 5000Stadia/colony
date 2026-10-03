@@ -23,7 +23,7 @@ class VisionTest(BoardBase):
 
     def test_multiline_reader_keeps_vision_out_of_items_and_all_consumers_agree(self):
         value = 'A quiet garden companion.\n\n- [ ] R99 This is a fundamental, not a task.\n### Feel\nUnhurried.'
-        vision.save(self.root, value, how='conversation', words='Yes, that is the vision.')
+        vision.save(self.root, value, how='conversation', words='Yes, that is the vision.', context='Agreed in conversation.')
         road = board.roadmap(self.root)
         self.assertEqual(road['goal'], value)
         self.assertEqual(set(board.items(road)), {'R1', 'R2', 'R3'})
@@ -77,9 +77,15 @@ class VisionTest(BoardBase):
         self.assertIn('brainstorming', result.stderr)
         self.assertEqual(self.path.read_text(), ROADMAP)
         result = self.cli('vision', '--file', str(draft), '--words', 'Yes, that describes it.')
+        self.assertNotEqual(result.returncode, 0, 'the agent reading is required beside the words')
+        self.assertIn('--context', result.stderr)
+        result = self.cli('vision', '--file', str(draft), '--words', 'Yes, that describes it.',
+                          '--context', 'We settled on a companion that stays gentle over a long horizon.')
         self.assertEqual(result.returncode, 0, result.stderr)
         event = vision.history(self.root)[-1]
         self.assertEqual(event['words'], 'Yes, that describes it.')
+        self.assertEqual(event['context'], 'We settled on a companion that stays gentle over a long horizon.')
+        self.assertIn('Reading: We settled', self.cli('vision', '--history').stdout)
         self.assertEqual(event['how'], 'conversation')
         self.assertTrue(event['at'].endswith('Z'))
         self.assertEqual(board.notes(self.root), [])
@@ -87,7 +93,7 @@ class VisionTest(BoardBase):
         self.assertEqual(board.notes(self.root), [])
 
     def test_file_changes_are_neutral_and_wait_for_engagement(self):
-        vision.save(self.root, 'First.', how='conversation', words='First is agreed.')
+        vision.save(self.root, 'First.', how='conversation', words='First is agreed.', context='Agreed in conversation.')
         self.path.write_text(vision.replace(self.path.read_text(), 'An external revision.'))
         vision.observe(self.root)
         [note] = board.notes(self.root)
@@ -109,7 +115,7 @@ class VisionTest(BoardBase):
         self.assertEqual(len(board.notes(self.root)), 1)
 
     def test_stamped_own_commit_is_not_echoed_but_external_edit_is(self):
-        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        vision.save(self.root, 'First.', how='conversation', words='Yes.', context='Agreed in conversation.')
         self.commit('Agreed baseline')
         self.path.write_text(vision.replace(self.path.read_text(), 'My revision.'))
         # The watcher can see a change before the agent commits it.
@@ -128,7 +134,7 @@ class VisionTest(BoardBase):
         self.assertNotIn('Outside revision.', self.cli('notes', '--deliver').stdout)
 
     def test_idle_changes_make_one_complete_catch_up_and_keep_history(self):
-        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        vision.save(self.root, 'First.', how='conversation', words='Yes.', context='Agreed in conversation.')
         for number in range(5):
             vision.save(self.root, f'Revision {number}.', how='board')
         original_history = vision.history(self.root)
@@ -148,7 +154,7 @@ class VisionTest(BoardBase):
         self.assertEqual(board.open_notes(self.root), [])
 
     def test_persons_board_edit_is_still_delivered_when_lead_commits_it(self):
-        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        vision.save(self.root, 'First.', how='conversation', words='Yes.', context='Agreed in conversation.')
         self.commit('Baseline')
         vision.save(self.root, 'The person changed this.', how='board')
         self.git('add', 'ROADMAP.md')
@@ -158,7 +164,7 @@ class VisionTest(BoardBase):
         self.assertIn('The person changed this.', result.stdout)
 
     def test_historical_own_stamp_does_not_claim_new_unstamped_repeated_edit(self):
-        vision.save(self.root, 'First.', how='conversation', words='Yes.')
+        vision.save(self.root, 'First.', how='conversation', words='Yes.', context='Agreed in conversation.')
         self.commit('Baseline')
         self.path.write_text(vision.replace(self.path.read_text(), 'My revision.'))
         self.git('add', 'ROADMAP.md')
@@ -188,7 +194,7 @@ class VisionTest(BoardBase):
         helper = board.sharing(self.root, 'garden-review', {'provider': 'codex'})
         before = {n['id'] for n in board.notes(helper)}
         lead_notes = board.notes(self.root)
-        event = vision.save(self.root, 'The new shared horizon.', how='conversation', words='Yes.')
+        event = vision.save(self.root, 'The new shared horizon.', how='conversation', words='Yes.', context='Agreed in conversation.')
         self.assertEqual(event['source'], str(self.root))
         self.assertEqual(board.notes(self.root), lead_notes)
         changes = [n for n in board.notes(helper) if n['id'] not in before]
@@ -251,11 +257,11 @@ class VisionTest(BoardBase):
         self.assertEqual(len(board.notes(self.root)), 2)
 
     def test_removing_section_or_file_is_observed(self):
-        vision.save(self.root, 'Agreed.', how='conversation', words='Agreed.')
+        vision.save(self.root, 'Agreed.', how='conversation', words='Agreed.', context='Agreed in conversation.')
         self.path.write_text(ROADMAP)
         vision.observe(self.root)
         self.assertEqual(vision.history(self.root)[-1]['text'], '')
-        vision.save(self.root, 'Restored.', how='conversation', words='Restore it.')
+        vision.save(self.root, 'Restored.', how='conversation', words='Restore it.', context='Agreed in conversation.')
         self.path.unlink()
         vision.observe(self.root)
         self.assertEqual(vision.history(self.root)[-1]['before'], 'Restored.')
@@ -286,7 +292,7 @@ class VisionTest(BoardBase):
 
     def test_observation_and_delivery_run_with_monitor_off_but_never_interrupt_work(self):
         vision.install(self.root)
-        vision.save(self.root, 'Agreed.', how='conversation', words='Agreed.')
+        vision.save(self.root, 'Agreed.', how='conversation', words='Agreed.', context='Agreed in conversation.')
         self.path.write_text(vision.replace(self.path.read_text(), 'Changed outside.'))
         watcher = monitor.Watcher(enabled=False)
         with patch.object(console, 'snapshot', return_value={'state': 'working'}), patch.object(console, 'type_into') as send, patch.object(monitor, 'ensure') as ensure:
@@ -301,7 +307,7 @@ class VisionTest(BoardBase):
         self.assertIn('Changed outside.', self.cli('notes', '--deliver').stdout)
 
     def test_existing_vision_receives_quiet_mechanics_note_without_redrafting(self):
-        vision.save(self.root, 'Already agreed.', how='conversation', words='Yes.')
+        vision.save(self.root, 'Already agreed.', how='conversation', words='Yes.', context='Agreed in conversation.')
         original = self.path.read_text()
         vision.install(self.root)
         vision.install(self.root)
@@ -339,7 +345,7 @@ class VisionTest(BoardBase):
         self.assertIn('## Vision', board.SKELETON)
 
     def test_http_multiline_save_noop_stale_recovery_and_quiet_update(self):
-        vision.save(self.root, 'First.\nSecond.', how='conversation', words='Yes.')
+        vision.save(self.root, 'First.\nSecond.', how='conversation', words='Yes.', context='Agreed in conversation.')
         httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         base = f'http://127.0.0.1:{httpd.server_address[1]}'

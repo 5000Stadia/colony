@@ -76,10 +76,10 @@ def history(root):
     return board.read(lead.plan_root(root), 'vision.jsonl')
 
 
-def _record(root, before, after, how, words='', notify=True, source=None):
+def _record(root, before, after, how, words='', notify=True, source=None, context=''):
     from . import board, lead
     event = dict(id='v' + secrets.token_hex(6), at=board.now(), before=before, text=after,
-                 how=how, words=words, notify=notify, source=source,
+                 how=how, words=words, context=context, notify=notify, source=source,
                  head=lead.git(root, 'rev-parse', 'HEAD', check=False))
     board.append(root, 'vision.jsonl', event)
     return event
@@ -207,7 +207,7 @@ def observe(root):
         return _observe(root)
 
 
-def save(root, text, *, how, words='', before=None):
+def save(root, text, *, how, words='', context='', before=None):
     """Publish a board edit or an already agreed conversation change immediately."""
     if how not in ('board', 'conversation'):
         raise ValueError('A vision is saved from the board or an agreed conversation.')
@@ -218,6 +218,8 @@ def save(root, text, *, how, words='', before=None):
     root = lead.plan_root(root)
     if how == 'conversation' and not words.strip():
         raise ValueError('Record the person’s words agreeing the change; brainstorming is not a vision update.')
+    if how == 'conversation' and not context.strip():
+        raise ValueError('Add --context: your reading of what was discussed, what they meant and what it changes.')
     text = text.replace('\r\n', '\n').strip()
     if before is not None:
         before = before.replace('\r\n', '\n').strip()
@@ -244,7 +246,7 @@ def save(root, text, *, how, words='', before=None):
         finally:
             Path(temporary).unlink(missing_ok=True)
         event = _record(root, current or section(old)['legacy'], text, how, words.strip(),
-                        source=actor if how == 'conversation' else None)
+                        source=actor if how == 'conversation' else None, context=context.strip())
         _notifications(root, [event])
         return event
 
@@ -261,7 +263,7 @@ Draft that vision from the existing goal and what you know of the person's inten
 your next normal conversation for them to confirm or reshape. Keep the draft in that discussion until
 it is clearly agreed; brainstorming and what-ifs do not change the live Vision. Do not interrupt the
 person with a questionnaire. Leave distant details open until upcoming work depends on them.
-When you agree the vision, use `colony vision --file PATH --words "the person's words agreeing it"` to
+When you agree the vision, use `colony vision --file PATH --words "the person's words agreeing it" --context "your reading"` to
 write ## Vision in this project's ROADMAP.md and record the conversation. Board edits are the person's
 direction; consider their effect on the work at hand and act, discussing anything unclear.""" + '\n\n' + SCOPE
 
@@ -284,7 +286,7 @@ def install(root):
             message = ("Your existing ## Vision stays as written. Board saves now update it directly and notify you "
                        "with before and after; consider the effect on the work at hand and act, discussing anything "
                        "unclear. Record clearly agreed conversation changes with `colony vision --file PATH "
-                       "--words \"the person's words\"`; brainstorming and what-ifs never update it. "
+                       "--words \"the person's words\" --context \"your reading\"`; brainstorming and what-ifs never update it. "
                        "Unrecorded file edits or merges also arrive as change notes.\n\n" + SCOPE if text else
                        MIGRATION + ('\n\nStarting draft from the existing goal (not yet published as Vision):\n' + draft if draft else ''))
             board.append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(3), at=board.now(),

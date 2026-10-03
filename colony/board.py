@@ -76,8 +76,10 @@ it went. Record the move and their original words in the dated vision history.
   whether it's what they wanted. Then tell them in plain words what's ready and how to see it: `colony
   ready R4 "what's ready" --check "how to check"`. They approve it or say what's wrong, and it reaches
   you as a note.
-- Record a clearly agreed conversation change with `colony vision --file PATH --words "the person's words"`:
-  it updates this project's Vision and its dated history together. An edit or merge made outside that command
+- Record a clearly agreed conversation change with `colony vision --file PATH --words "the person's words"
+  --context "your reading: what was discussed, what they meant, what it changes"`: it updates this project's
+  Vision and its dated history together. Wherever you record the person's words (here, a gate, an item), keep
+  your reading beside them: their words can be hard to act on later without it. An edit or merge made outside that command
   reaches you as a before-and-after note. Read the current vision and consider what it changes for your work.
 - The person's notes reach you by themselves, when they are relevant: notes on past work on your next
   turn, notes on a roadmap item once you mark it in progress. Act on each, then
@@ -85,7 +87,7 @@ it went. Record the move and their original words in the dated vision history.
 - When something needs the person (a decision costly to undo, an act that leaves their hands), run
   `colony gate "the question" --item R4 --why "what depends on it"` and do not proceed on that point
   until it is answered; the answer reaches you as a note. If the person settles it with you in
-  conversation instead, record it: `colony gate --answered ID "what they decided"`.
+  conversation instead, record it: `colony gate --answered ID "their words" --context "your reading"`.
 - Before you commit to a decision that's costly to change (adding a milestone or spec, setting a project's
   main objective, choosing a structure or foundation others will build on, designing what others will
   depend on, planning what's hard to undo, a major redesign; in short, anything that would mean redoing
@@ -135,7 +137,7 @@ recent history), so you arrive informed. Then have a conversation with the perso
 draw out the image of the finished work with them. This is between you, this project's own agent, and the \
 person; the monitor's setup does not stand in for it. Leave distant details open until the work depends on \
 them. Keep existing plans intact and do not publish a new roadmap path before you clearly agree the vision. \
-Once agreed, record it with `colony vision --file PATH --words "the person's words agreeing it"`.
+Once agreed, record it with `colony vision --file PATH --words "the person's words agreeing it" --context "your reading"`.
 
 Only then bring the roadmap on board. Write ROADMAP.md in the colony format: milestones as \
 `## M1 — name`, items as `- [ ] R1 text`, with `[x]` for done, `[~]` for in progress and `[?]` only for what \
@@ -148,7 +150,7 @@ BEGIN = """The person has just added this project. Your first piece of work is a
 vision: draw out your shared image of the finished work together. This is between you, this project's own
 agent, and the person; the monitor's setup does not stand in for it. Leave distant details open until the
 work depends on them. Once you clearly agree the vision, record it with
-`colony vision --file PATH --words "the person's words agreeing it"`. Only then lay the roadmap toward it.
+`colony vision --file PATH --words "the person's words agreeing it" --context "your reading"`. Only then lay the roadmap toward it.
 Do not publish a roadmap path before that agreement."""
 
 # This guidance is paid for only in the normal project conversation. A second
@@ -1280,7 +1282,8 @@ def vision_box(root, pid):
                f"<p class='muted'>{e(road['goal']) or 'Shape the vision with your project agent.'}</p>")
     rows = ''.join(f"<li><span class='who'>{e(r['at'])} · {e(r['how'])}</span>"
                    f"<div class='pre'>{e(r['text']) or '(vision cleared)'}</div>"
-                   + (f"<p>{e(r['words'])}</p>" if r.get('words') else '') + '</li>' for r in reversed(changes))
+                   + (f"<p>{e(r['words'])}</p>" if r.get('words') else '')
+                   + (f"<p class='muted'>Reading: {e(r['context'])}</p>" if r.get('context') else '') + '</li>' for r in reversed(changes))
     return (f"<section class='vision'><h2>Vision</h2>{current}"
             f"<details><summary>Edit vision</summary><form class='options' method='post' action='/vision'>"
             f"<input type='hidden' name='p' value='{pid}'>"
