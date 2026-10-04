@@ -226,25 +226,47 @@ def provider(name):
     return providers.of(next((p for p in board.projects() if session_name(p) == name), None))
 
 
-def drafting(name):
-    """Whether someone has something half-typed in the session: anything typed now would land on it and send it."""
+def draft(name):
+    """What is half-typed in the session's box, or "" (None: no box on screen)."""
     p = provider(name)
     styled = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", name], capture_output=True, text=True).stdout
-    return bool(p.draft(styled)) if hasattr(p, "draft") else False
+    return p.draft(styled) if hasattr(p, "draft") else ""
+
+
+def drafting(name):
+    """Whether someone has something half-typed in the session: anything typed now would land on it and send it."""
+    return bool(draft(name))
+
+
+def _sent(name, text, tries=3):
+    """Press Enter until colony's own line has left the box: a program still starting, or one that read the typing
+    as a paste, can swallow the first Enter and leave the message sitting there unsent."""
+    for attempt in range(tries):
+        time.sleep(0.5 * (attempt + 1))
+        left = draft(name)
+        if not left or not text.startswith(left[:20]):
+            return True
+        subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
+    left = draft(name)
+    return not left or not text.startswith(left[:20])
 
 
 def type_into(name, text):
     """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
-    is theirs to send: then nothing is typed, and False says so."""
-    if not running(name) or drafting(name):
+    is theirs to send: then nothing is typed, and False says so. Colony's own unsent line left there earlier is
+    sent rather than mistaken for the person's draft. True only once the message has left the box."""
+    if not running(name):
         return False
+    left = draft(name)
+    if left:
+        return left.startswith("[colony]") and _sent(name, left)
     # PROVIDER: this is how the board and the monitor reach an agent, and it relies on the CLI taking typed
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
     subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
-    time.sleep(getattr(provider(name), "enter_after", 0))   # one that takes fast typing for a paste needs a beat
+    time.sleep(getattr(provider(name), "enter_after", 0.3))   # typing that arrives at once can read as a paste
     subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-    return True
+    return _sent(name, text)
 
 
 def paste_into(name, text):

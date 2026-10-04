@@ -86,6 +86,23 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_a_nudge_counts_only_once_it_has_left_the_box_and_a_swallowed_enter_is_pressed_again(self):
+        keys = []
+        run = lambda args, **k: keys.append(args[-1])
+        with patch.object(console, 'running', return_value=True), patch.object(console, 'provider'), \
+                patch.object(console.time, 'sleep'), patch.object(console.subprocess, 'run', side_effect=run):
+            with patch.object(console, 'draft', side_effect=['', '[colony] You have mail.', '']):
+                self.assertTrue(console.type_into('s', '[colony] You have mail.'))
+            self.assertEqual(keys.count('Enter'), 2, 'the first Enter was swallowed, so it is pressed again')
+            keys.clear()
+            with patch.object(console, 'draft', return_value='[colony] You have mail.'):
+                self.assertFalse(console.type_into('s', '[colony] You have mail.'), 'still unsent: tried again next time')
+            self.assertNotIn('[colony] You have mail.', keys, "colony's own leftover line is sent, never typed twice")
+            keys.clear()
+            with patch.object(console, 'draft', return_value='half a thought'):
+                self.assertFalse(console.type_into('s', '[colony] hi'))
+            self.assertEqual(keys, [], "the person's draft is left alone")
+
     def test_remote_reach_defaults_per_program_and_each_project_can_turn_it_off(self):
         board.set_setting("remote_by", "claude=on,codex=off")
         self.assertTrue(board.project_settings(self.root)[0]["remote"], "a Claude project follows Claude's default")
