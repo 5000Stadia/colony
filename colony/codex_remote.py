@@ -165,7 +165,7 @@ def offer_pairing(root):
            f"Codex → Add manually and enter it before it expires. Then confirm with `colony pair {name} --check CODE`. "
            "A code goes only in your reply, never in a note or message; on Not now, leave it, as the project page "
            "keeps a Connect button.")
-    if board.registry()["settings"]["monitor"]:
+    if board.registry()["settings"]["monitor"] and not monitor.muted():
         monitor.queue(f"New Codex project {name} is connected for ChatGPT but not paired. " + ask)
     else:
         board.add_note(Path(root), None, ask.replace(f"connect {name}", "connect this project"), author="colony")

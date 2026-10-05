@@ -886,6 +886,18 @@ def cmd_mail(a):
     return 0
 
 
+def cmd_mute(a):
+    from . import monitor
+    try:
+        if a.state:
+            monitor.muted(a.state == "on")
+    except ValueError as err:
+        raise SystemExit(str(err))
+    print("the monitor is muted: nothing wakes it, and it spends nothing unless you talk to it" if monitor.muted()
+          else "the monitor is awake" + (", holding the helm" if monitor.helm() else ""))
+    return 0
+
+
 def cmd_helm(a):
     from . import monitor
     if a.project:
@@ -1114,6 +1126,8 @@ def main(argv=None):
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     sub.add_parser("whoami").set_defaults(fn=cmd_whoami)
+    p = sub.add_parser("mute", help="mute the monitor (on) so nothing wakes it, or wake it again (off)")
+    p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_mute)
     p = sub.add_parser("pair", help="a ChatGPT pairing code for a Codex project (--check CODE confirms it)")
     p.add_argument("name", nargs="?"); p.add_argument("--check", metavar="CODE"); p.set_defaults(fn=cmd_pair)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")

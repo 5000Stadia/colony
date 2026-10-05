@@ -63,6 +63,8 @@ own app, where it has one); each project also has its own session they can talk 
   `--model`, `--effort`, `--permissions` or `--provider` when they name one), then start its conversation the
   way the person would.
 - Settings, the person's global options: `colony settings`, and `colony settings KEY VALUE` when they ask.
+- Muting yourself when the person asks: `colony mute on|off`. Muted, nothing wakes you; it can't be set while
+  you hold the helm, and giving you the helm unmutes you.
 - A Codex project not yet paired with ChatGPT: on the person's yes, `colony pair NAME` prints a fresh code; give it
   to them in your reply (never in a note), then confirm with `colony pair NAME --check CODE`.
 - **First-time setup**, when the board asks for it: one step at a time, a line or two each, applying each
@@ -431,7 +433,21 @@ def helm(value=None):
     if value is not None:
         board.home().mkdir(parents=True, exist_ok=True)
         path.write_text("on" if value else "off")
+        if value:
+            (board.home() / "monitor-muted").unlink(missing_ok=True)   # holding the helm, it can't be silent
     return path.exists() and path.read_text().strip() == "on"
+
+
+def muted(value=None):
+    """Muted, the monitor is never woken (no events, scouting or relays), so it spends nothing unless the person
+    talks to it. Never while it holds the helm: that spends tokens, and the person sees it does."""
+    path = board.home() / "monitor-muted"
+    if value is not None:
+        if value and helm():
+            raise ValueError("The monitor holds the helm, so it stays awake: take the helm back first (colony helm off).")
+        board.home().mkdir(parents=True, exist_ok=True)
+        path.touch() if value else path.unlink(missing_ok=True)
+    return path.exists() and not helm()
 
 
 def ensure():
@@ -729,6 +745,9 @@ class Watcher:
             if keys:
                 console.press(name(), keys)             # its own start-up questions, as for any project's console
         self.mail()
+        if muted():
+            self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
+            return
         self.tell()
         self.scout()
         self.pending += self.events()

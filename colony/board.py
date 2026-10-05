@@ -1947,9 +1947,12 @@ def monitor_page(reg, view="overview"):
                f"<button>Have the monitor send it</button></form></div></details>") if targets else ""
     head = (f"<header class='project'><div class='titlerow'><h1>monitor</h1>{message}<form method='post' action='/helm' class='helmform'>"
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
-            f"{'Take the helm back' if on else 'Give it the helm'}</button></form></div>"
+            f"{'Take the helm back' if on else 'Give it the helm'}</button></form>"
+            + ("" if on else f"<form method='post' action='/mute' class='helmform'><input type='hidden' name='state' "
+               f"value='{'off' if monitor.muted() else 'on'}'><button class='quiet'>{'Unmute' if monitor.muted() else 'Mute'}</button></form>")
+            + "</div>"
             f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div>"
-            f"<p class='muted'>{'It holds the helm of every project included in it, and settles routine questions within each one' + chr(39) + 's direction.' if on else 'It sleeps: nothing wakes it but you and its scouting, and the board shows you what needs you.'}"
+            f"<p class='muted'>{'It holds the helm of every project included in it, and settles routine questions within each one' + chr(39) + 's direction.' if on else 'Muted: nothing wakes it and it spends nothing; it answers only when you talk to it.' if monitor.muted() else 'It sleeps: nothing wakes it but you and its scouting, and the board shows you what needs you.'}"
             f" Which projects are included, and each one's direction, are on the Helm tab.</p></header>")
     plist = projects(reg)
     if view == "console":
@@ -3310,6 +3313,17 @@ class Handler(BaseHTTPRequestHandler):
                                 scout_note=form.get("scout_note", ""), scouting=form.get("scouting") == "on")
             self.send_response(303)
             self.send_header("Location", "/monitor?view=helm")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/mute":
+            from . import monitor
+            try:
+                monitor.muted(form.get("state") == "on")
+            except ValueError as err:
+                return self._send(409, shell(reg, -1, f"<p>{e(str(err))}</p><p><a href='/monitor'>Back</a></p>").encode())
+            self.send_response(303)
+            self.send_header("Location", "/monitor")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

@@ -86,6 +86,30 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_a_muted_monitor_is_never_woken_and_cannot_be_muted_holding_the_helm(self):
+        monitor.helm(False)
+        monitor.muted(True)
+        self.assertTrue(monitor.muted())
+        watcher = monitor.Watcher.__new__(monitor.Watcher)
+        watcher.enabled, watcher.pending = True, ['something']
+        for step in ('freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
+            def stub(*a, step=step):
+                if step in ('tell', 'scout', 'events'):
+                    raise AssertionError(step + ' ran while muted')
+                return []
+            setattr(watcher, step, stub)
+        with patch.object(monitor, 'snapshot', return_value={'state': 'idle'}), \
+                patch('colony.vision.observe_all'), patch('colony.continuation.tick_all'), \
+                patch.object(monitor.console, 'type_into') as typed:
+            watcher.tick()
+            typed.assert_not_called()
+        self.assertEqual(watcher.pending, [])
+        monitor.helm(True)
+        self.assertFalse(monitor.muted(), 'giving it the helm wakes it')
+        with self.assertRaises(ValueError):
+            monitor.muted(True)
+        monitor.helm(False)
+
     def test_a_nudge_counts_only_once_it_has_left_the_box_and_a_swallowed_enter_is_pressed_again(self):
         keys = []
         run = lambda args, **k: keys.append(args[-1])
