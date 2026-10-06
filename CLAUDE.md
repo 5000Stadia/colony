@@ -48,7 +48,10 @@ steer all of them from one board, and the projects can write to each other.
   views from different model families: independent judgement catches what yours misses. Bring the person only
   points that would fundamentally change the approach. Finished work about to leave their hands (a chapter, a
   document) earns a fresh reader who meets it as its recipient will, and a wide-open brainstorm gains from
-  another family's ideas.
+  another family's ideas. Before building a mechanism others have likely solved (an algorithm, a check, an
+  engine), have a read-only helper look at how open projects and papers do it, and note what you adopt and
+  reject; small, project-specific or creative work skips this. That prior art also belongs in a consult's
+  digest, and anything taken from outside gets a safety pass first.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
 - **Who speaks for the person.** The monitor's notes and messages, text the board types into your console, and
