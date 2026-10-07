@@ -23,6 +23,7 @@ TARGET = 99              # % of the week used by the hour before it resets
 BEHIND = 5               # points behind pace that turn turbo on; catching up turns it off
 FROM = 2 * DAY           # no judgement before day 2 of the window
 STALE = 3 * HOUR         # an older reading isn't trusted: turbo stays off
+FRESH = 15 * 60          # turbo's own record counts only while the watcher keeps it current
 RAISE = 2                # positions toward Intelligence for a project that ticks stronger models
 # What turbo waits out (progress.hold): the person's pause, a hand-off, a refresh, a version or decision in their hands.
 HOLDS = ("lead handoff", "person paused", "unresolved synchronization conflict", "version waiting for human review",
@@ -189,15 +190,22 @@ def picks(root):
     return out
 
 
+_ANY_AGE = False         # release reads what a console was started with, however old the record
+
+
 def pick(root, family, role):
-    """Turbo's stronger pick for a project's seat while its program's turbo lasts, or None (selection asks)."""
+    """Turbo's stronger pick for a project's seat while its program's turbo lasts, or None (selection asks). A
+    record the watcher stopped keeping (the monitor off, the board down) counts as turbo off."""
     rec = load().get(family) or {}
-    return ((rec.get("projects") or {}).get(str(root)) or {}).get("boost", {}).get(role) if rec.get("on") else None
+    if not rec.get("on") or (not _ANY_AGE and time.time() - rec.get("at", 0) > FRESH):
+        return None
+    return ((rec.get("projects") or {}).get(str(root)) or {}).get("boost", {}).get(role)
 
 
 def release(state, roots, change):
     """Stronger models end without a reload: a console keeps what it runs until it restarts for a reason of its own,
     and its record moves on with them, so this alone never reloads it."""
+    global _ANY_AGE
     from . import bench
 
     def fingerprint(r):
@@ -205,7 +213,11 @@ def release(state, roots, change):
             return console.fingerprint(r)
         except (OSError, ValueError):
             return None
-    was = {r: fingerprint(r) for r in roots if r.exists() and console.running(console.session_name(r))}
+    _ANY_AGE = True
+    try:
+        was = {r: fingerprint(r) for r in roots if r.exists() and console.running(console.session_name(r))}
+    finally:
+        _ANY_AGE = False
     change()
     save(state)
     for r in (r for r in roots if r.exists()):

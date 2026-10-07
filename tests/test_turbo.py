@@ -490,6 +490,19 @@ class StrongerModelsTest(TurboBase):
         turbo.tick(self.now + 120)
         self.assertEqual(self.seats(), self.base, "at most one change an episode")
 
+    def test_a_record_the_watcher_stopped_keeping_counts_as_off_and_ending_still_never_reloads(self):
+        turbo.tick(self.now)
+        up = self.seats()
+        console._started(self.name, console.fingerprint(self.root))           # reloaded onto them
+        state = turbo.load()
+        state["claude"]["at"] = time.time() - turbo.FRESH - 60                 # the monitor turned off, say
+        turbo.save(state)
+        self.assertEqual(self.seats(), self.base, "no one keeps turbo current: its models don't hold")
+        self.assertNotEqual(self.seats(), up)
+        self.read_at(time.time(), used=80)                                     # the watcher is back; the week caught up
+        self.assertIn(("claude", "off"), turbo.tick(time.time()))
+        self.assertIsNone(console.stale(self.root), "still no reload back")
+
     def test_a_rejected_model_is_never_turbos_pick(self):
         turbo.tick(self.now)
         up = self.seats()
