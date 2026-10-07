@@ -32,13 +32,18 @@ def record_claude(payload):
 
 
 def codex(home=None):
-    """Codex's limits, from the newest session file that reports them."""
+    """Codex's limits, from the newest session file that reports them, across every Codex home colony runs (each
+    project's own, and the person's): its rate limits are the account's, whichever home wrote them. Only each file's
+    end is read, since sessions grow large."""
     from .providers import get
-    sessions = Path(home or get("codex").config_home()) / "sessions"
-    files = sorted(sessions.glob("*/*/*/*.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)[:5] if sessions.exists() else []
-    for f in files:
+    homes = [Path(home)] if home else [Path(get("codex").config_home()),
+                                        *(h for h in (board.home() / "codex-remote").glob("*") if h.is_dir())]
+    files = [f for h in homes if (h / "sessions").exists() for f in (h / "sessions").glob("*/*/*/*.jsonl")]
+    for f in sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:8]:
         try:
-            lines = f.read_text().splitlines()
+            with f.open("rb") as handle:
+                handle.seek(max(0, f.stat().st_size - TAIL))
+                lines = handle.read().decode(errors="replace").splitlines()
         except OSError:
             continue
         for line in reversed(lines):
@@ -58,6 +63,9 @@ def codex(home=None):
             if windows:
                 return {"at": f.stat().st_mtime, "windows": windows}
     return None
+
+
+TAIL = 1 << 20                              # bytes read from a session's end: its latest reports are there
 
 
 def _find(x, key):
