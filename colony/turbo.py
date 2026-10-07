@@ -5,10 +5,11 @@ before the reset. More than 5 points behind turns turbo on for that program's pr
 Each project ticks what turbo means for it (stronger models, going deeper on its queued work, research on a topic
 the person typed), and only projects with queued work, or research ticked, are turned up.
 
-It only ever adds to a project's work. A note wakes an idle console with nothing typed in it and nothing waiting on
-the person; stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is
-written into any instructions. Off, it is nothing at all. It runs in the watcher's minute with no tokens, and when
-a program's reading is missing or old it stays off.
+It only ever adds to a project's work. Its note is quiet, and turbo itself wakes a console only at a moment it has
+checked: idle, nothing typed, no one at it, nothing waiting on the person; a note that waits is let go once that
+changes. Stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is
+written into any instructions. Off, it is nothing at all. It runs in the watcher's minute with no tokens; when a
+program's reading is missing or old it stays off, and when the watcher can't keep it, it stands down.
 """
 import json
 import secrets
@@ -23,11 +24,9 @@ TARGET = 99              # % of the week used by the hour before it resets
 BEHIND = 5               # points behind pace that turn turbo on; catching up turns it off
 FROM = 2 * DAY           # no judgement before day 2 of the window
 STALE = 3 * HOUR         # an older reading isn't trusted: turbo stays off
-FRESH = 15 * 60          # turbo's own record counts only while the watcher keeps it current
+FRESH = 15 * 60          # a turbo the watcher hasn't kept this long stands down
 RAISE = 2                # positions toward Intelligence for a project that ticks stronger models
-# What turbo waits out (progress.hold): the person's pause, a hand-off, a refresh, a version or decision in their hands.
-HOLDS = ("lead handoff", "person paused", "unresolved synchronization conflict", "version waiting for human review",
-         "version stopped", "usage pause", "context refresh", "blocking decision", "question for the person")
+NUDGE = "[colony] You have an update from Colony."              # the watcher's own words for a colony note
 
 
 # ---------------------------------------------------------------- pace and cadence
@@ -106,12 +105,12 @@ def options(root):
 
 
 def queued(root):
-    """Work queued for this project's agent: an item of its own to do or under way, outside any Later section."""
-    from .progress import LATER
-    me = str(Path(root).resolve())
-    return any(i["state"] in ("todo", "doing") and i.get("owner", me) == me
-               for m in board.roadmap(root)["milestones"] if not LATER.search(f"{m['id']} {m['title']}")
-               for i in m["items"])
+    """Work queued for this project's agent: an item of its own to do or under way in a milestone (never Later, nor
+    a heading no version takes), and within the version under way where there is one."""
+    from . import progress
+    me, version, aside = str(Path(root).resolve()), progress.current(root), progress.unscheduled(root)
+    return any(i["state"] in ("todo", "doing") and i.get("owner", me) == me and i["id"] not in aside
+               and (not version or i["id"] in version["items"]) for i in board.items(board.roadmap(root)).values())
 
 
 def wanted(root, opts=None):
@@ -128,8 +127,9 @@ def wanted(root, opts=None):
 
 def held(root, snap=None):
     """Why turbo leaves a project be now, or None: paused at a usage limit, waiting on the person (a gate, a question,
-    a choice on its screen, a version or an item for their eye), or held for them (their pause, a hand-off, a
-    context refresh). Turbo never buries what is in their hands."""
+    a choice on its screen, a version or an item for their eye), or held for them: their pause, a hand-off, a context
+    refresh, or a project working in versions that isn't continuing one now (one finished with no next released, a
+    helper's item delivered). Turbo never buries what is in their hands, nor starts what they stopped."""
     from . import context, continuation, lead, progress
     if str(root) in usage.paused():
         return "paused at a usage limit"
@@ -139,7 +139,7 @@ def held(root, snap=None):
         return "refreshing its context"
     if lead.group(root):
         why = progress.hold(root, root)
-        if why in HOLDS:
+        if why and (why != "no bounded version selected" or lead.info(root)["checkpoints"]):
             return why
         stopped = continuation.status(root)
         if stopped.get("manual_stop") or stopped.get("native_stop"):
@@ -164,6 +164,12 @@ def unheard(root, nid):
     return bool(nid) and any(n["id"] == nid and not n["delivered_at"] and not n["addressed_at"] for n in board.notes(root))
 
 
+def withdraw(root, nid, why):
+    """A turbo note that never reached its agent is let go, so nothing hands it over after its moment."""
+    board.append(root, "notes.jsonl", {"type": "addressed", "of": nid, "at": board.now(),
+                                       "text": f"Let go by colony before it reached you ({why}): nothing to do."})
+
+
 # ---------------------------------------------------------------- stronger models
 
 def picks(root):
@@ -181,6 +187,8 @@ def picks(root):
     entries = [x for x in every if x["model"] not in state["rejected"] and (not ask_first or x["model"] in state["approved"])]
     out = {}
     for role in ("main", "routine"):
+        if (selection.pin_of(root, role) or {}).get("model"):
+            continue                                            # the person's pin is theirs, turbo or not
         ident = selection.key(family, role, selection.scope(root))
         chosen = selection.concrete(family, bench.role_pick(family, role, entries, balance=raised(base), ceiling=ceiling,
                                                             blocked=state["blocked"].get(ident, [])))
@@ -190,41 +198,38 @@ def picks(root):
     return out
 
 
-_ANY_AGE = False         # release reads what a console was started with, however old the record
-
-
 def pick(root, family, role):
-    """Turbo's stronger pick for a project's seat while its program's turbo lasts, or None (selection asks). A
-    record the watcher stopped keeping (the monitor off, the board down) counts as turbo off."""
+    """Turbo's stronger pick for a project's seat while its program's turbo is on, or None (selection asks)."""
     rec = load().get(family) or {}
-    if not rec.get("on") or (not _ANY_AGE and time.time() - rec.get("at", 0) > FRESH):
-        return None
-    return ((rec.get("projects") or {}).get(str(root)) or {}).get("boost", {}).get(role)
+    return ((rec.get("projects") or {}).get(str(root)) or {}).get("boost", {}).get(role) if rec.get("on") else None
 
 
 def release(state, roots, change):
     """Stronger models end without a reload: a console keeps what it runs until it restarts for a reason of its own,
-    and its record moves on with them, so this alone never reloads it."""
-    global _ANY_AGE
+    and its record moves on with them, so this alone never reloads it. Each project's part is its own: one's
+    trouble leaves the others' as they should be."""
     from . import bench
 
     def fingerprint(r):
         try:
             return console.fingerprint(r)
-        except (OSError, ValueError):
+        except Exception as err:
+            trouble(err)
             return None
-    _ANY_AGE = True
-    try:
-        was = {r: fingerprint(r) for r in roots if r.exists() and console.running(console.session_name(r))}
-    finally:
-        _ANY_AGE = False
+    was = {r: fingerprint(r) for r in roots if r.exists() and console.running(console.session_name(r))}
     change()
     save(state)
     for r in (r for r in roots if r.exists()):
-        bench.write_helpers(r)
-        name = console.session_name(r)
-        if was.get(r) and console.started(name) == was[r] and fingerprint(r):
-            console.adopt(name, fingerprint(r))
+        try:
+            bench.write_helpers(r)
+        except Exception as err:
+            trouble(err)
+        try:
+            name = console.session_name(r)
+            if was.get(r) and console.started(name) == was[r] and (now := fingerprint(r)):
+                console.adopt(name, now)
+        except Exception as err:
+            trouble(err)
 
 
 # ---------------------------------------------------------------- the watcher's minute
@@ -258,11 +263,15 @@ def tick(now=None):
     roots, paused = [p for p in board.projects() if p.exists()], usage.paused()
     for key, prov in providers.PROVIDERS.items():
         rec = state.get(key) or {}
-        p = (pace(usage.reading(key), now, rec.get("on")) if s["turbo_by"].get(key, True)
-             else dict(on=False, why="turned off in Settings"))
+        p = (dict(on=False, why="turned off in Settings") if not s["turbo_by"].get(key, True)
+             else dict(on=False, why="its program is off in Settings or not installed") if not providers.usable(prov)
+             else pace(usage.reading(key), now, rec.get("on")))
         if not p["on"]:
             if rec.get("on"):
-                done += end(state, key, dict(p, at=now))
+                try:
+                    done += end(state, key, dict(p, at=now))
+                except Exception as err:                # its record is off already: the rest goes on
+                    trouble(err)
             state[key] = dict(p, at=now)
             continue
         if not rec.get("on"):
@@ -291,21 +300,28 @@ def tick(now=None):
 
 
 def visit(state, rec, root, label, now, paused):
-    """One project while its program's turbo is on: (what turbo does for it, what it did now)."""
+    """One project while its program's turbo is on: (what turbo does for it, what it did now). Its note is quiet:
+    turbo wakes the console itself, only at a moment it has checked, and lets a note that still waits go once the
+    project is held, no longer turned up, or its console stopped, so nothing else ever types it in later."""
     from . import bench
     mine, done = rec["projects"].setdefault(str(root), {}), []
     opts = options(root)
     if mine.get("boost") and not opts["turbo_models"]:
         release(state, [root], lambda: mine.update(boost={}))      # unticked: they go, without a reload
-    want = wanted(root, opts)
-    if not want or str(root) in paused:
-        return {}, done
+    want = {} if str(root) in paused else wanted(root, opts)
     boost = want.get("models") and "boost" not in mine
     wake = (want.get("deeper") or want.get("research")) and due(mine.get("noted"), now, rec["resets_at"])
-    if not (boost or wake):
+    pending = unheard(root, mine.get("note"))
+    if not (boost or wake or pending):
         return want, done
     snap = console.snapshot(root, lines=4)
-    if held(root, snap):
+    why = held(root, snap) if want else "no longer turned up"
+    if pending and (why or snap["state"] == "off"):
+        withdraw(root, mine.pop("note"), why or "its console was stopped")
+        for k in ("noted", "woke"):
+            mine.pop(k, None)                                   # it never heard: it may hear when it can
+        pending = False
+    if why:
         return want, done
     if boost:
         mine["boost"] = picks(root)                             # once a turbo episode, kept until it ends
@@ -313,24 +329,54 @@ def visit(state, rec, root, label, now, paused):
         if mine["boost"]:
             bench.write_helpers(root)                           # with the main pick: one idle reload brings both
             done.append((root, "stronger models"))
-    if wake and not unheard(root, mine.get("note")) and ready(root, snap) and settled(root):
-        n = board.add_note(root, None, note(label, rec["resets_at"], want.get("deeper"), want.get("research", "")),
-                           author="colony")
-        mine.update(noted=now, note=n["id"])
-        done.append((root, "noted"))
+    if ((pending and not mine.get("woke")) or (wake and not pending)) and ready(root, snap) and settled(root):
+        if not pending:
+            n = board.add_note(root, None, note(label, rec["resets_at"], want.get("deeper"), want.get("research", "")),
+                               author="colony", quiet=True)
+            mine.update(noted=now, note=n["id"])
+            done.append((root, "noted"))
+        # a draft that appeared just now keeps it for the next free moment (once woken, never again), or its next turn
+        mine["woke"] = console.type_into(console.session_name(root), NUDGE)
     return want, done
 
 
 def end(state, key, off):
-    """Turbo ends for a program: stronger models leave without a reload, and a note that never reached its project
-    is withdrawn."""
+    """Turbo ends for a program: stronger models leave without a reload, a note that never reached its project is let
+    go, and the monitor's look, if it hasn't happened yet, with them."""
+    from . import monitor
     mine = {Path(r): m for r, m in ((state.get(key) or {}).get("projects") or {}).items()}
     release(state, [r for r, m in mine.items() if m.get("boost")], lambda: state.update({key: off}))
     for r, m in mine.items():
-        if m.get("note") and r.exists() and unheard(r, m["note"]):
-            board.append(r, "notes.jsonl", {"type": "addressed", "of": m["note"], "at": board.now(),
-                                            "text": "Turbo ended before this reached you: nothing to do."})
+        try:
+            if m.get("note") and r.exists() and unheard(r, m["note"]):
+                withdraw(r, m["note"], "turbo ended")
+        except Exception as err:
+            trouble(err)
+    monitor.unqueue(lambda text: text.startswith(f"Turbo is on for {providers.get(key).label} "))
     return [(key, "off")]
+
+
+def stand_down(why, stale=False, now=None):
+    """Turbo stands down when the watcher can't keep it: the monitor off (turbo runs with it), the safe pause unable to
+    read usage, or turbo's own trouble lasting (stale: only a turbo not kept for 15 minutes). Every program's turbo
+    ends as catching up would end it, and says why. Never raises."""
+    now = time.time() if now is None else now
+    try:
+        state = load()
+        for key in providers.PROVIDERS:
+            rec = state.get(key) or {}
+            if stale and not (rec.get("on") and now - rec.get("at", 0) > FRESH):
+                continue
+            off = dict(on=False, why=why, down=why, at=now)
+            try:
+                if rec.get("on"):
+                    end(state, key, off)
+            except Exception as err:
+                trouble(err)
+            state[key] = off
+        save(state)
+    except Exception as err:
+        trouble(err)
 
 
 def trouble(err):
@@ -347,7 +393,10 @@ def line(key, now=None, named=True):
     head = f"{providers.get(key).label}: " if named else ""
     if not board.registry()["settings"]["turbo_by"].get(key, True):
         return f"{head}turbo is off in Settings"
-    p = pace(usage.reading(key), now, (load().get(key) or {}).get("on"))
+    rec = load().get(key) or {}
+    if rec.get("down") or (rec and now - rec.get("at", 0) > FRESH):
+        return f"{head}turbo isn't running ({rec.get('down') or 'the watcher that runs it has stopped'})"
+    p = pace(usage.reading(key), now, rec.get("on"))
     if p["expected"] is None:
         used = f"{p['used']:g}% of its week used; " if p["used"] is not None and p["why"].startswith("before") else ""
         return f"{head}{used}turbo off ({p['why']})"

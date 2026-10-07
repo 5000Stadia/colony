@@ -3199,7 +3199,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, b'Auto balance must be from 0 to 6')
             from . import providers as pv
             set_setting("remote_by", ",".join(f"{k}={form.get('remote_' + k, 'off')}" for k, p in pv.PROVIDERS.items() if pv.usable(p)))
-            set_setting("turbo_by", ",".join(f"{k}={form.get('turbo_' + k, 'off')}" for k, p in pv.PROVIDERS.items() if pv.usable(p)))
+            turbo = dict(reg["settings"]["turbo_by"], **{k: form.get("turbo_" + k) == "on" for k, p in pv.PROVIDERS.items() if pv.usable(p)})
+            set_setting("turbo_by", ",".join(f"{k}={'on' if v else 'off'}" for k, v in turbo.items()))   # one not shown keeps its own
             set_setting("monitor", form.get("monitor", "off"))
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
