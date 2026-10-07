@@ -50,28 +50,31 @@ def snapshots_dir():
     return board.home() / "bench" / "artificial-analysis"
 
 
-def api_records():
-    """The latest Artificial Analysis reply, read as records for today's lineup: derived each time from what came,
-    so a better reading of names applies to it at once."""
+def snapshot():
+    """The latest Artificial Analysis reply kept on this machine, and the day it came: ([], None) if none reads."""
     snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
     if not snaps:
-        return []
+        return [], None
     try:
         data = json.loads(snaps[-1].read_text())
     except (OSError, ValueError):
+        return [], None
+    return ([e for e in data if isinstance(e, dict)] if isinstance(data, list) else []), snaps[-1].stem[:10]
+
+
+def api_records():
+    """The latest Artificial Analysis reply, read as records for today's lineup: derived each time from what came,
+    so a better reading of names applies to it at once."""
+    data, date = snapshot()
+    if not data:
         return []
-    date = snaps[-1].stem[:10]
     return records_from(data, [mid for _, mid, _, _ in lineup()], date)[0]
 
 
 def token_price(model):
     """A model's price per 1M input and output tokens from the latest Artificial Analysis reply, or None: what
     costs a run for a program that doesn't report its cost."""
-    snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
-    try:
-        data = json.loads(snaps[-1].read_text()) if snaps else []
-    except (OSError, ValueError):
-        return None
+    data, _ = snapshot()
     for e in data:
         pr = e.get("pricing") or {}
         if match(model, e) is not None and pr.get("price_1m_input_tokens") is not None and pr.get("price_1m_output_tokens") is not None:
@@ -529,15 +532,22 @@ def match(model, entry):
     return ""
 
 
+def claim(entry, lineup_models):
+    """The lineup model an Artificial Analysis entry measured and its variant, (model, variant), or None: the most
+    exact, if two could claim it."""
+    hits = [(m, v) for m in lineup_models if (v := match(m, entry)) is not None]
+    return min(hits, key=lambda h: len(h[1])) if hits else None
+
+
 def records_from(data, lineup_models, date):
     """Artificial Analysis' entries as records for the models in the lineup; which of theirs matched nothing."""
     rows, matched, unmatched, unknown = [], set(), [], set()
     for entry in data:
-        hits = [(m, v) for m in lineup_models if (v := match(m, entry)) is not None]
-        if not hits:
+        hit = claim(entry, lineup_models)
+        if not hit:
             unmatched.append(entry.get("name") or entry.get("slug"))
             continue
-        m, variant = min(hits, key=lambda h: len(h[1]))       # the most exact, if two could claim it
+        m, variant = hit
         matched.add(m)
         effort = variant if variant in EFFORTS else None
         note = f"AA entry '{entry.get('name')}' ({entry.get('slug')})" + ("" if effort else f"; variant {variant or 'default'}")

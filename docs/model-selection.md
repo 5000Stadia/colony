@@ -49,35 +49,51 @@ the Codex shortfall from the 53.62 main goal remains visible.
 
 ## Evidence and estimates
 
-Selection uses coherent AA score/task-cost pairs from one benchmark version.
-The latest compatible measured pair for each effort is retained independently;
-one successful page refresh cannot erase other efforts whose pages failed.
-API token prices are never substituted for task cost, nor is a newer API score
-silently spliced into an older measured cost. Unknown costs cannot win a cheapest
-or value comparison. If the qualifying pairs lack cost evidence, retain the
-accepted choice and show the gap. The shipped snapshot is in
+Cost per task is token volume per task × price, so that it never depends on a
+page read succeeding. The free Artificial Analysis API gives each pair's
+Intelligence Index and blended 3:1 token price, current every day. AA's public
+model pages give the token volume: a page's cost per task over the price it states,
+both kept with every reading. Each pair's cost says which kind it is:
+
+- Measured: the page's own cost per task, read no earlier than today's API price.
+- Carried: the page has not read since; its last measured volume at today's API
+  price, dated, with its index from the API, which stays current. A page break
+  therefore freezes only volumes, which change rarely, and accuracy degrades slowly.
+- Estimated: no page has measured the pair. With at least two measured efforts,
+  use the model's own average adjacent per-step gap, anchored at its nearest
+  measured effort (ties to the lower effort); score steps are additive, volume
+  steps positive ratios, divided over omitted levels. With exactly one, a
+  same-provider donor whose measured score at that anchor is closest lends its
+  percentage spread. A model no page has measured takes the API's index and the
+  volume of the nearest measured pair of the same provider (the same effort first,
+  then the nearest; among those, the closest index) at its own price today. Never
+  another provider's volume, never a recursive estimate.
+
+Measured evidence always replaces carried and estimated values once a page reads.
+Volumes come only from page measurements of one benchmark version, so versions are
+never spliced; the API's index (a tenth's precision, no version stated) is checked
+against the pages that were read and flagged where it differs. Unknown costs cannot
+win a cheapest or value comparison. If the qualifying pairs lack cost evidence,
+retain the accepted choice and show the gap. The shipped snapshot is in
 `colony/data/aa-pairs.json`; later local measurements supersede it.
 
-For a missing metric with at least two measured efforts, use the model's own
-average adjacent per-step gap, anchored at its nearest measured effort (ties to
-the lower effort). Score steps are additive; cost steps use positive ratios,
-reversed when stepping down. Gaps spanning omitted levels are divided by their
-number of steps. With exactly one measured effort, use a same-provider donor
-whose measured score at that anchor is closest, requiring a measured target
-metric too, and apply its percentage spread. There is no recursive donor estimate
-or cross-provider/version fallback. No qualifying evidence means no estimate.
+Estimates retain their anchor, donor, steps and source measurements. Values outside
+score bounds or nonpositive/nonfinite costs are invalid. An interior estimate
+outside its measured neighbours is flagged, not capped: it still follows the
+person's estimator. The Models page shows these provenance details and uses
+Index/task cost rather than domain categories.
 
-Measured evidence always takes priority. Estimates retain their anchor, donor,
-steps and source measurements. Values outside score bounds or nonpositive/nonfinite
-costs are invalid. An interior estimate outside its measured neighbours is flagged,
-not capped: it still follows the person's estimator. The Models page shows these
-provenance details and uses Index/task cost rather than domain categories.
-
-Daily upkeep refreshes the public AA pages for known model families, including
-missing supported efforts, without model calls. Parsing is scoped to the page's
-`currentModel`, verifying its slug and effort; a comparison model's values cannot
-fill a null. Failed or incomplete pages preserve prior measurements. Reconciliation
-then follows the existing adoption policy. Dates are retrieval dates.
+Daily upkeep reads the public AA pages right after the API fetch, without model
+calls: every lineup pair the API lists, at the page its own slug names, so a new
+model is read the day it appears; then pages known from earlier records. A page is
+read by content: the object whose slug is the page's and whose effort is the one
+asked for, wherever it sits in the payload, giving the index, its measured flag,
+the cost per task and the price; never a comparison model. A page carrying nothing
+usable is a failure with its reason, never a silent gap; a pair AA lists without a
+cost yet is not a failure. Failed pages preserve prior measurements. When more than
+half of a day's reads fail, or a lineup model has no cost at all, the Models page
+and `colony doctor` say so, with how old the oldest carried volume is.
+Reconciliation then follows the existing adoption policy. Dates are retrieval dates.
 
 ## Adoption and return
 

@@ -18,3 +18,6 @@ design/
 
 # helper worktrees
 .claude/worktrees/
+
+# a real model page for local tests; not ours to publish
+tests/fixtures/aa-*.html
