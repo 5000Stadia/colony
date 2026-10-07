@@ -53,6 +53,8 @@ own app, where it has one); each project also has its own session they can talk 
 
 - Projects: `colony projects`; look with `colony peek NAME`; relay with `colony tell NAME "..."` (it reaches the
   agent as the person's note).
+- A suggestion of your own for a project (a research idea, say): `colony suggest NAME "..."`. It reaches the agent
+  as yours, never as the person's word; the agent weighs it against its work and answers.
 - A choice on a project's screen (a folder-trust question, a permission prompt): `colony choose NAME "text of
   the option"`, never `colony tell`, which presses Enter on whatever is highlighted ("No, exit" on a trust
   question). `colony choose` prints the result.
@@ -686,15 +688,25 @@ class Watcher:
 
     def usage(self):
         """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down
-        (told on their next turn, not woken), and at the reset they're woken to carry on."""
+        (told on their next turn, not woken), and at the reset they're woken to carry on. Then turbo, which turns
+        projects up while a program's week runs behind pace."""
         if time.time() - self.usage_checked < 60:
             return
         self.usage_checked = time.time()
-        from . import usage
-        winding = [p.name for p, what in usage.check() if what == "paused"]
+        from . import turbo, usage
+        try:
+            winding = [p.name for p, what in usage.check() if what == "paused"]
+        except Exception:
+            turbo.stand_down("the safe pause can't read usage", stale=True)    # turbo never runs past it
+            raise
         if winding:
             queue(f"Winding down at a usage limit: {', '.join(winding)}. Each agent tells the person where things stand "
                   "and their options on its next turn; colony wakes them at the reset.")
+        try:
+            turbo.tick()
+        except Exception as err:                # turbo is extra: its trouble stops nothing else; lasting, it stands down
+            turbo.trouble(err)
+            turbo.stand_down("turbo ran into trouble", stale=True)
 
     def current(self):
         """Every two minutes, with no tokens: a console whose program has been updated, or whose settings or helper
@@ -777,6 +789,17 @@ def queue(text):
         fh.write(json.dumps({"at": board.now(), "text": text}) + "\n")
 
 
+def unqueue(match):
+    """Take back words that haven't reached the monitor yet and no longer stand (turbo's look, once turbo ended)."""
+    path = board.home() / "to_monitor.jsonl"
+    rows = [l for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
+    keep = [l for l in rows if not match(json.loads(l)["text"])]
+    if keep and keep != rows:
+        path.write_text("".join(l + "\n" for l in keep))
+    elif rows and not keep:
+        path.unlink()
+
+
 FIXLIKE = re.compile(r"\b(fix(es|ed)?|bug|regress\w*|revert\w*|broke|broken|flak\w*|repair\w*|hotfix)\b", re.I)
 
 
@@ -809,9 +832,13 @@ def last_commit(root):
 
 
 def start(enabled=True):
-    """The monitor's session and the watcher, alongside the board."""
+    """The monitor's session and the watcher, alongside the board. Without the monitor, the watcher keeps neither
+    the safe pause nor turbo, so turbo stands down."""
     if enabled:
         ensure()
+    else:
+        from . import turbo
+        turbo.stand_down("the monitor is off, and turbo runs with it")
     watcher = Watcher(enabled=enabled)
     threading.Thread(target=watcher.run, daemon=True).start()
     return watcher

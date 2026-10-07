@@ -55,6 +55,11 @@ conversation when you open it.
   free and wakes it only when there is something to hear.
 - **Projects talk to each other:** `colony send NAME "…"` (`--ask` for an answer), `colony reply`,
   and `colony projects` lists them with their goals, so an agent asks rather than guesses.
+- **Turbo:** when a program's weekly usage runs more than 5 points behind pace (from day 2, aiming for 99%
+  the hour before the reset), its projects with queued work are turned up, each as it ticks: stronger
+  models, going deeper on its agreed work, research on a topic you type. Alongside the work, never instead
+  of it: an idle console with nothing waiting on you is woken, and models change only at an idle reload.
+  `colony turbo` shows each program's pace; Settings turns it off per program.
 
 ## How it works
 

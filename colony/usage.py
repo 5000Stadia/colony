@@ -71,18 +71,20 @@ def _find(x, key):
     return None
 
 
+def reading(key):
+    """A program's latest report, as it was made: {at, windows}, or None."""
+    if key == "claude":
+        try:
+            return json.loads((folder() / "claude.json").read_text())
+        except (OSError, ValueError):
+            return None
+    return codex() if key == "codex" else None
+
+
 def read(key, raw=False):
     """A program's windows now: {name: {used, resets_at}}; a window past its reset reads as unused (raw: as
     last reported)."""
-    if key == "claude":
-        try:
-            got = json.loads((folder() / "claude.json").read_text())
-        except (OSError, ValueError):
-            got = None
-    elif key == "codex":
-        got = codex()
-    else:
-        got = None
+    got = reading(key)
     if not got:
         return {}
     if raw:

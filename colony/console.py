@@ -46,6 +46,7 @@ def command(label, root=None, folder=None):
     from . import board, providers, selection
     selection.migrate(root)
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
+    s = {k: v for k, v in s.items() if k not in board.TURBO}        # what turbo means for it isn't how it starts
     if label != "monitor" or root:
         s = dict(s, **selection.pair(selection.main(root)))
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
@@ -153,14 +154,39 @@ def _started_path():
     return board.home() / "consoles.json"
 
 
+def _record(change):
+    """The consoles' start records, changed under a lock and written whole: the board and the watcher both write."""
+    path = _started_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            have = json.loads(path.read_text())
+        except (OSError, ValueError):
+            have = {}
+        change(have)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(have))
+        tmp.replace(path)
+
+
 def _started(name, fp):
+    # fingerprint: what it counts as started with; ran: what its process really started with
+    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "ran": fp, "at": time.time()}))
+
+
+def started(name):
+    """What a console counts as started with (its fingerprint), or None."""
     try:
-        have = json.loads(_started_path().read_text())
+        return (json.loads(_started_path().read_text()).get(name) or {}).get("fingerprint")
     except (OSError, ValueError):
-        have = {}
-    have[name] = {"fingerprint": fp, "at": time.time()}
-    _started_path().parent.mkdir(parents=True, exist_ok=True)
-    _started_path().write_text(json.dumps(have))
+        return None
+
+
+def adopt(name, fp):
+    """Count a running console as started with fp: a change it needn't reload for (turbo's stronger models
+    ending), so it moves over only when it restarts for a reason of its own."""
+    _record(lambda have: have[name].update(fingerprint=fp) if name in have else None)
 
 
 def running_version(name):
@@ -202,7 +228,7 @@ def stale(root, name=None, label=None):
         was = None
     if not was:
         return "started before colony kept a record of how it starts"
-    if was["fingerprint"] != fingerprint(root, label):
+    if fingerprint(root, label) not in (was["fingerprint"], was.get("ran")):   # what it runs now needs no reload
         return "its settings or helper tiers changed"
     return None
 

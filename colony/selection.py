@@ -258,6 +258,10 @@ def auto(family, role, root=None):
     chosen = concrete(family, state['accepted'].get(ident))
     if not chosen:
         raise Unavailable(f'No available accepted model for {family} {role}; choose a concrete model in Settings.')
+    from . import turbo
+    up = turbo.pick(root, family, role) if root else None
+    if up and up['model'] not in state['rejected'] and pair(up) not in state['blocked'].get(ident, []):
+        chosen = concrete(family, up) or chosen          # turbo's stronger pick, latched for its episode
     return dict(chosen, own=False, why=chosen.get('why') or 'Benchmark recommendation')
 
 
@@ -381,19 +385,25 @@ def migrate(root=None):
     path.write_text(json.dumps(own, indent=2) + '\n')
 
 
-def main(root=None):
-    migrate(root)
+def pin_of(root, role):
+    """What a seat would be pinned to: the project's own choice, else colony's; Auto where it holds no model."""
     settings = board.registry()['settings']
     family = providers.key(providers.of(root))
-    own = board.project_settings(root)[1] if root else {}
-    pin = own if own.get('model') else settings if family == settings['provider'] else (settings.get('main_models') or {}).get(family)
-    return resolve(family, 'main', pin, root)
+    if role == 'main':
+        own = board.project_settings(root)[1] if root else {}
+        return own if own.get('model') else settings if family == settings['provider'] else (settings.get('main_models') or {}).get(family)
+    return bench.plan(root).get(role) or (settings.get('helper_models') or {}).get(key(family, role))
+
+
+def main(root=None):
+    migrate(root)
+    return resolve(providers.key(providers.of(root)), 'main', pin_of(root, 'main'), root)
 
 
 def helper(root, role):
     migrate(root)
     family = providers.key(providers.of(root))
-    pin = bench.plan(root).get(role) or (board.registry()['settings'].get('helper_models') or {}).get(key(family, role))
+    pin = pin_of(root, role)
     value = resolve(family, role, pin, root)
     value['own'] = role in bench.plan(root)
     if pin and not value['own']:
