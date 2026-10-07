@@ -389,9 +389,12 @@ def report(now=None):
             continue
         for root in [r for r in board.projects() if r.exists() and providers.key(providers.of(r)) == key]:
             want = wanted(root)
-            why = "no queued work or research topic" if not want else held(root)
+            snap = console.snapshot(root, lines=4)
+            why = "no queued work or research topic" if not want else held(root, snap)
             mine = (rec.get("projects") or {}).get(str(root)) or {}
-            noted = f"; last note {time.strftime('%a %-I:%M %p', time.localtime(mine['noted']))}" if mine.get("noted") else ""
+            noted = (f"; last note {time.strftime('%a %-I:%M %p', time.localtime(mine['noted']))}" if mine.get("noted")
+                     else f"; its note waits for its console, now {snap['state']}, to sit idle and untouched"
+                     if (want.get("deeper") or want.get("research")) and not ready(root, snap) else "")
             out.append(f"  {root.name}: " + (f"left be: {why}" if why else ", ".join(WORDS[k] for k in want) + noted))
     try:
         err = json.loads((board.home() / "turbo-error.json").read_text())
