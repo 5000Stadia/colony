@@ -24,7 +24,7 @@ waits on them for, its roadmap, and a monitor that can act for them.
     colony urls                     every address the board can be opened at
     colony setup                    the monitor walks you through first-time setup (again)
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
-                                    fetch pulls Artificial Analysis' data; key reads the key from stdin
+                                    fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
     colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores)
     colony helm [on|off]            whether the monitor answers routine questions for the person
 
@@ -260,6 +260,17 @@ def cmd_doctor(a):
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
+    try:
+        from . import intelligence
+        trouble, notes, summary = intelligence.health()
+    except Exception as err:                 # the model data never stops the doctor
+        trouble, notes, summary = [], [f"couldn't be read ({err.__class__.__name__}: {err})"], None
+    if summary and not trouble:
+        print(f"ok    model data: {summary}")
+    for note in notes:
+        print(f"note  model data: {note}")
+    problems += [f"model data: {t}: colony's page reader (colony/intelligence.py, page_point) needs a look"
+                 for t in trouble]
     if a.tests:
         home = Path(__file__).resolve().parent.parent
         r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog", "tests.test_catalog_freshness", "tests.test_lead", "tests.test_continuation"], cwd=home,
@@ -443,8 +454,12 @@ def cmd_bench(a):
         return 0
     if a.what == "fetch":
         out = bench.refresh()
-        from . import selection
+        from . import intelligence, selection
+        pages = intelligence.refresh() if intelligence.refresh_due() else None     # the volumes, read with the prices
         selection.reconcile()
+        if pages:
+            print(f"{pages['measured']} of {pages['pages']} model pages read"
+                  + (f"; {len(pages['errors'])} failed, the first: {pages['errors'][0]['detail']}" if pages["errors"] else ""))
         if out["error"]:
             print(f"colony: {out['error']}", file=sys.stderr)
             return 1

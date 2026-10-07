@@ -2435,10 +2435,14 @@ def models_page(reg):
             rows.append(f"<tr><th>{e(family)} · {e(role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
     cards = ''.join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     title = f'{ceiling:.2f}' if ceiling is not None else 'unavailable'
+    problems, notes, _ = intelligence.health(entries)
+    health = (f"<p><strong style='color:var(--flag)'>Model data:</strong> {e('; '.join(problems + notes))}.</p>"
+              if problems or notes else '')
     return shell(reg, -2, model_changes() + "<header><h1>Models</h1><p>Artificial Analysis Intelligence Index and cost per benchmark task. "
                  f"Shared runnable intelligence ceiling: <strong>{title}</strong>. "
                  "Scores within one point count as equal; the cheaper pair wins. Estimates are labelled and can participate. "
-                 "Usage never lowers an Auto goal. <a href='/settings'>Change the Auto slider in Settings</a>.</p></header>"
+                 "Cost per task is the token volume a page last measured at today's price. "
+                 "Usage never lowers an Auto goal. <a href='/settings'>Change the Auto slider in Settings</a>.</p>" + health + "</header>"
                  "<h2>Auto roles</h2><div class='card'><table class='bench'>" + ''.join(rows) + "</table></div>"
                  "<h2>Intelligence against task cost</h2><div class='card'>" + effort_chart(entries) + "</div>"
                  "<h2>Model evidence</h2>" + cards)
@@ -2461,15 +2465,22 @@ def model_card(c):
         if not point:
             continue
         cost = f"${point['cost']:.4g}" if point['cost'] is not None else 'Unknown'
-        kind = 'Estimated' if point['estimated'] else 'Measured'
+        kind = 'Estimated' if point['estimated'] else 'Carried' if point.get('carried') else 'Measured'
         sources = []
         for metric, evidence in point['evidence'].items():
             if not evidence:
                 continue
+            link = f"<a href='{e(evidence.get('url') or '')}' rel='noopener' target='_blank'>Artificial Analysis</a>"
             if evidence.get('estimated'):
                 sources.append(f"<li>{e(metric)}: {e(json.dumps(evidence['derivation'], ensure_ascii=False))}</li>")
+            elif evidence.get('carried'):
+                d = evidence['derivation']
+                sources.append(f"<li>{e(metric)}: token volume {link} measured {e(evidence['date'])}, at today's "
+                               f"${d['price']:g} per 1M tokens (API, {e(d['price_date'])})</li>")
             else:
-                sources.append(f"<li>{e(metric)}: <a href='{e(evidence['url'])}' rel='noopener' target='_blank'>Artificial Analysis</a>, {e(evidence['date'])}</li>")
+                warning = (evidence.get('derivation') or {}).get('warning')
+                sources.append(f"<li>{e(metric)}: {link}" + (' API' if evidence.get('source', '').endswith('(API)') else '')
+                               + f", {e(evidence['date'])}" + (f"; {e(warning)}" if warning else '') + "</li>")
         rows.append(f"<tr><th>{e(entry['variant'])}</th><td>{point['score']:.2f}</td><td>{cost}</td>"
                     f"<td>{kind}<details><summary>Evidence · {e(point['version'])}</summary><ul>{''.join(sources)}</ul></details></td></tr>")
     table = ("<table class='bench'><tr><th>Effort</th><th>Intelligence Index</th><th>USD/task</th><th>Evidence</th></tr>"
