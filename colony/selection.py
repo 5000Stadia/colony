@@ -258,6 +258,10 @@ def auto(family, role, root=None):
     chosen = concrete(family, state['accepted'].get(ident))
     if not chosen:
         raise Unavailable(f'No available accepted model for {family} {role}; choose a concrete model in Settings.')
+    from . import turbo
+    up = turbo.pick(root, family, role) if root else None
+    if up and up['model'] not in state['rejected'] and pair(up) not in state['blocked'].get(ident, []):
+        chosen = concrete(family, up) or chosen          # turbo's stronger pick, latched for its episode
     return dict(chosen, own=False, why=chosen.get('why') or 'Benchmark recommendation')
 
 

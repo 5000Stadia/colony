@@ -27,6 +27,8 @@ waits on them for, its roadmap, and a monitor that can act for them.
                                     fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
     colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores)
     colony helm [on|off]            whether the monitor answers routine questions for the person
+    colony turbo                    each program's pace this week, and what turbo is doing about it
+    colony suggest NAME "TEXT"      (monitor) your own suggestion to a project's agent, for it to weigh
 
 Run a project's commands from inside its folder.
 """
@@ -271,9 +273,13 @@ def cmd_doctor(a):
         print(f"note  model data: {note}")
     problems += [f"model data: {t}: colony's page reader (colony/intelligence.py, page_point) needs a look"
                  for t in trouble]
+    from . import turbo
+    for k, p in providers.PROVIDERS.items():
+        if providers.usable(p):
+            print(f"note  turbo: {turbo.line(k)}")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
-        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog", "tests.test_catalog_freshness", "tests.test_lead", "tests.test_continuation"], cwd=home,
+        r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog", "tests.test_catalog_freshness", "tests.test_lead", "tests.test_continuation", "tests.test_turbo"], cwd=home,
                            capture_output=True, text=True)
         (print("ok    the test suite passes") if r.returncode == 0
          else problems.append("the test suite fails:\n" + r.stderr[-1500:]))
@@ -825,7 +831,9 @@ def cmd_settings(a):
         except KeyError:
             raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
         for k in board.PROJECT_KEYS:
-            print(f"{k:12} {str(merged[k]) or '(colony Auto)':24} {'set for this project' if k in own else 'global'}")
+            v = merged[k]
+            shown = ("on" if v else "off") if isinstance(v, bool) else str(v) or ("(none)" if k in board.TURBO else "(colony Auto)")
+            print(f"{k:14} {shown:24} {'set for this project' if k in own else 'default' if k in board.TURBO else 'global'}")
         return 0
     if a.key:
         try:
@@ -838,7 +846,8 @@ def cmd_settings(a):
         v = reg["settings"][k]
         shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
-                 if k == "consultants" else v or "(colony Auto)")
+                 if k == "consultants" else ",".join(f"{f}={'on' if v.get(f, True) else 'off'}" for f in providers.PROVIDERS)
+                 if k == "turbo_by" else v or "(colony Auto)")
         print(f"{k:14} {str(shown):28} {board.SETTING_HELP.get(k, '')}")
     print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
@@ -1120,6 +1129,29 @@ def cmd_decided(a):
     return 0
 
 
+def cmd_suggest(a):
+    """(monitor) Your own suggestion to a project's agent, never the person's word: it weighs it against its work and
+    answers (colony noted). It wakes an idle project, unless something there waits on the person: then the agent
+    hears it on its next turn."""
+    from . import board, turbo
+    root = _project(a.name)
+    if not a.text.strip():
+        raise SystemExit('colony suggest NAME "your suggestion, and why it may help"')
+    quiet = bool(turbo.held(root))
+    board.add_note(root, None, a.text, author="suggestion", quiet=quiet, kind="idea")
+    print(f"suggested to {a.name}, as yours: " + ("it reaches the agent on its next turn, since something there waits on "
+                                                   "the person" if quiet else "it reaches the agent once it is idle"))
+    return 0
+
+
+def cmd_turbo(a):
+    """Each program's pace this week: its use against what's expected by now, turbo on or off, the reset, and what
+    turbo is doing for each of its projects."""
+    from . import turbo
+    print(turbo.report())
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="colony", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1251,5 +1283,8 @@ def main(argv=None):
     p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--trust"); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)
     p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
     p.set_defaults(fn=cmd_decided)
+    p = sub.add_parser("suggest", help="(monitor) your own suggestion to a project's agent, for it to weigh and answer")
+    p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_suggest)
+    sub.add_parser("turbo", help="each program's pace this week, and what turbo is doing about it").set_defaults(fn=cmd_turbo)
     a = ap.parse_args(argv)
     return a.fn(a)

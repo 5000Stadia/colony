@@ -53,6 +53,8 @@ own app, where it has one); each project also has its own session they can talk 
 
 - Projects: `colony projects`; look with `colony peek NAME`; relay with `colony tell NAME "..."` (it reaches the
   agent as the person's note).
+- A suggestion of your own for a project (a research idea, say): `colony suggest NAME "..."`. It reaches the agent
+  as yours, never as the person's word; the agent weighs it against its work and answers.
 - A choice on a project's screen (a folder-trust question, a permission prompt): `colony choose NAME "text of
   the option"`, never `colony tell`, which presses Enter on whatever is highlighted ("No, exit" on a trust
   question). `colony choose` prints the result.
@@ -686,15 +688,20 @@ class Watcher:
 
     def usage(self):
         """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down
-        (told on their next turn, not woken), and at the reset they're woken to carry on."""
+        (told on their next turn, not woken), and at the reset they're woken to carry on. Then turbo, which turns
+        projects up while a program's week runs behind pace."""
         if time.time() - self.usage_checked < 60:
             return
         self.usage_checked = time.time()
-        from . import usage
+        from . import turbo, usage
         winding = [p.name for p, what in usage.check() if what == "paused"]
         if winding:
             queue(f"Winding down at a usage limit: {', '.join(winding)}. Each agent tells the person where things stand "
                   "and their options on its next turn; colony wakes them at the reset.")
+        try:
+            turbo.tick()
+        except Exception as err:                # turbo is extra: whatever goes wrong in it, nothing else waits on it
+            turbo.trouble(err)
 
     def current(self):
         """Every two minutes, with no tokens: a console whose program has been updated, or whose settings or helper

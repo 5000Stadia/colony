@@ -46,6 +46,7 @@ def command(label, root=None, folder=None):
     from . import board, providers, selection
     selection.migrate(root)
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
+    s = {k: v for k, v in s.items() if k not in board.TURBO}        # what turbo means for it isn't how it starts
     if label != "monitor" or root:
         s = dict(s, **selection.pair(selection.main(root)))
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
@@ -161,6 +162,26 @@ def _started(name, fp):
     have[name] = {"fingerprint": fp, "at": time.time()}
     _started_path().parent.mkdir(parents=True, exist_ok=True)
     _started_path().write_text(json.dumps(have))
+
+
+def started(name):
+    """What a console was started with, as recorded (its fingerprint), or None."""
+    try:
+        return (json.loads(_started_path().read_text()).get(name) or {}).get("fingerprint")
+    except (OSError, ValueError):
+        return None
+
+
+def adopt(name, fp):
+    """Count a running console as started with fp: a change it needn't reload for (turbo's stronger models
+    ending), so it moves over only when it restarts for a reason of its own."""
+    try:
+        have = json.loads(_started_path().read_text())
+    except (OSError, ValueError):
+        return
+    if name in have:
+        have[name]["fingerprint"] = fp
+        _started_path().write_text(json.dumps(have))
 
 
 def running_version(name):

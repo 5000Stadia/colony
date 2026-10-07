@@ -10,7 +10,12 @@ model/effort pairs. Providers without effort controls use explicit null effort.
 Artificial Analysis Intelligence Index is the only selection score. The ceiling
 is the highest comparable score across runnable pairs from all enabled, installed
 providers, including qualifying estimates. Quota usage never changes eligibility,
-the ceiling, the slider or a pick. Safe pause handles exhausted usage separately.
+the ceiling, the slider or a pick, with one exception the person asked for: turbo
+(`colony/turbo.py`). While a program's weekly use runs behind pace, a project that
+ticks stronger models runs its main agent and routine helpers as Auto picks them two
+positions toward Intelligence, latched once per turbo episode and applied at the
+console's idle reload; pins, rejections and approvals still hold. Safe pause handles
+exhausted usage separately.
 
 At Balanced, role goals are these distances below the shared ceiling:
 

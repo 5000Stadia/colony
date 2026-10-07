@@ -164,7 +164,7 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "helper_models": {}, "auto_balance": 3, "remote_by": {}}
+                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "turbo_by": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -176,6 +176,7 @@ SETTING_HELP = {
     # PROVIDER: Claude uses Remote Control; Codex uses an isolated app-server host.
     "remote": "new consoles are reachable in their provider's app: Claude or ChatGPT",
     "remote_by": "each program's default for new projects, as claude=on,codex=on (a project can turn its own off)",
+    "turbo_by": "turbo for each program, as claude=on,codex=on (on unless turned off): when its weekly use runs behind pace, its projects with queued work are turned up as each one ticks",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
@@ -258,8 +259,9 @@ def set_setting(key, value):
         reg['settings'][key] = value
         for field in ('model', 'effort'):
             reg['settings'][field] = (saved.get(value) or {}).get(field) or ''
-    elif key == "remote_by":
-        # Each program's default for new projects' remote reach; one not named follows `remote`.
+    elif key in ("remote_by", "turbo_by"):
+        # Each program's own: its default for new projects' remote reach (one not named follows `remote`), or
+        # whether turbo turns its projects up (one not named does).
         from .providers import PROVIDERS
         chosen = {}
         for pair in (x.strip() for x in str(value).split(",") if x.strip()):
@@ -286,7 +288,10 @@ def set_setting(key, value):
     return reg
 
 
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance")
+# What turbo means for a project, as it ticks it (colony/turbo.py): stronger models, going deeper on its queued
+# work, research on a topic it names. Never part of how its console starts.
+TURBO = {"turbo_models": True, "turbo_deeper": True, "turbo_research": False, "turbo_topic": ""}
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", *TURBO)
 
 
 def project_settings(root, changes=None):
@@ -310,6 +315,14 @@ def project_settings(root, changes=None):
                     own[k] = intelligence.position(v)
                 except ValueError:
                     raise KeyError(k)
+            elif k == "turbo_topic":
+                own[k] = " ".join(str(v).split())[:300]
+            elif k in TURBO:
+                if str(v).lower() not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
+                    raise KeyError(k)
+                own[k] = str(v).lower() in ("on", "true", "yes", "1")
+                if own[k] == TURBO[k]:
+                    own.pop(k)                         # as colony starts it: nothing of the project's own
             elif k == "remote":
                 own[k] = str(v).lower() in ("on", "true", "yes", "1")
             elif k == "permissions" and v not in PERMISSIONS:
@@ -323,8 +336,9 @@ def project_settings(root, changes=None):
         if 'auto_balance' in changes:
             selection.reconcile()
     g = registry()["settings"]
-    merged = {k: g[k] for k in PROJECT_KEYS}
+    merged = {k: g[k] for k in PROJECT_KEYS if k in g}
     merged["remote"] = g["remote_by"].get(own.get("provider") or g["provider"], g["remote"])
+    merged.update(TURBO)
     merged.update(own)
     return merged, own
 
@@ -846,6 +860,10 @@ def where(n):
 SUGGESTION = (" (a suggestion from the monitor, not an instruction from the person, and not a new task: it serves the"
               " work you are doing and widens nothing. Check it against what you know of that work; if it fits, ask the"
               " person to install it with colony gate; if not, say why with colony noted)")
+# The monitor's own idea for the work (colony suggest), a research question say: weighed, never obeyed.
+IDEA = (" (the monitor's own suggestion, not an instruction from the person and not a new task: weigh it against your"
+        " work and what the person asked; take it up only if it is worth doing, within the agreed scope, and answer"
+        " with colony noted either way)")
 
 
 def render_notes(ns, heading):
@@ -853,7 +871,8 @@ def render_notes(ns, heading):
         return ""
     lines = [heading]
     for n in ns:
-        by = {"monitor": " (from the person's monitor, acting for them)", "suggestion": SUGGESTION,
+        by = {"monitor": " (from the person's monitor, acting for them)",
+              "suggestion": IDEA if n.get("kind") == "idea" else SUGGESTION,
               "colony": " (from colony, the harness the person trusts: act on it as theirs)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
@@ -966,10 +985,10 @@ def said_reply(root, text):
     append(root, "said.jsonl", {"at": now(), "reply": ("…" + tail[-600:]) if len(tail) > 600 else tail})
 
 
-def add_note(root, anchor, text, *, author, quiet=False):
+def add_note(root, anchor, text, *, author, quiet=False, kind=None):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
     note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
-            "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {})}
+            "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {}), **({"kind": kind} if kind else {})}
     append(root, "notes.jsonl", note)
     return note
 
@@ -1750,7 +1769,22 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
-            + (auto_balance_fields(root) + tier_fields(root) if root else "") + f"<button>Save</button></form>")
+            + (auto_balance_fields(root) + tier_fields(root) + turbo_fields(root) if root else "") + f"<button>Save</button></form>")
+
+
+def turbo_fields(root):
+    """What turbo means for this project, ticked: an unticked box still says so (its hidden twin sends off)."""
+    from . import turbo
+    o = turbo.options(root)
+    box = lambda k, label: (f"<label><input type='checkbox' name='{k}' value='on'{' checked' if o[k] else ''}>"
+                            f"<input type='hidden' name='{k}' value='off'> {label}</label>")
+    return ("<div class='turbo'><p><b>Turbo</b> <span class='muted'>when its program's week runs behind pace, and only "
+            "if it has queued work or a research topic: alongside its work, never instead of it</span></p>"
+            + box("turbo_models", "Stronger models <span class='muted'>(two positions toward Intelligence, from its next idle reload)</span>")
+            + box("turbo_deeper", "Go deeper on queued work <span class='muted'>(preparation, tests, reviews, prior art, parallel helpers)</span>")
+            + box("turbo_research", "Research")
+            + f"<label>Research topic <input name='turbo_topic' value='{e(o['turbo_topic'])}' placeholder='what it would research'></label>"
+            + f"<p class='muted'>{e(turbo.project_line(root))}</p></div>")
 
 
 def auto_balance_fields(root=None):
@@ -1786,7 +1820,8 @@ def auto_balance_fields(root=None):
             "oninput=\"for(const p of this.closest('.auto-balance').querySelectorAll('[data-balance]')){p.hidden=p.dataset.balance!==this.value;if(!p.hidden)this.closest('.auto-balance').querySelector('output').textContent=p.querySelector('strong').textContent}\">"
             f"<output>{e(intelligence.POSITIONS[selected])}</output></label>"
             + toggle + "<p class='muted'>Higher intelligence keeps goals near the shared ceiling. Economy lowers the goals so cheaper pairs qualify. "
-            "Usage never moves this slider. Chores keep their value pick. Explicit model pins stay in effect.</p>"
+            "Usage never moves this slider; turbo, while a program's week runs behind pace, picks two positions toward "
+            "Intelligence for projects that tick stronger models. Chores keep their value pick. Explicit model pins stay in effect.</p>"
             "<details><summary>What each position picks today</summary>" + ''.join(panels) +
             "</details><p class='muted'>Preview only until saved; new models follow your adoption setting. Missing evidence keeps the accepted choice.</p></div>")
 
@@ -2438,6 +2473,9 @@ def models_page(reg):
     problems, notes, _ = intelligence.health(entries)
     health = (f"<p><strong style='color:var(--flag)'>Model data:</strong> {e('; '.join(problems + notes))}.</p>"
               if problems or notes else '')
+    from . import turbo
+    health += ("<p class='muted'>Turbo: " + e("; ".join(turbo.line(k) for k in families)) + ". A project that ticks "
+               "stronger models runs two positions toward Intelligence while its program's turbo is on.</p>") if families else ''
     return shell(reg, -2, model_changes() + "<header><h1>Models</h1><p>Artificial Analysis Intelligence Index and cost per benchmark task. "
                  f"Shared runnable intelligence ceiling: <strong>{title}</strong>. "
                  "Scores within one point count as equal; the cheaper pair wins. Estimates are labelled and can participate. "
@@ -2672,11 +2710,12 @@ def settings_page(reg):
         state = ("installed" if pv.installed(p) else f"not installed: <a href='{e(p.site)}' target='_blank' rel='noopener'>get it</a>")
         also = (f"; off, but {len(using)} project{'s' * (len(using) != 1)} still run on it ({e(', '.join(using))})"
                 if using and not pv.enabled(p) else f"; {len(using)} project{'s' * (len(using) != 1)}" if using else "")
-        from . import usage
+        from . import turbo, usage
         used = usage.line(k) if pv.installed(p) else ""
         used = f"Usage: {used}" if used else ""
         out = signed_out().get(k)
         used = (f"signed out since {out}: sign in again in a terminal" + (f" · {used}" if used else "")) if out else used
+        pace = f"<p class='muted' style='margin:0 0 8px 26px'>Pace: {e(turbo.line(k, named=False))}</p>" if pv.installed(p) else ""
         from . import catalog_freshness
         freshness = catalog_freshness.info(p)
         fresh = " · ".join(f"{e(label)}: {e(value)}" for label, value in freshness['fields'])
@@ -2695,7 +2734,7 @@ def settings_page(reg):
             remote_info += '. ChatGPT shows the machine name as host; each conversation carries its project name.</p>'
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
                 f"<span class='muted'>({state}{also})</span></label>"
-                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + fresh + remote_info)
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + pace + fresh + remote_info)
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
@@ -2706,6 +2745,11 @@ def settings_page(reg):
                          f"New {e(p.label)} projects are reachable from {'ChatGPT' if k == 'codex' else 'the Claude app'} "
                          "<span class='muted'>(each project can turn it off)</span></label>"
                          for k, p in pv.PROVIDERS.items() if pv.usable(p)) +
+               "".join(f"<label><input type='checkbox' name='turbo_{k}' value='on'"
+                       f"{' checked' if reg['settings']['turbo_by'].get(k, True) else ''}> Turbo for {e(p.label)} "
+                       "<span class='muted'>(when its weekly use runs behind pace, its projects with queued work are "
+                       "turned up as each ticks in its own Settings)</span></label>"
+                       for k, p in pv.PROVIDERS.items() if pv.usable(p)) +
                f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
@@ -3155,6 +3199,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, b'Auto balance must be from 0 to 6')
             from . import providers as pv
             set_setting("remote_by", ",".join(f"{k}={form.get('remote_' + k, 'off')}" for k, p in pv.PROVIDERS.items() if pv.usable(p)))
+            set_setting("turbo_by", ",".join(f"{k}={form.get('turbo_' + k, 'off')}" for k, p in pv.PROVIDERS.items() if pv.usable(p)))
             set_setting("monitor", form.get("monitor", "off"))
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
