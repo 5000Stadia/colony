@@ -66,7 +66,9 @@ class PaceTest(unittest.TestCase):
             self.assertFalse(turbo.pace(r, self.now, on=True)["on"], r)
         old = turbo.pace(reading(0, 4, self.now, at_ago=turbo.STALE + 1), self.now, on=True)
         self.assertFalse(old["on"], "an old reading: off, even mid-turbo")
-        self.assertIn("no usage reading in the last 3 hours", old["why"])
+        self.assertIn("no usage reading in the last 12 hours", old["why"])
+        self.assertTrue(turbo.pace(reading(0, 4, self.now, at_ago=11 * HOUR), self.now)["on"],
+                        "a reading from last night still counts: Claude's ages while no console of its runs")
         self.assertTrue(turbo.pace(reading(0, 4, self.now, at_ago=turbo.STALE - 60), self.now)["on"])
         self.assertFalse(turbo.pace(reading(0, 7.5, self.now), self.now, on=True)["on"],
                          "the week turned over since the reading: off until a fresh one")
@@ -322,7 +324,7 @@ class TurboTest(TurboBase):
             self.readings["claude"] = r
             self.assertEqual(turbo.tick(self.now), [], why)
         self.assertEqual(self.turbo_notes(), [])
-        self.assertIn("turbo off (no usage reading in the last 3 hours)", turbo.line("claude", self.now))
+        self.assertIn("turbo off (no usage reading in the last 12 hours)", turbo.line("claude", self.now))
         w = monitor.Watcher(quiet=0)
         w.usage_checked = 0
         with patch.object(turbo, "tick", side_effect=RuntimeError("a surprise")):

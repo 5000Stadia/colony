@@ -23,7 +23,8 @@ WEEK = 7 * DAY
 TARGET = 99              # % of the week used by the hour before it resets
 BEHIND = 5               # points behind pace that turn turbo on; catching up turns it off
 FROM = 2 * DAY           # no judgement before day 2 of the window
-STALE = 3 * HOUR         # an older reading isn't trusted: turbo stays off
+STALE = 12 * HOUR        # an older reading isn't trusted: turbo stays off (Claude's refreshes only while a console runs,
+                         # so overnight it ages; an old reading only understates use, and the safe pause still guards)
 FRESH = 15 * 60          # a turbo the watcher hasn't kept this long stands down
 RAISE = 2                # positions toward Intelligence for a project that ticks stronger models
 NUDGE = "[colony] You have an update from Colony."              # the watcher's own words for a colony note
