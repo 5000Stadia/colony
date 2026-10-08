@@ -72,8 +72,8 @@ steer all of them from one board, and the projects can write to each other.
 - An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
-- A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"`; the answer
-  arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
+- A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
+  `--default "what stands if they skip it"`); the answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
