@@ -12,7 +12,9 @@ import re
 from pathlib import Path
 
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
-OFFSETS = {'main': 4, 'routine': 10, 'step-up': 0, 'consultant': 0, 'monitor': 2}
+# Each role's goal: this far below the shared ceiling at Balanced. Rote alone has none: mechanical work takes
+# the most points per task-dollar (the person's call).
+OFFSETS = {'main': 4, 'routine': 10, 'chores': 20, 'step-up': 0, 'consultant': 0, 'monitor': 2}
 POSITIONS = ('Intelligence', 'Intelligence + 1', 'Intelligence + 2', 'Balanced', 'Economy − 2', 'Economy − 1', 'Economy')
 TOLERANCE = 1
 PAGES = 'https://artificialanalysis.ai/models/'
@@ -246,8 +248,8 @@ def pick(family, role, points, balance=3, ceiling=None, blocked=()):
         return None
     best = max(p['score'] for p in mine)
     shift = 0 if role in ('consultant', 'step-up') else 2 * (balance - 3)
-    goal = None if role == 'chores' else max(0, ceiling - max(0, OFFSETS[role] + shift))
-    if role == 'chores':
+    goal = None if role == 'rote' else max(0, ceiling - max(0, OFFSETS[role] + shift))
+    if role == 'rote':
         chosen = min(priced, key=lambda p: (-p['score'] / p['cost'], p['cost'], p['model'], p['effort']))
         reason = 'Most Intelligence Index points per task-dollar'
         target = None

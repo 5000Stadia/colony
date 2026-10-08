@@ -85,7 +85,7 @@ steer all of them from one board, and the projects can write to each other.
 - What the person will keep opening: `colony pin PATH-or-URL --title "..." --why "..."`.
 - A turn that ends with a question waits for the person on the board; if they ask you something first, answer
   it and ask yours again.
-- Helpers run at three tiers (routine, step-up, chores), handed to you at each session start.
+- Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
 - How long work goes well, from colony's measured runs: `GUIDE_PATH`. Read it at a project's start, and again
   when weighing structure (helpers, review, tests, memory).
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
@@ -1821,7 +1821,7 @@ def auto_balance_fields(root=None):
             f"<output>{e(intelligence.POSITIONS[selected])}</output></label>"
             + toggle + "<p class='muted'>Higher intelligence keeps goals near the shared ceiling. Economy lowers the goals so cheaper pairs qualify. "
             "Usage never moves this slider; turbo, while a program's week runs behind pace, picks two positions toward "
-            "Intelligence for projects that tick stronger models. Chores keep their value pick. Explicit model pins stay in effect.</p>"
+            "Intelligence for projects that tick stronger models. Rote keeps its value pick at every position. Explicit model pins stay in effect.</p>"
             "<details><summary>What each position picks today</summary>" + ''.join(panels) +
             "</details><p class='muted'>Preview only until saved; new models follow your adoption setting. Missing evidence keeps the accepted choice.</p></div>")
 

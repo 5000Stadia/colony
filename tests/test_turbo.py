@@ -512,13 +512,13 @@ class StrongerModelsTest(TurboBase):
         selection.reconcile()
         bench.write_helpers(self.root)
         self.base = {r: selection.pair(selection.main(self.root) if r == "main" else selection.helper(self.root, r))
-                     for r in ("main", "routine", "step-up", "chores")}
+                     for r in ("main", "routine", "step-up", "chores", "rote")}
         console._started(self.name, console.fingerprint(self.root))           # its console, as started before turbo
         self.assertIsNone(console.stale(self.root))
 
     def seats(self):
         return {r: selection.pair(selection.main(self.root) if r == "main" else selection.helper(self.root, r))
-                for r in ("main", "routine", "step-up", "chores")}
+                for r in ("main", "routine", "step-up", "chores", "rote")}
 
     def routine_file(self):
         return (self.root / ".claude" / "agents" / "colony-routine.md").read_text()
@@ -531,8 +531,8 @@ class StrongerModelsTest(TurboBase):
             self.assertNotEqual(up[role], self.base[role], f"{role}: stronger")
             want = bench.role_pick("claude", role, bench.standings(), balance=1, ceiling=ceiling)
             self.assertEqual(up[role], selection.pair(want), f"{role}: Auto two positions toward Intelligence")
-        self.assertEqual({r: up[r] for r in ("step-up", "chores")}, {r: self.base[r] for r in ("step-up", "chores")},
-                         "step-up is already at the ceiling; chores keep their value pick")
+        self.assertEqual({r: up[r] for r in ("step-up", "chores", "rote")}, {r: self.base[r] for r in ("step-up", "chores", "rote")},
+                         "step-up is already at the ceiling; chores and rote are left unboosted")
         self.assertIn(f"model: {up['routine']['model']}", self.routine_file())
         self.assertTrue(selection.main(self.root)["why"].startswith("Turbo: Intelligence + 1"))
         self.assertEqual(console.stale(self.root), "its settings or helper tiers changed",
