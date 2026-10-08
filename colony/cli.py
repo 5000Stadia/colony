@@ -653,7 +653,7 @@ def cmd_notes(a):
         if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here
             console.remember(root, *seen(payload))
         prompt = str(payload.get("prompt") or "")
-        if prompt and not prompt.startswith("[colony]"):
+        if _persons(prompt):
             board.answer_asks(root, "in the console")        # the person answered there themselves
             board.said(root, prompt)                         # their own words, for the monitor to catch up on
         from . import bench
@@ -672,7 +672,7 @@ def cmd_notes(a):
         # Outside the person's active hours, a project's agent hears it on every turn; inside them, nothing. The
         # monitor's own console isn't a project: its brief says what the hours mean for it.
         # The person typing to it now is awake: their own turn gets no such line.
-        night = ("" if Path(root).resolve() == monitor.home().resolve() or (prompt and not prompt.startswith("[colony]"))
+        night = ("" if Path(root).resolve() == monitor.home().resolve() or _persons(prompt)
                  else hours.notice())
         text = "\n\n".join(filter(None, [
             standing,
@@ -731,6 +731,16 @@ def cmd_pair(a):
     print(f"{result['manualPairingCode']}  (expires {expires}): in the ChatGPT app, signed in to the same account, "
           "open Codex → Add manually and enter it")
     return 0
+
+
+# Prompts the agent program or colony makes, never the person: colony's own nudges, and a background helper's
+# result, which Claude Code hands back as a prompt.
+MADE = ("[colony]", "<task-notification>", "<system-reminder>", "<command-name>", "<local-command")
+
+
+def _persons(prompt):
+    """Whether a prompt is the person's own words."""
+    return bool(prompt) and not prompt.lstrip().startswith(MADE)
 
 
 def cmd_noted(a):

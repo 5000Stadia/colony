@@ -88,6 +88,13 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_a_helpers_result_handed_back_as_a_prompt_is_never_the_persons_words(self):
+        from colony import cli
+        self.assertTrue(cli._persons("Please carry on"))
+        for made in ("[colony] You have mail.", "<task-notification>\n<status>completed</status>", "  <system-reminder>x"):
+            self.assertFalse(cli._persons(made), made)
+        self.assertFalse(cli._persons(""))
+
     def test_a_muted_monitor_is_never_woken_and_cannot_be_muted_holding_the_helm(self):
         monitor.helm(False)
         monitor.muted(True)
