@@ -332,6 +332,14 @@ def cmd_gate(a):
     if owner and owner != Path(root).resolve() and owner.exists():
         board.add_note(owner, None, f"Costly decision for {a.item}: {a.question}. Reason: {a.why}. "
                        f"Gate {gid} is owned by {root.name}; keep work affected by it stopped.", author='colony', quiet=True)
+    if gate.get("held_until"):
+        # Outside the person's active hours it isn't their question yet, so it holds back only what depends on it:
+        # the version carries on meanwhile, and stops for the answer once the hours begin and the gate is theirs.
+        from . import hours
+        print(f"gate {gid} is held for the person's active hours: it reaches them with any others at "
+              f"{hours.at_clock(board.epoch(gate['held_until']))}. Don't proceed on it until the answer arrives as a note; "
+              "meanwhile keep on with what doesn't depend on it")
+        return 0
     continuation.tick(root, forced_hold='blocking decision')
     print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note")
     return 0
@@ -659,6 +667,10 @@ def cmd_notes(a):
             engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
         except Exception as error:                      # a sync problem never costs the turn its notes and mail
             engagement, engagement_receipt = f"Colony could not sync this workspace: {error}", None
+        from . import hours, monitor
+        # Outside the person's active hours, a project's agent hears it on every turn; inside them, nothing. The
+        # monitor's own console isn't a project: its brief says what the hours mean for it.
+        night = "" if Path(root).resolve() == monitor.home().resolve() else hours.notice()
         text = "\n\n".join(filter(None, [
             standing,
             lead.role_text(root) if a.session else '',
@@ -670,7 +682,8 @@ def cmd_notes(a):
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
             mail.render(new_mail, "Mail from other projects in the colony:"),
-            mail.render(open_asks, "Questions from the colony you haven't answered yet:")]))
+            mail.render(open_asks, "Questions from the colony you haven't answered yet:"),
+            night]))
     else:
         text = board.render_notes(board.open_notes(root, a.item), "Open notes:") or "No open notes."
     if text:
@@ -840,6 +853,8 @@ def cmd_settings(a):
             board.set_setting(a.key, a.value or "")
         except KeyError:
             raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.DEFAULT_SETTINGS)}, new-folder")
+        except ValueError as err:                     # a setting that says what reads (active_hours)
+            raise SystemExit(f"colony: {err}")
     reg = board.registry()
     from . import providers
     for k in board.DEFAULT_SETTINGS:
