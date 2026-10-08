@@ -2565,7 +2565,7 @@ class ConsultTest(BoardBase):
     def test_two_families_answer_a_brief_in_the_persons_words_and_the_cost_is_logged(self):
         rec = self.consult.run(self.root, "R3", "How should reminders work?", "Plants are in plants.db (db.py:12).")
         self.assertIn("don't survey the project", self.calls[0]["brief"])   # bounded: no wild-goose chase
-        self.assertEqual([c["model"] for c in self.calls], ["claude-opus-5-5", "gpt-6-astra"])
+        self.assertEqual(sorted(c["model"] for c in self.calls), ["claude-opus-5-5", "gpt-6-astra"])   # asked side by side
         brief = self.calls[0]["brief"]
         self.assertIn("A tool for my plants.", brief)             # the person's goal, verbatim
         self.assertIn("roadmap item R3: reminders", brief)

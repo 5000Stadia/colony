@@ -108,9 +108,10 @@ def ask(key, text, model, effort, root):
     doesn't report its cost is priced from the benchmark data (unknown: no cost shown)."""
     from . import bench
     p = providers.get(key, strict=True)
+    folder = board.workdir(Path(root))       # the files it may read: a project sharing another's folder reads that one
     if getattr(p, "reports_cost", True):
-        return p.consult(text, model, effort, root)
-    return p.consult(text, model, effort, root, price=bench.token_price(model))
+        return p.consult(text, model, effort, folder)
+    return p.consult(text, model, effort, folder, price=bench.token_price(model))
 
 
 def consultants():

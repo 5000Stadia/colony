@@ -632,6 +632,10 @@ class Codex:
         usage = {}
         try:
             proc = (popen or subprocess.Popen)(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            import threading
+            guard = threading.Timer(1800, proc.kill)    # a hung run never holds its caller (or a turbo slot) for good
+            guard.daemon = True
+            guard.start()
             proc.stdin.write(brief)
             proc.stdin.close()
             for line in proc.stdout:
@@ -643,6 +647,7 @@ class Codex:
                 if isinstance(u, dict) and u:
                     usage = u
             proc.wait(timeout=60)
+            guard.cancel()
         except (OSError, subprocess.TimeoutExpired) as err:
             return {"text": "", "cost": None, "error": err.__class__.__name__}
         return {"text": last.read_text() if last.exists() else "", "cost": cost(usage) if price else None,
