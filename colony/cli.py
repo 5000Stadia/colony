@@ -3,7 +3,7 @@ waits on them for, its roadmap, and a monitor that can act for them.
 
     colony track [PATH]             put a project on the board (roadmap, notes, gates, delivery hooks)
     colony board [--port 8790] [--lan]  one page for all tracked projects, with each project's live console
-    colony gate "QUESTION" [--item R4] [--why ...]   put a decision in the person's hands
+    colony gate "QUESTION" [--item R4] [--why ...] [--default ...]   put a decision in the person's hands
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
     colony noted ID "TEXT"          mark a note as acted on, with what was done
     colony vision [--history]       read this project's vision or its dated changes
@@ -296,6 +296,8 @@ def cmd_gate(a):
         try:
             if a.consult or a.points:
                 raise ValueError("An answered gate already has its consultation and points; do not replace them.")
+            if a.default:
+                raise ValueError("A default goes with a new gate's question, not an answer.")
             decisions = {}
             for value, ids in (("accept", a.accept), ("reject", a.reject)):
                 for ident in ids:
@@ -318,7 +320,8 @@ def cmd_gate(a):
         if bool(a.consult) != bool(a.points):
             raise ValueError("Use --consult ID and --points FILE together.")
         points = json.loads(sys.stdin.read() if a.points == "-" else Path(a.points).read_text()) if a.points else None
-        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when)
+        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when,
+                              default=a.default)
     except (ValueError, OSError) as err:
         print(str(err), file=sys.stderr)
         return 2
@@ -326,6 +329,10 @@ def cmd_gate(a):
     if a.when and next(g for g in board.gates(root) if g["id"] == gid).get("waits_for"):
         print(f"gate {gid} waits until {a.when} starts, off the person's list; carry on meanwhile")
         return 0
+    from . import hours
+    # A default stands only for a decision the person skips: until then, the gate is theirs like any other.
+    skipped = (f" If they skip it, its default stands at {hours.at_day(board.stands_at(root, gate))} and arrives as their "
+               "answer." if gate.get("default") else "")
     from . import lead, continuation
     # Only the member at work on the gate's item hears of it, on its next turn: no one is woken for it.
     job = lead.info(root)['assignments'].get(a.item) if a.item else None
@@ -336,13 +343,12 @@ def cmd_gate(a):
     if gate.get("held_until"):
         # Outside the person's active hours it isn't their question yet, so it holds back only what depends on it:
         # the version carries on meanwhile, and stops for the answer once the hours begin and the gate is theirs.
-        from . import hours
         print(f"gate {gid} is held for the person's active hours: it reaches them with any others at "
               f"{hours.at_clock(board.epoch(gate['held_until']))}. Don't proceed on it until the answer arrives as a note; "
-              "meanwhile keep on with what doesn't depend on it")
+              f"meanwhile keep on with what doesn't depend on it.{skipped}")
         return 0
     continuation.tick(root, forced_hold='blocking decision')
-    print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note")
+    print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note.{skipped}")
     return 0
 
 
@@ -1206,6 +1212,8 @@ def main(argv=None):
     p = sub.add_parser("pair", help="a ChatGPT pairing code for a Codex project (--check CODE confirms it)")
     p.add_argument("name", nargs="?"); p.add_argument("--check", metavar="CODE"); p.set_defaults(fn=cmd_pair)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
+    p.add_argument("--default", help="only for a reversible choice: what stands if the person skips it, once it has "
+                   "been on their page a whole day; a costly or irreversible decision has no default")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")
     p.add_argument("--when", metavar="ITEM", help="the question waits, off the person's list, until roadmap ITEM starts")

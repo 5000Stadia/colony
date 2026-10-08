@@ -126,7 +126,7 @@ def hold(root, member):
     for source in g['members']:
         if any(board.due(gate) and (not gate.get('item') or gate['item'] in c['items']) for gate in board.gates(Path(source))):
             return 'blocking decision'
-        if source == member and board.asks(Path(source)):
+        if source == member and any(not a['held'] for a in board.asks(Path(source))):   # held at night: work goes on
             return 'question for the person'
     if member != g['lead']:
         actionable = any(a['owner'] == member and a['item'] in c['items'] and
