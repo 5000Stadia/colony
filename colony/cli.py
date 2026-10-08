@@ -671,7 +671,9 @@ def cmd_notes(a):
         from . import hours, monitor
         # Outside the person's active hours, a project's agent hears it on every turn; inside them, nothing. The
         # monitor's own console isn't a project: its brief says what the hours mean for it.
-        night = "" if Path(root).resolve() == monitor.home().resolve() else hours.notice()
+        # The person typing to it now is awake: their own turn gets no such line.
+        night = ("" if Path(root).resolve() == monitor.home().resolve() or (prompt and not prompt.startswith("[colony]"))
+                 else hours.notice())
         text = "\n\n".join(filter(None, [
             standing,
             lead.role_text(root) if a.session else '',
