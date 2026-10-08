@@ -31,6 +31,28 @@ def record_claude(payload):
         (folder() / "claude.json").write_text(json.dumps({"at": time.time(), "windows": windows}))
 
 
+def codex_live():
+    """Codex's limits asked of a running Codex server (no tokens), when one is up: fresh even while every console idles."""
+    from . import codex_remote
+    from .codex_rpc import Client, RPCError
+    for home in sorted((h for h in (board.home() / "codex-remote").glob("*") if h.is_dir()),
+                       key=lambda h: h.stat().st_mtime, reverse=True):
+        if not codex_remote.alive(home):
+            continue
+        try:
+            with Client(codex_remote.socket_for(home), timeout=2) as client:
+                limits = client.call("account/rateLimits/read", {}).get("rateLimits") or {}
+        except (OSError, RPCError, ValueError):
+            continue
+        windows = {}
+        for w in (limits.get("primary"), limits.get("secondary")):
+            if w and WINDOWS.get(w.get("windowDurationMins")) and w.get("usedPercent") is not None:
+                windows[WINDOWS[w["windowDurationMins"]]] = {"used": w["usedPercent"], "resets_at": w.get("resetsAt")}
+        if windows:
+            return {"at": time.time(), "windows": windows}
+    return None
+
+
 def codex(home=None):
     """Codex's limits, from the newest session file that reports them, across every Codex home colony runs (each
     project's own, and the person's): its rate limits are the account's, whichever home wrote them. Only each file's
@@ -86,7 +108,7 @@ def reading(key):
             return json.loads((folder() / "claude.json").read_text())
         except (OSError, ValueError):
             return None
-    return codex() if key == "codex" else None
+    return (codex_live() or codex()) if key == "codex" else None
 
 
 def read(key, raw=False):
