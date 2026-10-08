@@ -3574,10 +3574,9 @@ class ServerTest(BoardBase):
             other.server_close()
 
 
-class ActiveHoursTest(BoardBase):
-    """R82: the person's active hours. Outside them agents keep working and hold their questions, which reach the
-    person together when the hours begin; the person's own words and colony's safety notices go through at any hour.
-    Every check fixes the clock, on 7 October 2026 by this machine's own clock, whatever its zone."""
+class HoursBase(BoardBase):
+    """A tracked project on the person's own hours (colony's default), with both of colony's clocks fixed in each
+    check, on 7 October 2026 and the days after by this machine's own clock, whatever its zone."""
 
     def setUp(self):
         super().setUp()
@@ -3620,6 +3619,15 @@ class ActiveHoursTest(BoardBase):
                 redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.main(["gate", *args]), 0)
         return out.getvalue(), tick
+
+    def stamp(self, hour, minute=0, day=7):
+        """A moment on the board's clock, as colony keeps it in its records."""
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.at(hour, minute, day)))
+
+
+class ActiveHoursTest(HoursBase):
+    """R82: the person's active hours. Outside them agents keep working and hold their questions, which reach the
+    person together when the hours begin; the person's own words and colony's safety notices go through at any hour."""
 
     def test_the_setting_reads_a_range_even_across_midnight_or_off_and_refuses_anything_else(self):
         self.assertEqual(board.DEFAULT_SETTINGS["active_hours"], "07:30-23:45", "the person's own hours, by default")
@@ -3739,7 +3747,7 @@ class ActiveHoursTest(BoardBase):
             self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]],
                              "already theirs: night changes nothing")
 
-    def test_at_night_the_monitor_wakes_only_for_what_it_can_act_on_and_hears_the_rest_together_at_the_start(self):
+    def test_at_night_the_monitor_hears_nothing_for_the_person_and_hears_it_together_at_the_start(self):
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
         with self.clock(2):
@@ -3750,20 +3758,18 @@ class ActiveHoursTest(BoardBase):
             self.assertEqual(self.sent, [], "what only the person can settle doesn't wake it at night")
             board.record_ask(self.root, "t1", "Shall I index the log?")
             w.tick()
-        self.assertEqual(len(self.sent), 1, "a question it can settle, holding the helm, wakes it at any hour")
-        self.assertIn("asked you: Shall I index the log?", self.sent[0])
-        self.assertNotIn("ready for your OK", self.sent[0])
+        self.assertEqual(self.sent, [], "R80: a question asked in the console at night waits for the hours, like a gate")
         with self.clock(5):
             board.add_gate(self.root, "Rename the project?")
             w.tick()
-        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent, [])
         with self.clock(7, 30):
             w.tick()
             w.tick()
-        self.assertEqual(len(self.sent), 2, "when the hours begin: one message")
-        for words in ("opened a gate: Email or SMS?", "opened a gate: Rename the project?", "has R2 ready for your OK"):
-            self.assertIn(words, self.sent[1])
-        self.assertNotIn("asked you", self.sent[1], "what it heard at night isn't told again")
+        self.assertEqual(len(self.sent), 1, "when the hours begin: one message")
+        for words in ("opened a gate: Email or SMS?", "opened a gate: Rename the project?", "has R2 ready for your OK",
+                      "asked you: Shall I index the log?"):
+            self.assertIn(words, self.sent[0])
 
     def test_the_persons_own_words_and_colonys_safety_notices_go_through_at_any_hour(self):
         with self.clock(3):
@@ -3814,6 +3820,252 @@ class ActiveHoursTest(BoardBase):
         self.assertIn("outside the person's active hours", out, "a turn turbo starts at night hears the hours")
         with self.clock(7, 30):
             self.assertEqual(turbo.held(self.root, snap), "waiting on the person", "theirs now: turbo leaves it be")
+
+
+class DailyPageTest(HoursBase):
+    """R80: one page a day for each project, made by code from colony's records: what landed, the day's decisions by
+    number with defaults that stand if skipped, the queue, and what is held for the person's hours."""
+
+    NUM = re.compile(r"<span class='num'>(\d+)</span> <b>([^<]+)</b>")
+
+    def commit_at(self, msg, t):
+        """A commit made at a fixed moment."""
+        env = dict(os.environ, GIT_AUTHOR_DATE=f"@{int(t)}", GIT_COMMITTER_DATE=f"@{int(t)}")
+        self.git("add", "-A")
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg,
+                        "--allow-empty"], capture_output=True, env=env)
+
+    def server(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        return httpd.server_address[1]
+
+    def post(self, port, path, **form):
+        """A form sent from the page: its status, and the page it led to."""
+        try:
+            with urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                                                               data=urllib.parse.urlencode(form).encode())) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as err:
+            return err.code, err.read().decode()
+
+    def answers(self):
+        return {g["question"]: g["answer"] for g in board.gates(self.root)}
+
+    def test_a_default_is_kept_on_the_gate_shown_under_its_question_and_only_for_a_reversible_choice(self):
+        with self.clock(14):
+            said, tick = self.gate("Which reminders first?", "--item", "R3", "--why", "R3 starts with one",
+                                   "--default", "email first, SMS later")
+            [gate] = board.gates(self.root)
+        self.assertEqual(gate["default"], "email first, SMS later")
+        self.assertIn("If they skip it, its default stands at Fri 7:30 AM and arrives as their answer.", said)
+        tick.assert_called_once_with(self.root, forced_hold="blocking decision")   # theirs, like any gate, until then
+        with self.clock(15):
+            for page in (board.render(board.registry(), 0, "today"), board.needs_you(board.registry()),
+                         board.waiting_html(0, self.root), board.render_item(board.registry(), 0, "R3")):
+                self.assertIn("If you skip it: email first, SMS later", page)
+                self.assertIn("stands Fri 7:30 AM", page)
+        helped = " ".join(self.cli("gate", "--help").stdout.split())
+        self.assertIn("only for a reversible choice", helped)
+        self.assertIn("a costly or irreversible decision has no default", helped)
+        self.assertIn('(if reversible, `--default "what stands if they skip it"`)', " ".join(board.PROTOCOL.split()))
+        with self.assertRaisesRegex(ValueError, "consultant points has no default"):
+            board.add_gate(self.root, "Which changes?", consultation="c1", points=[{"text": "x", "consultants": [1]}],
+                           default="none of them")
+        refused = self.cli("gate", "email", "--answered", gate["id"], "--default", "SMS")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("A default goes with a new gate's question", refused.stderr)
+
+    def test_a_skipped_default_stands_as_the_day_after_a_whole_one_begins_and_reaches_the_agent_as_the_answer(self):
+        with self.clock(14):                                           # Wednesday afternoon: on the page from 2 PM
+            first = board.add_gate(self.root, "Which reminders first?", "R3", default="email first")
+            plain = board.add_gate(self.root, "Keep the old export?", "R2")
+        with self.clock(3, day=8):                                     # held to Thursday 7:30: a whole Thursday
+            night = board.add_gate(self.root, "Rename the project?", default="keep plants")
+        for h, m, d in ((7, 30, 8), (23, 59, 8), (7, 29, 9)):
+            with self.clock(h, m, d):
+                self.assertEqual(board.stand_defaults(self.root), [], f"not yet on the {d}th at {h}:{m:02d}")
+        monitor.helm(False)
+        with self.clock(7, 30, day=9):                                 # Friday begins: no page open, no turn taken
+            monitor.Watcher(quiet=0).mail()
+            gs = {g["id"]: g for g in board.gates(self.root)}
+        self.assertEqual(gs[first["id"]]["answer"], "Default stood (skipped): email first")
+        self.assertEqual(gs[night["id"]]["answer"], "Default stood (skipped): keep plants")
+        self.assertEqual(gs[first["id"]]["answered_by"], "colony")
+        self.assertIsNone(gs[plain["id"]]["answer"], "never without a default")
+        self.assertEqual(self.sent, ["[colony] You have an update from Colony."], "the agent is woken for its answer")
+        [note] = [n for n in board.notes(self.root) if (n["anchor"] or {}).get("gate") == first["id"]]
+        self.assertEqual((note["author"], note.get("quiet")), ("colony", None))
+        with self.clock(7, 31, day=9):
+            out = self.deliver()
+            self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:" + plain["id"]])
+            page = board.render(board.registry(), 0, "today")
+        self.assertIn('On "Which reminders first?": Default stood (skipped): email first', out)
+        self.assertIn("Colony, the harness the person set up and trusts, tells you", out)
+        self.assertEqual(self.NUM.findall(page), [("1", "Which reminders first?"), ("2", "Keep the old export?"),
+                                                  ("3", "Rename the project?")], "settled today, each keeps its number")
+        self.assertIn("Default stood (skipped): email first", page)
+        self.assertNotIn("Your answer: Default stood", page)
+        with self.clock(7, 30, day=12):
+            self.assertEqual(board.stand_defaults(self.root), [], "a default stands once")
+
+    def test_a_default_never_stands_on_consultant_points_or_while_the_person_is_answering_it(self):
+        with self.clock(14):
+            board.append(self.root, "gates.jsonl", {"type": "gate", "id": "gp1", "at": board.now(), "question": "Which points?",
+                                                    "consult": "c1", "default": "none of them",   # a hand-edited record
+                                                    "points": [{"id": "P1", "text": "Keep history.", "sources": []}]})
+            mail = board.add_gate(self.root, "Email or SMS?", default="email")
+            weekly = board.add_gate(self.root, "Weekly or daily?", default="weekly")
+        with self.clock(7, 20, day=9):                     # typing an answer to one of them, not yet sent
+            numbers = {n: g["id"] for n, g in board.decisions(self.root)}
+            self.assertEqual(numbers, {"1": "gp1", "2": mail["id"], "3": weekly["id"]})
+            board.save_draft(self.root, "2 SMS, b", numbers)
+        with self.clock(7, 30, day=9):
+            board.stand_defaults(self.root)
+        with self.clock(8, 19, day=9):
+            board.stand_defaults(self.root)
+            answers = self.answers()
+        self.assertIsNone(answers["Which points?"], "consultant points need every one decided")
+        self.assertIsNone(answers["Email or SMS?"], "mid-answer: its default waits")
+        self.assertEqual(answers["Weekly or daily?"], "Default stood (skipped): weekly", "the rest stand")
+        with self.clock(8, 20, day=9):                     # an hour without a keystroke: they have left it
+            board.stand_defaults(self.root)
+        self.assertEqual(self.answers()["Email or SMS?"], "Default stood (skipped): email")
+        self.assertIsNone(self.answers()["Which points?"])
+
+    def test_answers_read_by_number(self):
+        n = {"1": "ga", "2": "gb", "3": "gc"}
+        self.assertEqual(board.by_number("1 yes\n2. email, not SMS; 3) as you say", n),
+                         {"1": "yes", "2": "email, not SMS", "3": "as you say"})
+        self.assertEqual(board.by_number("2: keep it; but trim it", n), {"2": "keep it; but trim it"})
+        self.assertEqual(board.by_number("yes, email", {"3": "gc"}), {"3": "yes, email"}, "one decision: words alone")
+        for text, why in (("yes", "Start each answer"), ("4 yes", "4 isn't an open decision"), ("1 yes\n1 no", "twice"),
+                          ("1 yes 2 no", "another decision's number"), ("2", "no answer")):
+            with self.assertRaisesRegex(ValueError, why, msg=text):
+                board.by_number(text, n)
+        self.assertEqual(set(board.by_number("1 SMS, b\n3", n, lenient=True)), {"1", "3"}, "a draft: what reads so far")
+
+    def test_the_days_page_shows_what_landed_numbers_its_decisions_answers_them_by_number_and_lists_the_queue(self):
+        (self.root / "ROADMAP.md").write_text(ROADMAP + "\n## Later\n\n- [ ] R9 a phone app\n")
+        self.commit_at("Later: a phone app", self.at(12, day=6))
+        with self.clock(18, day=6):
+            board.render(board.registry(), 0, "today")             # Tuesday evening, the person looks at the day
+        (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace("[~] R2", "[x] R2"))
+        self.commit_at("R2 water log keeps a year", self.at(22, day=6))
+        with self.clock(14):
+            first = board.add_gate(self.root, "Which reminders first?", "R3", "R3 starts with one", default="email first")
+        with self.clock(3, day=8):
+            night = board.add_gate(self.root, "Rename the project?", default="keep plants")
+        with self.clock(9, day=8):
+            last = board.add_gate(self.root, "Keep the old export?", "R2")
+            page = board.render(board.registry(), 0, "today")
+        self.assertIn("<a class='on' href='/?p=0&view=today'>Today</a>", page)
+        self.assertIn("Landed since Tue 6:00 PM", page, "since the last look on an earlier day")
+        landed = page.split("<h2>Landed")[1].split("<h2>")[0]
+        self.assertIn("<a href='/item?p=0&id=R2'>R2</a> water log <span class='st done'>done</span>", landed)
+        self.assertIn("<a href='/item?p=0&id=R2'>R2</a> water log keeps a year", landed)
+        self.assertNotIn("a phone app", landed, "it landed before that look")
+        self.assertEqual(self.NUM.findall(page), [("1", "Which reminders first?"), ("2", "Rename the project?"),
+                                                  ("3", "Keep the old export?")], "in the order each became theirs")
+        queue = page.split("<h2>Queue</h2>")[1]
+        self.assertIn("<a href='/item?p=0&id=R3'>R3</a> reminders", queue)
+        self.assertNotIn("R9", queue, "Later waits for the person")
+        self.assertNotIn("add plants", queue)
+        numbers = re.search(r"name='n' value='([^']+)'", page).group(1)
+        port = self.server()
+        with self.clock(10, day=8):
+            for text, why in (("yes", "Start each answer"), ("1 SMS 3 no", "another decision"), ("3 default", "no default")):
+                status, said = self.post(port, "/answers", p=0, n=numbers, text=text, back="/?p=0&view=today")
+                self.assertEqual(status, 400, text)
+                self.assertIn(why, said)
+                self.assertEqual(set(self.answers().values()), {None}, "nothing recorded")
+                self.assertEqual(board.draft(self.root)["text"], text, "what they wrote stays in the box")
+            status, _ = self.post(port, "/answers/draft", p=0, n=numbers, text="1 SMS first\n2 default")
+            self.assertEqual((status, board.draft(self.root)["text"]), (204, "1 SMS first\n2 default"))
+            self.assertIn(">1 SMS first\n2 default</textarea>", board.render(board.registry(), 0, "today"),
+                          "kept as typed: a reload loses nothing")
+            status, _ = self.post(port, "/answers", p=0, n=numbers, text="1 SMS first\r\n2 default", back="/?p=0&view=today")
+            self.assertEqual(status, 200)
+            page = board.render(board.registry(), 0, "today")
+        self.assertEqual(self.answers(), {"Which reminders first?": "SMS first",
+                                          "Rename the project?": "Default accepted: keep plants", "Keep the old export?": None})
+        self.assertIsNone(board.draft(self.root), "sent: nothing left behind")
+        [note] = [n for n in board.notes(self.root) if (n["anchor"] or {}).get("gate") == first["id"]]
+        self.assertEqual((note["author"], note["text"]), ("person", 'On "Which reminders first?": SMS first'))
+        self.assertEqual(self.NUM.findall(page)[2], ("3", "Keep the old export?"), "a number keeps its decision all day")
+        self.assertIn("name='n' value='3:" + last["id"] + "'", page, "only what's open is answered by number")
+        self.assertIn("Decisions (1)", page)
+        with self.clock(9, day=9):
+            board.save_draft(self.root, "3 keep it", {"3": night["id"]})       # typed against yesterday's numbers
+            page = board.render(board.registry(), 0, "today")
+        self.assertEqual(self.NUM.findall(page), [("1", "Keep the old export?")], "a new day numbers afresh")
+        self.assertIn("Unsent, from when the numbers were different", page)
+        self.assertNotIn(">3 keep it</textarea>", page, "never sent to the wrong decision")
+        self.assertIn("Landed since Thu 10:00 AM", page, "the day turned: since the last look on Thursday")
+
+    def test_needs_you_rolls_up_each_projects_numbered_decisions_with_a_box_for_each(self):
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
+        board.track(shop)
+        with self.clock(14):
+            board.add_gate(self.root, "Email or SMS?", default="email")
+            board.add_gate(self.root, "Weekly?")
+            board.add_gate(shop, "Open on Sundays?")
+            html = board.needs_you(board.registry())
+        self.assertEqual(self.NUM.findall(html), [("1", "Email or SMS?"), ("2", "Weekly?"), ("1", "Open on Sundays?")])
+        self.assertEqual(html.count("action='/answers'"), 2, "one box a project")
+        self.assertIn("If you skip it: email", html)
+        for name, pid in (("plants", 0), ("shop", 1)):
+            self.assertIn(f"<a class='dayline' href='/?p={pid}&view=today'>{name} today →</a>", html)
+
+    def test_a_question_asked_in_the_console_at_night_waits_for_the_hours_like_a_gate(self):
+        monitor.helm(True)
+        w = monitor.Watcher(quiet=0)
+        with self.clock(3):
+            ask = board.record_ask(self.root, "t1", "Shall I index the log?")
+            self.assertEqual(ask["held_until"], self.stamp(7, 30))
+            self.assertEqual(board.waiting_items(self.root), [], "off what waits on the person")
+            self.assertIn("Waiting on you (<span id='wcount'>0</span>)", board.render(board.registry(), 0))
+            self.assertNotIn("Shall I index the log?", board.needs_you(board.registry()))
+            held = board.waiting_html(0, self.root)
+            self.assertIn("asked in its console · held until 7:30 AM", held, "someone up at night can answer it")
+            self.assertIn("Shall I index the log?", board.render(board.registry(), 0, "today").split("Held for your hours")[1])
+            w.tick()
+        self.assertEqual(self.sent, [], "nor does it wake the monitor")
+        with self.clock(7, 30):
+            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["ask:" + ask["id"]])
+            w.tick()
+            w.tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("plants asked you: Shall I index the log?", self.sent[0])
+        with self.clock(14):
+            self.assertNotIn("held_until", board.record_ask(self.root, "t2", "Weekly, then?"), "within the hours: at once")
+        with self.clock(2, day=8):
+            late = board.record_ask(self.root, "t3", "Prune the old entries?")
+            board.clear_waiting(self.root, "ask:" + late["id"])
+            self.assertEqual(board.asks(self.root), [], "cleared from the held list")
+
+    def test_changing_the_hours_moves_what_is_held_to_the_new_ones(self):
+        with self.clock(3):
+            gate = board.add_gate(self.root, "Email or SMS?")
+            board.record_ask(self.root, "t1", "Shall I index the log?")
+        with self.clock(4):
+            board.set_setting("active_hours", "06:00-22:00")
+            [g], [a] = board.gates(self.root), board.asks(self.root)
+            self.assertEqual((g["held_until"], a["held_until"]), (self.stamp(6), self.stamp(6)))
+            self.assertEqual(board.waiting_items(self.root), [])
+            records = len(board.read(self.root, "gates.jsonl"))
+            board.set_setting("active_hours", "06:00-22:00")
+            self.assertEqual(len(board.read(self.root, "gates.jsonl")), records, "the same hours again: nothing moves")
+        with self.clock(6):
+            self.assertEqual({x["key"] for x in board.waiting_items(self.root)}, {"gate:" + gate["id"], "ask:" + a["id"]})
+        with self.clock(2, day=8):
+            later = board.add_gate(self.root, "Rename the project?")
+            self.assertFalse(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
+            board.set_setting("active_hours", "off")                    # always around: released at once
+            self.assertTrue(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
 
 
 if __name__ == "__main__":

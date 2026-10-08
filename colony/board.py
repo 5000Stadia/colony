@@ -82,8 +82,8 @@ steer all of them from one board, and the projects can write to each other.
 - An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
-- A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"`; the answer
-  arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
+- A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
+  `--default "what stands if they skip it"`); the answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
@@ -293,6 +293,8 @@ def set_setting(key, value):
     if key == 'auto_balance':
         from . import selection
         selection.reconcile()
+    if key == "active_hours":
+        restamp_held()                                       # what waits for the hours, waits for the new ones
     return reg
 
 
@@ -716,13 +718,18 @@ def asks_question(text):
 
 
 def asks(root):
-    """The turns that asked the person something and haven't had an answer: at most the latest one."""
-    out = {}
+    """The turns that asked the person something and haven't had an answer: at most the latest one. One asked outside
+    the person's active hours keeps `held` (its `held_until`) until those begin, like a gate."""
+    out, clock = {}, now()
     for e in read(root, "asks.jsonl"):
         if e["type"] == "ask":
-            out[e["id"]] = e
+            out[e["id"]] = dict(e)
         elif e["type"] == "answered":
             out.pop(e["of"], None)
+        elif e["type"] == "held" and e["of"] in out:            # the person's hours changed: released at the new ones
+            out[e["of"]]["held_until"] = e["until"]
+    for a in out.values():
+        a["held"] = a["held_until"] if a.get("held_until", "") > clock else None
     return list(out.values())
 
 
@@ -748,6 +755,9 @@ def record_ask(root, key, text, explicit=False):
         return None
     answer_asks(root, "superseded by a later turn")
     ask = {"type": "ask", "id": "a" + secrets.token_hex(3), "at": now(), "key": key, "text": text.strip()}
+    until = hours.held_until(epoch(ask["at"]))       # asked at night: the person's when their hours begin
+    if until:
+        ask["held_until"] = until
     append(root, "asks.jsonl", ask)
     return ask
 
@@ -789,15 +799,20 @@ def plain(text):
 def gates(root):
     """Every gate with its answer. One that waits for its moment (`when`) keeps `waits_for` until that item starts:
     it is no one's question yet. An item that isn't on the roadmap doesn't hold a question back. One opened outside
-    the person's active hours keeps `held` (its `held_until`) until those begin, and then reaches them with the rest."""
+    the person's active hours keeps `held` (its `held_until`) until those begin, and then reaches them with the rest.
+    `answered_by` is colony where a default stood, the person otherwise."""
     out, later, clock = {}, None, now()
     for e in read(root, "gates.jsonl"):
         if e["type"] == "gate":
-            out[e["id"]] = dict(e, answer=None, answered_at=None, point_decisions=None, note_id=None, comment="", cleared=False)
+            out[e["id"]] = dict(e, answer=None, answered_at=None, point_decisions=None, note_id=None, comment="",
+                                cleared=False, answered_by=None)
         elif e["type"] == "answer" and e["of"] in out:
             out[e["of"]].update(answer=e["text"], answered_at=e["at"],
                                 point_decisions=e.get("point_decisions"), note_id=e.get("note_id"),
-                                comment=e.get("comment", ""), cleared=e.get("cleared", False))
+                                comment=e.get("comment", ""), cleared=e.get("cleared", False),
+                                answered_by=e.get("author", "person"))
+        elif e["type"] == "held" and e["of"] in out:            # the person's hours changed: released at the new ones
+            out[e["of"]]["held_until"] = e["until"]
     for g in out.values():
         if g.get("when"):
             if later is None:
@@ -1020,16 +1035,21 @@ def gate_lock(root):
         yield
 
 
-def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None):
+def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None):
     with gate_lock(root):
-        return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when)
+        return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default)
 
 
-def _add_gate(root, question, item, why, *, consultation, points, when=None):
-    gate = dict(type="gate", id="g" + secrets.token_hex(3), at=now(),
-                question=question.strip(), item=item or when, why=why.strip(), **({"when": when} if when else {}))
+def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None):
+    """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
+    (stand_defaults); one with consultant points never does, since each point needs their decision."""
+    default = (default or "").strip()
+    gate = dict(type="gate", id="g" + secrets.token_hex(3), at=now(), question=question.strip(), item=item or when,
+                why=why.strip(), **({"when": when} if when else {}), **({"default": default} if default else {}))
     if not gate["question"]:
         raise ValueError("A gate needs its question.")
+    if default and (consultation or points is not None):
+        raise ValueError("A gate with consultant points has no default: the person decides each point.")
     until = hours.held_until(epoch(gate["at"]))     # outside the person's active hours: theirs when those begin
     if until:
         gate["held_until"] = until
@@ -1100,9 +1120,198 @@ def clear_gate(root, gate_id):
                    gate["answered_at"], author="colony", quiet=True)
 
 
+# ---------------------------------------------------------------- the day's decisions: by number, with defaults
+
+ANSWERING = 3600         # seconds an unsent answer on the page holds back the defaults of the decisions it answers
+
+
+def due_since(root, g, times=None):
+    """When a gate became the person's question: when it was opened, when its hold for their hours ended, or when the
+    item it waited for started, whichever came last."""
+    t = epoch(g["at"])
+    if g.get("held_until"):
+        t = max(t, epoch(g["held_until"]))
+    if g.get("when"):
+        rec = (item_times(root) if times is None else times).get(g["when"]) or {}
+        t = max(t, rec.get("first") or rec.get("at") or 0)
+    return t
+
+
+def stands_at(root, g, times=None):
+    """When a skipped default stands: as the person's day begins after the first whole day the decision was theirs."""
+    return hours.next_day(hours.next_day(due_since(root, g, times) - 1))
+
+
+def stand_defaults(root, gs=None):
+    """A reversible decision the person skipped: a gate with a default, still unanswered as their next day begins
+    after a whole day on their page, is answered with it by colony, and its note reaches the agent as their answer.
+    Never a gate without a default or with consultant points, nor one they have started answering on the page. The
+    gates whose defaults stood."""
+    gs = gates(root) if gs is None else gs
+    times = item_times(root) if any(g.get("when") and g.get("default") for g in gs) else {}
+    clock = epoch(now())
+    ripe = {g["id"] for g in gs if g.get("default") and not g.get("points") and not g.get("consult") and due(g)
+            and stands_at(root, g, times) <= clock}
+    ripe -= answering(root) if ripe else set()
+    stood = []
+    if ripe:
+        with gate_lock(root):
+            for g in gates(root):
+                if g["id"] in ripe and not g["answer"]:
+                    answer = dict(type="answer", of=g["id"], at=now(), author="colony",
+                                  text=f"Default stood (skipped): {g['default']}", note_id="n" + secrets.token_hex(3))
+                    append(root, "gates.jsonl", answer)
+                    _gate_note(root, g, answer["note_id"], answer["text"], answer["at"], author="colony")
+                    stood.append(g)
+    return stood
+
+
+def decisions(root, gs=None):
+    """The day's decisions as the person's page numbers them: every gate due now, and every one settled since their
+    day began, in the order each became theirs. A settled one keeps its number, so a number means one decision all
+    day. [(number, gate)], the numbers as text."""
+    gs = gates(root) if gs is None else gs
+    if stand_defaults(root, gs):
+        gs = gates(root)
+    times = item_times(root) if any(g.get("when") for g in gs) else {}
+    start, out = hours.day_start(epoch(now())), []
+    for g in gs:
+        if g.get("waits_for"):
+            continue
+        since_ = due_since(root, g, times)
+        if due(g) or (g["answer"] and start <= epoch(g["answered_at"]) and since_ <= epoch(g["answered_at"])):
+            out.append((since_, g))
+    # a stable sort: those that became theirs together keep the order they were opened in
+    return [(str(k), g) for k, (_, g) in enumerate(sorted(out, key=lambda x: x[0]), 1)]
+
+
+def draft(root):
+    """The person's unsent answers by number on a project's page, kept as they type: {text, numbers, at}, or None."""
+    try:
+        d = json.loads((Path(root) / ".board" / "answering.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and str(d.get("text") or "").strip() else None
+
+
+def save_draft(root, text, numbers):
+    """Keep what the person has typed so far (numbered as the page they typed on); nothing typed, nothing kept."""
+    path = Path(root) / ".board" / "answering.json"
+    if not str(text or "").strip():
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"text": text, "numbers": numbers, "at": now()}, ensure_ascii=False))
+    tmp.replace(path)
+
+
+def answering(root):
+    """The gates the person has started answering: those their unsent answer speaks to, while typed within the hour."""
+    d = draft(root)
+    if not d or epoch(now()) - epoch(d["at"]) >= ANSWERING:
+        return set()
+    numbers = d.get("numbers") or {}
+    return {numbers[n] for n in by_number(d["text"], numbers, lenient=True)}
+
+
+def numbering(value):
+    """The numbers a page showed, as its form sends them back ("1:g1a2b3c,2:g4d5e6f"): {number: gate id}."""
+    pairs = (p.strip().partition(":") for p in str(value or "").split(","))
+    return {n: gid for n, _, gid in pairs if n.isdigit() and re.fullmatch(r"g[0-9a-f]+", gid)}
+
+
+ANSWER = re.compile(r"\s*(\d{1,3})(?:\s*[.):–—-]+\s*|\s+|$)(.*)", re.S)
+
+
+def by_number(text, numbers, lenient=False):
+    """The person's answers by number, {number: their words}. An answer starts with its decision's number at the start
+    of the text, of a line, or after a semicolon ("1 yes; 2 email, not SMS"); with one decision open, words alone
+    answer it. ValueError, saying what didn't read; lenient (an unsent draft), whatever reads so far."""
+    out, current, lead = {}, None, ""
+    pieces = re.split(r"(\n|;)", text or "")
+    for k in range(0, len(pieces), 2):
+        sep, seg = pieces[k - 1] if k else "", pieces[k]
+        m = ANSWER.fullmatch(seg)
+        if m and m.group(1) in numbers and m.group(1) not in out:
+            current = m.group(1)
+            out[current] = m.group(2)
+        elif m and not lenient:
+            raise ValueError(f"Decision {m.group(1)} is answered twice." if m.group(1) in out else
+                             f"{m.group(1)} isn't an open decision here: start a line with a decision's number only.")
+        elif current:
+            out[current] += sep + seg
+        else:
+            lead += sep + seg
+    if lead.strip():
+        if len(numbers) == 1 and not out:
+            out[next(iter(numbers))] = lead
+        elif not lenient:
+            raise ValueError("Start each answer with its decision's number: 1 yes; 2 email, not SMS.")
+    out = {n: w.strip() for n, w in out.items()}
+    if not lenient:
+        for n, w in out.items():
+            if not w:
+                raise ValueError(f"Decision {n} has its number but no answer.")
+            for m in re.findall(r"(?<!\S)(\d{1,3})(?=[\s.):–—-]|$)", w):
+                if m in numbers and m not in out:          # "1 yes 2 no" on one line: two answers run together?
+                    raise ValueError(f"Your answer to {n} has {m} in it, another decision's number: put each answer "
+                                     "on its own line or after a semicolon (1 yes; 2 no).")
+    return out
+
+
+def answer_by_number(root, text, numbers):
+    """The person's answers by number, each recorded as its gate's answer (reaching the agent as a note, as from any
+    gate); "default" takes a decision's default now. All or none: a ValueError, saying what didn't read, records
+    nothing. A default that stood is answered over. Sent, the unsent answer is cleared. [(number, gate)]"""
+    words = by_number(text, numbers)
+    if not words:
+        raise ValueError("Nothing to send: answer by number, as 1 yes; 2 email.")
+    current, todo = {g["id"]: g for g in gates(root)}, []
+    for n, w in words.items():
+        g = current.get(numbers[n])
+        if not g:
+            raise ValueError(f"Decision {n} isn't in this project.")
+        if g.get("points"):
+            raise ValueError(f"Decision {n} has consultant points: choose on each point instead.")
+        if re.fullmatch(r"(the\s+)?default[.!]?", w, re.I):
+            if not g.get("default"):
+                raise ValueError(f"Decision {n} has no default: say what you'd like.")
+            if g["answered_by"] == "colony":
+                continue                                    # it stood already
+            w = f"Default accepted: {g['default']}"
+        if g["answer"] and g["answered_by"] != "colony":
+            if g["answer"] == w:
+                continue                                    # sent twice
+            raise ValueError(f"Decision {n} was answered meanwhile: {g['answer']}")
+        todo.append((n, g, w))
+    for n, g, w in todo:
+        answer_gate(root, g["id"], w)
+    save_draft(root, "", {})
+    return [(n, g) for n, g, _ in todo]
+
+
+def restamp_held():
+    """The person changed their hours: what is held for them is released as the new hours next begin (at once, if
+    those hold now or are off)."""
+    until = hours.held_until(epoch(now())) or now()
+    for root in projects():
+        if not (root / ".board").is_dir():
+            continue
+        with gate_lock(root):
+            for g in gates(root):
+                if g.get("held") and not g["answer"] and g["held_until"] != until:
+                    append(root, "gates.jsonl", {"type": "held", "of": g["id"], "at": now(), "until": until})
+        for a in asks(root):
+            if a.get("held") and a["held_until"] != until:
+                append(root, "asks.jsonl", {"type": "held", "of": a["id"], "at": now(), "until": until})
+
+
 def open_notes(root, item=None):
     """Notes the agent has not yet acted on. Without an item: everything except notes on roadmap items
-    not yet started, which wait until the agent reaches them."""
+    not yet started, which wait until the agent reaches them. A default whose moment has come stands first, so its
+    answer is among them: the watcher looks here for every project every few seconds."""
+    stand_defaults(root)
     road_items = items(roadmap(root))
     waiting = [n for n in notes(root) if not n["addressed_at"] and n.get('source') != str(Path(root).resolve())]
     if item:
@@ -1136,6 +1345,31 @@ def since(root, seen):
     moved_at = stamp(git(root, "log", "-1", "--format=%aI", "--", "ROADMAP.md").strip()) if moved else ""
     return {"head": head, "commits": commits, "moved": moved, "moved_at": moved_at, "opened": opened,
             "replies": replies, "pinned": pinned, "first": not seen}
+
+
+def page_base(root, mark=True):
+    """Where a project's page for the day starts what landed: the person's last look at it on an earlier day (when,
+    and the commit it stood at), or on a first look, the start of the day before. Each look is kept on this machine,
+    with the board: the page reads the same all day, and turns over with the person's day."""
+    path = home() / "today.json"
+    try:
+        every = json.loads(path.read_text())
+    except (OSError, ValueError):
+        every = {}
+    rec, day = every.get(str(root)) or {}, hours.day_start(epoch(now()))
+    board_time = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+    if rec.get("day") != board_time(day):
+        before = hours.day_start(day - 1)
+        rec = {"day": board_time(day), "from": rec.get("last") or {
+            "at": board_time(before), "head": git(root, "rev-list", "-1", f"--before=@{int(before)}", "HEAD").strip()}}
+    if mark:
+        rec["last"] = {"at": now(), "head": git(root, "rev-parse", "HEAD").strip()}
+        every[str(root)] = rec
+        home().mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(every))
+        tmp.replace(path)
+    return rec["from"]
 
 
 def stamp(iso):
@@ -1209,7 +1443,20 @@ def sidebar(reg, pid):
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}{STUCK}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}{STUCK}{DRAFTS}</script></body></html>")
+
+
+# What's typed in a box for answering by number is kept as it's typed (answer_box): a reload, or a list redrawn
+# meanwhile, loses nothing, and the defaults it speaks to wait while it's written. Sending it leaves nothing behind.
+DRAFTS = """
+let drafting;
+document.addEventListener('input', (ev) => {
+  const f = ev.target.closest && ev.target.closest('form.bynumber'); if (!f) return;
+  clearTimeout(drafting);
+  drafting = setTimeout(() => fetch('/answers/draft', {method: 'POST', body: new URLSearchParams(new FormData(f))}).catch(() => {}), 700);
+});
+document.addEventListener('submit', (ev) => { if (ev.target.matches('form.bynumber')) clearTimeout(drafting); }, true);
+"""
 
 
 # What stays pinned at the top (the project chips on a phone): things that stick sit below it, not under it.
@@ -1256,8 +1503,8 @@ setInterval(poll, 2500);
 
 def tabs(pid, view):
     tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
-    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview") + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
-            + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
+    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview") + tab("today", "Today", f"/?p={pid}&view=today")
+            + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap") + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
 def held(who, back):
@@ -1401,10 +1648,14 @@ def render(reg, pid, view="overview"):
     # time its agent has spent at work, all told: turns only, never the time it sat waiting
     secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
+    # the day's page opens on the day itself: the vision and the project's state are a tab away
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
-               f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>{remote_line(root)}</header>")
+               + ("" if view == "today" else
+                  f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>{remote_line(root)}") + "</header>")
     out.append(progress_panel(root, pid))
-    if view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
+    if view == "today":
+        out.append(today_html(pid, root))
+    elif view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
         its_now = items(road)
         mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
@@ -1531,6 +1782,57 @@ def render(reg, pid, view="overview"):
     return shell(reg, pid, "".join(out))
 
 
+MERGE = re.compile(r"Merge (branch|remote-tracking branch|pull request|commit)\b")
+
+
+def short(text, n=140):
+    """A roadmap line or subject cut to read at a glance."""
+    text = " ".join(str(text).split())
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def today_html(pid, root):
+    """A project's page for the person's day, from colony's records at no token cost: what landed since their last
+    look on an earlier day, the day's decisions by number with their defaults, what else waits on them, the queue
+    (open items outside Later), and what is held for their hours, which joins the decisions as the hours begin."""
+    back, road, clock = f"/?p={pid}&view=today", roadmap(root), epoch(now())
+    its = items(road)
+    link = lambda iid: f"<a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a>" if iid in its else e(iid)
+    linked = lambda text: re.sub(r"\bR\d+\b", lambda m: link(m.group(0)), e(text))
+    away = "" if hours.active(clock) else f" · outside your hours until {hours.at_clock(hours.next_start(clock))}"
+    out = [f"<p class='muted'>{e(time.strftime('%A %-d %B', time.localtime(hours.day_start(clock))))}{e(away)}</p>"]
+    base = page_base(root)
+    s = since(root, base)
+    landed = [f"<li>{link(i)} {e(short(plain(t)))} <span class='st done'>done</span></li>"
+              for i, _, state, t in s["moved"] if state == "done"]
+    landed += [f"<li class='muted'><code>{e(h)}</code> {linked(subj)}</li>" for h, _, subj in s["commits"] if not MERGE.match(subj)]
+    out.append(f"<h2>Landed since {e(hours.at_day(epoch(base['at'])))}</h2><div class='card'>"
+               + (f"<ul class='landed'>{''.join(landed)}</ul>" if landed else "<p class='muted'>Nothing has landed since then.</p>")
+               + "</div>")
+    numbered = decisions(root)
+    rows = "".join(f"<div class='need{'' if due(g) else ' settled'}'>{gate_body(root, pid, g, back, number=n, fold=True)}</div>"
+                   for n, g in numbered)
+    out.append(f"<h2>Decisions ({sum(1 for _, g in numbered if due(g))})</h2><div class='card'>"
+               + (rows + answer_box(pid, root, numbered, back, hint=True) if numbered else
+                  "<p class='muted'>Nothing to decide today.</p>") + "</div>")
+    others = waiting_on(pid, root, back, label=False, with_gates=False)
+    if others:
+        out.append(f"<h2>Also waiting on you</h2><div class='card'>{''.join(others)}</div>")
+    queue = []
+    for m in road["milestones"]:
+        left = [i for i in m["items"] if i["state"] != "done"]
+        if left and not re.match(r"later\b", (m["title"] or m["id"]).strip(), re.I):
+            queue.append(f"<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3><ul class='queue'>" + "".join(
+                f"<li><span class='st {i['state']}'>{LABEL[i['state']]}</span> {link(i['id'])} {e(short(plain(i['text'])))}</li>"
+                for i in left) + "</ul>")
+    out.append("<h2>Queue</h2><div class='card'>" + ("".join(queue) or "<p class='muted'>Nothing open outside Later.</p>")
+               + "</div>")
+    later = held_html(pid, root, back)
+    if later:
+        out.append(f"<h2>Held for your hours</h2><div class='card'>{later}</div>")
+    return "".join(out)
+
+
 W, H, GX, GY = 172, 56, 38, 16
 
 
@@ -1618,11 +1920,16 @@ def render_item(reg, pid, iid):
     return shell(reg, pid, "".join(body))
 
 
-def gate_body(root, pid, gate, back):
-    """The same point decisions in Needs you, Waiting on you and the item's record."""
-    body = f"<b>{e(gate['question'])}</b>"
+def gate_body(root, pid, gate, back, number=None, fold=False):
+    """The same point decisions in Needs you, Waiting on you and the item's record. With its number on the day's page;
+    folded, its own answer box tucks away beside the page's box for answering by number."""
+    body = (f"<span class='num'>{e(number)}</span> " if number else "") + f"<b>{e(gate['question'])}</b>"
     if gate.get("why"):
         body += f"<p class='muted'>{e(gate['why'])}</p>"
+    if gate.get("default") and not gate["answer"]:
+        when = "" if gate.get("waits_for") else stands_at(root, gate)
+        when = when and (f" · stands {hours.at_day(when)}" if when > epoch(now()) else " · waits while you answer it")
+        body += f"<p class='default'>If you skip it: {e(gate['default'])}<span class='muted'>{e(when)}</span></p>"
     points = gate.get("points", [])
     choices = gate.get("point_decisions") or {}
     rec = None
@@ -1654,7 +1961,8 @@ def gate_body(root, pid, gate, back):
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
                 + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
     if gate["answer"]:
-        answer_text = "Cleared without an answer." if gate.get("cleared") else f"Your answer: {e(gate['answer'])}"
+        answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
+                       if gate.get("answered_by") == "colony" else f"Your answer: {e(gate['answer'])}")
         body += "".join(rows) + f"<div class='pre'>{answer_text}</div>"
         if points:
             body += ("<p class='muted'>The checking round is already recorded; this decision has used both rounds.</p>"
@@ -1664,12 +1972,40 @@ def gate_body(root, pid, gate, back):
                      "<p class='muted'>No change accepted; no checking round.</p>")
             body += ("<details><summary>Revise your choices</summary>"
                      + form("".join(editable), gate.get("comment", "")) + "</details>")
+    elif fold and not points:
+        body += f"<details class='one'><summary>Answer just this one</summary>{form('')}</details>"
     else:
         body += form("".join(rows))
     if rec:
         body += ("<details><summary>Full consultant answers</summary>"
                  + consultation(dict(rec, adopted=None, point_decisions=[])) + "</details>")
     return body
+
+
+def answer_box(pid, root, numbered, back, hint=False, day=False):
+    """One box for a project's open decisions, answered by number. What's typed is kept as it's typed, so a reload or
+    a redrawn list loses nothing, and the defaults it speaks to wait while it's written. Typed against numbers the
+    page no longer shows, it is set beside the box to retype, never sent to the wrong decision."""
+    numbers = {n: g["id"] for n, g in numbered if due(g)}
+    if not any(not g.get("points") for n, g in numbered if due(g)):
+        return ""
+    text, aside, d = "", "", draft(root)
+    if d:
+        theirs = d.get("numbers") or {}
+        if all(numbers.get(n) == theirs.get(n) for n in by_number(d["text"], theirs, lenient=True)):
+            text = d["text"]
+        else:
+            aside = f"<p class='muted'>Unsent, from when the numbers were different:</p><div class='pre muted'>{e(d['text'])}</div>"
+    first = list(numbers)
+    hint_ = f"Your answer to {first[0]}" if len(first) == 1 else f"By number: {first[0]} yes; {first[1]} …"
+    return (f"{aside}<form class='add bynumber' method='post' action='/answers'><input type='hidden' name='p' value='{pid}'>"
+            f"<input type='hidden' name='back' value='{e(back)}'>"
+            f"<input type='hidden' name='n' value='{e(','.join(f'{n}:{gid}' for n, gid in numbers.items()))}'>"
+            f"<textarea name='text' placeholder='{e(hint_)}'>{e(text)}</textarea>"
+            + (f"<a class='dayline' href='/?p={pid}&view=today'>{e(Path(root).name)} today →</a>" if day else "")
+            + "<button>Send answers</button></form>"
+            + ("<p class='muted'>One answer a line, or after a semicolon; “2 default” takes a default now. Skip one, and "
+               "its default stands as your day begins after a whole day here.</p>" if hint else ""))
 
 
 def consultation(c):
@@ -2173,16 +2509,20 @@ def pin_editor(reg, pid, pin):
 def waiting_items(p, snap=None):
     """Everything a project is waiting on the person for. The one definition: Needs you, the project's
     Waiting on you, the sidebar's count, `colony projects` and the monitor's wake-ups all read this.
-      gate    a decision the agent put to the person (`colony gate`), once due: not before its item, nor their hours
+      gate    a decision the agent put to the person (`colony gate`), once due: not before its item, nor their hours;
+              a skipped default that has come to stand is answered first
       choice  an on-screen choice in its console, such as a permission or trust question
       screen  its console needs the person but the choice can't be read (answer it in the console)
-      ask     a turn that asked the person something in the console
+      ask     a turn that asked the person something in the console, once their hours hold
       verify  a roadmap item built but waiting to be checked or accepted
     Each has a key that stays the same while it waits, so it is announced once."""
     if not p.exists():
         return []
+    gs = gates(p)
+    if stand_defaults(p, gs):
+        gs = gates(p)
     out = [{"kind": "gate", "key": "gate:" + g["id"], "gate": g, "summary": f"opened a gate: {g['question']}"}
-           for g in gates(p) if due(g)]
+           for g in gs if due(g)]
     snap = snap or console.snapshot(p, lines=4)
     if snap["state"] == "needs you":
         found = providers.of(p).choice(console.screen(console.session_name(p)))
@@ -2195,7 +2535,8 @@ def waiting_items(p, snap=None):
             key = "screen:" + hashlib.sha1("\n".join(snap["lines"]).encode()).hexdigest()[:10]
             out.append({"kind": "screen", "key": key, "lines": snap["lines"],
                         "summary": "needs you in its console: " + " / ".join(snap["lines"][-2:])})
-    out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]} for a in asks(p)]
+    out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]}
+            for a in asks(p) if not a["held"]]
     from . import lead, progress
     shared = lead.group(p)
     primary = not shared or shared['lead'] == str(p.resolve())
@@ -2235,7 +2576,10 @@ def clear_waiting(root, key):
     if key.startswith("gate:"):
         clear_gate(root, key[5:])
         return
-    w = next((w for w in waiting_items(root) if w["key"] == key), None)
+    if key.startswith("ask:"):                       # held for the person's hours or not
+        w = next(({"kind": "ask", "key": key, "ask": a} for a in asks(root) if "ask:" + a["id"] == key), None)
+    else:
+        w = next((w for w in waiting_items(root) if w["key"] == key), None)
     if not w:
         return
     if w["kind"] == "ask":
@@ -2264,13 +2608,25 @@ def moments(p, snap=None):
     return single + ([asks + verify] if asks else [verify] if verify else [])
 
 
-def waiting_on(pid, p, back, label=True):
-    """The project's moments as the person answers them, where they stand: a gate's answer reaches the agent
-    as a note, a choice gets a button per option, a question (with what it left to verify) gets a reply typed
-    into the console, items to verify get one note about them."""
+def waiting_on(pid, p, back, label=True, with_gates=True):
+    """The project's moments as the person answers them, where they stand: its gates are the day's decisions, by
+    number, answered together in one box (each reaches the agent as a note), a choice gets a button per option, a
+    question (with what it left to verify) gets a reply typed into the console, items to verify get one note about
+    them. Without its gates, the rest."""
     rows = []
     hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
-    for group in moments(p):
+    groups = moments(p)
+    ours = [g for g in groups if g[0]["kind"] == "gate"] if with_gates else []
+    numbered = decisions(p) if ours else []
+    number = {g["id"]: n for n, g in numbered}
+    ours.sort(key=lambda g: int(number.get(g[0]["gate"]["id"], 0)))
+    rest = [g for g in groups if g[0]["kind"] != "gate"]
+    box = answer_box(pid, p, numbered, back, day=label) if ours else ""
+    for k, group in enumerate(ours + rest + [None]):
+        if k == len(ours) and box:
+            rows.append(box)                       # after the decisions, before the rest
+        if group is None:
+            break
         w = group[0]
         keys = ",".join(x["key"] for x in group)
         clear = (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(keys)}'>"
@@ -2303,7 +2659,7 @@ def waiting_on(pid, p, back, label=True):
         elif w["kind"] == "gate":
             g = w["gate"]
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
-                        + gate_body(p, pid, g, back) + "</div>")
+                        + gate_body(p, pid, g, back, number=number.get(g["id"]), fold=True) + "</div>")
         elif w["kind"] == "choice":
             rows.append(f"<div class='need'>{who('asking in its console')}"
                         + "".join(f"<div>{e(q)}</div>" for q in w["question"])
@@ -2329,21 +2685,28 @@ def waiting_html(pid, root):
     return ("".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>") + held_html(pid, root)
 
 
-def held_html(pid, root):
-    """Gates opened outside the person's active hours, below what waits on them and not counted with it: they reach
-    their list when the hours begin, and can be answered here before then."""
+def held_html(pid, root, back=None):
+    """Gates opened and questions asked outside the person's active hours, below what waits on them and not counted
+    with it: they reach their list when the hours begin, and can be answered here before then."""
     later = [g for g in gates(root) if not g["answer"] and g.get("held") and not g.get("waits_for")]
-    if not later:
+    asked = [a for a in asks(root) if a["held"]]
+    if not later and not asked:
         return ""
-    back = f"/?p={pid}"
-    clear = lambda g: (f"<form class='clear' method='post' action='/clear'><input type='hidden' name='p' value='{pid}'>"
-                       f"<input type='hidden' name='back' value='{e(back)}'><input type='hidden' name='key' value='gate:{e(g['id'])}'>"
-                       f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
-    return ("<p class='muted'>Opened outside your active hours: these reach your list when the hours begin, and you can "
+    back = back or f"/?p={pid}"
+    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>"
+    clear = lambda key: (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(key)}'>"
+                         f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
+    until = lambda x: e(hours.at_clock(epoch(x["held"])))
+    return ("<p class='muted'>From outside your active hours: these reach your list when the hours begin, and you can "
             "answer them now.</p>" + "".join(
-                f"<div class='need held'><div class='who'>{clear(g)}<span class='kind'>gate"
-                f"{' on ' + e(g['item']) if g.get('item') else ''} · held until {e(hours.at_clock(epoch(g['held'])))}</span></div>"
-                f"{gate_body(root, pid, g, back)}</div>" for g in later))
+                f"<div class='need held'><div class='who'>{clear('gate:' + g['id'])}<span class='kind'>gate"
+                f"{' on ' + e(g['item']) if g.get('item') else ''} · held until {until(g)}</span></div>"
+                f"{gate_body(root, pid, g, back)}</div>" for g in later) + "".join(
+                f"<div class='need held'><div class='who'>{clear('ask:' + a['id'])}<span class='kind'>asked in its console · "
+                f"held until {until(a)}</span></div><div class='asktext'>{e(a['text'])}</div>"
+                f"<form class='add' method='post' action='/reply'>{hidden}<textarea name='text' "
+                f"placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>"
+                for a in asked))
 
 
 def support_rows():
@@ -2989,7 +3352,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/":
             view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
-            return self._send(200, render(reg, pid, view if view in ("overview", "roadmap", "console") else "overview").encode())
+            return self._send(200, render(reg, pid, view if view in ("overview", "today", "roadmap", "console") else "overview").encode())
         if url.path == "/add":
             if (q.get("for") or ["project"])[0] == "project":
                 return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())
@@ -3456,7 +3819,24 @@ class Handler(BaseHTTPRequestHandler):
         root = projects(reg)[pid]
         text = form.get("text", "").strip()
         path = urllib.parse.urlparse(self.path).path
-        if path in ('/lead/switch', '/item/owner', '/progress/decision', '/progress/control'):
+        back = form.get("back", "")
+        back = back if back.startswith("/") and not back.startswith("//") else f"/?p={pid}"
+        if path == "/answers/draft":                     # what's typed in the box for answering by number, as typed
+            save_draft(root, form.get("text", "").replace("\r\n", "\n"), numbering(form.get("n")))
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/answers":
+            typed, numbers = form.get("text", "").replace("\r\n", "\n"), numbering(form.get("n"))
+            try:
+                answer_by_number(root, typed, numbers)
+            except ValueError as err:
+                save_draft(root, typed, numbers)          # kept in the box, to put right
+                return self._send(400, shell(reg, pid, f"<h1>Answers not sent</h1><p>{e(err)}</p><p class='muted'>Nothing "
+                                             f"was recorded; what you wrote is still in the box.</p>"
+                                             f"<p><a href='{e(back)}'>Back to it</a></p>").encode())
+        elif path in ('/lead/switch', '/item/owner', '/progress/decision', '/progress/control'):
             from . import lead, progress, continuation
             try:
                 if path == '/lead/switch':
@@ -3557,9 +3937,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/seen":
             reg["seen"][str(root)] = {"at": now(), "head": form.get("head") or git(root, "rev-parse", "HEAD").strip()}
             save_registry(reg)
-        back = form.get("back", "")
         self.send_response(303)
-        self.send_header("Location", back if back.startswith("/") and not back.startswith("//") else f"/?p={pid}")
+        self.send_header("Location", back)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -3699,6 +4078,13 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
 .since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
   pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
 .since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:80px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.num { display:inline-block; min-width:1.7em; padding:0 6px; margin-right:2px; border-radius:999px; text-align:center;
+  font-weight:700; font-size:13px; background:var(--flag-bg); color:var(--flag) }
+.need.settled { color:var(--muted) } .need.settled .num { background:var(--sunk); color:var(--muted) }
+.default { margin:4px 0 } details.one summary { cursor:pointer; color:var(--accent); font-size:13px; margin-top:4px }
+form.bynumber { margin:12px 0 14px; align-items:center } form.bynumber textarea { min-height:56px }
+form.bynumber button { margin-left:auto } .dayline { font-size:13px }
+ul.landed, ul.queue { padding-left:0; list-style:none } ul.landed li, ul.queue li { overflow-wrap:anywhere; margin:5px 0 }
 .need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }

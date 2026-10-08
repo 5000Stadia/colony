@@ -64,9 +64,14 @@ conversation when you open it.
   short research advice, apart from its agent: a report in its `research/` folder, with a quiet note.
   `colony turbo` shows each program's pace; Settings turns it off per program.
 - **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
-  Outside them agents keep working but don't end on a question to you: the decisions they need are held off
-  Waiting on you and arrive together when your hours begin, and the monitor isn't woken just to pass
-  something on. What you send goes through at any hour.
+  Outside them agents keep working but don't end on a question to you: the decisions they need, and any
+  question asked in a console, are held off Waiting on you and arrive together when your hours begin (new
+  hours move them), and the monitor isn't woken just to pass something on. What you send goes through at any hour.
+- **Today:** each project's page for your day, made from colony's records at no token cost: what landed since
+  you last looked on an earlier day, the day's decisions numbered, the queue, and what's held for your hours.
+  Answer by number in one box (`1 yes; 2 email`). An agent can give a reversible decision a default, which
+  stands if you skip it, as your day begins after a whole day on the page. Needs you lists every project's
+  numbered decisions in one place.
 
 ## How it works
 

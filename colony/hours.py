@@ -1,7 +1,9 @@
 """Active hours: when the person is around, on this machine's clock (07:30-23:45 unless they set their own; off:
 always). A question put to them outside those hours only interrupts or waits unseen, so then agents keep on with
 what doesn't depend on it, the gates they open are held, and what was held reaches the person together when the
-hours begin. Work goes on at any hour; the person's own words, and colony's safety notices, are never held.
+hours begin. Work goes on at any hour; the person's own words, and colony's safety notices, are never held. Their
+day runs from one start of their hours to the next: it paces each project's page for the day, and when a decision
+they skipped takes its default.
 
     colony settings active_hours 07:30-23:45     a range may cross midnight (22:00-06:00); off: always
 """
@@ -68,20 +70,40 @@ def active(now=None, hours=None):
 
 def next_start(now=None, hours=None):
     """When the active hours next begin after `now`, as a timestamp; None when they're off."""
+    return None if span(hours) is None else next_day(now, hours)
+
+
+def _starts(now, hours, after):
+    """The start of the person's day nearest `now` on one side: the first after it, or the last at or before it. A
+    day begins when their hours do (the night after them is that day's), or with hours off, at midnight."""
     s = span(hours)
-    if s is None:
-        return None
+    minute = s[0] if s else 0
     now = clock() if now is None else now
     t = time.localtime(now)
-    for day in range(3):                    # today's start, else tomorrow's (mktime carries a day past the month's end)
-        at = time.mktime((t.tm_year, t.tm_mon, t.tm_mday + day, s[0] // 60, s[0] % 60, 0, 0, 0, -1))
-        if at > now:
+    for day in (range(3) if after else range(0, -3, -1)):   # mktime carries a day past the month's end
+        at = time.mktime((t.tm_year, t.tm_mon, t.tm_mday + day, minute // 60, minute % 60, 0, 0, 0, -1))
+        if (at > now) if after else (at <= now):
             return at
+
+
+def day_start(now=None, hours=None):
+    """When the person's day that `now` falls in began: the last time their hours began, or with hours off, midnight."""
+    return _starts(now, hours, after=False)
+
+
+def next_day(now=None, hours=None):
+    """When the person's next day begins after `now`: when their hours next begin, or with hours off, at midnight."""
+    return _starts(now, hours, after=True)
 
 
 def at_clock(ts):
     """A moment as the person reads a clock: 7:30 AM."""
     return time.strftime("%-I:%M %p", time.localtime(ts))
+
+
+def at_day(ts):
+    """A moment on another day, as the person reads it: Sat 7:30 AM."""
+    return time.strftime("%a %-I:%M %p", time.localtime(ts))
 
 
 def held_until(now=None, hours=None):
