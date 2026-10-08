@@ -60,7 +60,9 @@ conversation when you open it.
   models, going deeper on its agreed work, research on a topic you type. Alongside the work, never instead
   of it: an idle console with nothing waiting on you is woken, and models change only at an idle reload; an
   agent with nothing worth doing says so (`colony turbo --nothing`) and isn't woken again until its roadmap
-  changes. `colony turbo` shows each program's pace; Settings turns it off per program.
+  changes. Once a day, with consulting on, the program's strongest model also writes each such project a
+  short research advice, apart from its agent: a report in its `research/` folder, with a quiet note.
+  `colony turbo` shows each program's pace; Settings turns it off per program.
 
 ## How it works
 

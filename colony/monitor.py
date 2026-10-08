@@ -789,17 +789,6 @@ def queue(text):
         fh.write(json.dumps({"at": board.now(), "text": text}) + "\n")
 
 
-def unqueue(match):
-    """Take back words that haven't reached the monitor yet and no longer stand (turbo's look, once turbo ended)."""
-    path = board.home() / "to_monitor.jsonl"
-    rows = [l for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
-    keep = [l for l in rows if not match(json.loads(l)["text"])]
-    if keep and keep != rows:
-        path.write_text("".join(l + "\n" for l in keep))
-    elif rows and not keep:
-        path.unlink()
-
-
 FIXLIKE = re.compile(r"\b(fix(es|ed)?|bug|regress\w*|revert\w*|broke|broken|flak\w*|repair\w*|hotfix)\b", re.I)
 
 

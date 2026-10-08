@@ -666,7 +666,8 @@ def cmd_notes(a):
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's monitor, acting for them, left notes for you:"),
-            board.render_notes([n for n in fresh if n.get("author") == "suggestion"], "Suggestions from the monitor:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"], "Suggestions from the monitor:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") == "advice"], "Research advice colony asked for, apart from you:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
@@ -726,7 +727,7 @@ def cmd_noted(a):
     note = next(n for n in board.notes(root) if n["id"] == a.id)
     for ident in note.get('batch_ids') or [a.id]:
         board.append(root, "notes.jsonl", {"type": "addressed", "of": ident, "at": board.now(), "text": a.text})
-    if note.get("author") == "suggestion":            # the monitor made it, so the answer is the monitor's to hear
+    if note.get("author") == "suggestion" and note.get("kind") != "advice":   # the monitor made it: its answer is the monitor's to hear
         from . import monitor
         monitor.queue(f"{root.name} answered your suggestion ({note['text'][:80]}...): {a.text}")
     print(f"{a.id} marked as acted on")
