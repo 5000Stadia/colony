@@ -88,10 +88,23 @@ class BoardBase(unittest.TestCase):
 
 
 class BoardTest(BoardBase):
+    def test_a_session_window_pauses_at_its_own_lower_threshold(self):
+        from colony import usage
+        board.set_setting("safe_pause", 99)
+        board.set_setting("safe_pause_session", 97)
+        self.assertEqual(usage.limit("5-hour", 99), 97)
+        self.assertEqual(usage.limit("weekly", 99), 99)
+        board.set_setting("safe_pause_session", "off")
+        self.assertEqual(usage.limit("5-hour", 99), 99)
+        board.set_setting("safe_pause_session", 97)
+        self.assertIsNone(usage.limit("5-hour", None), "safe pause off is off for the session too")
+        self.assertEqual(board.registry()["settings"]["safe_pause_session"], 97)
+
     def test_a_helpers_result_handed_back_as_a_prompt_is_never_the_persons_words(self):
         from colony import cli
         self.assertTrue(cli._persons("Please carry on"))
-        for made in ("[colony] You have mail.", "<task-notification>\n<status>completed</status>", "  <system-reminder>x"):
+        for made in ("[colony] You have mail.", "<task-notification>\n<status>completed</status>", "  <system-reminder>x",
+                     '<agent-message from="a3058abe869fd6dab"> R166 hand-in 2'):
             self.assertFalse(cli._persons(made), made)
         self.assertFalse(cli._persons(""))
 

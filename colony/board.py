@@ -169,7 +169,7 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "turbo_by": {}, "active_hours": hours.DEFAULT}
+                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -181,6 +181,7 @@ SETTING_HELP = {
     # PROVIDER: Claude uses Remote Control; Codex uses an isolated app-server host.
     "remote": "new consoles are reachable in their provider's app: Claude or ChatGPT",
     "remote_by": "each program's default for new projects, as claude=on,codex=on (a project can turn its own off)",
+    "safe_pause_session": "% of a 5-hour session window at which projects wind down until it resets; never later than safe_pause (off: as safe_pause)",
     "turbo_by": "turbo for each program, as claude=on,codex=on (on unless turned off): when its weekly use runs behind pace, its projects with queued work are turned up as each one ticks",
     "lan": "the board answers other devices on your network, not only this machine",
     "messaging": "project agents can message each other (colony send, colony reply)",
@@ -223,7 +224,7 @@ def set_setting(key, value):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
     elif key in ("model", "effort"):
         reg["settings"][key] = str(value).strip()
-    elif key == "safe_pause":
+    elif key in ("safe_pause", "safe_pause_session"):
         v = str(value).strip().rstrip("%").lower()
         if v in ("off", "0"):
             reg["settings"][key] = 0

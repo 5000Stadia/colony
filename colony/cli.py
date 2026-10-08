@@ -741,7 +741,7 @@ def cmd_pair(a):
 
 # Prompts the agent program or colony makes, never the person: colony's own nudges, and a background helper's
 # result, which Claude Code hands back as a prompt.
-MADE = ("[colony]", "<task-notification>", "<system-reminder>", "<command-name>", "<local-command")
+MADE = ("[colony]", "<task-notification>", "<agent-message", "<system-reminder>", "<command-name>", "<local-command")
 
 
 def _persons(prompt):

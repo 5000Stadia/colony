@@ -124,6 +124,23 @@ def read(key, raw=False):
             for w, v in got["windows"].items()}
 
 
+def session_threshold():
+    """The share of a 5-hour session window at which projects pause: colony's safe_pause_session (99 by default, the
+    person's call); None is off, leaving the window to the safe pause itself."""
+    try:
+        t = float(board.registry()["settings"].get("safe_pause_session") or 0)
+    except (TypeError, ValueError):
+        return None
+    return t if 0 < t <= 100 else None
+
+
+def limit(window, t):
+    """The threshold a window pauses at: the safe pause's (the project's own, else colony's), a 5-hour window never
+    later than the session's. Safe pause off is off for both: the person chose to keep going past the limit."""
+    s = session_threshold() if window == "5-hour" else None
+    return min(t, s) if t and s else t
+
+
 def threshold(root=None):
     """The percentage of a window at which projects pause: the project's own, else colony's; None is off."""
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
@@ -176,18 +193,19 @@ def check():
         def reset(value):
             return bool(value.get('resets_at') and value['resets_at'] <= clock)
 
-        blocking = {w: v for w, v in raw.items() if t and not reset(v) and v['used'] >= t}
-        if t:
-            for window, saved in held.items():
-                latest = raw.get(window, {})
-                # Missing telemetry or a missing reset timestamp is not evidence of a reset.
-                if reset(saved) or reset(latest):
-                    continue
-                if latest.get('used') is not None and latest['used'] <= max(0, t - RESUME_MARGIN):
-                    continue
-                retained = dict(saved, **latest)
-                retained['resets_at'] = latest.get('resets_at') or saved.get('resets_at')
-                blocking.setdefault(window, retained)
+        blocking = {w: v for w, v in raw.items() if limit(w, t) and not reset(v) and v['used'] >= limit(w, t)}
+        for window, saved in held.items():
+            if not limit(window, t):
+                continue
+            latest = raw.get(window, {})
+            # Missing telemetry or a missing reset timestamp is not evidence of a reset.
+            if reset(saved) or reset(latest):
+                continue
+            if latest.get('used') is not None and latest['used'] <= max(0, limit(window, t) - RESUME_MARGIN):
+                continue
+            retained = dict(saved, **latest)
+            retained['resets_at'] = latest.get('resets_at') or saved.get('resets_at')
+            blocking.setdefault(window, retained)
         if blocking:
             window, v = max(blocking.items(), key=lambda x: x[1].get('resets_at') or 0)
             now[str(p)] = {"provider": key, "window": window, "resets_at": v.get("resets_at"),
@@ -201,8 +219,7 @@ def check():
             why = ("this project no longer pauses at a usage limit" if not t
                    else f"this project now uses {prov.label}" if previous['provider'] != key
                    else f"{prov.label}'s usage limit has reset" if turned
-                   else f"{prov.label}'s blocking usage windows have reset or fallen to {max(0, t - RESUME_MARGIN):g}% "
-                        f"or less, below this project's pause threshold ({t:g}%)")
+                   else f"{prov.label}'s blocking usage windows have reset or fallen below their pause thresholds")
             board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped.", author="colony")
             changed.append((p, "resumed"))
     if now != was:
