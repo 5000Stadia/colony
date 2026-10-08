@@ -475,8 +475,8 @@ RELOAD_AFTER = 300              # seconds a stale console must sit idle, untouch
 # A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
 WAKE = {("working", "idle"): "finished a turn"}
 # What only the person can settle: woken for one, the monitor could only relay it. Outside their active hours it
-# waits unannounced, and reaches the monitor with the rest when the hours begin. A choice on a screen, a question
-# or a finished turn it can act on with the helm, so those wake it at any hour.
+# waits unannounced, and reaches the monitor with the rest when the hours begin. A choice on a screen or a finished
+# turn it can act on with the helm, so those wake it at any hour; a question asked at night is held for the person.
 FOR_THE_PERSON = ("gate", "verify", "checkpoint")
 
 
