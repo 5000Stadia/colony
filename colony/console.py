@@ -93,7 +93,12 @@ def contained(cmd):
     if _SCOPE is None:
         _SCOPE = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "true"], capture_output=True).returncode == 0 \
             if shutil.which("systemd-run") else False
-    return f"systemd-run --user --scope --quiet -p OOMPolicy=continue -- sh -c {shlex.quote(cmd)}" if _SCOPE else cmd
+    if not _SCOPE:
+        return cmd
+    # Asked again where the console starts: a long-lived tmux server can lose the right to make scopes ("Access
+    # denied") while the board still has it, and a console that can't get one starts as it is rather than dying.
+    return (f"if systemd-run --user --scope --quiet true 2>/dev/null; then exec systemd-run --user --scope --quiet "
+            f"-p OOMPolicy=continue -- sh -c {shlex.quote(cmd)}; else exec sh -c {shlex.quote(cmd)}; fi")
 
 
 _SCOPE = None
