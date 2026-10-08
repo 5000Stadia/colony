@@ -103,6 +103,16 @@ def auto(key):
     return value['model'], value['effort'], value['why']
 
 
+def ask(key, text, model, effort, root):
+    """One fresh consultant's answer from a family's program: {"text", "cost", "usage", "error"}. A program that
+    doesn't report its cost is priced from the benchmark data (unknown: no cost shown)."""
+    from . import bench
+    p = providers.get(key, strict=True)
+    if getattr(p, "reports_cost", True):
+        return p.consult(text, model, effort, root)
+    return p.consult(text, model, effort, root, price=bench.token_price(model))
+
+
 def consultants():
     """One consultant from each of up to two families (ticked and installed), and a note if only one family is
     here: never a second model of the same family passed off as another view."""
@@ -163,16 +173,8 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
     text = brief(root, decision, question, digest, plan, rnd,
                  choices=accepted.get("gate_answer") if rnd == 2 else None)
     import concurrent.futures as cf
-
-    def ask(k, model, effort):
-        p = providers.get(k, strict=True)
-        if getattr(p, "reports_cost", True):
-            return p.consult(text, model, effort, root)
-        # a program that doesn't report its cost is priced from the benchmark data (unknown: no cost shown)
-        return p.consult(text, model, effort, root, price=bench.token_price(model))
-    from . import bench
     with (pool or cf.ThreadPoolExecutor)(max_workers=2) as ex:
-        futs = [(k, m, e, why, ex.submit(ask, k, m, e)) for k, m, e, why in who]
+        futs = [(k, m, e, why, ex.submit(ask, k, text, m, e, root)) for k, m, e, why in who]
         answers = [dict(f.result(), provider=k, model=m, effort=e, why=why) for k, m, e, why, f in futs]
     cost = sum(a.get("cost") or 0 for a in answers)
     rec = {"type": "consult", "id": "c" + secrets.token_hex(3), "at": board.now(), "decision": decision, "round": rnd,

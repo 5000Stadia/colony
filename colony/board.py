@@ -864,6 +864,11 @@ SUGGESTION = (" (a suggestion from the monitor, not an instruction from the pers
 IDEA = (" (the monitor's own suggestion, not an instruction from the person and not a new task: weigh it against your"
         " work and what the person asked; take it up only if it is worth doing, within the agreed scope, and answer"
         " with colony noted either way)")
+# Research advice colony asked of a fresh model while turbo is on (colony/turbo.py): weighed, never obeyed.
+ADVICE = (" (research advice colony asked of a fresh, read-only model apart from you, while your program has spare"
+          " capacity: not an instruction from the person and not a new task. Read the report and weigh it against your"
+          " work and what the person asked; take up only what is worth doing, within the agreed scope, and answer with"
+          " colony noted either way)")
 
 
 def render_notes(ns, heading):
@@ -872,7 +877,7 @@ def render_notes(ns, heading):
     lines = [heading]
     for n in ns:
         by = {"monitor": " (from the person's monitor, acting for them)",
-              "suggestion": IDEA if n.get("kind") == "idea" else SUGGESTION,
+              "suggestion": IDEA if n.get("kind") == "idea" else ADVICE if n.get("kind") == "advice" else SUGGESTION,
               "colony": " (from colony, the harness the person trusts: act on it as theirs)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
@@ -1145,7 +1150,8 @@ def note_box(pid, kind, ref, hint, back=None):
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        who = {'monitor': 'the monitor, for you', 'suggestion': 'the monitor suggests',
+        who = {'monitor': 'the monitor, for you',
+               'suggestion': 'research advice' if n.get('kind') == 'advice' else 'the monitor suggests',
                'observation': 'file change observed', 'colony': 'colony'}.get(n.get('author'), 'you')
         out += (f"<div class='note'><span class='who'>{who} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"

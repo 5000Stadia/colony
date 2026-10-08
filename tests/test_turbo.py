@@ -12,11 +12,12 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from colony import bench, board, console, intelligence, monitor, providers, selection, turbo, usage
+from colony import bench, board, console, consult, intelligence, monitor, providers, selection, supports, turbo, usage
 from tests.test_board import ROADMAP, BoardBase
 
 DAY, HOUR = turbo.DAY, turbo.HOUR
 REAL_STALE = console.stale
+REAL_AUTO, REAL_BACKGROUND = consult.auto, turbo.background
 
 
 def reading(used, day, now, at_ago=0):
@@ -66,7 +67,9 @@ class PaceTest(unittest.TestCase):
             self.assertFalse(turbo.pace(r, self.now, on=True)["on"], r)
         old = turbo.pace(reading(0, 4, self.now, at_ago=turbo.STALE + 1), self.now, on=True)
         self.assertFalse(old["on"], "an old reading: off, even mid-turbo")
-        self.assertIn("no usage reading in the last 3 hours", old["why"])
+        self.assertIn("no usage reading in the last 12 hours", old["why"])
+        self.assertTrue(turbo.pace(reading(0, 4, self.now, at_ago=11 * HOUR), self.now)["on"],
+                        "a reading from last night still counts: Claude's ages while no console of its runs")
         self.assertTrue(turbo.pace(reading(0, 4, self.now, at_ago=turbo.STALE - 60), self.now)["on"])
         self.assertFalse(turbo.pace(reading(0, 7.5, self.now), self.now, on=True)["on"],
                          "the week turned over since the reading: off until a fresh one")
@@ -106,6 +109,19 @@ class TurboBase(BoardBase):
         self.patch(console, "stale", lambda root, name=None, label=None: None)
         self.patch(console, "type_into", lambda name, text: self.keys.append(text) or True)
         self.patch(console, "press", lambda name, keys: self.keys.append(keys))
+        # Research advice: never a real model here; the consultant pick is fixed, and it runs inline unless a test says so.
+        self.consulted = []
+        self.answer = {"text": "Seed libraries keep germination records by variety: a week reading them could set R3's "
+                               "reminder defaults from data rather than guesses.", "cost": 0.42, "usage": {}, "error": None}
+
+        def ask(brief, model, effort, project, price=None):
+            self.consulted.append(dict(brief=brief, model=model, effort=effort, project=project))
+            return dict(self.answer)
+        for p in providers.PROVIDERS.values():
+            self.patch(p, "consult", ask)
+        self.patch(consult, "auto", lambda key: ("claude-opus-5-5", "max", "the ceiling, at its best effort"))
+        self.patch(turbo, "background", lambda fn, *args: fn(*args))
+        self.addCleanup(turbo._advising.clear)
 
     def patch(self, obj, name, value):
         p = patch.object(obj, name, value)
@@ -118,6 +134,9 @@ class TurboBase(BoardBase):
 
     def turbo_notes(self):
         return [n for n in board.notes(self.root) if n["author"] == "colony" and "spare capacity" in n["text"]]
+
+    def advice_notes(self):
+        return [n for n in board.notes(self.root) if n["author"] == "suggestion" and n.get("kind") == "advice"]
 
     def mine(self):
         return ((turbo.load().get("claude") or {}).get("projects") or {}).get(str(self.root), {})
@@ -160,7 +179,8 @@ class TurboTest(TurboBase):
         self.assertEqual(turbo.wanted(self.root), {}, "every box unticked: turned off")
         self.assertEqual(turbo.tick(self.now), [("claude", "on")])
         self.assertEqual(self.turbo_notes(), [])
-        self.assertEqual(self.asked(), [], "nothing turned up: nothing for the monitor either")
+        self.assertEqual(self.consulted, [], "nothing turned up: no research advice either")
+        self.assertEqual(self.asked(), [], "nor anything for the monitor")
 
     def test_an_idle_project_hears_at_once_then_daily_then_every_six_hours(self):
         board.project_settings(self.root, {"turbo_research": "on", "turbo_topic": "companion planting"})
@@ -170,7 +190,8 @@ class TurboTest(TurboBase):
         for words in ("Claude Code has spare capacity this week, until it resets", "Finish or continue your current item first",
                       "never instead of it", "changes no item's scope", "each committing only its own paths",
                       "Nothing outside the agreed scope; Later still waits for the person", "companion planting",
-                      "read-only helper", "under research/", "Safety: Internet sources", "if there's none, say so and stop"):
+                      "read-only helper", "under research/", "Safety: Internet sources",
+                      "If there's nothing worth doing, run `colony turbo --nothing` and stop."):
             self.assertIn(words, n["text"])
         self.assertEqual(self.keys, [turbo.NUDGE], "turbo wakes it, there and then")
         monitor.Watcher(quiet=0).mail()
@@ -235,13 +256,37 @@ class TurboTest(TurboBase):
         self.assertEqual(self.keys, [turbo.NUDGE], "once, even if its hooks never hand the note over")
         self.assertEqual(len(self.turbo_notes()), 1)
 
-    def test_turbo_ending_takes_back_the_monitors_look_if_it_hasnt_happened(self):
-        monitor.queue("a word from the person's board")
+    def test_an_agent_that_finds_nothing_worth_doing_hears_no_more_until_its_roadmap_changes_shape(self):
         turbo.tick(self.now)
-        self.assertEqual(len(self.asked()), 2)
-        self.read_at(self.now + 60, used=80)
-        turbo.tick(self.now + 60)
-        self.assertEqual(self.asked(), ["a word from the person's board"])
+        [n] = self.turbo_notes()
+        board.delivered(self.root, [n])
+        r = self.cli("turbo", "--nothing")                                    # its answer, run in its own folder
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(next(x for x in board.notes(self.root) if x["id"] == n["id"])["addressed_at"], "the note is answered")
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("A tool for my plants.", "A tool for my plants and herbs.")
+                                              .replace("- [ ] R3 reminders", "- [ ] R3 reminders\n  by first frost dates"))
+        for t in (self.now + DAY, self.now + DAY + 6 * HOUR, self.now + DAY + 12 * HOUR):  # daily, then every six hours
+            self.read_at(t)
+            turbo.tick(t)
+        self.assertEqual(len(self.turbo_notes()), 1, "no note while its roadmap keeps its shape, rewording aside")
+        self.assertEqual(self.keys, [turbo.NUDGE], "nor is it woken")
+        self.assertIn("plants: stronger models, going deeper; it found nothing worth doing (", turbo.report(self.now + DAY))
+        self.assertIn("its agent found nothing worth doing, so no note until its roadmap changes", turbo.project_line(self.root))
+        (self.root / "ROADMAP.md").write_text(ROADMAP + "- [ ] R4 seed swaps\n")
+        self.read_at(self.now + DAY + 18 * HOUR)
+        turbo.tick(self.now + DAY + 18 * HOUR)
+        self.assertEqual(len(self.turbo_notes()), 2, "its roadmap changed shape: it hears again")
+        self.assertEqual(self.keys, [turbo.NUDGE, turbo.NUDGE])
+        board.delivered(self.root, self.turbo_notes())
+        turbo.nothing(self.root)
+        self.read_at(self.now + 2 * DAY)
+        turbo.tick(self.now + 2 * DAY)
+        self.assertEqual(len(self.turbo_notes()), 2, "nothing again, for the new shape")
+        board.project_settings(self.root, {"turbo_research": "on", "turbo_topic": "companion planting"})
+        self.read_at(self.now + 2 * DAY + 6 * HOUR)
+        turbo.tick(self.now + 2 * DAY + 6 * HOUR)
+        self.assertEqual(len(self.turbo_notes()), 3, "a research topic the person typed is new work: it hears it")
+        self.assertIn("companion planting", self.turbo_notes()[-1]["text"])
 
     def test_it_never_interrupts_work_in_progress(self):
         from colony import cli
@@ -281,6 +326,7 @@ class TurboTest(TurboBase):
             self.assertFalse([x for x in done if x[0] == self.root], why)
             self.assertEqual(self.turbo_notes(), [], why)
             self.assertNotIn("boost", self.mine(), f"{why}: no model change either")
+            self.assertEqual(self.consulted, [], f"{why}: nor research advice")
             with redirect_stdout(io.StringIO()):
                 cli.main(["suggest", "plants", f"an idea, while {why}"])         # nor does the monitor's suggestion
             monitor.Watcher(quiet=0).mail()
@@ -322,7 +368,7 @@ class TurboTest(TurboBase):
             self.readings["claude"] = r
             self.assertEqual(turbo.tick(self.now), [], why)
         self.assertEqual(self.turbo_notes(), [])
-        self.assertIn("turbo off (no usage reading in the last 3 hours)", turbo.line("claude", self.now))
+        self.assertIn("turbo off (no usage reading in the last 12 hours)", turbo.line("claude", self.now))
         w = monitor.Watcher(quiet=0)
         w.usage_checked = 0
         with patch.object(turbo, "tick", side_effect=RuntimeError("a surprise")):
@@ -365,50 +411,14 @@ class TurboTest(TurboBase):
             self.assertEqual(everything(), before, why)
             self.assertEqual(self.keys, [], why)
             self.assertEqual(self.asked(), [], why)
+            self.assertEqual(self.consulted, [], why)
         board.set_setting("turbo_by", "claude=on")
         turbo.tick(self.now)
-        self.assertEqual(len(self.turbo_notes()), 1, "on, it only adds a note")
+        self.assertEqual(len(self.turbo_notes()), 1, "on, it only adds: a note, and research advice beside it")
+        self.assertEqual(len(self.advice_notes()), 1)
         instructions = (self.root / "CLAUDE.md").read_text() + bench.plan_text(self.root)
         for words in ("urbo", "spare capacity"):
             self.assertNotIn(words, instructions, "nothing of turbo is ever written into instructions")
-
-    def test_the_monitor_is_asked_once_a_turbo_day_and_never_when_muted_or_off(self):
-        board.project_settings(self.root, {"turbo_research": "on", "turbo_topic": "companion planting"})
-        usage.folder().mkdir(parents=True, exist_ok=True)
-        (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {"provider": "claude", "window": "5-hour"}}))
-        turbo.tick(self.now)
-        self.assertEqual(self.asked(), [], "paused at its usage limit: not turned up, so nothing to look at")
-        (usage.folder() / "paused.json").write_text("{}")
-        turbo.tick(self.now)
-        [ask] = self.asked()
-        for words in ("Turbo is on for Claude Code", "plants (the person's research topic: companion planting)",
-                      "colony posture", "colony peek NAME", "nobody has considered", "colony suggest NAME",
-                      "never the person's word", "never replacing it", "suggest nothing"):
-            self.assertIn(words, ask)
-        self.read_at(self.now + HOUR)
-        turbo.tick(self.now + HOUR)
-        self.assertEqual(len(self.asked()), 1, "once a day")
-        self.read_at(self.now + DAY)
-        turbo.tick(self.now + DAY)
-        self.assertEqual(len(self.asked()), 2, "a day on, once more")
-        (board.home() / "to_monitor.jsonl").unlink()
-
-        def episode(t):                                                         # caught up, then behind again
-            self.read_at(t, used=95)
-            turbo.tick(t)
-            self.read_at(t + 60)
-            turbo.tick(t + 60)
-        monitor.muted(True)
-        episode(self.now + DAY + 60)
-        monitor.muted(False)
-        turbo.tick(self.now + DAY + 180)
-        self.assertEqual(self.asked(), [], "muted: skipped entirely, not saved for later")
-        board.set_setting("monitor", "off")
-        episode(self.now + DAY + 240)
-        self.assertEqual(self.asked(), [], "the monitor off in Settings: skipped")
-        board.set_setting("monitor", "on")
-        episode(self.now + DAY + 360)
-        self.assertEqual(len(self.asked()), 1, "a new turbo episode asks again")
 
     def test_colony_suggest_leaves_the_monitors_own_suggestion(self):
         r = self.cli("suggest", "plants", "Seed-saving apps time reminders by first frost: worth a look for R3")
@@ -468,6 +478,7 @@ class TurboTest(TurboBase):
         out = self.cli("turbo").stdout
         self.assertIn("Claude Code: 20% of its week used, 57% expected by now: turbo on", out)
         self.assertIn("  plants: stronger models, going deeper; last note", out)
+        self.assertRegex(out, r"; research advice .+ \(turbo-advice-\d{4}-\d{2}-\d{2}\.md\)")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
@@ -488,6 +499,157 @@ class TurboTest(TurboBase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class AdviceTest(TurboBase):
+    """Research advice: once a turbo day, colony asks the program's consultant, apart from the project's agent, and
+    leaves its answer in the project as a report with one quiet note. The agent decides what to do with it."""
+
+    def report_of(self, n):
+        [path] = [e["report"] for e in board.read(self.root, turbo.LOG) if e.get("note") == n["id"]]
+        return Path(path)
+
+    def day(self, t):
+        return time.strftime("%Y-%m-%d", time.localtime(t))
+
+    def test_once_a_turbo_day_as_a_report_and_a_quiet_note_with_nothing_typed_and_the_monitor_never_asked(self):
+        board.project_settings(self.root, {"turbo_deeper": "off"})            # stronger models only: turbo types nothing
+        monitor.muted(True)                                                    # the monitor's mute is beside the point
+        monitor.queue("a word from the person's board")
+        self.assertIn((self.root, "research advice"), turbo.tick(self.now))
+        self.assertEqual(len(self.consulted), 1)
+        [n] = self.advice_notes()
+        self.assertTrue(n.get("quiet"), "it waits for the agent's next turn")
+        path = self.report_of(n)
+        self.assertEqual(path, self.root / "research" / f"turbo-advice-{self.day(self.now)}.md")
+        self.assertIn(str(path), n["text"], "the note points at the report")
+        report = path.read_text()
+        self.assertIn(self.answer["text"], report)
+        self.assertIn("from this project's agent while Claude Code had spare weekly capacity", report)
+        self.assertTrue(report.rstrip().endswith(supports.NOTICE), "it ends with the safety line")
+        self.assertIn("?? research/", self.git("status", "--porcelain"), "left to the agent: nothing is committed")
+        monitor.Watcher(quiet=0).mail()
+        self.assertEqual(self.keys, [], "nothing is typed into its console")
+        self.assertEqual(self.asked(), ["a word from the person's board"], "and the monitor is asked nothing")
+        self.read_at(self.now + DAY)
+        turbo.tick(self.now + DAY)
+        self.assertEqual(len(self.consulted), 1, "a day on, but the last hasn't reached the agent: none piles up behind it")
+        out = self.cli("notes", "--deliver").stdout                            # its next turn
+        self.assertIn("Research advice colony asked for, apart from you:", out)
+        self.assertIn(board.ADVICE, out)
+        self.assertNotIn("Suggestions from the monitor:", out, "never passed off as the monitor's")
+        self.assertEqual(self.cli("noted", n["id"], "Worth a look once R3 starts").returncode, 0)
+        self.assertEqual(self.asked(), ["a word from the person's board"], "its answer isn't the monitor's to hear")
+        mine = self.root / "research" / f"turbo-advice-{self.day(self.now + DAY)}.md"
+        mine.write_text("the agent's own notes\n")
+        turbo.tick(self.now + DAY)
+        self.assertEqual(len(self.consulted), 2, "heard, and a day on: once more")
+        second = self.advice_notes()[1]
+        self.assertEqual(self.report_of(second).name, f"turbo-advice-{self.day(self.now + DAY)}-2.md")
+        self.assertEqual(mine.read_text(), "the agent's own notes\n", "never over a file already there")
+        board.delivered(self.root, [second])
+        self.read_at(self.now + DAY + HOUR)
+        turbo.tick(self.now + DAY + HOUR)
+        self.assertEqual(len(self.consulted), 2, "heard, but not again within the day")
+        self.read_at(self.now + DAY + HOUR + 60, used=80)
+        self.assertEqual(turbo.tick(self.now + DAY + HOUR + 60), [("claude", "off")])
+        self.assertEqual(self.asked(), ["a word from the person's board"], "turbo ending takes back nothing it never queued")
+        self.read_at(self.now + DAY + HOUR + 120)
+        turbo.tick(self.now + DAY + HOUR + 120)
+        self.assertEqual(len(self.consulted), 2, "behind again the same day: at most once a day, episodes aside")
+        self.assertEqual(self.keys, [])
+        self.assertIn("plants: stronger models; research advice ", turbo.report(self.now + DAY + HOUR + 120))
+
+    def test_its_brief_is_the_projects_own_words_and_work_then_the_question(self):
+        board.project_settings(self.root, {"turbo_research": "on", "turbo_topic": "companion planting"})
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [ ] R3 reminders\n  by first frost dates"))
+        self.commit("R2 water log: daily entries")
+        turbo.tick(self.now)
+        [asked] = self.consulted
+        self.assertEqual((asked["model"], asked["effort"]), ("claude-opus-5-5", "max"), "the program's consultant pick")
+        self.assertEqual(asked["project"], self.root, "it reads the project by path, read-only, where its program allows")
+        for words in ("apart from the project's own agent", "in the person's words\nA tool for my plants.",
+                      "M1 — v1: it works for me", "- R1 (done) add plants", "- R2 (under way) water log",
+                      "- R3 (to do) reminders: by first frost dates", "- R2 water log: daily entries", "- start",
+                      "companion planting", "never in its place", "nobody has considered", "purpose, not its topic",
+                      "At most two suggestions", "under 400 words", "the single word NONE", "don't survey it"):
+            self.assertIn(words, asked["brief"])
+
+    def test_nothing_standing_out_or_a_failed_answer_leaves_nothing_to_weigh(self):
+        self.answer = {"text": "NONE.", "cost": 0.2, "usage": {}, "error": None}
+        turbo.tick(self.now)
+        self.assertEqual((len(self.consulted), self.advice_notes()), (1, []))
+        self.assertFalse((self.root / "research").exists())
+        self.assertIn("(nothing stood out)", turbo.report(self.now))
+        self.answer = {"text": "", "cost": None, "usage": {}, "error": "TimeoutExpired"}
+        self.read_at(self.now + DAY)
+        turbo.tick(self.now + DAY)
+        self.assertEqual((len(self.consulted), self.advice_notes()), (2, []))
+        self.assertIn("research advice for plants: TimeoutExpired", turbo.report(self.now + DAY))
+        self.read_at(self.now + DAY + 60)
+        turbo.tick(self.now + DAY + 60)
+        self.assertEqual(len(self.consulted), 2, "tried again tomorrow, not every minute")
+
+    def test_none_with_consulting_off_its_own_turbo_off_paused_or_while_it_waits_on_the_person(self):
+        board.set_setting("consult", "off")
+        turbo.tick(self.now)
+        self.assertEqual((self.consulted, self.advice_notes()), ([], []), "consulting off: no advice")
+        self.assertFalse((self.root / "research").exists())
+        board.set_setting("consult", "on")
+        for k in ("turbo_models", "turbo_deeper", "turbo_research"):
+            board.project_settings(self.root, {k: "off"})
+        self.read_at(self.now + 60)
+        turbo.tick(self.now + 60)
+        self.assertEqual(self.consulted, [], "turbo turned off for this project: none")
+        board.project_settings(self.root, {"turbo_models": "on"})
+        usage.folder().mkdir(parents=True, exist_ok=True)
+        (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {"provider": "claude", "window": "5-hour"}}))
+        self.read_at(self.now + 120)
+        turbo.tick(self.now + 120)
+        self.assertEqual(self.consulted, [], "paused at its program's usage limit: none")
+        (usage.folder() / "paused.json").write_text("{}")
+        gate = board.add_gate(self.root, "Which reminders first?")
+        self.read_at(self.now + 180)
+        turbo.tick(self.now + 180)
+        self.assertEqual(self.consulted, [], "waiting on the person: it waits too")
+        board.clear_gate(self.root, gate["id"])
+        self.read_at(self.now + 240)
+        self.assertIn((self.root, "research advice"), turbo.tick(self.now + 240))
+
+    def test_it_runs_beside_the_watchers_minute_never_twice_at_once(self):
+        self.patch(turbo, "background", REAL_BACKGROUND)
+        go = threading.Event()
+
+        def slow(brief, model, effort, project, price=None):
+            self.consulted.append(dict(project=project))
+            go.wait(30)
+            return dict(self.answer)
+
+        def finish():
+            go.set()
+            for t in threading.enumerate():
+                if t.name == "colony-turbo-advice":
+                    t.join(30)
+        self.patch(providers.get("claude"), "consult", slow)
+        other = Path(self.tmp.name) / "seeds"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        try:                                    # released here, while this test's board still stands, whatever happens
+            began = time.monotonic()
+            done = turbo.tick(self.now)
+            self.assertLess(time.monotonic() - began, 10, "the watcher's minute goes on while the model thinks")
+            self.assertIn((self.root, "research advice"), done)
+            self.assertNotIn((other, "research advice"), done, "one at a time for a program")
+            self.assertFalse(turbo.advise(self.root, "claude", self.now + 2 * DAY), "never twice at once")
+            self.assertIn("research advice asked", turbo.report(self.now))
+            finish()
+            self.assertEqual((len(self.consulted), len(self.advice_notes())), (1, 1))
+            self.read_at(self.now + 60)
+            self.assertIn((other, "research advice"), turbo.tick(self.now + 60), "then the next")
+        finally:
+            finish()
+        self.assertEqual(len(self.consulted), 2)
 
 
 class StrongerModelsTest(TurboBase):
@@ -608,6 +770,18 @@ class StrongerModelsTest(TurboBase):
         turbo.tick(self.now)
         self.assertNotIn("main", self.mine().get("boost", {}), "turbo doesn't claim a seat the person pinned")
         self.assertEqual(selection.pair(selection.main(self.root)), {"model": "claude-sonnet-5-5", "effort": "low"})
+
+    def test_research_advice_comes_from_its_programs_consultant_as_auto_picks_it(self):
+        self.patch(consult, "auto", REAL_AUTO)
+        board.set_setting("consultants", "claude=claude-sonnet-5-5:low")          # the person's own, for their decisions
+        self.assertIn((self.root, "research advice"), turbo.tick(self.now))
+        auto = selection.consultant("claude", automatic=True)
+        [asked] = self.consulted
+        self.assertEqual((asked["model"], asked["effort"]), (auto["model"], auto["effort"]))
+        self.assertNotEqual((asked["model"], asked["effort"]), ("claude-sonnet-5-5", "low"))
+        ceiling = max(x["score"] for x in intelligence.pairs(bench.standings()) if x["family"] == "claude")
+        best = [x for x in intelligence.pairs(bench.standings()) if (x["model"], x["effort"]) == (auto["model"], auto["effort"])]
+        self.assertGreaterEqual(best[0]["score"], ceiling - 1, "the ceiling, within Auto's one-point tolerance")
 
     def test_a_rejected_model_is_never_turbos_pick(self):
         turbo.tick(self.now)

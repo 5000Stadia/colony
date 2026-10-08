@@ -7,23 +7,30 @@ the person typed), and only projects with queued work, or research ticked, are t
 
 It only ever adds to a project's work. Its note is quiet, and turbo itself wakes a console only at a moment it has
 checked: idle, nothing typed, no one at it, nothing waiting on the person; a note that waits is let go once that
-changes. Stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is
-written into any instructions. Off, it is nothing at all. It runs in the watcher's minute with no tokens; when a
-program's reading is missing or old it stays off, and when the watcher can't keep it, it stands down.
+changes, and an agent that answers there's nothing worth doing hears no more until its roadmap changes shape.
+Stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is written into
+any instructions. Once a day, apart from the agent, the program's consultant writes each turned-up project research
+advice: a report left in the project, with a quiet note for the agent to weigh. Off, it is nothing at all. It runs in
+the watcher's minute with no tokens (the advice runs beside it); when a program's reading is missing or old it stays
+off, and when the watcher can't keep it, it stands down.
 """
+import hashlib
+import itertools
 import json
 import secrets
+import threading
 import time
 from pathlib import Path
 
-from . import board, console, providers, usage
+from . import board, console, consult, providers, usage
 
 HOUR, DAY = 3600, 86400
 WEEK = 7 * DAY
 TARGET = 99              # % of the week used by the hour before it resets
 BEHIND = 5               # points behind pace that turn turbo on; catching up turns it off
 FROM = 2 * DAY           # no judgement before day 2 of the window
-STALE = 3 * HOUR         # an older reading isn't trusted: turbo stays off
+STALE = 12 * HOUR        # an older reading isn't trusted: turbo stays off (Claude's refreshes only while a console runs,
+                         # so overnight it ages; an old reading only understates use, and the safe pause still guards)
 FRESH = 15 * 60          # a turbo the watcher hasn't kept this long stands down
 RAISE = 2                # positions toward Intelligence for a project that ticks stronger models
 NUDGE = "[colony] You have an update from Colony."              # the watcher's own words for a colony note
@@ -82,18 +89,7 @@ def note(label, resets_at, deeper=False, research=""):
         parts.append(f"Research the person asked for here: {research}. Give it to a read-only helper (it searches and "
                      "reads, and changes nothing), and keep its report in this project, under research/, ending with "
                      f"this line: {NOTICE}")
-    return " ".join(parts + ["Only work worth doing: if there's none, say so and stop."])
-
-
-def ask(label, rec, turned):
-    """The monitor's one look while turbo is on: where research could bring a gain nobody has considered."""
-    names = "; ".join(r.name + (f" (the person's research topic: {t})" if t else "") for r, t in turned)
-    return (f"Turbo is on for {label} until it resets {usage.when(rec['resets_at'])}: {rec['used']:g}% of its week "
-            f"used, {rec['expected']:.0f}% expected by now. Turned up: {names}. Glance at each (colony posture, colony "
-            "peek NAME, its roadmap and vision) and judge, by your own lights, where research could bring a gain nobody "
-            "has considered yet. Offer each such project one research suggestion with colony suggest NAME \"...\": "
-            "yours, never the person's word, beside any topic they typed and never replacing it. Where nothing stands "
-            "out, suggest nothing.")
+    return " ".join(parts + ["Only work worth doing. If there's nothing worth doing, run `colony turbo --nothing` and stop."])
 
 
 # ---------------------------------------------------------------- which projects, and when
@@ -170,6 +166,51 @@ def withdraw(root, nid, why):
                                        "text": f"Let go by colony before it reached you ({why}): nothing to do."})
 
 
+# ---------------------------------------------------------------- nothing worth doing
+
+def shape(root):
+    """What turbo's notes to a project are about, as a fingerprint: its roadmap's items (where each sits, what it
+    says, its state, whose it is), the version under way, and the research topic the person typed. Rewording the
+    vision or an item's description leaves it; adding, removing, re-stating or moving an item changes it."""
+    from . import progress
+    opts = options(root)
+    items = [[i["milestone"], i["id"], i["state"], i["text"], i.get("owner")]
+             for i in board.items(board.roadmap(root)).values()]
+    version = (progress.current(root) or {}).get("items")
+    topic = opts["turbo_topic"].strip() if opts["turbo_research"] else ""
+    return hashlib.sha256(json.dumps([items, version, topic]).encode()).hexdigest()[:16]
+
+
+def nothing_path(root):
+    return Path(root) / ".board" / "turbo-nothing.json"
+
+
+def said_nothing(root):
+    """When the agent answered there's nothing worth doing (colony turbo --nothing), while its roadmap keeps the
+    shape it had then; else None."""
+    try:
+        said = json.loads(nothing_path(root).read_text())
+        return said["at"] if said["shape"] == shape(root) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def nothing(root, now=None):
+    """An agent's answer to turbo's note, colony turbo --nothing: nothing worth doing. The note is answered, and turbo
+    sends it no more until its roadmap changes shape; stronger models and research advice, which ask nothing of it,
+    go on."""
+    now = time.time() if now is None else now
+    path = nothing_path(root)
+    path.parent.mkdir(exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"at": now, "shape": shape(root)}))
+    tmp.replace(path)
+    for n in board.notes(root):
+        if n["author"] == "colony" and n.get("kind") == "turbo" and not n["addressed_at"]:
+            board.append(root, "notes.jsonl", {"type": "addressed", "of": n["id"], "at": board.now(),
+                                               "text": "Nothing worth doing: no more from turbo until the roadmap changes."})
+
+
 # ---------------------------------------------------------------- stronger models
 
 def picks(root):
@@ -232,6 +273,135 @@ def release(state, roots, change):
             trouble(err)
 
 
+# ---------------------------------------------------------------- research advice, apart from the agent
+
+ADVISE = ("Where could research bring this project a gain nobody has considered yet, and what should that research look "
+          "like? Take the question from the project's purpose, not its topic, and look past what a strong model "
+          "already knows and what the roadmap already plans. At most two suggestions, each with why it would pay here "
+          "and how to approach it, in under 400 words. If nothing would clearly pay, answer with the single word NONE.")
+LOG = "turbo-advice.jsonl"                  # in each project's .board: when its advice was asked, and what came of it
+STATES = {"todo": "to do", "doing": "under way", "verify": "for the person's eye", "done": "done"}
+_advising, _guard = {}, threading.Lock()    # advice under way in this process: project → its program
+
+
+def advice_due(root, key, now):
+    """Whether a turned-up project is due research advice: consulting on, none asked for it in the last day, none
+    under way for its program (one at a time, so a burst never runs the program's 5-hour window into the safe pause),
+    and its last one heard, so none piles up."""
+    if not board.registry()["settings"]["consult"] or not hasattr(providers.get(key), "consult"):
+        return False
+    with _guard:
+        if key in _advising.values():
+            return False
+    asked = [e["at"] for e in board.read(root, LOG) if e.get("type") == "asked"]
+    if asked and now - asked[-1] < DAY:
+        return False
+    return not any(n["author"] == "suggestion" and n.get("kind") == "advice" and not n["delivered_at"]
+                   and not n["addressed_at"] for n in board.notes(root))
+
+
+def advise(root, key, now):
+    """Start a project's research advice beside the watcher's minute, marked under way so it never runs twice at once.
+    Whether it started."""
+    with _guard:
+        if str(root) in _advising or key in _advising.values():
+            return False
+        _advising[str(root)] = key
+    try:
+        board.append(root, LOG, {"type": "asked", "at": now})           # once a day, whatever comes of it
+        background(advice, root, key, now)
+    except BaseException:
+        with _guard:
+            _advising.pop(str(root), None)
+        raise
+    return True
+
+
+def background(fn, *args):
+    """Off the watcher's minute: a slow model never stalls it."""
+    threading.Thread(target=fn, args=args, daemon=True, name="colony-turbo-advice").start()
+
+
+def advice(root, key, now):
+    """One project's research advice, apart from its agent: its program's consultant as colony's Auto picks it (within
+    a point of the ceiling; the person's own consultant choice is for their decisions), fresh and read-only in an
+    empty folder, reading the project only by path, on a brief colony writes. Its answer is left in the project as a
+    report with one quiet note pointing at it: nothing is typed into its console, and the agent decides what to do
+    with it. Each is logged with its cost; never raises."""
+    out = dict(type="advice", model=None, effort=None, cost=None, report=None, note=None, error=None)
+    try:
+        model, effort, _ = consult.auto(key)
+        out.update(model=model, effort=effort)
+        got = consult.ask(key, advice_brief(root), model, effort, board.workdir(root))
+        text = (got.get("text") or "").strip()
+        out.update(cost=got.get("cost"), error=got.get("error") or (None if text else "no answer"))
+        if not out["error"] and text.strip(" .*_`'\"").upper() != "NONE":          # NONE: nothing stood out
+            label = providers.get(key).label
+            out["report"] = str(keep(root, label, model, effort, text, now))
+            out["note"] = board.add_note(root, None, f"Research advice for this project from {model} at {effort} effort, "
+                                         f"while {label} has spare weekly capacity: {out['report']}",
+                                         author="suggestion", quiet=True, kind="advice")["id"]
+    except Exception as err:
+        out["error"] = f"{type(err).__name__}: {err}"
+    finally:
+        try:
+            board.append(root, LOG, dict(out, at=time.time()))
+            if out["error"]:
+                trouble(RuntimeError(f"research advice for {Path(root).name}: {out['error']}"))
+        except Exception:
+            pass                                                # its project gone, say: no one left to tell
+        with _guard:
+            _advising.pop(str(root), None)
+
+
+def advice_brief(root):
+    """What the advice is asked from, written by colony rather than the project's agent: the vision and roadmap in
+    the person's words, the open items, the recent commits and any research topic the person typed, then the question."""
+    road, work = board.roadmap(root), board.workdir(root)
+    cut = lambda t: t if len(t) <= 200 else t[:199] + "…"
+    plan = "\n\n".join("\n".join([m["id"] + (f" — {m['title']}" if m["title"] else "")]
+                                 + [f"- {i['id']} ({STATES[i['state']]}) {cut(i['text'])}" for i in m["items"]])
+                       for m in road["milestones"])
+    open_ = [f"- {i['id']} ({STATES[i['state']]}) {i['text']}" + (f": {i['desc']}" if i["desc"] else "")
+             for i in board.items(road).values() if i["state"] in ("todo", "doing")]
+    commits = [f"- {c}" for c in board.git(work, "log", "-n", "20", "--no-merges", "--format=%s").splitlines() if c.strip()]
+    opts = options(root)
+    topic = opts["turbo_topic"].strip() if opts["turbo_research"] else ""
+    parts = [f"You are `advisor · {Path(root).name} · research only`: a fresh, independent view on someone's project, "
+             "asked by colony, the harness they run it in, apart from the project's own agent. You advise; you change "
+             "nothing.",
+             f"## Its {'vision' if road['vision'] else 'goal'}, in the person's words\n{road['goal'] or '(none recorded)'}",
+             f"## Its roadmap\n{plan or '(no items yet)'}",
+             "## Its open items\n" + ("\n".join(open_) or "(none)"),
+             "## Its recent commits, newest first\n" + ("\n".join(commits) or "(none)")]
+    if topic:
+        parts.append(f"## The person's own research topic for it\n{topic}\nThey asked their agent to research this: build "
+                     "on it or look beside it, never in its place.")
+    parts.append(f"## Your task\n{ADVISE} The project is under {work}: read there (read-only) only what your answer turns "
+                 "on, and don't survey it.")
+    return "\n\n".join(parts)
+
+
+def keep(root, label, model, effort, text, now):
+    """The advice as a report in the project's research/ folder, never over a file already there, ending with the
+    safety line every research report carries. Left uncommitted: the agent decides what becomes of it."""
+    from .supports import NOTICE
+    day, folder = time.strftime("%Y-%m-%d", time.localtime(now)), board.workdir(root) / "research"
+    folder.mkdir(exist_ok=True)                                 # a project gone meanwhile stays gone
+    body = (f"# Research advice for {Path(root).name}, {day}\n\nFrom {model} at {effort} effort, which colony asked apart "
+            f"from this project's agent while {label} had spare weekly capacity (turbo). It read the project's vision, "
+            "roadmap, open items and recent commits. A suggestion to weigh, not the person's word.\n\n"
+            + text + ("" if text.endswith(NOTICE) else f"\n\n{NOTICE}") + "\n")
+    for n in itertools.count(1):
+        path = folder / f"turbo-advice-{day}{'' if n == 1 else f'-{n}'}.md"
+        try:
+            with path.open("x") as fh:
+                fh.write(body)
+            return path
+        except FileExistsError:
+            continue
+
+
 # ---------------------------------------------------------------- the watcher's minute
 
 def path():
@@ -256,7 +426,6 @@ def save(state):
 def tick(now=None):
     """The watcher's minute, with no tokens: each program's pace, and while turbo is on, what it does for that
     program's projects. What changed, as (program or project, what)."""
-    from . import monitor
     now = time.time() if now is None else now
     state, done = load(), []
     s = board.registry()["settings"]
@@ -279,30 +448,22 @@ def tick(now=None):
             done.append((key, "on"))
         state[key] = rec = dict(rec, **p, at=now)
         rec.setdefault("projects", {})
-        turned = []
         for root in [r for r in roots if providers.key(providers.of(r)) == key]:
             try:
-                want, did = visit(state, rec, root, prov.label, now, paused)
+                done += visit(state, rec, root, key, now, paused)
             except Exception as err:                    # one project's trouble never stops turbo for the rest
                 trouble(err)
-                continue
-            done += did
-            if want:
-                turned.append((root, want.get("research", "")))
         rec["projects"] = {r: m for r, m in rec["projects"].items() if m}
-        if turned and now - rec.get("monitor", 0) >= DAY:
-            rec["monitor"] = now
-            if s["monitor"] and not monitor.muted():
-                monitor.queue(ask(prov.label, rec, turned))
-                done.append((key, "asked the monitor"))
     save(state)
     return done
 
 
-def visit(state, rec, root, label, now, paused):
-    """One project while its program's turbo is on: (what turbo does for it, what it did now). Its note is quiet:
-    turbo wakes the console itself, only at a moment it has checked, and lets a note that still waits go once the
-    project is held, no longer turned up, or its console stopped, so nothing else ever types it in later."""
+def visit(state, rec, root, key, now, paused):
+    """One project while its program's turbo is on: what turbo did for it now. Its note is quiet: turbo wakes the
+    console itself, only at a moment it has checked, and lets a note that still waits go once the project is held, no
+    longer turned up, or its console stopped, so nothing else ever types it in later. An agent that said there's
+    nothing worth doing hears no more until its roadmap changes shape. Research advice runs apart from the agent and
+    wakes nothing."""
     from . import bench
     mine, done = rec["projects"].setdefault(str(root), {}), []
     opts = options(root)
@@ -310,10 +471,12 @@ def visit(state, rec, root, label, now, paused):
         release(state, [root], lambda: mine.update(boost={}))      # unticked: they go, without a reload
     want = {} if str(root) in paused else wanted(root, opts)
     boost = want.get("models") and "boost" not in mine
-    wake = (want.get("deeper") or want.get("research")) and due(mine.get("noted"), now, rec["resets_at"])
+    wake = ((want.get("deeper") or want.get("research")) and due(mine.get("noted"), now, rec["resets_at"])
+            and not said_nothing(root))
     pending = unheard(root, mine.get("note"))
-    if not (boost or wake or pending):
-        return want, done
+    advice_now = bool(want) and advice_due(root, key, now)
+    if not (boost or wake or pending or advice_now):
+        return done
     snap = console.snapshot(root, lines=4)
     why = held(root, snap) if want else "no longer turned up"
     if pending and (why or snap["state"] == "off"):
@@ -322,7 +485,13 @@ def visit(state, rec, root, label, now, paused):
             mine.pop(k, None)                                   # it never heard: it may hear when it can
         pending = False
     if why:
-        return want, done
+        return done
+    if advice_now:
+        try:
+            if advise(root, key, now):
+                done.append((root, "research advice"))
+        except Exception as err:                                # extra to the rest: its trouble stops none of it
+            trouble(err)
     if boost:
         mine["boost"] = picks(root)                             # once a turbo episode, kept until it ends
         save(state)
@@ -331,19 +500,18 @@ def visit(state, rec, root, label, now, paused):
             done.append((root, "stronger models"))
     if ((pending and not mine.get("woke")) or (wake and not pending)) and ready(root, snap) and settled(root):
         if not pending:
-            n = board.add_note(root, None, note(label, rec["resets_at"], want.get("deeper"), want.get("research", "")),
-                               author="colony", quiet=True)
+            n = board.add_note(root, None, note(providers.get(key).label, rec["resets_at"], want.get("deeper"),
+                                                want.get("research", "")), author="colony", quiet=True, kind="turbo")
             mine.update(noted=now, note=n["id"])
             done.append((root, "noted"))
         # a draft that appeared just now keeps it for the next free moment (once woken, never again), or its next turn
         mine["woke"] = console.type_into(console.session_name(root), NUDGE)
-    return want, done
+    return done
 
 
 def end(state, key, off):
-    """Turbo ends for a program: stronger models leave without a reload, a note that never reached its project is let
-    go, and the monitor's look, if it hasn't happened yet, with them."""
-    from . import monitor
+    """Turbo ends for a program: stronger models leave without a reload, and a note that never reached its project is
+    let go. Research advice already asked for lands as it would: it stands on its own."""
     mine = {Path(r): m for r, m in ((state.get(key) or {}).get("projects") or {}).items()}
     release(state, [r for r, m in mine.items() if m.get("boost")], lambda: state.update({key: off}))
     for r, m in mine.items():
@@ -352,7 +520,6 @@ def end(state, key, off):
                 withdraw(r, m["note"], "turbo ended")
         except Exception as err:
             trouble(err)
-    monitor.unqueue(lambda text: text.startswith(f"Turbo is on for {providers.get(key).label} "))
     return [(key, "off")]
 
 
@@ -421,11 +588,30 @@ def project_line(root):
             "going deeper on its queued work" if want.get("deeper") else "",
             f"research on {want['research']}" if want.get("research") else ""]
     why = held(root)
-    return (f"Turbo is on for {label} until it resets {usage.when(rec['resets_at'])}: "
-            + ", ".join(w for w in what if w) + (f"; left be for now: {why}." if why else "."))
+    said = (want.get("deeper") or want.get("research")) and said_nothing(root)
+    return (f"Turbo is on for {label} until it resets {usage.when(rec['resets_at'])}: " + ", ".join(w for w in what if w)
+            + (f"; left be for now: {why}." if why
+               else "; its agent found nothing worth doing, so no note until its roadmap changes." if said else "."))
 
 
 WORDS = {"models": "stronger models", "deeper": "going deeper", "research": "research"}
+
+
+def stamp(t):
+    return time.strftime("%a %-I:%M %p", time.localtime(t))
+
+
+def advised(root):
+    """A project's latest research advice, in a few words."""
+    log = board.read(root, LOG)
+    if not log:
+        return ""
+    last = log[-1]
+    if last.get("type") == "asked":
+        return f"; research advice asked {stamp(last['at'])}"
+    what = (Path(last["report"]).name if last.get("report") else f"trouble: {last['error']}" if last.get("error")
+            else "nothing stood out")
+    return f"; research advice {stamp(last['at'])} ({what})"
 
 
 def report(now=None):
@@ -441,14 +627,18 @@ def report(now=None):
             snap = console.snapshot(root, lines=4)
             why = "no queued work or research topic" if not want else held(root, snap)
             mine = (rec.get("projects") or {}).get(str(root)) or {}
-            noted = (f"; last note {time.strftime('%a %-I:%M %p', time.localtime(mine['noted']))}" if mine.get("noted")
+            nudged = want.get("deeper") or want.get("research")
+            said = nudged and said_nothing(root)
+            noted = (f"; it found nothing worth doing ({stamp(said)}), so no note until its roadmap changes" if said
+                     else f"; last note {stamp(mine['noted'])}" if mine.get("noted")
                      else f"; its note waits for its console, now {snap['state']}, to sit idle and untouched"
-                     if (want.get("deeper") or want.get("research")) and not ready(root, snap) else "")
-            out.append(f"  {root.name}: " + (f"left be: {why}" if why else ", ".join(WORDS[k] for k in want) + noted))
+                     if nudged and not ready(root, snap) else "")
+            out.append(f"  {root.name}: " + (f"left be: {why}" if why else ", ".join(WORDS[k] for k in want) + noted)
+                       + advised(root))
     try:
         err = json.loads((board.home() / "turbo-error.json").read_text())
         if time.time() - err["at"] < DAY:
-            out.append(f"Last trouble, {time.strftime('%a %-I:%M %p', time.localtime(err['at']))}: {err['error']}")
+            out.append(f"Last trouble, {stamp(err['at'])}: {err['error']}")
     except (OSError, ValueError, KeyError):
         pass
     return "\n".join(out)

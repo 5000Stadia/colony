@@ -27,7 +27,8 @@ waits on them for, its roadmap, and a monitor that can act for them.
                                     fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
     colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores, rote)
     colony helm [on|off]            whether the monitor answers routine questions for the person
-    colony turbo                    each program's pace this week, and what turbo is doing about it
+    colony turbo [--nothing]        each program's pace this week, and what turbo is doing about it; --nothing (a
+                                    project's agent): nothing worth doing, so no more from turbo until its roadmap changes
     colony suggest NAME "TEXT"      (monitor) your own suggestion to a project's agent, for it to weigh
 
 Run a project's commands from inside its folder.
@@ -665,7 +666,8 @@ def cmd_notes(a):
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's monitor, acting for them, left notes for you:"),
-            board.render_notes([n for n in fresh if n.get("author") == "suggestion"], "Suggestions from the monitor:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"], "Suggestions from the monitor:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") == "advice"], "Research advice colony asked for, apart from you:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
@@ -725,7 +727,7 @@ def cmd_noted(a):
     note = next(n for n in board.notes(root) if n["id"] == a.id)
     for ident in note.get('batch_ids') or [a.id]:
         board.append(root, "notes.jsonl", {"type": "addressed", "of": ident, "at": board.now(), "text": a.text})
-    if note.get("author") == "suggestion":            # the monitor made it, so the answer is the monitor's to hear
+    if note.get("author") == "suggestion" and note.get("kind") != "advice":   # the monitor made it: its answer is the monitor's to hear
         from . import monitor
         monitor.queue(f"{root.name} answered your suggestion ({note['text'][:80]}...): {a.text}")
     print(f"{a.id} marked as acted on")
@@ -1147,8 +1149,16 @@ def cmd_suggest(a):
 
 def cmd_turbo(a):
     """Each program's pace this week: its use against what's expected by now, turbo on or off, the reset, and what
-    turbo is doing for each of its projects."""
-    from . import turbo
+    turbo is doing for each of its projects. --nothing, from a project's agent answering turbo's note: nothing worth
+    doing, so turbo sends it no more until its roadmap changes shape."""
+    from . import board, turbo
+    if a.nothing:
+        root = board.root_of()
+        if not (root / ".board").is_dir() or root.resolve() not in {p.resolve() for p in board.projects()}:
+            raise SystemExit("colony turbo --nothing: run it in a project on the board")
+        turbo.nothing(root)
+        print(f"noted for {root.name}: nothing more from turbo until its roadmap changes")
+        return 0
     print(turbo.report())
     return 0
 
@@ -1286,6 +1296,9 @@ def main(argv=None):
     p.set_defaults(fn=cmd_decided)
     p = sub.add_parser("suggest", help="(monitor) your own suggestion to a project's agent, for it to weigh and answer")
     p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_suggest)
-    sub.add_parser("turbo", help="each program's pace this week, and what turbo is doing about it").set_defaults(fn=cmd_turbo)
+    p = sub.add_parser("turbo", help="each program's pace this week, and what turbo is doing about it")
+    p.add_argument("--nothing", action="store_true",
+                   help="(a project's agent) nothing worth doing: no more from turbo until the roadmap changes")
+    p.set_defaults(fn=cmd_turbo)
     a = ap.parse_args(argv)
     return a.fn(a)
