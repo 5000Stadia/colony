@@ -7,10 +7,12 @@ the person typed), and only projects with queued work, or research ticked, are t
 
 It only ever adds to a project's work. Its note is quiet, and turbo itself wakes a console only at a moment it has
 checked: idle, nothing typed, no one at it, nothing waiting on the person; a note that waits is let go once that
-changes. Stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is
-written into any instructions. Off, it is nothing at all. It runs in the watcher's minute with no tokens; when a
-program's reading is missing or old it stays off, and when the watcher can't keep it, it stands down.
+changes, and an agent that answers there's nothing worth doing hears no more until its roadmap changes shape.
+Stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is written into
+any instructions. Off, it is nothing at all. It runs in the watcher's minute with no tokens; when a program's reading
+is missing or old it stays off, and when the watcher can't keep it, it stands down.
 """
+import hashlib
 import json
 import secrets
 import time
@@ -83,7 +85,7 @@ def note(label, resets_at, deeper=False, research=""):
         parts.append(f"Research the person asked for here: {research}. Give it to a read-only helper (it searches and "
                      "reads, and changes nothing), and keep its report in this project, under research/, ending with "
                      f"this line: {NOTICE}")
-    return " ".join(parts + ["Only work worth doing: if there's none, say so and stop."])
+    return " ".join(parts + ["Only work worth doing. If there's nothing worth doing, run `colony turbo --nothing` and stop."])
 
 
 def ask(label, rec, turned):
@@ -169,6 +171,50 @@ def withdraw(root, nid, why):
     """A turbo note that never reached its agent is let go, so nothing hands it over after its moment."""
     board.append(root, "notes.jsonl", {"type": "addressed", "of": nid, "at": board.now(),
                                        "text": f"Let go by colony before it reached you ({why}): nothing to do."})
+
+
+# ---------------------------------------------------------------- nothing worth doing
+
+def shape(root):
+    """What turbo's notes to a project are about, as a fingerprint: its roadmap's items (where each sits, what it
+    says, its state, whose it is), the version under way, and the research topic the person typed. Rewording the
+    vision or an item's description leaves it; adding, removing, re-stating or moving an item changes it."""
+    from . import progress
+    opts = options(root)
+    items = [[i["milestone"], i["id"], i["state"], i["text"], i.get("owner")]
+             for i in board.items(board.roadmap(root)).values()]
+    version = (progress.current(root) or {}).get("items")
+    topic = opts["turbo_topic"].strip() if opts["turbo_research"] else ""
+    return hashlib.sha256(json.dumps([items, version, topic]).encode()).hexdigest()[:16]
+
+
+def nothing_path(root):
+    return Path(root) / ".board" / "turbo-nothing.json"
+
+
+def said_nothing(root):
+    """When the agent answered there's nothing worth doing (colony turbo --nothing), while its roadmap keeps the
+    shape it had then; else None."""
+    try:
+        said = json.loads(nothing_path(root).read_text())
+        return said["at"] if said["shape"] == shape(root) else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def nothing(root, now=None):
+    """An agent's answer to turbo's note, colony turbo --nothing: nothing worth doing. The note is answered, and turbo
+    sends it no more until its roadmap changes shape; stronger models, which ask nothing of it, go on."""
+    now = time.time() if now is None else now
+    path = nothing_path(root)
+    path.parent.mkdir(exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"at": now, "shape": shape(root)}))
+    tmp.replace(path)
+    for n in board.notes(root):
+        if n["author"] == "colony" and n.get("kind") == "turbo" and not n["addressed_at"]:
+            board.append(root, "notes.jsonl", {"type": "addressed", "of": n["id"], "at": board.now(),
+                                               "text": "Nothing worth doing: no more from turbo until the roadmap changes."})
 
 
 # ---------------------------------------------------------------- stronger models
@@ -303,7 +349,8 @@ def tick(now=None):
 def visit(state, rec, root, label, now, paused):
     """One project while its program's turbo is on: (what turbo does for it, what it did now). Its note is quiet:
     turbo wakes the console itself, only at a moment it has checked, and lets a note that still waits go once the
-    project is held, no longer turned up, or its console stopped, so nothing else ever types it in later."""
+    project is held, no longer turned up, or its console stopped, so nothing else ever types it in later. An agent
+    that said there's nothing worth doing hears no more until its roadmap changes shape."""
     from . import bench
     mine, done = rec["projects"].setdefault(str(root), {}), []
     opts = options(root)
@@ -311,7 +358,8 @@ def visit(state, rec, root, label, now, paused):
         release(state, [root], lambda: mine.update(boost={}))      # unticked: they go, without a reload
     want = {} if str(root) in paused else wanted(root, opts)
     boost = want.get("models") and "boost" not in mine
-    wake = (want.get("deeper") or want.get("research")) and due(mine.get("noted"), now, rec["resets_at"])
+    wake = ((want.get("deeper") or want.get("research")) and due(mine.get("noted"), now, rec["resets_at"])
+            and not said_nothing(root))
     pending = unheard(root, mine.get("note"))
     if not (boost or wake or pending):
         return want, done
@@ -333,7 +381,7 @@ def visit(state, rec, root, label, now, paused):
     if ((pending and not mine.get("woke")) or (wake and not pending)) and ready(root, snap) and settled(root):
         if not pending:
             n = board.add_note(root, None, note(label, rec["resets_at"], want.get("deeper"), want.get("research", "")),
-                               author="colony", quiet=True)
+                               author="colony", quiet=True, kind="turbo")
             mine.update(noted=now, note=n["id"])
             done.append((root, "noted"))
         # a draft that appeared just now keeps it for the next free moment (once woken, never again), or its next turn
@@ -422,11 +470,17 @@ def project_line(root):
             "going deeper on its queued work" if want.get("deeper") else "",
             f"research on {want['research']}" if want.get("research") else ""]
     why = held(root)
-    return (f"Turbo is on for {label} until it resets {usage.when(rec['resets_at'])}: "
-            + ", ".join(w for w in what if w) + (f"; left be for now: {why}." if why else "."))
+    said = (want.get("deeper") or want.get("research")) and said_nothing(root)
+    return (f"Turbo is on for {label} until it resets {usage.when(rec['resets_at'])}: " + ", ".join(w for w in what if w)
+            + (f"; left be for now: {why}." if why
+               else "; its agent found nothing worth doing, so no note until its roadmap changes." if said else "."))
 
 
 WORDS = {"models": "stronger models", "deeper": "going deeper", "research": "research"}
+
+
+def stamp(t):
+    return time.strftime("%a %-I:%M %p", time.localtime(t))
 
 
 def report(now=None):
@@ -442,14 +496,17 @@ def report(now=None):
             snap = console.snapshot(root, lines=4)
             why = "no queued work or research topic" if not want else held(root, snap)
             mine = (rec.get("projects") or {}).get(str(root)) or {}
-            noted = (f"; last note {time.strftime('%a %-I:%M %p', time.localtime(mine['noted']))}" if mine.get("noted")
+            nudged = want.get("deeper") or want.get("research")
+            said = nudged and said_nothing(root)
+            noted = (f"; it found nothing worth doing ({stamp(said)}), so no note until its roadmap changes" if said
+                     else f"; last note {stamp(mine['noted'])}" if mine.get("noted")
                      else f"; its note waits for its console, now {snap['state']}, to sit idle and untouched"
-                     if (want.get("deeper") or want.get("research")) and not ready(root, snap) else "")
+                     if nudged and not ready(root, snap) else "")
             out.append(f"  {root.name}: " + (f"left be: {why}" if why else ", ".join(WORDS[k] for k in want) + noted))
     try:
         err = json.loads((board.home() / "turbo-error.json").read_text())
         if time.time() - err["at"] < DAY:
-            out.append(f"Last trouble, {time.strftime('%a %-I:%M %p', time.localtime(err['at']))}: {err['error']}")
+            out.append(f"Last trouble, {stamp(err['at'])}: {err['error']}")
     except (OSError, ValueError, KeyError):
         pass
     return "\n".join(out)

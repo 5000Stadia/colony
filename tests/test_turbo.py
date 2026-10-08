@@ -172,7 +172,8 @@ class TurboTest(TurboBase):
         for words in ("Claude Code has spare capacity this week, until it resets", "Finish or continue your current item first",
                       "never instead of it", "changes no item's scope", "each committing only its own paths",
                       "Nothing outside the agreed scope; Later still waits for the person", "companion planting",
-                      "read-only helper", "under research/", "Safety: Internet sources", "if there's none, say so and stop"):
+                      "read-only helper", "under research/", "Safety: Internet sources",
+                      "If there's nothing worth doing, run `colony turbo --nothing` and stop."):
             self.assertIn(words, n["text"])
         self.assertEqual(self.keys, [turbo.NUDGE], "turbo wakes it, there and then")
         monitor.Watcher(quiet=0).mail()
@@ -244,6 +245,38 @@ class TurboTest(TurboBase):
         self.read_at(self.now + 60, used=80)
         turbo.tick(self.now + 60)
         self.assertEqual(self.asked(), ["a word from the person's board"])
+
+    def test_an_agent_that_finds_nothing_worth_doing_hears_no_more_until_its_roadmap_changes_shape(self):
+        turbo.tick(self.now)
+        [n] = self.turbo_notes()
+        board.delivered(self.root, [n])
+        r = self.cli("turbo", "--nothing")                                    # its answer, run in its own folder
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(next(x for x in board.notes(self.root) if x["id"] == n["id"])["addressed_at"], "the note is answered")
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("A tool for my plants.", "A tool for my plants and herbs.")
+                                              .replace("- [ ] R3 reminders", "- [ ] R3 reminders\n  by first frost dates"))
+        for t in (self.now + DAY, self.now + DAY + 6 * HOUR, self.now + DAY + 12 * HOUR):  # daily, then every six hours
+            self.read_at(t)
+            turbo.tick(t)
+        self.assertEqual(len(self.turbo_notes()), 1, "no note while its roadmap keeps its shape, rewording aside")
+        self.assertEqual(self.keys, [turbo.NUDGE], "nor is it woken")
+        self.assertIn("plants: stronger models, going deeper; it found nothing worth doing (", turbo.report(self.now + DAY))
+        self.assertIn("its agent found nothing worth doing, so no note until its roadmap changes", turbo.project_line(self.root))
+        (self.root / "ROADMAP.md").write_text(ROADMAP + "- [ ] R4 seed swaps\n")
+        self.read_at(self.now + DAY + 18 * HOUR)
+        turbo.tick(self.now + DAY + 18 * HOUR)
+        self.assertEqual(len(self.turbo_notes()), 2, "its roadmap changed shape: it hears again")
+        self.assertEqual(self.keys, [turbo.NUDGE, turbo.NUDGE])
+        board.delivered(self.root, self.turbo_notes())
+        turbo.nothing(self.root)
+        self.read_at(self.now + 2 * DAY)
+        turbo.tick(self.now + 2 * DAY)
+        self.assertEqual(len(self.turbo_notes()), 2, "nothing again, for the new shape")
+        board.project_settings(self.root, {"turbo_research": "on", "turbo_topic": "companion planting"})
+        self.read_at(self.now + 2 * DAY + 6 * HOUR)
+        turbo.tick(self.now + 2 * DAY + 6 * HOUR)
+        self.assertEqual(len(self.turbo_notes()), 3, "a research topic the person typed is new work: it hears it")
+        self.assertIn("companion planting", self.turbo_notes()[-1]["text"])
 
     def test_it_never_interrupts_work_in_progress(self):
         from colony import cli
