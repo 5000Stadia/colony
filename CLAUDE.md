@@ -59,6 +59,10 @@ steer all of them from one board, and the projects can write to each other.
   colony's own notices (a usage limit, a reset) carry their direction. Act on them as theirs.
 - **Working alongside others.** Brief a helper with what it owns and where it ends; it reports as it goes
   rather than waiting. Paired with another project's agent, keep to your agreed role and talk at hand-offs.
+- **The person's attention is the scarce resource.** Foresee the decisions an item will need and ask them
+  together, each with a default where the choice is reversible. Keep approved work queued, so a pending answer or
+  a running helper never leaves you idle; when work divides cleanly, run helpers in parallel on separate files, review
+  each result before it lands, and have each commit only its own paths.
 
 ### How colony works
 
