@@ -53,13 +53,45 @@ what it assumes and what a second provider needs there. What a provider supplies
   goal_client(root)        a client for the CLI's own goal per conversation, which bounded continuation pauses and
                            resumes (optional; continuation.py speaks Codex's thread goals). Without it, colony
                            continues a version by typing a wake into the idle console after work changes.
+  network_stop(path)       what a network drop stopped, read from the session's own transcript: when its last turn
+                           ended on a network error its retries gave up on, {"key", "at", "error"} for that turn,
+                           "helpers": the helpers lost to one since the agent last replied ({"key", "id", "name",
+                           "at", "error"}), and "ok_at": when it last replied; else None. Once the console is idle and
+                           api_host answers again, the watcher types one nudge (recovery.py). Optional.
+  api_host                 a host its requests go to: when it takes a connection again, the network is back
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
 import json
+import re
 import sys
 import shlex
 from pathlib import Path
+
+
+def _newest_first(path, most=1 << 22, block=1 << 16):
+    """A file's lines from its end backwards, at most `most` bytes back: a look back that stops early reads little
+    of a transcript that has grown large."""
+    with open(path, "rb") as fh:
+        pos, rest = fh.seek(0, 2), b""
+        while pos > 0 and most > 0:
+            step = min(block, pos, most)
+            pos, most = pos - step, most - step
+            fh.seek(pos)
+            lines = (fh.read(step) + rest).split(b"\n")
+            rest = lines.pop(0)                  # it may start mid-line: read again with the block before it
+            yield from (line for line in reversed(lines) if line.strip())
+        if pos == 0 and rest.strip():
+            yield rest
+
+
+def _stamp(entry):
+    """A transcript entry's time, as a timestamp (0 without one)."""
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(entry.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def _keep(path, text):
@@ -454,6 +486,51 @@ class ClaudeCode:
                     out.append(f"● {c.get('name')}({arg.splitlines()[0][:100] if arg else ''})")
         text = "\n\n".join(out)
         return text[-limit:] if text else None
+
+    # What Claude Code says when the network, not the work, ended a request its retries gave up on: the connection
+    # errors it names, and a reply cut off mid-stream. A usage limit, a sign-in, a refusal or a server error is none.
+    NETWORK = re.compile(
+        r"Can't reach the API server|No internet route|Connection (?:dropped|refused|error|lost|closed before)|"
+        r"Connection to the API was lost|Unable to connect to API(?!: SSL)|timed out|No response from (?:the )?API|"
+        r"The response stopped arriving|Part of the response never arrived|socket hang up|fetch failed|"
+        r"\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ENETUNREACH|ENETDOWN|EHOSTUNREACH|EPIPE)\b")
+    # A background helper's report that it stopped, as Claude Code hands it to the agent.
+    LOST = re.compile(r"<task-id>(?P<id>[^<]+)</task-id>.*?<status>failed</status>\s*"
+                      r"<summary>Agent \"(?P<name>.*?)\" failed: (?P<error>.*?)</summary>", re.S)
+    api_host = "api.anthropic.com"
+
+    def network_stop(self, path):
+        """What a network drop stopped in this session, if its last turn ended on one (see the list at the top).
+        Claude Code retries a request for about six minutes, then gives up: each helper is reported to the agent as
+        failed ("Agent terminated early due to an API error: API Error: Can't reach the API server ..."), and the
+        agent's own turn ends on that error, as does each turn those reports start while the network is still
+        down. Read back from the transcript's end only as far as the agent's last real reply. PROVIDER: reads
+        Claude Code's own transcript."""
+        stop, helpers = None, []
+        for line in _newest_first(path):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            content = (e.get("message") or {}).get("content")
+            text = content if isinstance(content, str) else "\n".join(
+                c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text")
+            if e.get("type") == "assistant":
+                if not e.get("isApiErrorMessage"):
+                    return dict(stop, helpers=helpers[::-1], ok_at=_stamp(e)) if stop else None   # it replied since
+                if stop is None:
+                    if not self.NETWORK.search(text):
+                        return None                # its last turn ended on something else: a limit, a sign-in
+                    stop = {"key": e.get("uuid") or e.get("timestamp"), "at": _stamp(e),
+                            "error": text.removeprefix("API Error: ").strip()}
+            elif e.get("type") == "user" and text.strip():
+                if stop is None:
+                    return None                    # a turn began after its last reply: under way, or just typed
+                m = self.LOST.search(text)
+                if m and "API Error" in m["error"] and self.NETWORK.search(m["error"]):
+                    helpers.append({"key": f"{m['id']}@{e.get('timestamp')}", "id": m["id"], "name": m["name"],
+                                    "at": _stamp(e), "error": m["error"]})
+        return dict(stop, helpers=helpers[::-1], ok_at=0.0) if stop else None
 
     def own_defaults(self):
         """What Claude Code uses when colony names nothing: its own settings file, where the person may have
@@ -910,6 +987,57 @@ class Codex:
 
     def history_text(self, root, limit=200_000):
         return None
+
+    # What Codex says when the network ended a turn or a helper after its own retries (a reply cut short for another
+    # reason, "Incomplete response returned", is not one), and the kinds it gives a turn's error.
+    NETWORK = re.compile(r"stream disconnected before completion(?!: Incomplete response)|error sending request|"
+                         r"Connection failed|connection (?:reset|refused|closed)|Reconnecting|timed out|dns error|"
+                         r"failed to lookup address|network (?:error|is unreachable)|broken pipe", re.I)
+    NETWORK_KINDS = ("http_connection_failed", "response_stream_connection_failed", "response_stream_disconnected")
+    api_host = "chatgpt.com"
+
+    def network_stop(self, path):
+        """As Claude Code's, from a Codex rollout: a turn that failed ends in a task_complete carrying its `error`
+        (message and codex_error_info), and a helper's failure shows in the CollabAgentToolCall that saw it, as
+        agents_states {thread: {"errored": message}}. PROVIDER: reads Codex's own rollout file."""
+        def network(error):
+            kind = error.get("codex_error_info")
+            kind = next(iter(kind), None) if isinstance(kind, dict) else kind
+            return kind in self.NETWORK_KINDS or (kind in (None, "other") and bool(self.NETWORK.search(error.get("message") or "")))
+        stop, helpers = None, []
+        for line in _newest_first(path):
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+            kind = p.get("type")
+            if e.get("type") == "response_item" and (kind in ("reasoning", "function_call", "custom_tool_call")
+                                                     or (kind == "message" and p.get("role") == "assistant")):
+                return dict(stop, helpers=helpers[::-1], ok_at=_stamp(e)) if stop else None       # it replied since
+            if e.get("type") != "event_msg":
+                continue
+            if kind == "task_complete":
+                failed = network(p["error"]) if p.get("error") else False
+                if stop is None:
+                    if not failed:
+                        return None                # its last turn ended well, or on something else
+                    stop = {"key": p.get("turn_id") or e.get("timestamp"), "at": _stamp(e),
+                            "error": p["error"].get("message") or ""}
+                elif not failed:
+                    return dict(stop, helpers=helpers[::-1], ok_at=_stamp(e))          # the turn before the drop
+            elif kind in ("task_started", "turn_aborted") and stop is None:
+                return None                        # a turn under way, or one the person stopped
+            elif kind == "item_completed" and stop and (p.get("item") or {}).get("type") == "CollabAgentToolCall":
+                item = p["item"]
+                names = {a.get("thread_id"): a.get("agent_nickname") or a.get("agent_role")
+                         for a in item.get("receiver_agents") or []}
+                for tid, state in (item.get("agents_states") or {}).items():
+                    error = state.get("errored") if isinstance(state, dict) else None
+                    if error and self.NETWORK.search(error) and all(h["id"] != tid for h in helpers):
+                        helpers.append({"key": f"{tid}@{e.get('timestamp')}", "id": tid, "name": names.get(tid) or tid,
+                                        "at": _stamp(e), "error": error})
+        return dict(stop, helpers=helpers[::-1], ok_at=0.0) if stop else None
 
     def classify(self, screen):
         """Codex shows "• Working (3s • esc to interrupt)" while it works, and a numbered choice marked `›`
