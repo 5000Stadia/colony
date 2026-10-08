@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import board, bench, providers
 
-ROLES = ('main', 'routine', 'step-up', 'chores', 'consultant', 'monitor')
+ROLES = ('main', 'routine', 'step-up', 'chores', 'rote', 'consultant', 'monitor')
 _LOCK = threading.RLock()
 
 
@@ -168,6 +168,22 @@ def switch(state, ident, chosen, reason):
                                  prices=price_change(old, chosen)))
 
 
+def split_chores(state):
+    """Rote, the fourth tier, takes over the value pick chores held: where a ledger from the three tiers has a
+    chores seat (colony's, or a project's own) and no rote seat yet, rote starts from that seat's pair, with any
+    pair the person returned from there. Chores then moves to its own goal by the adoption policy."""
+    for ident, held in list(state['accepted'].items()):
+        family, _, seat = ident.partition(':')
+        role, at, project = seat.partition('@')
+        rote = family + ':rote' + at + project
+        if (role != 'chores' or rote in state['accepted'] or family not in providers.PROVIDERS
+                or held['model'] in state['rejected'] or not concrete(family, held)):
+            continue
+        switch(state, rote, copy.deepcopy(held), 'Rote, the new tier, takes over the value pick chores held')
+        if state['blocked'].get(ident) and rote not in state['blocked']:
+            state['blocked'][rote] = copy.deepcopy(state['blocked'][ident])
+
+
 def reconcile():
     """Discover recommendation transitions, group once per model, adopt according to policy."""
     migrate()
@@ -178,6 +194,7 @@ def reconcile():
         # A seat whose role colony no longer has (the retired unattended runtime had one) is dropped, not kept up.
         for ident in [i for i in state['accepted'] if i.split(':', 1)[1].split('@')[0] not in ROLES]:
             del state['accepted'][ident]
+        split_chores(state)
         proposed = recommendations(state)
         initial = not state['accepted']
         for family, provider in providers.PROVIDERS.items():

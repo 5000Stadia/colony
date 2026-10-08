@@ -199,7 +199,7 @@ class ClaudeCode:
         env = dict(os.environ, **{self.TOKEN_ENV: token.strip()})
         try:
             from . import bench
-            cheap = (bench.tiers_for("claude").get("chores") or {}).get("model")     # the cheapest worth its points
+            cheap = (bench.tiers_for("claude").get("rote") or {}).get("model")     # the cheapest worth its points
             r = (run or subprocess.run)([self.program, "-p", *(["--model", cheap] if cheap else []), "--setting-sources", "",
                                          "--output-format", "json"], input="Reply with: ok", capture_output=True, text=True,
                                         env=env, cwd=tempfile.mkdtemp(prefix="colony-token-"), timeout=120)
@@ -235,7 +235,8 @@ class ClaudeCode:
         return [root / ".claude" / "agents" / f"{self.helper_name(t)}.md" for t in self.HELPER_BRIEF]
     HELPER_BRIEF = {"routine": "ordinary work: building, editing, looking things up across files",
                     "step-up": "work that has stalled, been retried or redone, or needs the strongest reasoning here",
-                    "chores": "clear, mechanical tasks: small edits, running a named test, copying, simple lookups"}
+                    "chores": "simple work that takes minor discernment: small edits, short clear instructions, light checks",
+                    "rote": "clear, mechanical tasks: copying, renaming, running a named command or test, simple lookups"}
 
     @staticmethod
     def helper_name(tier):
@@ -771,7 +772,8 @@ class Codex:
     HELPER_CALL = "spawn one with agent_type set to its name and fork_turns \"none\"; its model and effort come from it"
     HELPER_BRIEF = {"routine": "Colony's routine tier: ordinary work, building, editing, looking things up across files",
                     "step-up": "Colony's step-up tier: work that has stalled, been retried or redone, or needs the strongest reasoning here",
-                    "chores": "Colony's chores tier: clear, mechanical tasks, small edits, running a named test, simple lookups"}
+                    "chores": "Colony's chores tier: simple work that takes minor discernment, small edits, short clear instructions, light checks",
+                    "rote": "Colony's rote tier: clear, mechanical tasks, copying, renaming, running a named command or test, simple lookups"}
 
     @staticmethod
     def helper_name(tier):

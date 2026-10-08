@@ -25,7 +25,7 @@ waits on them for, its roadmap, and a monitor that can act for them.
     colony setup                    the monitor walks you through first-time setup (again)
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
                                     fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
-    colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores)
+    colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores, rote)
     colony helm [on|off]            whether the monitor answers routine questions for the person
     colony turbo                    each program's pace this week, and what turbo is doing about it
     colony suggest NAME "TEXT"      (monitor) your own suggestion to a project's agent, for it to weigh
@@ -1227,7 +1227,7 @@ def main(argv=None):
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
-    p = sub.add_parser("models", help="this project's helper tiers: routine, step-up, chores")
+    p = sub.add_parser("models", help="this project's helper tiers: routine, step-up, chores, rote")
     p.add_argument("what", nargs="?", choices=("set", "reset")); p.add_argument("args", nargs="*"); p.add_argument("--why")
     p.set_defaults(fn=cmd_models)
     p = sub.add_parser('lead', help='shared project lead and canonical plan')

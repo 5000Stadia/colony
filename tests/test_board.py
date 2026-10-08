@@ -1061,8 +1061,10 @@ class GlanceTest(BoardBase):
         tiers = bench.tiers_for("claude")
         self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "max"),
                          "the smartest model at max for rare judgement")
-        self.assertEqual(tiers["chores"]["model"], "claude-haiku-4-5-20251001",
+        self.assertEqual(tiers["rote"]["model"], "claude-haiku-4-5-20251001",
                          "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 51/$1.34)")
+        self.assertEqual((tiers["chores"]["model"], tiers["chores"]["effort"]), ("claude-opus-5-5", "low"),
+                         "the cheapest pair within twenty points of the ceiling: Haiku's 20 is too far below")
         self.assertEqual((tiers["routine"]["model"], tiers["routine"]["effort"]), ("claude-opus-5-5", "medium"),
                          "the cheapest pair meeting the routine intelligence goal")
         self.assertIn("claude-sonnet-5", bench.unmeasured("claude"), "no index yet: shown as not measured, never picked")
@@ -1087,11 +1089,13 @@ class GlanceTest(BoardBase):
         # a new project gets the tiers as helpers at once: no plan to agree before work
         board.track(self.root)
         self.assertFalse(any("agree your model plan" in n["text"] for n in board.notes(self.root)))
+        rote = (self.root / ".claude" / "agents" / "colony-rote.md").read_text()
+        self.assertIn("model: claude-haiku-4-5-20251001", rote)
         chores = (self.root / ".claude" / "agents" / "colony-chores.md").read_text()
-        self.assertIn("model: claude-haiku-4-5-20251001", chores)
+        self.assertIn("model: claude-opus-5-5\neffort: low", chores)
         self.assertIn("effort: max", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
         claude_md = (self.root / "CLAUDE.md").read_text()
-        self.assertIn("three tiers (routine, step-up, chores)", " ".join(claude_md.split()))
+        self.assertIn("four tiers (routine, step-up, chores, rote)", " ".join(claude_md.split()))
         self.assertIn("it reports as it goes rather than waiting", " ".join(claude_md.split()),
                       "helpers keep their assigner aware of the shape of their work")
         self.assertIn("talk at hand-offs", claude_md, "paired projects: roles, not running updates")
@@ -1100,7 +1104,11 @@ class GlanceTest(BoardBase):
         self.cli("models", "set", "routine", "claude-opus-5-5", "high")
         self.assertIn("effort: high", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
         out = self.cli("notes", "--deliver", "--session").stdout
-        self.assertIn("Your helpers (subagents) run at three tiers", out, "handed over at every session start")
+        self.assertIn("Your helpers (subagents) run at four tiers", out, "handed over at every session start")
+        for when in ("routine for ordinary work", "chores for simple work that takes minor discernment",
+                     "rote for clear, mechanical tasks", "step-up when the work struggles"):
+            self.assertIn(when, " ".join(out.split()), "each tier with when to use it")
+        self.assertIn("(claude-haiku-4-5-20251001) at its default effort, as the `colony-rote` helper", out)
         self.assertIn("routine: Opus 5.5 (claude-opus-5-5) at high effort, as the `colony-routine` helper (this project's choice)", out)
         self.assertIn("hand it to the step-up helper with a tight brief", out)
         self.cli("models", "reset", "routine")
@@ -2673,6 +2681,32 @@ class HelperTierTest(BoardBase):
         self.assertFalse(any("colony-stepup" in a for a in args), "a tier with no file isn't registered")
         codex.write_helpers(self.root, {"routine": tiers["routine"]})
         self.assertFalse((self.root / ".codex" / "agents" / "colony-chores.toml").exists(), "a tier colony can't fill: no helper")
+
+    def test_both_programs_get_a_helper_for_each_of_the_four_tiers_saying_what_it_is_for(self):
+        tiers = {"routine": {"model": "m-routine", "effort": "high"}, "step-up": {"model": "m-stepup", "effort": "max"},
+                 "chores": {"model": "m-chores", "effort": "high"}, "rote": {"model": "m-rote", "effort": "low"}}
+        what = {"chores": "simple work that takes minor discernment", "rote": "clear, mechanical tasks"}
+        examples = {"chores": "small edits, short clear instructions, light checks",
+                    "rote": "copying, renaming, running a named command or test, simple lookups"}
+        for key, folder, suffix in (("claude", ".claude", "md"), ("codex", ".codex", "toml")):
+            with self.subTest(key):
+                p = providers.get(key)
+                self.assertEqual(len(p.write_helpers(self.root, tiers)), 4)
+                names = {t: f"colony-{t.replace('-', '')}" for t in tiers}
+                files = {t: self.root / folder / "agents" / f"{n}.{suffix}" for t, n in names.items()}
+                self.assertEqual(sorted(p.startup_files(self.root)), sorted(files.values()),
+                                 "a new tier's file reloads the console that hasn't read it")
+                for t, f in files.items():
+                    text = f.read_text()
+                    self.assertIn(tiers[t]["model"], text)
+                    self.assertIn(tiers[t]["effort"], text)
+                    self.assertIn(f"Colony's {t} tier: ", text)
+                for t in ("chores", "rote"):
+                    self.assertIn(what[t], files[t].read_text())
+                    self.assertIn(examples[t], files[t].read_text())
+        args = providers.get("codex").local_command("plants", {}, root=self.root)
+        for name in ("colony-routine", "colony-stepup", "colony-chores", "colony-rote"):
+            self.assertIn(f"agents.{name}.config_file=", args, "each tier registered when the console starts")
 
 
 class ScoutTest(BoardBase):

@@ -25,6 +25,7 @@ At Balanced, role goals are these distances below the shared ceiling:
 | Monitor | 2 |
 | Main agent | 4 |
 | Routine helper | 10 |
+| Chores helper | 20 |
 
 For each provider, use the cheaper pair meeting the goal. Scores within **one
 point** count as equal, including when the provider's best cannot reach the goal.
@@ -38,8 +39,11 @@ against the original goal, including a tolerated shortfall.
 The seven-position Auto slider is available in colony Settings and each project's
 settings. Position 0 is Intelligence, 3 Balanced, 6 Economy, with two intermediate
 positions on either side. Each step changes every role's distance by two points;
-distances never go below zero. Chores retain the explicitly requested value pick:
-most Index points per benchmark-task dollar. The UI labels that exception.
+distances never go below zero. Rote helpers (mechanical work: copying, renaming,
+running a named command or test, simple lookups) retain the explicitly requested
+value pick: most Index points per benchmark-task dollar, at every position. The UI
+labels that exception. Chores helpers (simple work that takes minor discernment),
+which the person separated from rote, follow the goal like routine.
 
 A project inherits the colony slider unless it selects an override. Its main
 and helpers then have their own accepted Auto seats. Monitor and

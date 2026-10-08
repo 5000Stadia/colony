@@ -261,7 +261,7 @@ class IntegrationTest(BoardBase):
             main = selection.main(self.root)
             self.assertIn(main['model'], cmd)
             self.assertIn(main['effort'], cmd)
-            for role, filename in [('routine', 'routine'), ('step-up', 'stepup'), ('chores', 'chores')]:
+            for role, filename in [('routine', 'routine'), ('step-up', 'stepup'), ('chores', 'chores'), ('rote', 'rote')]:
                 chosen = selection.helper(self.root, role)
                 contents = (self.root / '.codex' / 'agents' / f'colony-{filename}.toml').read_text()
                 self.assertIn(chosen['model'], contents)
@@ -370,3 +370,97 @@ class GoalSliderTest(BoardBase):
         with self.assertRaisesRegex(ValueError,'changed'):
             selection.decide('claude-sonnet-5-5',old,'approve')
         self.assertEqual(selection.main(self.other)['effort'],'max')
+
+
+class FourthTierTest(BoardBase):
+    """The person split chores in two: rote, new, keeps the value pick for mechanical work; chores, simple work
+    that takes minor discernment, gets a goal like routine's. A ledger from the three tiers loses no seat."""
+
+    def setUp(self):
+        super().setUp()
+        from colony import bench, intelligence
+        self.bench = bench
+        rows = intelligence.records(json.loads(Path(bench.__file__).with_name('data').joinpath('aa-pairs.json').read_text()))
+        models = [('claude', 'claude-opus-5-5'), ('claude', 'claude-sonnet-5-5'), ('codex', 'gpt-6-astra'), ('codex', 'gpt-6.1-sol')]
+        levels = ['low', 'medium', 'high', 'xhigh', 'max']
+        for obj, name, value in [(bench, 'records', lambda: rows),
+                                 (bench, 'lineup', lambda: [(f, m, m, levels) for f, m in models]),
+                                 (providers, 'available', lambda p: [(m, m) for f, m in models if f == providers.key(p)]),
+                                 (providers, 'efforts_of', lambda p, m: levels)]:
+            patcher = patch.object(obj, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        board.track(self.root)
+        board.project_settings(self.root, {'auto_balance': '5'})          # its own seats, beside colony's
+        self.returned = {'model': 'gpt-6.1-sol', 'effort': 'low'}
+        with selection.transaction() as state:
+            # The ledger as the three tiers left it: no rote seat, each chores seat on the value pick, Codex's on
+            # the one after Sol low, which the person returned from; no history yet.
+            for ident in [i for i in state['accepted'] if ':rote' in i]:
+                state['accepted'][ident.replace(':rote', ':chores')] = state['accepted'].pop(ident)
+            state['accepted']['codex:chores'] = selection.concrete('codex', bench.role_pick(
+                'codex', 'rote', bench.standings(), blocked=[self.returned]))
+            state['blocked'] = {'codex:chores': [self.returned]}
+            state['history'] = []
+        self.before = selection.read()['accepted']
+
+    def test_a_three_tier_ledger_keeps_every_seat_and_rote_starts_from_what_chores_held(self):
+        self.assertFalse([i for i in self.before if ':rote' in i])
+        self.assertEqual(selection.pair(self.before['codex:chores']), {'model': 'gpt-6.1-sol', 'effort': 'medium'})
+        after = selection.reconcile()
+        self.assertLessEqual(set(self.before), set(after['accepted']), 'no seat lost')
+        chores = [i for i in self.before if i.partition(':')[2].split('@')[0] == 'chores']
+        self.assertEqual(len(chores), 3, "colony's for each program, and the project's own")
+        for ident in chores:
+            rote = ident.replace(':chores', ':rote')
+            self.assertEqual(selection.pair(after['accepted'][rote]), selection.pair(self.before[ident]),
+                             f'{rote}: the value pick chores held')
+        seeded = [e for e in after['history'] if ':rote' in e['role']]
+        self.assertEqual([e['reason'] for e in seeded], ['Rote, the new tier, takes over the value pick chores held'] * 3,
+                         'one start each, never a detour through another seat')
+        self.assertEqual(after['blocked']['codex:rote'], [self.returned], 'what the person returned from stays returned from')
+        self.assertEqual(selection.pair(selection.auto('codex', 'rote')), selection.pair(self.before['codex:chores']))
+        self.assertEqual(selection.pair(after['accepted']['claude:chores']), {'model': 'claude-opus-5-5', 'effort': 'low'},
+                         'chores moves to its own goal, by the adoption policy')
+        self.assertNotEqual(selection.pair(self.before['claude:chores']), selection.pair(after['accepted']['claude:chores']))
+        self.assertEqual(selection.reconcile()['history'], after['history'], 'once: a second look changes nothing')
+        self.bench.write_helpers(self.root)
+        agents = self.root / '.claude' / 'agents'
+        for tier, name in (('rote', 'colony-rote'), ('chores', 'colony-chores')):
+            seat = selection.helper(self.root, tier)
+            self.assertIn(f"model: {seat['model']}\neffort: {seat['effort']}\n", (agents / f'{name}.md').read_text())
+
+    def test_every_place_the_tiers_are_shown_has_all_four(self):
+        import argparse
+        import contextlib
+        import html
+        import io
+        from colony import cli
+        selection.reconcile()
+        self.assertEqual(list(self.bench.effective(self.root)), ['routine', 'step-up', 'chores', 'rote'])
+        fields = board.tier_fields(self.root)
+        for tier in ('routine', 'step-up', 'chores', 'rote'):
+            self.assertIn(f"name='tier_{tier}'", fields, 'a project can pin each tier')
+            self.assertIn(f"name='helper_claude:{tier}'", board.global_role_fields(), "and colony's Settings each")
+        models = html.unescape(board.models_page(board.registry()))
+        for family in ('claude', 'codex'):
+            for role in ('chores', 'rote'):
+                self.assertIn(f'{family} · {role}', models)
+        self.assertIn('Rote keeps its value pick at every position', board.auto_balance_fields(self.root))
+        out = io.StringIO()
+        with patch.object(board, 'root_of', return_value=self.root), contextlib.redirect_stdout(out):
+            cli.cmd_models(argparse.Namespace(what=None, args=[], why=None))
+        self.assertEqual([line.split()[0] for line in out.getvalue().splitlines()[:4]], ['routine', 'step-up', 'chores', 'rote'])
+        self.assertIn('Helpers run at four tiers (routine, step-up, chores, rote)', ' '.join(board.PROTOCOL.split()))
+
+    def test_turbo_leaves_rote_and_chores_unboosted(self):
+        from colony import intelligence, turbo
+        selection.reconcile()
+        entries = self.bench.standings()
+        ceiling = max(p['score'] for p in intelligence.pairs(entries))
+        up = turbo.picks(self.root)
+        self.assertIn('main', up, 'turbo raises this project two positions toward Intelligence')
+        self.assertLessEqual(set(up), {'main', 'routine'})
+        held = selection.read()['accepted'][selection.key('claude', 'chores', self.root)]
+        raised = self.bench.role_pick('claude', 'chores', entries, balance=turbo.raised(5), ceiling=ceiling)
+        self.assertNotEqual(selection.pair(raised), selection.pair(held), 'raised, chores would have moved; it stays')

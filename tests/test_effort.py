@@ -60,9 +60,48 @@ class EffortPolicyTest(unittest.TestCase):
                 pick = policy.pick('claude', role, self.points, position)
                 self.assertEqual((pick['model'], pick['effort']), (balanced['model'], balanced['effort']))
                 self.assertEqual(pick['evidence']['goal'], pick['evidence']['ceiling'])
-        for role in ('main', 'routine', 'monitor'):
+        for role in ('main', 'routine', 'chores', 'monitor'):
             self.assertLess(policy.pick('claude', role, self.points, 6)['evidence']['goal'],
                             policy.pick('claude', role, self.points, 3)['evidence']['goal'])
+
+    def test_rote_takes_the_most_points_per_task_dollar_whatever_the_balance(self):
+        for family in ('claude', 'codex'):
+            priced = [p for p in self.points if p['family'] == family and p['cost']]
+            best = max(priced, key=lambda p: p['score'] / p['cost'])
+            for position in range(7):
+                rote = policy.pick(family, 'rote', self.points, position)
+                self.assertEqual((rote['model'], rote['effort']), (best['model'], best['effort']), f'{family} at {position}')
+                self.assertIsNone(rote['evidence']['goal'], 'no goal: value alone')
+                self.assertTrue(rote['why'].startswith('Most Intelligence Index points per task-dollar'))
+        self.assertEqual(policy.pick('codex', 'rote', self.points)['effort'], 'low')
+
+    def test_chores_takes_the_cheapest_pair_within_twenty_points_and_moves_with_the_balance(self):
+        ceiling = max(p['score'] for p in self.points)
+        claude = [p for p in self.points if p['family'] == 'claude' and p['cost']]
+        picks = {}
+        for position in range(7):
+            chores = policy.pick('claude', 'chores', self.points, position)
+            goal = ceiling - max(0, 20 + 2 * (position - 3))
+            self.assertAlmostEqual(chores['evidence']['goal'], goal)
+            fits = [p for p in claude if p['score'] >= min(goal, max(x['score'] for x in claude)) - 1]
+            cheapest = min(fits, key=lambda p: p['cost'])
+            self.assertEqual((chores['model'], chores['effort']), (cheapest['model'], cheapest['effort']), f'at {position}')
+            picks[position] = (chores['model'], chores['effort'])
+        self.assertEqual(picks[3], ('claude-opus-5-5', 'low'), 'Balanced: twenty points below the ceiling, cheapest first')
+        self.assertEqual(picks[0], ('claude-sonnet-5-5', 'high'), 'toward Intelligence the goal rises')
+        self.assertEqual(picks[6], ('claude-sonnet-5-5', 'low'), 'toward Economy it falls')
+
+    def test_minor_discernment_gets_a_smarter_pair_than_the_value_pick_and_a_cheaper_one_than_before(self):
+        # Today's shape: the value pick lands on Haiku low; chores on Haiku high, above the Sonnet low the old
+        # value pick once held, and a fraction of its cost.
+        points = [dict(model=m, effort=e, score=s, cost=c, family='claude', version='v4.3.2', estimated=False, evidence={})
+                  for m, e, s, c in [('claude-opus-5-5', 'max', 57.62, 5.982), ('claude-sonnet-5-5', 'low', 35.87, 0.417),
+                                     ('claude-haiku-5-5', 'low', 29.45, 0.0245), ('claude-haiku-5-5', 'medium', 34.46, 0.047),
+                                     ('claude-haiku-5-5', 'high', 37.82, 0.0794), ('claude-haiku-5-5', 'xhigh', 41.25, 0.1238)]]
+        rote, chores = (policy.pick('claude', role, points) for role in ('rote', 'chores'))
+        self.assertEqual((rote['model'], rote['effort']), ('claude-haiku-5-5', 'low'))
+        self.assertEqual((chores['model'], chores['effort']), ('claude-haiku-5-5', 'high'))
+        self.assertAlmostEqual(chores['evidence']['goal'], 37.62)
 
     def test_tolerance_does_not_chain_through_intermediate_pairs(self):
         points=[dict(model=str(i),effort='high',score=50-i*.8,cost=10-i,family='codex',version='v1',estimated=False,evidence={}) for i in range(4)]
@@ -419,7 +458,7 @@ class TokenVolumeTest(unittest.TestCase):
                                api_entry('Claude Haiku 5.5', 'claude-haiku-5-5', 'max', 43.4, 0.2)])
         top = self.pairs(rows, 'claude-haiku-5-5')['max']
         self.assertIn('differs from page measurements by 3.40 points', top['evidence']['score']['derivation']['warning'])
-        self.assertIn('differs from page measurements', policy.pick('claude', 'chores', [top])['why'])
+        self.assertIn('differs from page measurements', policy.pick('claude', 'rote', [top])['why'])
 
 
 class ModelDataHealthTest(BoardBase):

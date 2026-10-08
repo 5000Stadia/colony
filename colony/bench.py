@@ -30,8 +30,9 @@ KEYS = ("model", "effort", "source", "kind", "benchmark", "version", "domain", "
 INDEX = "intelligence index"                # the overall benchmark whose cost and time per task price every entry
 # The tiers a project's helpers run at, chosen on one early, general score: Artificial Analysis' Intelligence
 # Index, in its own points. A new model gets it first and it covers every domain roughly enough; domains stay on
-# the Models page as information and play no part in the choice (the person's call).
-TIERS = ("routine", "step-up", "chores")
+# the Models page as information and play no part in the choice (the person's call). Chores and rote are the
+# person's split of simple work: chores takes minor discernment and has a goal, rote is mechanical and takes value.
+TIERS = ("routine", "step-up", "chores", "rote")
 
 
 def path():
@@ -412,10 +413,12 @@ def plan_text(root):
     lines = [f"- {t}: {name(r['model'])} ({r['model']}) at {r['effort'] or 'its default'} effort"
              + (f", as the `{p.helper_name(t)}` helper" if named else "")
              + (" (this project's choice)" if r["own"] else "") for t, r in tiers.items()]
-    return ("Your helpers (subagents) run at three tiers, colony's default from the benchmark cards unless this "
-            "project set its own (`colony models` shows them): routine for ordinary work, chores for clear "
-            "mechanical tasks, step-up when the work struggles (stalls, retries, work redone); step back down once "
-            "the hard part is done. For a genuinely hard judgement, hand it to the step-up helper with a tight "
+    return ("Your helpers (subagents) run at four tiers, colony's default from the benchmark cards unless this "
+            "project set its own (`colony models` shows them): routine for ordinary work; chores for simple work "
+            "that takes minor discernment (small edits, short clear instructions, light checks); rote for clear, "
+            "mechanical tasks (copying, renaming, running a named command or test, simple lookups); step-up when "
+            "the work struggles (stalls, retries, work redone). Step back down once the hard part is done. "
+            "For a genuinely hard judgement, hand it to the step-up helper with a tight "
             "brief, accepting that it rebuilds context; ordinary work stays yours. Costly decisions go to consultants (colony consult)."
             + (f" Each tier is a helper: {p.HELPER_CALL}." if named else "") + "\n" + "\n".join(lines))
 

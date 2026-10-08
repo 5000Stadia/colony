@@ -35,7 +35,7 @@ These are defaults from measured runs, not rules. Where you see a better way, ta
 - Add agents when it's clearly the better approach for the project (genuinely parallel domains, scale beyond one context) or when a real difficulty would benefit from a specialist's focus. The gain is a clean context and a narrow brief, not more intelligence; for a problem that is simply hard, raise effort.
 - Tell each helper what it owns, where it ends, and what others are doing. It hands in parts as they're done and says when its work moves beyond its brief or into another's area; that informs, it doesn't wait for approval. Judge progress by what's been handed in.
 - Open each subagent's prompt with a scoped name: `searcher · src/billing · this task only`. Scoped names kept agents in scope; neutral names drifted.
-- Chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
+- Rote work and chores can run at low effort or on a smaller model. Finding problems or making calls cannot: low-effort reviewers barely look.
 - Step up when the work struggles (it stalls, retries, or its work is redone), not on a guess; step back down once the hard part is done.
 
 ## Review
