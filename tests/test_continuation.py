@@ -4,11 +4,13 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
 
 from colony import board, console, context, continuation, lead, progress, providers
+from colony import hours, monitor, recovery, vision
 from colony.codex_rpc import RPCError
 from colony.codex_transfer import atomic_json
 
@@ -690,6 +692,281 @@ class ContinuationTest(unittest.TestCase):
                 patch.object(lead, 'finish_handoff') as finish:
             self.assertTrue(continuation.handoff(self.root))
             finish.assert_called_once_with(self.root, 1)
+
+
+# ---------------------------------------------------------------- work a network drop stopped (recovery.py)
+# Lines trimmed from real transcripts: their shapes and error strings as the programs wrote them, nothing else of
+# the conversations. Claude Code's are holo-emitter's, 2026-10-07, when the network dropped at night.
+
+def when(at):
+    return time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(at)) + '.000Z'
+
+
+EAI_AGAIN = "Can't reach the API server — check your internet or DNS (EAI_AGAIN)"
+
+
+def cc_reply(at):
+    return dict(parentUuid='p', isSidechain=False, type='assistant', uuid=f'reply-{at}', timestamp=when(at),
+                message=dict(model='claude-opus-5-5', role='assistant', type='message', stop_reason='tool_use',
+                             content=[dict(type='text', text='Running the checks.')]))
+
+
+def cc_error(at, text='API Error: ' + EAI_AGAIN):
+    """A turn's end once Claude Code's retries gave up."""
+    return dict(parentUuid='p', isSidechain=False, type='assistant', uuid=f'error-{at}', timestamp=when(at),
+                message=dict(model='<synthetic>', role='assistant', type='message', stop_reason='stop_sequence',
+                             stop_sequence='', content=[dict(type='text', text=text)]),
+                error='server_error', isApiErrorMessage=True)
+
+
+def cc_report(at, task, name, status='failed',
+              error=f'Agent terminated early due to an API error: API Error: {EAI_AGAIN} (error type server_error)'):
+    """A background helper's report to its agent."""
+    summary = f'Agent "{name}" failed: {error}' if status == 'failed' else f'Agent "{name}" finished'
+    content = (f'<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n'
+               f'<output-file>/tmp/tasks/{task}.output</output-file>\n<status>{status}</status>\n<summary>{summary}'
+               '</summary>\n<note>A task-notification fires each time this agent stops with no live background children '
+               'of its own. The user can send it another message and resume it, so the same task-id may notify more '
+               'than once.</note>\n<result>Checking the setup first.</result>\n</task-notification>')
+    return dict(parentUuid='p', isSidechain=False, type='user', uuid=f'report-{task}-{at}', timestamp=when(at),
+                message=dict(role='user', content=content), promptSource='system',
+                origin=dict(kind='task-notification', producer='session-task'))
+
+
+def cc_typed(at, text='Continue'):
+    return dict(parentUuid='p', isSidechain=False, type='user', uuid=f'typed-{at}', timestamp=when(at),
+                message=dict(role='user', content=text), origin=dict(kind='human'))
+
+
+def cc_end(at, ms=372355):
+    return dict(type='system', subtype='turn_duration', durationMs=ms, timestamp=when(at), uuid=f'end-{at}')
+
+
+def night(t):
+    """The drop, as it went (its times shifted to end at t): the agent at work, four helpers fail one by one, and its
+    turn and each turn their reports start end on the same error after six minutes of retries."""
+    return [cc_reply(t - 1249), dict(type='queue-operation', operation='enqueue', timestamp=when(t - 805)),
+            cc_error(t - 758), cc_end(t - 758, 3442699),
+            cc_report(t - 757, 'a1dc2f44ba8931af3', 'Street package'),
+            cc_error(t - 372), cc_end(t - 372),
+            cc_report(t - 372, 'a8f969af25cef90bc', 'Texture worker'),
+            cc_report(t - 372, 'ae66e2e223efd43aa', 'Hillside'),
+            cc_report(t - 371, 'a567ab2df35234e64', 'Checks'),
+            cc_error(t), cc_end(t)]
+
+
+# Codex's: Bookflow's, 2026-09-06, a helper lost to "Selected model is at capacity". No Codex session here has met a
+# network drop, so where one is needed its error is Codex 0.162's own words for it.
+STREAM = 'stream disconnected before completion: error sending request for url (https://chatgpt.com/backend-api/codex/responses)'
+CAPACITY = 'Selected model is at capacity. Please try a different model.'
+HELPER = '01a074a0-516b-79f0-b0d8-b06065e71aa0'
+REACHABLE = recovery.reachable                  # the real check: the tests below stand in for it
+
+
+def cx(at, kind, **payload):
+    return dict(timestamp=when(at), type=kind, payload=payload)
+
+
+def cx_wait(at):
+    return cx(at, 'response_item', type='function_call', name='wait', arguments=json.dumps(dict(ids=[HELPER])), call_id='call_1')
+
+
+def cx_lost(at, error=STREAM):
+    return cx(at, 'event_msg', type='item_completed', thread_id='01a0703a-2359-7951-b2a1-8e057c42085e',
+              item=dict(type='CollabAgentToolCall', id='exec-9c71684b-0951-4fc3-9c4f-6319e1c191e9', tool='wait',
+                        status='failed', sender_thread_id='01a0703a-2359-7951-b2a1-8e057c42085e',
+                        receiver_thread_ids=[HELPER], receiver_agents=[dict(thread_id=HELPER, agent_nickname='Hilbert')],
+                        agents_states={HELPER: dict(errored=error)}))
+
+
+def cx_end(at, error=STREAM, kind='response_stream_disconnected'):
+    return cx(at, 'event_msg', type='task_complete', turn_id='01a07593-4a81-7610-8fb4-bcb9436a580c',
+              last_agent_message=None, error=dict(message=error, codex_error_info=kind) if error else None)
+
+
+class RecoveryTest(unittest.TestCase):
+    """No console, network or model is touched: the screen, the typing and the network check are stand-ins."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='colony-recovery-')
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.root, self.transcript = base / 'project', base / 'session.jsonl'
+        (self.root / '.board').mkdir(parents=True)
+        env = patch.dict(os.environ, COLONY_BOARD_HOME=str(base / 'board'))
+        env.start()
+        self.addCleanup(env.stop)
+        board.save_registry(dict(projects=[str(self.root)], roots=[], settings=dict(messaging=False, active_hours='off')))
+        atomic_json(context.file(self.root, 'context-session.json'), dict(provider='claude', id='s1', path=str(self.transcript)))
+        self.state, self.draft, self.online, self.typed = 'idle', False, True, []
+        for target, name, value in ((console, 'snapshot', lambda root, lines=6, name=None: dict(state=self.state, lines=[])),
+                                    (console, 'drafting', lambda name: self.draft),
+                                    (console, 'type_into', lambda name, text: self.typed.append(text) or True),
+                                    (recovery, 'reachable', lambda host: self.online)):
+            p = patch.object(target, name, side_effect=value)
+            p.start()
+            self.addCleanup(p.stop)
+        recovery._scans.clear()
+
+    def write(self, entries, path=None):
+        Path(path or self.transcript).write_text(''.join(json.dumps(e) + '\n' for e in entries))
+
+    def test_claude_code_reads_what_the_drop_stopped_from_its_transcript(self):
+        t = 1791361623.0                              # 2026-10-07T08:27:03Z, its last turn's end
+        self.write(night(t))
+        found = providers.get('claude').network_stop(self.transcript)
+        self.assertEqual((found['key'], found['at'], found['error'], found['ok_at']), (f'error-{t}', t, EAI_AGAIN, t - 1249))
+        self.assertEqual([(h['id'], h['name'], h['at']) for h in found['helpers']],
+                         [('a1dc2f44ba8931af3', 'Street package', t - 757), ('a8f969af25cef90bc', 'Texture worker', t - 372),
+                          ('ae66e2e223efd43aa', 'Hillside', t - 372), ('a567ab2df35234e64', 'Checks', t - 371)])
+        self.write([cc_reply(t - 9), cc_report(t - 8, 'a1', 'Street package',
+                                               error='Agent terminated early due to an API error: API Error: 400 prompt is too long'),
+                    cc_error(t, 'API Error: The response stopped arriving. The response above may be incomplete.')])
+        found = providers.get('claude').network_stop(self.transcript)
+        self.assertEqual((found['error'], found['helpers']),
+                         ('The response stopped arriving. The response above may be incomplete.', []),
+                         'a reply cut off mid-stream is a stop; a helper stopped by something else is not lost to it')
+
+    def test_claude_code_sees_no_stop_where_the_network_did_not_end_the_last_turn(self):
+        t = 1791361623.0
+        cases = {'a helper that ended normally': [cc_reply(t - 9), cc_report(t - 8, 'a1', 'Hillside', status='completed'), cc_reply(t)],
+                 'a turn that ended well after the drop': night(t - 60) + [cc_typed(t - 50), cc_reply(t)],
+                 'a turn begun since, still under way': night(t - 60) + [cc_typed(t)],
+                 'a server error, not the network': [cc_reply(t - 9), cc_error(t, 'API Error: 529 Overloaded')],
+                 'a sign-in that ran out': [cc_reply(t - 9), cc_error(t, 'API Error: 401 Invalid authentication credentials')]}
+        for case, entries in cases.items():
+            self.write(entries)
+            self.assertIsNone(providers.get('claude').network_stop(self.transcript), case)
+
+    def test_codex_reads_the_same_from_its_rollout(self):
+        t, codex = 1788681814.0, providers.get('codex')     # 2026-09-06T08:03:34Z, the real turn's end
+        self.write([cx(t - 300, 'event_msg', type='task_started', turn_id='t1'), cx_wait(t - 120), cx_lost(t - 60), cx_end(t)])
+        found = codex.network_stop(self.transcript)
+        self.assertEqual((found['key'], found['error'], found['ok_at']), ('01a07593-4a81-7610-8fb4-bcb9436a580c', STREAM, t - 120))
+        self.assertEqual([(h['id'], h['name']) for h in found['helpers']], [(HELPER, 'Hilbert')])
+        self.write([cx_wait(t - 120), cx_lost(t - 60, "You've hit your usage limit."), cx_end(t)])
+        self.assertEqual(codex.network_stop(self.transcript)['helpers'], [], 'a helper at a usage limit waits for the safe pause')
+        cases = {'the real loss, to capacity rather than the network': [cx_wait(t - 120), cx_lost(t - 60, CAPACITY),
+                                                                         cx_end(t, CAPACITY, 'server_overloaded')],
+                 'a turn that ended well': [cx_wait(t - 120), cx_end(t, None)],
+                 'a turn under way': [cx_wait(t - 120), cx_end(t - 60), cx(t, 'event_msg', type='task_started', turn_id='t2')]}
+        for case, entries in cases.items():
+            self.write(entries)
+            self.assertIsNone(codex.network_stop(self.transcript), case)
+
+    def test_an_idle_console_is_nudged_once_the_network_is_back_and_once_only(self):
+        self.write(night(time.time() - 600))
+        later = (time.localtime().tm_hour + 2) % 24
+        board.save_registry(dict(board.registry(), settings=dict(board.registry()['settings'],
+                                                                 active_hours=f'{later:02d}:00-{later:02d}:30')))
+        self.assertFalse(hours.active(), 'the night: it is work, not a question, so it goes on')
+        self.online = False
+        self.assertIsNone(recovery.tick(self.root), 'the network still down: a nudge now would only fail again')
+        self.online = True
+        text = recovery.tick(self.root)
+        first = recovery.stop(self.root)['helpers'][0]['at']
+        self.assertEqual(text, f'[colony] 4 helpers stopped on a network error at {hours.at_clock(first)}: Street package '
+                               '(a1dc2f44ba8931af3); Texture worker (a8f969af25cef90bc); Hillside (ae66e2e223efd43aa); '
+                               'Checks (a567ab2df35234e64). The network is back: resume or relaunch them and carry on.')
+        self.assertEqual(self.typed, [text])
+        recovery._scans.clear()                       # the board restarted
+        self.assertIsNone(recovery.tick(self.root))
+        self.assertEqual(self.typed, [text], 'once per loss, across restarts')
+
+    def test_no_nudge_while_busy_typed_into_asked_paused_or_just_stopped(self):
+        self.write(night(time.time() - 30))
+        self.assertIsNone(recovery.tick(self.root), 'just stopped: a person at the console has the first move')
+        self.write(night(time.time() - 600))
+        self.state = 'working'
+        self.assertIsNone(recovery.tick(self.root), 'busy')
+        self.state, self.draft = 'idle', True
+        self.assertIsNone(recovery.tick(self.root), 'the person is typing there')
+        self.draft = False
+        board.record_ask(self.root, 'k1', 'Which of the two layouts do you want?')
+        self.assertIsNone(recovery.tick(self.root), 'its turn ended on a question to the person')
+        board.answer_asks(self.root, 'in the console')
+        progress.pause(self.root, True)
+        self.assertIsNone(recovery.tick(self.root), 'the person paused it')
+        progress.pause(self.root, False)
+        paused = board.home() / 'usage' / 'paused.json'
+        paused.parent.mkdir(parents=True, exist_ok=True)
+        paused.write_text(json.dumps({str(self.root): dict(provider='claude', window='weekly', resets_at=None)}))
+        self.assertIsNone(recovery.tick(self.root), 'the safe pause holds it')
+        paused.unlink()
+        self.assertEqual(self.typed, [])
+        self.assertTrue(recovery.tick(self.root))
+
+    def test_no_nudge_for_helpers_that_ended_normally(self):
+        now = time.time()
+        self.write([cc_reply(now - 900), cc_report(now - 800, 'ae66e2e223efd43aa', 'Hillside', status='completed'),
+                    cc_reply(now - 700)])
+        self.assertIsNone(recovery.tick(self.root))
+        self.assertEqual(self.typed, [])
+
+    def test_a_nudge_the_network_stops_again_waits_longer_each_time(self):
+        now = time.time()
+        entries = night(now - 900)
+        self.write(entries)
+        self.assertIn('4 helpers', recovery.tick(self.root))
+
+        def again(rewind, reply=False):
+            entries.extend([cc_typed(now - 300, self.typed[-1])] + ([cc_reply(now - 290)] if reply else [])
+                           + [cc_error(now - 200 + len(entries))])
+            self.write(entries)
+            rows = recovery.records()
+            rows[str(self.root)]['at'] -= rewind      # as if the last nudge was that long ago
+            (board.home() / 'recovery.json').write_text(json.dumps(rows))
+            return recovery.tick(self.root)
+        self.assertIsNone(again(0), 'its turn stopped too, with no reply: it waits before the next')
+        text = again(recovery.RETRY)
+        self.assertTrue(text.startswith('[colony] Your turn stopped on a network error at '), 'the helpers are named once')
+        self.assertTrue(text.endswith(f'({EAI_AGAIN}). The network is back: carry on where you were.'))
+        self.assertIsNone(again(recovery.RETRY), 'twice stopped: the wait has doubled')
+        self.assertTrue(again(recovery.RETRY))
+        self.assertIsNone(again(400), 'three times: it waits twenty minutes now')
+        self.assertTrue(again(400, reply=True), 'a reply since the last nudge: the waits start over')
+
+    def test_the_watcher_resumes_work_whether_or_not_the_monitor_runs(self):
+        for enabled in (False, True):
+            with patch.object(recovery, 'tick_all') as resumed, patch.object(vision, 'observe_all'), \
+                    patch.object(continuation, 'tick_all'), patch.object(context, 'tick_all'), \
+                    patch.object(monitor.Watcher, 'mail'), patch.object(monitor.Watcher, 'models'), \
+                    patch.object(monitor.Watcher, 'usage'), patch.object(monitor.Watcher, 'current'), \
+                    patch.object(monitor, 'snapshot', return_value=dict(state='working', lines=[])), \
+                    patch.object(monitor, 'muted', return_value=True):
+                monitor.Watcher(enabled=enabled).tick()
+                resumed.assert_called_once_with()
+
+    def test_the_network_check_runs_apart_and_counts_the_network_down_until_it_answers(self):
+        tried, answer = [], threading.Event()
+
+        class Connection:
+            def close(self):
+                pass
+
+        def connect(address, timeout):
+            answer.wait(5)                            # a network slow to answer
+            tried.append(address)
+            return Connection()
+
+        def settled(host):
+            for _ in range(500):
+                if not recovery._probes[host]['busy']:
+                    return True
+                time.sleep(0.01)
+        recovery._probes.clear()
+        with patch.object(recovery.socket, 'create_connection', side_effect=connect):
+            self.assertFalse(REACHABLE('api.example'), 'not known yet: counted down, and the watcher did not wait')
+            answer.set()
+            self.assertTrue(settled('api.example'))
+            self.assertTrue(REACHABLE('api.example'))
+            self.assertTrue(REACHABLE('api.example'))
+        self.assertEqual(tried, [('api.example', 443)], 'tried once a minute at most, never each tick')
+        recovery._probes['api.example']['at'] -= recovery.PROBE          # a minute on: due again
+        with patch.object(recovery.socket, 'create_connection', side_effect=OSError('down')):
+            REACHABLE('api.example')
+            self.assertTrue(settled('api.example'))
+            self.assertFalse(REACHABLE('api.example'))
+        recovery._probes.clear()
 
 
 if __name__ == '__main__':

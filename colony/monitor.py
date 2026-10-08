@@ -756,12 +756,13 @@ class Watcher:
         context.tick_all()
 
     def tick(self):
-        from . import vision, continuation
+        from . import vision, continuation, recovery
         vision.observe_all()
         continuation.tick_all()
         self.freshen()
         if not self.enabled:
             self.mail()  # project delivery is independent of the monitor agent
+            recovery.tick_all()  # so is resuming what a network drop stopped
             return
         self.models()
         self.usage()
@@ -772,6 +773,7 @@ class Watcher:
             if keys:
                 console.press(name(), keys)             # its own start-up questions, as for any project's console
         self.mail()
+        recovery.tick_all()                         # work a network drop stopped, once the network is back
         if muted():
             self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
             return
