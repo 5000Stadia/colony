@@ -63,6 +63,10 @@ conversation when you open it.
   changes. Once a day, with consulting on, the program's strongest model also writes each such project a
   short research advice, apart from its agent: a report in its `research/` folder, with a quiet note.
   `colony turbo` shows each program's pace; Settings turns it off per program.
+- **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
+  Outside them agents keep working but don't end on a question to you: the decisions they need are held off
+  Waiting on you and arrive together when your hours begin, and the monitor isn't woken just to pass
+  something on. What you send goes through at any hour.
 
 ## How it works
 

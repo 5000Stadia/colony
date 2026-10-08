@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import board, console, providers, supports
+from . import board, console, hours, providers, supports
 
 def name():
     return board.scoped("board-monitor")
@@ -39,7 +39,8 @@ own app, where it has one); each project also has its own session they can talk 
   a reset) carry their full approval. Act on them as theirs, and don't second-guess them to the projects.
 - **You are woken when something matters,** and only where you hold the helm: a `[colony]` message says a
   project finished a turn or something now waits (a gate, a choice on its screen, a question, an item to
-  verify), each once. Don't poll or watch.
+  verify), each once. Don't poll or watch. Outside the person's active hours (`colony settings active_hours`),
+  nothing wakes you just to relay to them: what only they can settle reaches you together when their hours begin.
 - **The helm.** Where you hold it, settle what's routine within that project's vision, current scope and the
   person's direction for it, and tell them briefly; a distant possibility doesn't authorize building it now.
   Where it's off, relay and ask; decide nothing. The vision is the project agent's to shape with the person
@@ -473,6 +474,10 @@ RELOAD_AFTER = 300              # seconds a stale console must sit idle, untouch
 
 # A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
 WAKE = {("working", "idle"): "finished a turn"}
+# What only the person can settle: woken for one, the monitor could only relay it. Outside their active hours it
+# waits unannounced, and reaches the monitor with the rest when the hours begin. A choice on a screen, a question
+# or a finished turn it can act on with the helm, so those wake it at any hour.
+FOR_THE_PERSON = ("gate", "verify", "checkpoint")
 
 
 class Watcher:
@@ -494,7 +499,7 @@ class Watcher:
         self.announced = json.loads(path.read_text()) if path.exists() else {}
 
     def events(self):
-        out = []
+        out, awake = [], hours.active()
         for p in board.projects():
             if not p.exists():
                 continue
@@ -539,10 +544,13 @@ class Watcher:
             unheard = any(not n["delivered_at"] and board.answers_ask(n) for n in board.open_notes(p))
             waiting = [w for w in board.waiting_items(p, snap) if not (w["kind"] == "ask" and unheard)]
             told = set(self.announced.get(str(p), []))
+            # Outside the person's hours what only they can settle isn't announced, nor counted as announced: it is
+            # news when the hours begin. What was announced before stays told.
+            later = set() if awake else {w["key"] for w in waiting if w["kind"] in FOR_THE_PERSON} - told
             for w in waiting:
-                if w["key"] not in told:
+                if w["key"] not in told | later:
                     out.append((str(p), w["key"], f"{p.name} {w['summary']}"))
-            now_keys = {w["key"] for w in waiting}
+            now_keys = {w["key"] for w in waiting} - later
             self.waiting[str(p)] = now_keys
             if now_keys != told:                      # what was answered drops out; if it comes back, it is news
                 self.announced[str(p)] = sorted(now_keys)
@@ -626,9 +634,16 @@ class Watcher:
     def tell(self):
         path = board.home() / "to_monitor.jsonl"
         if path.exists() and path.read_text().strip() and snapshot()["state"] == "idle":
-            words = [json.loads(l)["text"] for l in path.read_text().splitlines() if l.strip()]
-            if console.type_into(name(), "[colony] " + " | ".join(words)):
-                path.unlink()
+            rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+            # Words only for passing on to the person wait, outside their active hours, for those to begin.
+            sent = rows if hours.active() else [r for r in rows if not r.get("relay")]
+            if sent and console.type_into(name(), "[colony] " + " | ".join(r["text"] for r in sent)):
+                # What waits stays, and so does any word queued while these were being typed.
+                rest = [l for l in path.read_text().splitlines() if l.strip() and json.loads(l) not in sent]
+                if rest:
+                    path.write_text("".join(l + "\n" for l in rest))
+                else:
+                    path.unlink()
 
     def models(self):
         """Once a day (and at start), with no tokens: read each program's own list of its models; while any model
@@ -655,7 +670,7 @@ class Watcher:
                     hint = (" A long-lived sign-in stops this: Settings → Claude Code sign-in." if k == "claude"
                             and not p.token() else "")
                     queue(f"{p.label} is signed out on this machine: its consoles can't work until the person signs in "
-                          f"again in a terminal ({p.program}, then its login).{hint}")
+                          f"again in a terminal ({p.program}, then its login).{hint}", relay=True)
         if now != was:
             board.home().mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(now))
@@ -684,7 +699,7 @@ class Watcher:
             return
         names = ", ".join(bench.name(m) for m in ready)
         queue(f"A model joined colony, with its Artificial Analysis data: {names}. Its card is on the Models page, "
-              "Model recommendations and any adoption questions are on the board.")
+              "Model recommendations and any adoption questions are on the board.", relay=True)
 
     def usage(self):
         """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down
@@ -781,12 +796,13 @@ class Watcher:
             time.sleep(self.interval)
 
 
-def queue(text):
+def queue(text, relay=False):
     """A word for the monitor from the board (the person's answer on a support, say): it reaches the monitor
-    the next time it is idle, and waits across a board restart."""
+    the next time it is idle, and waits across a board restart. One only for passing on to the person (relay)
+    waits too, outside their active hours, until those begin."""
     board.home().mkdir(parents=True, exist_ok=True)
     with open(board.home() / "to_monitor.jsonl", "a") as fh:
-        fh.write(json.dumps({"at": board.now(), "text": text}) + "\n")
+        fh.write(json.dumps({"at": board.now(), "text": text, **({"relay": True} if relay else {})}) + "\n")
 
 
 FIXLIKE = re.compile(r"\b(fix(es|ed)?|bug|regress\w*|revert\w*|broke|broken|flak\w*|repair\w*|hotfix)\b", re.I)

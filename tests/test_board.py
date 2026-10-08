@@ -18,8 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from unittest.mock import patch  # noqa: E402
-from colony import board, console, mail, monitor, pins, providers  # noqa: E402
-import base64, socket, time  # noqa: E402
+from colony import board, console, hours, mail, monitor, pins, providers  # noqa: E402
+import base64, io, socket, time  # noqa: E402
+from contextlib import contextmanager, redirect_stdout  # noqa: E402
 
 ROADMAP = """# Roadmap
 
@@ -46,8 +47,9 @@ class BoardBase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
-        # A test board sees no one's real project folders and, unless a test says so, posts no mail.
-        board.save_registry({"roots": [], "settings": {"messaging": False}})
+        # A test board sees no one's real project folders and, unless a test says so, posts no mail and keeps no
+        # active hours, so nothing it checks turns on the hour it runs (the active-hours tests fix their clock).
+        board.save_registry({"roots": [], "settings": {"messaging": False, "active_hours": "off"}})
         # Nor does it ever start a real agent: a console that a test starts, here or in a `colony` it runs,
         # is a stand-in, and teardown ends every session its projects left.
         self._command, console.COMMAND = console.COMMAND, "sleep 60"
@@ -3563,6 +3565,248 @@ class ServerTest(BoardBase):
         finally:
             other.shutdown()
             other.server_close()
+
+
+class ActiveHoursTest(BoardBase):
+    """R82: the person's active hours. Outside them agents keep working and hold their questions, which reach the
+    person together when the hours begin; the person's own words and colony's safety notices go through at any hour.
+    Every check fixes the clock, on 7 October 2026 by this machine's own clock, whatever its zone."""
+
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        board.set_setting("active_hours", "07:30-23:45")              # the person's own hours: colony's default
+        self.saved = (console.snapshot, console.type_into, monitor.snapshot)
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        self.sent = []
+        console.type_into = lambda name, text: self.sent.append(text) or True
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+
+    def tearDown(self):
+        console.snapshot, console.type_into, monitor.snapshot = self.saved
+        super().tearDown()
+
+    @staticmethod
+    def at(hour, minute=0, day=7):
+        return time.mktime((2026, 10, day, hour, minute, 0, 0, 0, -1))
+
+    @contextmanager
+    def clock(self, hour, minute=0, day=7):
+        """Both clocks colony reads, fixed together: the board's (its records, a gate's hold) and the hours'."""
+        t = self.at(hour, minute, day)
+        with patch.object(board, "now", return_value=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))), \
+                patch.object(hours, "clock", return_value=t):
+            yield t
+
+    def deliver(self, root=None):
+        """What the per-turn delivery hook hands a project's agent."""
+        from colony import cli
+        with patch.object(board, "root_of", return_value=root or self.root), patch.object(cli, "_hook_input", return_value={}), \
+                redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["notes", "--deliver"]), 0)
+        return out.getvalue()
+
+    def gate(self, *args):
+        """`colony gate`, run by the project's agent: what it says, and whether it held the version's continuation."""
+        from colony import cli, continuation
+        with patch.object(board, "root_of", return_value=self.root), patch.object(continuation, "tick") as tick, \
+                redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["gate", *args]), 0)
+        return out.getvalue(), tick
+
+    def test_the_setting_reads_a_range_even_across_midnight_or_off_and_refuses_anything_else(self):
+        self.assertEqual(board.DEFAULT_SETTINGS["active_hours"], "07:30-23:45", "the person's own hours, by default")
+        for typed, kept in (("7:30-23:45", "07:30-23:45"), ("22:00 – 06:00", "22:00-06:00"), ("09:00-24:00", "09:00-00:00"),
+                            ("Off", "off")):
+            board.set_setting("active_hours", typed)
+            self.assertEqual(board.registry()["settings"]["active_hours"], kept, typed)
+        for typed in ("", "7:30", "9am-5pm", "25:00-06:00", "07:30-07:60", "08:00-08:00"):
+            with self.assertRaises(ValueError, msg=typed):
+                board.set_setting("active_hours", typed)
+        self.assertEqual(board.registry()["settings"]["active_hours"], "off", "what doesn't read changes nothing")
+        run = self.cli("settings", "active_hours", "09:00-17:30")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertRegex(run.stdout, r"active_hours +09:00-17:30 +when you're around")
+        refused = self.cli("settings", "active_hours", "9-5")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("HH:MM-HH:MM", refused.stderr, "it says what reads")
+        self.assertIn("name='active_hours' value='09:00-17:30'", board.settings_page(board.registry()))
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        post = lambda **form: urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{httpd.server_address[1]}/options", data=urllib.parse.urlencode(form).encode()))
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as refused:
+                post(active_hours="25:00-01:00", effort="low")
+            self.assertEqual(refused.exception.code, 400)
+            self.assertIn(b"HH:MM-HH:MM", refused.exception.read())
+            self.assertEqual((board.registry()["settings"]["active_hours"], board.registry()["settings"]["effort"]),
+                             ("09:00-17:30", ""), "nothing on the page is saved with hours that don't read")
+            post(active_hours="22:00-06:00", effort="low")
+            self.assertEqual(board.registry()["settings"]["active_hours"], "22:00-06:00")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_whether_the_hours_hold_and_when_they_next_begin(self):
+        day = "07:30-23:45"
+        for (h, m), on in (((3, 0), False), ((7, 29), False), ((7, 30), True), ((12, 0), True), ((23, 44), True),
+                           ((23, 45), False), ((0, 0), False)):
+            self.assertEqual(hours.active(self.at(h, m), day), on, f"{h:02d}:{m:02d}")
+        self.assertEqual(hours.next_start(self.at(3), day), self.at(7, 30), "later the same morning")
+        self.assertEqual(hours.next_start(self.at(23, 50), day), self.at(7, 30, day=8), "the next morning")
+        self.assertEqual(hours.next_start(self.at(12), day), self.at(7, 30, day=8), "within them: the next time they begin")
+        night = "22:00-06:00"                                          # someone whose hours cross midnight
+        for (h, m), on in (((21, 59), False), ((22, 0), True), ((3, 0), True), ((5, 59), True), ((6, 0), False)):
+            self.assertEqual(hours.active(self.at(h, m), night), on, f"{h:02d}:{m:02d} on a night shift")
+        self.assertEqual(hours.next_start(self.at(12), night), self.at(22))
+        self.assertTrue(hours.active(self.at(3), "off"), "off: always")
+        self.assertIsNone(hours.next_start(self.at(3), "off"))
+        self.assertIsNone(hours.held_until(self.at(3), "off"))
+        with self.clock(3):
+            self.assertFalse(hours.active(), "the person's own setting, at this moment")
+
+    def test_an_agent_hears_of_the_hours_only_outside_them(self):
+        with self.clock(3):
+            night = self.deliver()
+        self.assertEqual(night.strip(), "It's outside the person's active hours (back at 7:30 AM). Don't end your turn "
+                         "on a question to them: keep on with what doesn't depend on the answer, and record what you need "
+                         "from them with colony gate; they'll see it together when their hours begin.")
+        with self.clock(23, 50):
+            self.assertIn("(back at 7:30 AM)", self.deliver(), "from 11:45 PM until the morning")
+        with self.clock(12):
+            self.assertEqual(self.deliver(), "", "inside the hours: not a word")
+        board.set_setting("active_hours", "off")
+        with self.clock(3):
+            self.assertEqual(self.deliver(), "", "hours off: always active")
+        board.set_setting("active_hours", "07:30-23:45")
+        (monitor.home() / ".board").mkdir(parents=True, exist_ok=True)
+        with self.clock(3):
+            self.assertNotIn("active hours", self.deliver(monitor.home()), "the monitor's console is no project to gate from")
+        self.assertIn("Ask in their active hours; outside them, hold your questions", " ".join(board.PROTOCOL.split()))
+        self.assertIn("nothing wakes you just to relay to them", " ".join(monitor.ROLE.split()))
+
+    def test_a_gate_opened_at_3_am_waits_off_the_persons_list_until_7_30_then_reaches_them_once(self):
+        monitor.helm(True)
+        w = monitor.Watcher(quiet=0)
+        with self.clock(3):
+            said, tick = self.gate("Which reminders first?", "--item", "R3", "--why", "R3 starts with one")
+            [gate] = board.gates(self.root)
+        self.assertIn("held for the person's active hours: it reaches them with any others at 7:30 AM", said)
+        self.assertIn("keep on with what doesn't depend on it", said)
+        tick.assert_not_called()                                       # not their question yet: the version goes on
+        self.assertEqual(gate["held_until"], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.at(7, 30))))
+        for h, m in ((3, 0), (7, 29)):
+            with self.clock(h, m):
+                [gate] = board.gates(self.root)
+                self.assertFalse(board.due(gate))
+                self.assertEqual(board.waiting_items(self.root), [], "off what waits on the person")
+                page = board.render(board.registry(), 0)
+                self.assertIn("Waiting on you (<span id='wcount'>0</span>)", page)
+                self.assertIn("held until 7:30 AM", page, "someone up at night can see it, and answer it")
+                self.assertIn("Which reminders first?", page)
+                self.assertNotIn("Which reminders first?", board.needs_you(board.registry()))
+                self.assertIn("Held until 7:30 AM", board.render_item(board.registry(), 0, "R3"))
+                w.tick()
+        self.assertEqual(self.sent, [], "the monitor isn't woken for it")
+        with self.clock(7, 30):
+            [gate] = board.gates(self.root)
+            self.assertTrue(board.due(gate))
+            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]])
+            self.assertNotIn("held until", board.render(board.registry(), 0))
+            w.tick()
+            w.tick()
+            monitor.Watcher(quiet=0).tick()                            # the board restarted: nothing twice
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("plants opened a gate: Which reminders first?", self.sent[0])
+
+    def test_a_gate_opened_within_the_hours_is_the_persons_at_once_and_stays_so_overnight(self):
+        with self.clock(14):
+            said, tick = self.gate("Keep the old export?", "--item", "R2")
+            [gate] = board.gates(self.root)
+            self.assertNotIn("held_until", gate)
+            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]])
+        self.assertIn("is waiting on the person", said)
+        tick.assert_called_once_with(self.root, forced_hold="blocking decision")
+        with self.clock(2, day=8):
+            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]],
+                             "already theirs: night changes nothing")
+
+    def test_at_night_the_monitor_wakes_only_for_what_it_can_act_on_and_hears_the_rest_together_at_the_start(self):
+        monitor.helm(True)
+        w = monitor.Watcher(quiet=0)
+        with self.clock(2):
+            board.add_gate(self.root, "Email or SMS?")
+            (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
+            board.mark_ready(self.root, "R2", "the water log", "open it")
+            w.tick()
+            self.assertEqual(self.sent, [], "what only the person can settle doesn't wake it at night")
+            board.record_ask(self.root, "t1", "Shall I index the log?")
+            w.tick()
+        self.assertEqual(len(self.sent), 1, "a question it can settle, holding the helm, wakes it at any hour")
+        self.assertIn("asked you: Shall I index the log?", self.sent[0])
+        self.assertNotIn("ready for your OK", self.sent[0])
+        with self.clock(5):
+            board.add_gate(self.root, "Rename the project?")
+            w.tick()
+        self.assertEqual(len(self.sent), 1)
+        with self.clock(7, 30):
+            w.tick()
+            w.tick()
+        self.assertEqual(len(self.sent), 2, "when the hours begin: one message")
+        for words in ("opened a gate: Email or SMS?", "opened a gate: Rename the project?", "has R2 ready for your OK"):
+            self.assertIn(words, self.sent[1])
+        self.assertNotIn("asked you", self.sent[1], "what it heard at night isn't told again")
+
+    def test_the_persons_own_words_and_colonys_safety_notices_go_through_at_any_hour(self):
+        with self.clock(3):
+            gate = board.add_gate(self.root, "Email or SMS?")
+            self.assertIn("held_until", gate)
+            board.answer_gate(self.root, gate["id"], "Email, please")         # up at night, they answered it anyway
+            board.add_note(self.root, None, "Use the blue palette.", author="person")
+            board.add_note(self.root, None, "Safe pause over: the limit has reset. Carry on where you stopped.", author="colony")
+            board.add_note(self.root, None, "Safe pause: Claude Code is at 98% of its weekly usage limit. Wind down now.",
+                           author="colony", quiet=True)
+            monitor.Watcher(quiet=0).mail()
+            self.assertEqual(self.sent, ["[colony] You have a note from the person on the board and an update from Colony."],
+                             "the agent is woken for them at 3 AM")
+            out = self.deliver()
+            for words in ("Email, please", "Use the blue palette.", "Safe pause over", "Safe pause: Claude Code is at 98%"):
+                self.assertIn(words, out)
+            self.sent.clear()
+            monitor.queue("Winding down at a usage limit: plants. Each agent tells the person where things stand.")
+            monitor.queue("A model joined colony, with its Artificial Analysis data: X.", relay=True)
+            monitor.Watcher(quiet=0).tell()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Winding down at a usage limit", self.sent[0], "a safety notice reaches the monitor at night")
+        self.assertNotIn("A model joined", self.sent[0], "news only to pass on to the person waits for their hours")
+        with self.clock(7, 30):
+            monitor.Watcher(quiet=0).tell()
+        self.assertIn("A model joined colony", self.sent[1])
+        self.assertFalse((board.home() / "to_monitor.jsonl").exists())
+
+    def test_a_word_queued_while_the_monitor_is_being_told_waits_for_the_next_time(self):
+        monitor.queue("first")
+        console.type_into = lambda name, text: (monitor.queue("second"), self.sent.append(text))[0] or True
+        with self.clock(12):
+            monitor.Watcher(quiet=0).tell()
+        self.assertEqual(self.sent, ["[colony] first"])
+        self.assertIn('"second"', (board.home() / "to_monitor.jsonl").read_text(), "not lost: it goes next time")
+
+    def test_turbo_keeps_projects_working_at_night_and_its_turns_hear_the_hours(self):
+        from colony import turbo
+        snap = {"state": "idle", "lines": []}
+        with self.clock(3):
+            board.add_gate(self.root, "Which reminders first?")
+            self.assertIsNone(turbo.held(self.root, snap), "a held question isn't the person's yet: the work goes on")
+            note = turbo.note("Claude Code", self.at(12, day=9), deeper=True, research="companion planting")
+            self.assertNotIn("?", note, "turbo asks the person nothing")
+            board.add_note(self.root, None, note, author="colony", quiet=True)
+            out = self.deliver()
+        self.assertIn("spare capacity", out)
+        self.assertIn("outside the person's active hours", out, "a turn turbo starts at night hears the hours")
+        with self.clock(7, 30):
+            self.assertEqual(turbo.held(self.root, snap), "waiting on the person", "theirs now: turbo leaves it be")
 
 
 if __name__ == "__main__":
