@@ -220,7 +220,7 @@ def check():
                    else f"this project now uses {prov.label}" if previous['provider'] != key
                    else f"{prov.label}'s usage limit has reset" if turned
                    else f"{prov.label}'s blocking usage windows have reset or fallen below their pause thresholds")
-            board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped.", author="colony")
+            board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped.", author="colony", kind="resume")
             changed.append((p, "resumed"))
     if now != was:
         folder().mkdir(parents=True, exist_ok=True)

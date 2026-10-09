@@ -488,7 +488,7 @@ class Watcher:
         self.enabled = enabled
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
-        self.nudged = set()
+        self.nudged, self.nudged_at = set(), {}
         self.mail_lock = threading.Lock()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
@@ -569,7 +569,9 @@ class Watcher:
         """Wake a project that has something it hasn't been handed: mail from another project, or a note or
         gate answer from the person whose moment has come. Start its session if it isn't running, and once
         it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
-        on a question, is left alone until its turn ends, unless the mail is urgent."""
+        on a question, is left alone until its turn ends, unless the mail is urgent. The end of a safe pause wakes
+        a project whatever its screen seems to say (a misread one stayed asleep all evening), short of a choice on
+        it, which typing would answer; a nudge that doesn't hand it over is tried again."""
         from . import mail, usage, vision
         for p in board.projects():
             if not p.exists():
@@ -577,6 +579,10 @@ class Watcher:
             letters = [m for m in mail.inbox(p) if not m["delivered_at"]]
             notes = [n for n in board.open_notes(p) if not n["delivered_at"] and not n.get("quiet")
                      and not vision.is_update(n)]
+            resume = [n["id"] for n in notes if n.get("kind") == "resume"]
+            for i in resume:
+                if time.time() - self.nudged_at.get(i, time.time()) > RENUDGE:
+                    self.nudged.discard(i)
             waiting = {m["id"] for m in letters} | {n["id"] for n in notes}
             if not waiting or waiting <= self.nudged:
                 continue
@@ -584,6 +590,7 @@ class Watcher:
             urgent = any(m.get("urgent") for m in letters)
             if str(p) in usage.paused() and not urgent:
                 continue                            # paused at a usage limit: what waits is handed over at its next turn
+            urgent = urgent or bool(resume)
             if state == "off":
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
@@ -596,6 +603,7 @@ class Watcher:
                     "mail from another project in the colony" if letters else ""]))
                 if console.type_into(console.session_name(p), f"[colony] You have {what}."):
                     self.nudged |= waiting          # else someone is typing there: tried again next time
+                    self.nudged_at.update((i, time.time()) for i in resume)
 
     def scout(self):
         """Each project, every so many hours (its "scout" posture; 0 never): if it was worked on since its last
@@ -761,6 +769,7 @@ class Watcher:
         continuation.tick_all()
         self.freshen()
         if not self.enabled:
+            self.usage()  # so are the safe pause and its waking at the reset
             self.mail()  # project delivery is independent of the monitor agent
             recovery.tick_all()  # so is resuming what a network drop stopped
             return
@@ -796,6 +805,9 @@ class Watcher:
             except Exception:
                 pass
             time.sleep(self.interval)
+
+
+RENUDGE = 600                               # seconds before a safe pause's end, still not handed over, is nudged again
 
 
 def queue(text, relay=False):

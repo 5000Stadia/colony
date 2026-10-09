@@ -1955,6 +1955,48 @@ class MailWakeTest(BoardBase):
         w.mail()
         self.assertEqual(len(self.typed), 1, "urgent mail is typed in even mid-turn")
 
+    def test_a_safe_paused_project_wakes_at_the_reset_whatever_its_screen_seems_to_say(self):
+        from colony import usage
+        # Tonight's three: paused at the session limit, then idle, with a passed spinner line still on screen
+        rule = "─" * 48
+        screen = ("✻ Waiting for 2 background agents to finish\n\n● Agent \"R50\" failed: session limit\n"
+                  f"\n✻ Baked for 38m 16s · done 3:29 PM\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on")
+        self.state["state"] = providers.get("claude").classify(screen)
+        self.assertEqual(self.state["state"], "idle")
+        reset = time.time() - 60
+        usage.folder().mkdir(parents=True, exist_ok=True)
+        (usage.folder() / "claude.json").write_text(json.dumps(
+            {"at": reset - 3600, "windows": {"5-hour": {"used": 99, "resets_at": reset}}}))
+        (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {
+            "provider": "claude", "window": "5-hour", "resets_at": reset}}))
+        for misread in ("working", "idle"):          # even read as busy, it is woken: typed mid-turn, it is queued
+            self.state["state"], self.typed = misread, []
+            w = monitor.Watcher()
+            w.usage_checked = 0
+            with patch("colony.turbo.tick"):
+                w.usage()
+            w.mail()
+            self.assertEqual(self.typed, ["[colony] You have an update from Colony."], misread)
+            self.assertEqual(usage.paused(), {})
+            w.mail()
+            self.assertEqual(len(self.typed), 1, "one nudge while it may still be landing")
+            w.nudged_at = {k: v - monitor.RENUDGE - 1 for k, v in w.nudged_at.items()}
+            w.mail()
+            self.assertEqual(len(self.typed), 2, "a nudge that didn't hand it over is tried again")
+            (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {
+                "provider": "claude", "window": "5-hour", "resets_at": reset}}))
+        self.state["state"], self.typed = "needs you", []
+        w = monitor.Watcher()
+        w.mail()
+        self.assertEqual(self.typed, [], "a choice on screen isn't answered by typing into it")
+
+    def test_the_safe_pause_runs_with_the_monitor_off(self):
+        w = monitor.Watcher(enabled=False)
+        with patch.object(w, "usage") as checked, patch.object(w, "mail"), patch("colony.recovery.tick_all"), \
+                patch("colony.vision.observe_all"), patch("colony.continuation.tick_all"), patch.object(w, "freshen"):
+            w.tick()
+        checked.assert_called_once()
+
 
 class NeedsYouTest(BoardBase):
     """Everything waiting on the person, across projects, answerable where it stands."""
