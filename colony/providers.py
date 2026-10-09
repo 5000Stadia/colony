@@ -553,16 +553,21 @@ class ClaudeCode:
     def classify(self, screen):
         """Claude Code shows "esc to interrupt" while it works and a numbered choice when it asks permission;
         anything else is waiting for the person to type. On a narrow window (a phone attached) the status line
-        is cut short, so its spinner counts too: "✻ Calculating…" while working, "✻ Worked for 3s" once done."""
+        is cut short, so its spinner counts too: "✻ Calculating…" while working, "✻ Worked for 3s" once done.
+        Its spinner lines stay in the transcript once passed ("✻ Waiting for 2 background agents to finish"), so
+        with the box on screen only the live one counts: the last unindented line above it."""
         import re
-        low = screen.lower()
-        if "esc to interrupt" in low or re.search(r"^\s*[✻✶✳✢✽·*+] \S[^\n]*?…", screen, re.M) \
-                or re.search(r"waiting for \d+ background", low):     # its background agents are still at work
+        lines = screen.splitlines()
+        box = self._box(lines)
+        live = screen
+        if box is not None:
+            above = [l for l in lines[:box - 1] if l.strip() and not l[:1].isspace()]
+            live = above[-1] if above else ""
+        if "esc to interrupt" in screen.lower() or re.search(r"^\s*[✻✶✳✢✽·*+] \S[^\n]*?…", live, re.M) \
+                or re.search(r"waiting for \d+ background", live.lower()):     # its background agents are still at work
             return "working"
         # A choice takes the typing box's place. While the box is there, "Do you want…" above it is the agent's
         # own prose, a question for the person to answer by typing, so only what's below the box counts.
-        lines = screen.splitlines()
-        box = self._box(lines)
         low = "\n".join(lines[box + 1:] if box is not None else lines).lower()
         if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
             return "needs you"

@@ -577,6 +577,14 @@ class GlanceTest(BoardBase):
         self.assertEqual(act["agents"][1]["detail"], "7m 0s · ↓ 138.2k tokens")
         self.assertEqual(claude.classify("* Waiting for 4 background agents to finish\n❯ "), "working", "its agents are at work")
         rule = "─" * 48
+        foot = f"\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on · 1 shell · ← for agents"
+        waited = "✻ Waiting for 2 background agents to finish\n\n● Agent \"R50\" failed: session limit\n  ⎿  resets 5:40pm\n"
+        self.assertEqual(claude.classify(waited + "\n✻ Baked for 38m 16s · done 3:29 PM\n" + foot), "idle",
+                         "a passed spinner line in the transcript is history, not work")
+        self.assertEqual(claude.classify(waited + foot), "idle", "nor when what came after it isn't a spinner")
+        self.assertEqual(claude.classify("● Done.\n✻ Waiting for 1 background agent to finish\n  ⎿  Tip: /agents\n" + foot),
+                         "working", "the live spinner sits just above the box")
+        self.assertEqual(claude.classify("✻ Calculating… (12s · ↓ 1k tokens)\n  ⎿  ☐ fix the bug\n" + foot), "working")
         asked = f"  Do you want sales orders written up as a spec row?\n\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on · …\n  ● main"
         self.assertEqual(claude.classify(asked), "idle", "its own question above the typing box is for the person to type to")
         labelled = ("  Do you want that after you've judged this room, or\n  should the current room go to you?\n"
