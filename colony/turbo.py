@@ -160,6 +160,18 @@ def unheard(root, nid):
     return bool(nid) and any(n["id"] == nid and not n["delivered_at"] and not n["addressed_at"] for n in board.notes(root))
 
 
+def heard(root, nid):
+    """Whether turbo's last note there reached its agent."""
+    return bool(nid) and any(n["id"] == nid and n["delivered_at"] for n in board.notes(root))
+
+
+CALM = ("Turbo is over: {why}. Turbo spent usage that would otherwise go unused on work worth doing even at diminishing "
+        "returns; from your next step that usage is gone, so each step should again earn its cost. Return to this project's usual "
+        "posture: its current item at its agreed depth, no preparation, prior-art passes, research or extra helpers "
+        "taken on because usage was going unused. Let helpers already running finish, finish what is half-done rather "
+        "than dropping it, and keep what turbo produced where it serves agreed items. This supersedes turbo's note.")
+
+
 def withdraw(root, nid, why):
     """A turbo note that never reached its agent is let go, so nothing hands it over after its moment."""
     board.append(root, "notes.jsonl", {"type": "addressed", "of": nid, "at": board.now(),
@@ -510,14 +522,18 @@ def visit(state, rec, root, key, now, paused):
 
 
 def end(state, key, off):
-    """Turbo ends for a program: stronger models leave without a reload, and a note that never reached its project is
-    let go. Research advice already asked for lands as it would: it stands on its own."""
+    """Turbo ends for a program: stronger models leave without a reload, a note that never reached its project is
+    let go, and a project that heard one is told, quietly, to return to its usual posture: it hears on its next turn,
+    which after a safe pause is its waking at the reset. Research advice already asked for lands as it would."""
     mine = {Path(r): m for r, m in ((state.get(key) or {}).get("projects") or {}).items()}
     release(state, [r for r, m in mine.items() if m.get("boost")], lambda: state.update({key: off}))
     for r, m in mine.items():
         try:
             if m.get("note") and r.exists() and unheard(r, m["note"]):
                 withdraw(r, m["note"], "turbo ended")
+            elif m.get("note") and r.exists() and heard(r, m["note"]):
+                board.add_note(r, None, CALM.format(why=off.get("why") or "its program caught up"),
+                               author="colony", quiet=True, kind="turbo-end")
         except Exception as err:
             trouble(err)
     return [(key, "off")]

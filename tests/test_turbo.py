@@ -220,6 +220,28 @@ class TurboTest(TurboBase):
         self.assertTrue(next(x for x in board.notes(self.root) if x["id"] == n["id"])["addressed_at"])
         self.assertNotIn(n["id"], [x["id"] for x in board.open_notes(self.root)], "it never wakes anyone after turbo")
 
+    def test_a_project_that_heard_turbo_is_told_to_return_to_its_usual_posture_when_it_ends(self):
+        from colony import usage
+        turbo.tick(self.now)
+        [n] = self.turbo_notes()
+        board.delivered(self.root, [n])                                         # it heard, and went wild
+        self.read_at(self.now + 60, used=99)                                    # it maxed: the safe pause holds it
+        usage.folder().mkdir(parents=True, exist_ok=True)
+        (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {
+            "provider": "claude", "window": "weekly", "resets_at": self.now + 120}}))
+        self.assertEqual(turbo.tick(self.now + 60), [("claude", "off")])
+        [calm] = [x for x in board.open_notes(self.root) if x.get("kind") == "turbo-end"]
+        self.assertTrue(calm.get("quiet"), "it wakes nothing: it reaches the agent on its next turn")
+        self.assertIn("usual posture", calm["text"])
+        self.assertIn("supersedes turbo's note", calm["text"])
+        turbo.tick(self.now + 90)
+        self.assertEqual(len([x for x in board.notes(self.root) if x.get("kind") == "turbo-end"]), 1, "told once")
+        self.read_at(self.now + 180, used=0)                                    # the week resets: it wakes
+        with patch("time.time", return_value=self.now + 180):
+            usage.check()
+        [back] = [x for x in board.open_notes(self.root) if x.get("kind") == "resume"]
+        self.assertIn("usual posture: turbo is over", back["text"])
+
     def test_a_note_still_waiting_is_let_go_once_the_person_is_needed_or_its_console_stops(self):
         started = []
         self.patch(console, "ensure", lambda root, name=None, label=None: started.append(root))
