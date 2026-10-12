@@ -8,7 +8,7 @@ the person typed), and only projects with queued work, or research ticked, are t
 It only ever adds to a project's work. Its note is quiet, and turbo itself wakes a console only at a moment it has
 checked: idle, nothing typed, no one at it, nothing waiting on the person; a note that waits is let go once that
 changes, and an agent that answers there's nothing worth doing hears no more until its roadmap changes shape.
-Stronger models come through the idle reload, once a turbo episode, and leave without one; nothing is written into
+Stronger models come through the idle reload, once a turbo episode, and leave the same way; nothing is written into
 any instructions. Once a day, apart from the agent, the program's consultant writes each turned-up project research
 advice: a report left in the project, with a quiet note for the agent to weigh. Off, it is nothing at all. It runs in
 the watcher's minute with no tokens (the advice runs beside it); when a program's reading is missing or old it stays
@@ -258,29 +258,15 @@ def pick(root, family, role):
 
 
 def release(state, roots, change):
-    """Stronger models end without a reload: a console keeps what it runs until it restarts for a reason of its own,
-    and its record moves on with them, so this alone never reloads it. Each project's part is its own: one's
-    trouble leaves the others' as they should be."""
+    """Stronger models end as they came: the helper files go back, and each console, now out of date, returns to its
+    usual model and helpers through the watcher's idle reload into the same conversation, once it sits idle with
+    nothing typed and no one at it. Each project's part is its own: one's trouble leaves the others' as they should be."""
     from . import bench
-
-    def fingerprint(r):
-        try:
-            return console.fingerprint(r)
-        except Exception as err:
-            trouble(err)
-            return None
-    was = {r: fingerprint(r) for r in roots if r.exists() and console.running(console.session_name(r))}
     change()
     save(state)
     for r in (r for r in roots if r.exists()):
         try:
             bench.write_helpers(r)
-        except Exception as err:
-            trouble(err)
-        try:
-            name = console.session_name(r)
-            if was.get(r) and console.started(name) == was[r] and (now := fingerprint(r)):
-                console.adopt(name, now)
         except Exception as err:
             trouble(err)
 
@@ -480,7 +466,7 @@ def visit(state, rec, root, key, now, paused):
     mine, done = rec["projects"].setdefault(str(root), {}), []
     opts = options(root)
     if mine.get("boost") and not opts["turbo_models"]:
-        release(state, [root], lambda: mine.update(boost={}))      # unticked: they go, without a reload
+        release(state, [root], lambda: mine.update(boost={}))      # unticked: they go, by the idle reload
     want = {} if str(root) in paused else wanted(root, opts)
     boost = want.get("models") and "boost" not in mine
     wake = ((want.get("deeper") or want.get("research")) and due(mine.get("noted"), now, rec["resets_at"])
@@ -522,7 +508,7 @@ def visit(state, rec, root, key, now, paused):
 
 
 def end(state, key, off):
-    """Turbo ends for a program: stronger models leave without a reload, a note that never reached its project is
+    """Turbo ends for a program: stronger models leave through the idle reload, a note that never reached its project is
     let go, and a project that heard one is told, quietly, to return to its usual posture: it hears on its next turn,
     which after a safe pause is its waking at the reset. Research advice already asked for lands as it would."""
     mine = {Path(r): m for r, m in ((state.get(key) or {}).get("projects") or {}).items()}

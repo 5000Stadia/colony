@@ -176,22 +176,7 @@ def _record(change):
 
 
 def _started(name, fp):
-    # fingerprint: what it counts as started with; ran: what its process really started with
-    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "ran": fp, "at": time.time()}))
-
-
-def started(name):
-    """What a console counts as started with (its fingerprint), or None."""
-    try:
-        return (json.loads(_started_path().read_text()).get(name) or {}).get("fingerprint")
-    except (OSError, ValueError):
-        return None
-
-
-def adopt(name, fp):
-    """Count a running console as started with fp: a change it needn't reload for (turbo's stronger models
-    ending), so it moves over only when it restarts for a reason of its own."""
-    _record(lambda have: have[name].update(fingerprint=fp) if name in have else None)
+    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "at": time.time()}))
 
 
 def running_version(name):
@@ -233,7 +218,7 @@ def stale(root, name=None, label=None):
         was = None
     if not was:
         return "started before colony kept a record of how it starts"
-    if fingerprint(root, label) not in (was["fingerprint"], was.get("ran")):   # what it runs now needs no reload
+    if fingerprint(root, label) != was.get("ran", was["fingerprint"]):    # ran: what its process started with, in older records
         return "its settings or helper tiers changed"
     return None
 

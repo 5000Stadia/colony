@@ -593,6 +593,12 @@ class GlanceTest(BoardBase):
         self.assertEqual(claude.classify(labelled), "idle", "a rule labelled with the session's name is still the box's")
         self.assertEqual(claude.draft(labelled), "")
         dialog = f"{rule}\n Edit file\n Do you want to make this edit to a.py?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel"
+        multi = ("←  ☐ Support plan  ✔ Submit  →\nWhich changes do you accept?\n❯ 1. [ ] Rank by payoff\n     Apply cost per result.\n"
+                 "  2. [ ] Add county benefits\n     County runs CalFresh.\n  3. [ ] Type something\n  Submit\n"
+                 "  4. Chat about this\n  Enter to select · ↑/↓ to navigate · Esc to cancel")
+        self.assertEqual(claude.choice(multi)[1][-2:], ["Submit", "Chat about this"])
+        self.assertEqual(claude.choose(multi, "Submit"), ["Down"] * 3 + ["Enter"], "a multi-select's unnumbered Submit is reached")
+        self.assertEqual(claude.choose(multi, "county"), ["Down", "Enter"])
         self.assertEqual(claude.classify(f"❯ fix the bug\n\n● Editing.\n{dialog}"), "needs you",
                          "a choice takes the box's place; a past prompt above doesn't hide it")
 

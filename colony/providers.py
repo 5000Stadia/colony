@@ -622,14 +622,15 @@ class ClaudeCode:
             return None
         col = lines[cur].index(mark) + 2
         numbered = re.match(r"\d+\.", lines[cur][col:])      # then only numbered lines are options
-        is_option = lambda l: (len(l) > col and l[col] != " " and l[:col].strip() in ("", mark)
-                               and (not numbered or re.match(r"\d+\.", l[col:])))
+        row = lambda l: len(l) > col and l[col] != " " and l[:col].strip() in ("", mark)
+        is_option = lambda l: row(l) and (not numbered or re.match(r"\d+\.", l[col:]))
         i = cur
         while i > 0 and (is_option(lines[i - 1]) or lines[i - 1][:col + 1].strip() == ""):
             i -= 1                                                       # up to the first option
         block = []
-        for l in lines[i:]:
-            if is_option(l):
+        for k, l in enumerate(lines[i:], i):
+            # a multi-select's Submit is an unnumbered row among the numbered ones
+            if is_option(l) or (row(l) and any(is_option(x) for x in lines[k + 1:k + 4])):
                 block.append(l)
             elif l[:col + 1].strip():                                    # shallower text: the list has ended
                 break

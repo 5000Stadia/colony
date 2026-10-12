@@ -675,7 +675,7 @@ class AdviceTest(TurboBase):
 
 
 class StrongerModelsTest(TurboBase):
-    """Stronger models come once a turbo episode, through the console's idle reload, and leave without one."""
+    """Stronger models come once a turbo episode, through the console's idle reload, and leave the same way."""
 
     def setUp(self):
         super().setUp()
@@ -707,7 +707,7 @@ class StrongerModelsTest(TurboBase):
     def routine_file(self):
         return (self.root / ".claude" / "agents" / "colony-routine.md").read_text()
 
-    def test_they_come_once_through_the_idle_reload_and_leave_without_one(self):
+    def test_they_come_once_through_the_idle_reload_and_leave_the_same_way(self):
         self.assertIn((self.root, "stronger models"), turbo.tick(self.now))
         up = self.seats()
         ceiling = max(x["score"] for x in intelligence.pairs(bench.standings()))
@@ -734,26 +734,29 @@ class StrongerModelsTest(TurboBase):
         self.assertIn(("claude", "off"), turbo.tick(self.now + 180))
         self.assertEqual(self.seats(), self.base, "turbo over: Auto's own picks")
         self.assertIn(f"model: {self.base['routine']['model']}", self.routine_file())
-        self.assertIsNone(console.stale(self.root), "no reload back: it moves over when it next restarts for its own reasons")
+        self.assertEqual(console.stale(self.root), "its settings or helper tiers changed",
+                         "it goes back to its usual model and helpers at its next idle reload")
+        console._started(self.name, console.fingerprint(self.root))           # the watcher's idle reload
+        self.assertIsNone(console.stale(self.root))
 
-    def test_unticked_mid_turbo_they_go_without_a_reload_and_dont_come_back_that_episode(self):
+    def test_unticked_mid_turbo_they_go_by_the_idle_reload_and_dont_come_back_that_episode(self):
         turbo.tick(self.now)
         console._started(self.name, console.fingerprint(self.root))
         board.project_settings(self.root, {"turbo_models": "off"})
         turbo.tick(self.now + 60)
         self.assertEqual(self.seats(), self.base)
-        self.assertIsNone(console.stale(self.root))
+        self.assertTrue(console.stale(self.root), "back at its next idle reload")
         board.project_settings(self.root, {"turbo_models": "on"})
         turbo.tick(self.now + 120)
         self.assertEqual(self.seats(), self.base, "at most one change an episode")
 
-    def test_with_the_monitor_off_turbo_stands_down_without_a_reload(self):
+    def test_with_the_monitor_off_turbo_stands_down_and_its_models_go_at_the_next_reload(self):
         turbo.tick(self.now)
         console._started(self.name, console.fingerprint(self.root))           # reloaded onto them
         with patch.object(monitor.threading, "Thread"):                        # no watcher thread in a test
             monitor.start(enabled=False)
         self.assertEqual(self.seats(), self.base, "nothing keeps turbo current: it stands down")
-        self.assertIsNone(console.stale(self.root), "and no reload back")
+        self.assertTrue(console.stale(self.root), "back at its next reload")
         self.assertIn("turbo isn't running (the monitor is off, and turbo runs with it)", turbo.line("claude"))
 
     def test_lasting_trouble_stands_it_down_and_a_new_turn_reloads_nothing_the_console_already_runs(self):
@@ -771,7 +774,7 @@ class StrongerModelsTest(TurboBase):
             w.usage_checked = 0
             w.usage()
         self.assertEqual(self.seats(), self.base, "lasting: it stands down")
-        self.assertIsNone(console.stale(self.root))
+        self.assertTrue(console.stale(self.root), "back at its next idle reload")
         self.read_at(time.time())
         turbo.tick(time.time())                                                # back, and still behind: a new turn
         self.assertEqual(self.seats(), up)
@@ -784,8 +787,39 @@ class StrongerModelsTest(TurboBase):
         with patch.object(bench, "write_helpers", side_effect=ValueError("no models listed")):
             self.assertIn(("claude", "off"), turbo.tick(self.now + 60))
         self.assertFalse(turbo.load()["claude"]["on"])
-        self.assertIsNone(console.stale(self.root), "its record still moves on: no reload back")
         self.assertIn("ValueError: no models listed", turbo.report())
+
+    def test_a_console_whose_record_moved_on_before_this_fix_still_goes_back(self):
+        turbo.tick(self.now)
+        boosted = console.fingerprint(self.root)
+        self.read_at(self.now + 60, used=80)
+        turbo.tick(self.now + 60)
+        console._record(lambda have: have.__setitem__(self.name, {"fingerprint": console.fingerprint(self.root),
+                                                                   "ran": boosted, "at": time.time()}))
+        self.assertTrue(console.stale(self.root), "what its process runs is what counts")
+
+    def test_the_watcher_reloads_it_back_only_once_it_sits_idle_and_untouched(self):
+        turbo.tick(self.now)
+        console._started(self.name, console.fingerprint(self.root))
+        self.read_at(self.now + 60, used=80)
+        turbo.tick(self.now + 60)
+        reloaded, screen = [], {"state": "working", "lines": []}
+        self.patch(console, "reload", lambda root, name, label=None: reloaded.append(name))
+        self.patch(console, "snapshot", lambda root, lines=1, name=None: screen)
+        self.patch(console, "drafting", lambda name: False)
+        self.patch(console, "attached", lambda name: False)
+        w = monitor.Watcher(quiet=0)
+
+        def minute(**after):
+            w.current_checked = 0
+            w.idle_since = {k: v - after.get("idle", 0) for k, v in w.idle_since.items()}
+            w.current()
+        minute()
+        self.assertEqual(reloaded, [], "nothing in the middle of work is touched")
+        screen["state"] = "idle"
+        minute()
+        minute(idle=monitor.RELOAD_AFTER + 1)
+        self.assertEqual(reloaded, [self.name], "idle a few minutes, nothing typed, no one at it: back to its usual seats")
 
     def test_a_pinned_seat_is_left_to_its_pin(self):
         board.project_settings(self.root, {"model": "claude-sonnet-5-5", "effort": "low"})
