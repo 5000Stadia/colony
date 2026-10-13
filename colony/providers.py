@@ -911,6 +911,11 @@ class Codex:
             from .codex_remote import toml
             value = f'hooks.{event}={toml(entries)}'
             parts += ["-c", shlex.quote(value)]
+        # Codex runs a hook only once it is trusted: these are colony's own, given in this very command, so with the
+        # person's trust setting on (as the app path's trust_hooks requires) they run without a stored trust.
+        from .board import registry
+        if registry()["settings"].get("trust"):
+            parts += ["--dangerously-bypass-hook-trust"]
         # the helper tiers, registered for this session (a project file would need the project trusted first);
         # each overlay holds its tier's model and effort (write_helpers)
         from .board import workdir

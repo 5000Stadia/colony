@@ -654,10 +654,11 @@ class Watcher:
         rows = inbox()
         if not rows or snapshot()["state"] != "idle":
             return
-        if rows == self.told[1] and time.time() - self.told[0] < RETELL:
+        ids = [r["id"] for r in rows]
+        if ids == self.told[1] and time.time() - self.told[0] < RETELL:
             return
         if console.type_into(name(), INBOX_LINE):
-            self.told = (time.time(), rows)
+            self.told = (time.time(), ids)
 
     def models(self):
         """Once a day (and at start), with no tokens: read each program's own list of its models; while any model
@@ -902,18 +903,59 @@ def queue(text, relay=False):
     """A word for the monitor from the board (the person's answer on a support, say): it waits in the monitor's inbox,
     across a board restart, until its hook hands it over. One only for passing on to the person (relay) waits too,
     outside their active hours, until those begin."""
-    with _inbox_lock(), open(_inbox_path(), "a") as fh:
-        fh.write(json.dumps({"id": secrets.token_hex(4), "at": board.now(), "text": text,
-                             **({"relay": True} if relay else {})}) + "\n")
+    row = json.dumps({"id": secrets.token_hex(4), "at": board.now(), "text": text, **({"relay": True} if relay else {})})
+    with _inbox_lock():
+        path = _inbox_path()
+        torn = path.exists() and path.stat().st_size and not path.read_bytes().endswith(b"\n")
+        with open(path, "a") as fh:
+            fh.write(("\n" if torn else "") + row + "\n")       # a line an interrupted write left never swallows this one
+
+
+def _rows():
+    """Every row in the inbox; a line left broken by an interrupted write is skipped, never the ones around it."""
+    rows = []
+    try:
+        lines = _inbox_path().read_text().splitlines()
+    except OSError:
+        return rows
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            continue
+    return [r for r in rows if isinstance(r, dict) and "id" in r]
+
+
+def _write(rows):
+    """The inbox rewritten whole, at once: a crash leaves the old file or the new one, never half of either."""
+    path = _inbox_path()
+    if not rows:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    os.replace(tmp, path)
 
 
 def inbox():
     """What waits for the monitor and may be handed over now."""
-    try:
-        rows = [json.loads(l) for l in _inbox_path().read_text().splitlines() if l.strip()]
-    except (OSError, ValueError):
-        return []
+    rows = _rows()
     return rows if hours.active() else [r for r in rows if not r.get("relay")]
+
+
+CLAIM = 120                     # seconds a hand-off holds its rows; a hook that died before finishing frees them then
+
+
+def claim():
+    """The rows this hook hands over, held so a hook running alongside doesn't hand them over too. One that dies
+    before taken() lets its rows go after CLAIM seconds, so they come again rather than being lost."""
+    with _inbox_lock():
+        rows, now = _rows(), time.time()
+        mine = [r for r in rows if now - r.get("claimed", 0) >= CLAIM and (hours.active() or not r.get("relay"))]
+        if mine:
+            ids = {r["id"] for r in mine}
+            _write([dict(r, claimed=now) if r["id"] in ids else r for r in rows])
+        return mine
 
 
 def render_inbox(rows):
@@ -926,13 +968,9 @@ def render_inbox(rows):
 
 def taken(rows):
     """Rows handed over: gone from the inbox; whatever came in meanwhile, or waits for the person's hours, stays."""
+    ids = {r["id"] for r in rows}
     with _inbox_lock():
-        try:
-            lines = [l for l in _inbox_path().read_text().splitlines() if l.strip()]
-        except OSError:
-            return
-        rest = [l for l in lines if json.loads(l) not in rows]
-        _inbox_path().write_text("".join(l + "\n" for l in rest)) if rest else _inbox_path().unlink()
+        _write([r for r in _rows() if r["id"] not in ids])
 
 
 def plain(text, cap=300):

@@ -149,6 +149,32 @@ class BoardTest(BoardBase):
         self.assertNotIn("Your helpers (subagents)", r.stdout, "the helper tiers are a project's, not the monitor's")
         self.assertEqual(monitor.inbox(), [], "handed over once")
 
+    def test_the_inbox_is_handed_over_once_and_survives_a_broken_line_or_a_hook_that_died(self):
+        monitor.queue("plants finished a turn")
+        first = monitor.claim()
+        self.assertEqual([r["text"] for r in first], ["plants finished a turn"])
+        self.assertEqual(monitor.claim(), [], "a hook running alongside doesn't hand it over too")
+        with open(monitor._inbox_path(), "a") as fh:
+            fh.write('{"id": "torn", "te')                                     # a write cut off midway
+        monitor.queue("seeds finished a turn")
+        self.assertEqual([r["text"] for r in monitor.inbox()], ["plants finished a turn", "seeds finished a turn"],
+                         "the broken line costs only itself")
+        saved = monitor.time.time
+        try:
+            monitor.time.time = lambda: saved() + monitor.CLAIM                 # the first hook died before taken()
+            self.assertEqual([r["text"] for r in monitor.claim()], ["plants finished a turn", "seeds finished a turn"])
+        finally:
+            monitor.time.time = saved
+        monitor.taken(monitor.inbox())
+        self.assertEqual(monitor.inbox(), [])
+        self.assertFalse(monitor._inbox_path().exists())
+
+    def test_a_codex_console_runs_colonys_own_hooks_without_a_stored_trust_only_while_trust_is_on(self):
+        codex = providers.PROVIDERS["codex"]
+        self.assertIn("--dangerously-bypass-hook-trust", codex.local_command("plants", {"permissions": "all"}))
+        board.set_setting("trust", "off")
+        self.assertNotIn("--dangerously-bypass-hook-trust", codex.local_command("plants", {"permissions": "all"}))
+
     def test_the_status_line_shows_the_monitor_and_the_helm_whole_or_in_part(self):
         board.track(self.root)
         other = Path(self.tmp.name) / "seeds"

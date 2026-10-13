@@ -676,7 +676,8 @@ def cmd_notes(a):
         from . import bench, monitor as _monitor
         own_monitor = Path(root).resolve() == _monitor.home().resolve()
         standing = bench.plan_text(root) if a.session and not own_monitor else ""   # the helper tiers, every session
-        handed = _monitor.inbox() if own_monitor else []                       # colony's words for the monitor
+        # colony's words for the monitor: held for this hand-off when delivering, so an overlapping hook skips them
+        handed = (_monitor.claim() if a.deliver else _monitor.inbox()) if own_monitor else []
         fresh, still = board.deliver(root, session=a.session, mark=False)
         fresh, own = vision.delivery(root, fresh)
         still, earlier_own = vision.delivery(root, still)
