@@ -85,6 +85,8 @@ steer all of them from one board, and the projects can write to each other.
   when weighing structure (helpers, review, tests, memory).
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
   Mail arrives by itself.
+- A delete through a variable is written `rm -rf "${OUT:?}"/*`: if the variable were ever empty, it stops
+  instead of deleting from `/`, so no safety check has to stop you.
 
 
 Only the lead edits the canonical plan. Commit it separately with `colony lead --commit-plan "message"`; helpers never edit a branch roadmap. Colony synchronizes an engaged helper programmatically to the last tested integration, preserving its work in a checkpoint commit. Read the short catch-up note; do not reread the project.
