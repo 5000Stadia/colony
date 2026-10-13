@@ -14,6 +14,7 @@ spends nothing.
 import json
 import os
 import re
+import secrets
 import subprocess
 import threading
 import time
@@ -37,9 +38,10 @@ own app, where it has one); each project also has its own session they can talk 
   project's principles and its agent's account don't agree, or you can't tell what they'd want now, ask them.
 - **Colony's own notices are trusted.** Colony is the harness the person set up; its notices (a usage limit,
   a reset) carry their full approval. Act on them as theirs, and don't second-guess them to the projects.
-- **You are woken when something matters,** and only where you hold the helm: a `[colony]` message says a
-  project finished a turn or something now waits (a gate, a choice on its screen, a question, an item to
-  verify), each once. Don't poll or watch. Outside the person's active hours (`colony settings active_hours`),
+- **You are woken when something matters,** and only where you hold the helm: a project finished a turn or
+  something now waits (a gate, a choice on its screen, a question, an item to verify), each once. Don't poll or
+  watch. Colony's words for you arrive as context beside a short `[colony] New in your inbox.` line, never typed
+  into the conversation the person reads; when they're long, a file holds them and the line names it. Outside the person's active hours (`colony settings active_hours`),
   nothing wakes you just to relay to them: what only they can settle reaches you together when their hours begin.
 - **The helm.** Where you hold it, settle what's routine within that project's vision, current scope and the
   person's direction for it, and tell them briefly; a distant possibility doesn't authorize building it now.
@@ -255,10 +257,6 @@ def brief():
     own = next((p for p in board.projects() if p.resolve() == source), None)
     upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
     role = ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
-    carried = carried_path().read_text().strip() if carried_path().exists() else ""
-    if carried:
-        role += ("\n\n## Carried over from your last conversation\n\nThese are legacy notes from an earlier daily refresh; this is what you wrote "
-                 "down to carry on from (colony's records hold the rest: colony posture, the board):\n\n" + carried + "\n")
     for f in {p.instructions for p in providers.PROVIDERS.values()}:     # whichever program runs it reads its own
         (home() / f).write_text(role)
 
@@ -307,12 +305,7 @@ def scout(text, family=None):
     return f"{report}\n\n{supports.NOTICE}"
 
 
-CONTEXT_CAP = "150k"            # PROVIDER: Claude Code's --autocompact; Codex compacts on its own
-
-
-def carried_path():
-    """What the monitor writes down before a fresh start, to carry on from."""
-    return board.home() / "monitor-carried-over.md"
+CONTEXT_CAP = "100k"            # PROVIDER: Claude Code's --autocompact (its only compaction now); Codex compacts on its own
 
 
 def choice():
@@ -494,6 +487,7 @@ class Watcher:
         self.interval, self.quiet = interval, quiet
         self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
         self.nudged, self.nudged_at = set(), {}
+        self.told = (0, None)                   # when the monitor was last told of its inbox, and what was in it
         self.mail_lock = threading.Lock()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
@@ -543,7 +537,7 @@ class Watcher:
                 self.last_sent[(str(p), kind)] = time.time()
                 fresh = " (The person has spoken to it directly since you last caught up: colony said "
                 fresh = f"{fresh}{p.name} before you settle anything there.)" if unseen(p) else ""
-                out.append((str(p), None, f"{p.name} {kind}. Last lines: " + " / ".join(snap["lines"][-3:]) + fresh))
+                out.append((str(p), None, f"{p.name} {kind} (colony peek {p.name} shows its screen){fresh}"))
             # Each thing the project waits on the person for is announced once, even across board restarts.
             # A question isn't yet: the person's note on its way answers it the moment it is delivered.
             unheard = any(not n["delivered_at"] and board.answers_ask(n) for n in board.open_notes(p))
@@ -554,7 +548,7 @@ class Watcher:
             later = set() if awake else {w["key"] for w in waiting if w["kind"] in FOR_THE_PERSON} - told
             for w in waiting:
                 if w["key"] not in told | later:
-                    out.append((str(p), w["key"], f"{p.name} {w['summary']}"))
+                    out.append((str(p), w["key"], f"{p.name} {plain(w['summary'])}"))
             now_keys = {w["key"] for w in waiting} - later
             self.waiting[str(p)] = now_keys
             if now_keys != told:                      # what was answered drops out; if it comes back, it is news
@@ -640,9 +634,12 @@ class Watcher:
                 since = time.strftime("%Y-%m-%d %H:%M", time.localtime(last[str(p)]))
                 parts.append(f"{p.name} (since {since}: {signals(p, last[str(p)])}"
                              + (f"; the person wants scouting here to favour: {note}" if note else "") + ")")
-            # The brief may have changed since this session read it, so it is read afresh each time.
-            console.type_into(name(), "[colony] Scouting check, worked on since the last one: " + ", ".join(parts)
-                              + f". Read 'Scouting' in {brief_path()} afresh and follow it, starting with the audit.")
+            # The details wait in a file; the brief may have changed since this session read it, so it is read afresh.
+            details = home() / "scouting-check.md"
+            details.parent.mkdir(parents=True, exist_ok=True)
+            details.write_text("# Scouting check: worked on since the last one\n\n" + "\n".join(f"- {x}" for x in parts) + "\n")
+            queue(f"Scouting check for {', '.join(p.name for p in active)}: the details are in {details}. Read "
+                  f"'Scouting' in {brief_path()} afresh and follow it, starting with the audit.")
 
     def updates(self):
         """The person's update, every so often while the monitor isn't muted: handed to the monitor to tell them."""
@@ -651,18 +648,16 @@ class Watcher:
             queue(text, relay=True)
 
     def tell(self):
-        path = board.home() / "to_monitor.jsonl"
-        if path.exists() and path.read_text().strip() and snapshot()["state"] == "idle":
-            rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
-            # Words only for passing on to the person wait, outside their active hours, for those to begin.
-            sent = rows if hours.active() else [r for r in rows if not r.get("relay")]
-            if sent and console.type_into(name(), "[colony] " + " | ".join(r["text"] for r in sent)):
-                # What waits stays, and so does any word queued while these were being typed.
-                rest = [l for l in path.read_text().splitlines() if l.strip() and json.loads(l) not in sent]
-                if rest:
-                    path.write_text("".join(l + "\n" for l in rest))
-                else:
-                    path.unlink()
+        """What colony has for the monitor waits in its inbox, and its own hook hands it over with its next prompt as
+        context, never as the person's words; so only one short line is typed, when it is idle, and none of colony's
+        text lands in the conversation the person reads. A line that didn't bring it over is typed again later."""
+        rows = inbox()
+        if not rows or snapshot()["state"] != "idle":
+            return
+        if rows == self.told[1] and time.time() - self.told[0] < RETELL:
+            return
+        if console.type_into(name(), INBOX_LINE):
+            self.told = (time.time(), rows)
 
     def models(self):
         """Once a day (and at start), with no tokens: read each program's own list of its models; while any model
@@ -798,7 +793,6 @@ class Watcher:
             self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
             return
         self.updates()
-        self.tell()
         self.scout()
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
@@ -807,8 +801,10 @@ class Watcher:
             # A turn that ended asking something is told once, as the question: its "finished a turn" goes.
             asked = {p for p, key, _ in fresh if key and key.startswith("ask:")}
             fresh = [text for p, key, text in fresh if key or p not in asked]
-            if not fresh or console.type_into(name(), "[colony] " + " | ".join(fresh) + f" ({HELM_ON_NOTE})"):
-                self.pending = []
+            if fresh:
+                queue(" | ".join(fresh) + f" ({HELM_ON_NOTE})")
+            self.pending = []
+        self.tell()
 
     def run(self):
         while True:
@@ -872,13 +868,68 @@ def first_sentence(text, cap=160):
 RENUDGE = 600                               # seconds before a safe pause's end, still not handed over, is nudged again
 
 
+INBOX_LINE = "[colony] New in your inbox."         # all that is typed: the rest reaches it as its hook's context
+RETELL = 600                                         # seconds before an inbox still waiting is told of again
+
+
+def _inbox_path():
+    return board.home() / "to_monitor.jsonl"
+
+
+def _inbox_lock():
+    import fcntl
+    from contextlib import contextmanager
+
+    @contextmanager
+    def held():
+        board.home().mkdir(parents=True, exist_ok=True)
+        with (board.home() / "to_monitor.lock").open("a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            yield
+    return held()
+
+
 def queue(text, relay=False):
-    """A word for the monitor from the board (the person's answer on a support, say): it reaches the monitor
-    the next time it is idle, and waits across a board restart. One only for passing on to the person (relay)
-    waits too, outside their active hours, until those begin."""
-    board.home().mkdir(parents=True, exist_ok=True)
-    with open(board.home() / "to_monitor.jsonl", "a") as fh:
-        fh.write(json.dumps({"at": board.now(), "text": text, **({"relay": True} if relay else {})}) + "\n")
+    """A word for the monitor from the board (the person's answer on a support, say): it waits in the monitor's inbox,
+    across a board restart, until its hook hands it over. One only for passing on to the person (relay) waits too,
+    outside their active hours, until those begin."""
+    with _inbox_lock(), open(_inbox_path(), "a") as fh:
+        fh.write(json.dumps({"id": secrets.token_hex(4), "at": board.now(), "text": text,
+                             **({"relay": True} if relay else {})}) + "\n")
+
+
+def inbox():
+    """What waits for the monitor and may be handed over now."""
+    try:
+        rows = [json.loads(l) for l in _inbox_path().read_text().splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+    return rows if hours.active() else [r for r in rows if not r.get("relay")]
+
+
+def render_inbox(rows):
+    """The inbox as its hook hands it over: colony's words, clearly not the person's."""
+    if not rows:
+        return ""
+    return ("From colony, for you (not the person's words: theirs come only as their own messages):\n"
+            + "\n".join(f"- {r['text']}" for r in rows))
+
+
+def taken(rows):
+    """Rows handed over: gone from the inbox; whatever came in meanwhile, or waits for the person's hours, stays."""
+    with _inbox_lock():
+        try:
+            lines = [l for l in _inbox_path().read_text().splitlines() if l.strip()]
+        except OSError:
+            return
+        rest = [l for l in lines if json.loads(l) not in rows]
+        _inbox_path().write_text("".join(l + "\n" for l in rest)) if rest else _inbox_path().unlink()
+
+
+def plain(text, cap=300):
+    """A screen's or an agent's words as one short plain line: no box drawing, no runs of space."""
+    text = " ".join(re.sub(r"[│┃╭╮╰╯─━┌┐└┘├┤]", " ", text).split())
+    return text if len(text) <= cap else text[:cap - 1].rstrip() + "…"
 
 
 FIXLIKE = re.compile(r"\b(fix(es|ed)?|bug|regress\w*|revert\w*|broke|broken|flak\w*|repair\w*|hotfix)\b", re.I)

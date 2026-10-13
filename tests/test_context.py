@@ -129,11 +129,11 @@ class ContextTest(unittest.TestCase):
         self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'ready')
         self.assertIn('Do not resend.', context.file(self.root, 'context-carried.md').read_text())
 
-    def test_daily_monitor_and_disabled_monitor_watcher(self):
+    def test_the_monitor_types_nothing_for_its_context_and_disabled_monitor_watcher(self):
         self.message('user', 'keep blue'); self.message('assistant', 'yes')
-        atomic_json(context.file(self.root), dict(last=time.time() - context.DAILY - 1))
+        atomic_json(context.file(self.root), dict(last=time.time() - 30 * 3600))
         with patch.object(context, 'safe', return_value=True), patch.object(context, 'is_monitor', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
-            context.tick(self.root); self.assertIn('Context carry-over', typed.call_args.args[1])
+            context.tick(self.root); typed.assert_not_called()   # it compacts natively: nothing in the person's view
         with patch.object(context, 'tick_all') as refresh, patch.object(monitor.Watcher, 'mail'), patch('colony.vision.observe_all'):
             watcher = monitor.Watcher(enabled=False); watcher.tick(); refresh.assert_called_once()
 

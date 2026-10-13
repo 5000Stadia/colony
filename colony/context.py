@@ -17,7 +17,6 @@ TAIL_EXCHANGES = 4
 TAIL_BUDGET = 5_000  # UTF-8 bytes are a conservative token upper bound for text
 CARRY_BUDGET = 3_000
 OUTPUT_BUDGET = 9_000
-DAILY = 20 * 3600
 TIMEOUT = 15 * 60
 COOLDOWN = 3600
 LIVE = ('due', 'requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown')
@@ -375,12 +374,12 @@ def due(root, st, tokens, window, now):
     """The one test that both holds continuation for a new refresh and starts it."""
     if now < st.get('retry_after', 0) or st.get('await_usage') is not None or st.get('ineffective'):
         return None
-    if is_monitor(root) and now - st.get('last', now) >= DAILY:
-        return 'daily'
     return 'context threshold' if window and tokens is not None and tokens >= window * SOFT else None
 
 
 def tick(root):
+    if is_monitor(root):
+        return  # the monitor compacts natively, at its cap: nothing typed into the conversation the person reads
     s = session(root)
     if not s:
         return

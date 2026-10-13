@@ -662,8 +662,10 @@ def cmd_notes(a):
         if _persons(prompt):
             board.answer_asks(root, "in the console")        # the person answered there themselves
             board.said(root, prompt)                         # their own words, for the monitor to catch up on
-        from . import bench
-        standing = bench.plan_text(root) if a.session else ""       # the helper tiers, every session
+        from . import bench, monitor as _monitor
+        own_monitor = Path(root).resolve() == _monitor.home().resolve()
+        standing = bench.plan_text(root) if a.session and not own_monitor else ""   # the helper tiers, every session
+        handed = _monitor.inbox() if own_monitor else []                       # colony's words for the monitor
         fresh, still = board.deliver(root, session=a.session, mark=False)
         fresh, own = vision.delivery(root, fresh)
         still, earlier_own = vision.delivery(root, still)
@@ -682,6 +684,7 @@ def cmd_notes(a):
                  else hours.notice())
         text = "\n\n".join(filter(None, [
             standing,
+            _monitor.render_inbox(handed),
             lead.role_text(root) if a.session else '',
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
@@ -699,6 +702,8 @@ def cmd_notes(a):
     if text:
         print(text, flush=True)
     if a.deliver:
+        if handed:
+            _monitor.taken(handed)
         board.delivered(root, fresh, own + earlier_own)
         mail.delivered(root, new_mail)
         lead.acknowledge_engagement(root, engagement_receipt)

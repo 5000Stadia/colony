@@ -34,6 +34,19 @@ A tool for my plants.
 """
 
 
+def hearing(into):
+    """A stand-in console that records what is typed; the monitor's inbox line brings its inbox over, as its hook
+    does, recorded as one message the way it once was typed."""
+    def type_into(name, text):
+        if text == monitor.INBOX_LINE:
+            rows = monitor.inbox()
+            monitor.taken(rows)
+            text = "[colony] " + " | ".join(r["text"] for r in rows)
+        into.append(text)
+        return True
+    return type_into
+
+
 class BoardBase(unittest.TestCase):
     def setUp(self):
         from unittest.mock import patch
@@ -124,6 +137,17 @@ class BoardTest(BoardBase):
         self.assertIsNone(monitor.update(t0 + 20000))
         board.set_setting("updates", "30")
         self.assertEqual(board.registry()["settings"]["updates"], 30)
+
+    def test_the_monitors_own_hook_hands_over_its_inbox_and_nothing_else_of_colonys(self):
+        (monitor.home() / ".board").mkdir(parents=True, exist_ok=True)
+        monitor.queue("plants finished a turn")
+        r = subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver", "--session"], cwd=monitor.home(),
+                           input=json.dumps({"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"}),
+                           capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertIn("From colony, for you (not the person's words", r.stdout, r.stderr)
+        self.assertIn("plants finished a turn", r.stdout)
+        self.assertNotIn("Your helpers (subagents)", r.stdout, "the helper tiers are a project's, not the monitor's")
+        self.assertEqual(monitor.inbox(), [], "handed over once")
 
     def test_the_update_reaches_the_monitor_only_while_it_is_not_muted(self):
         watcher = monitor.Watcher.__new__(monitor.Watcher)
@@ -1281,7 +1305,7 @@ class MonitorTest(BoardBase):
         screens = iter(["working", "working", "needs you", "needs you", "working", "idle", "idle"])
         console.snapshot = lambda root, lines=6, name=None: {"state": next(screens), "lines": ["last line"]}
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -1297,7 +1321,7 @@ class MonitorTest(BoardBase):
                       ("working", False), ("idle", False), ("idle", False)])
         console.snapshot = lambda root, lines=6, name=None: dict(zip(("state", "scrolled"), next(reads)), lines=[])
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -1312,7 +1336,7 @@ class MonitorTest(BoardBase):
         reads = iter(["working", "idle", "idle", "idle"])
         console.snapshot = lambda root, lines=6, name=None: {"state": next(reads), "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -1357,7 +1381,7 @@ class MonitorTest(BoardBase):
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: busy
         monitor.helm(True)
         w = monitor.Watcher(quiet=0)
@@ -1371,7 +1395,7 @@ class MonitorTest(BoardBase):
     def test_a_question_the_person_already_wrote_back_to_is_not_announced_and_their_note_answers_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         board.add_note(self.root, None, "Yes, CSV.", author="monitor")     # `colony tell`, while the turn ran
@@ -1387,7 +1411,7 @@ class MonitorTest(BoardBase):
     def test_a_pending_colony_notice_does_not_hide_the_agents_question(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
         board.add_note(self.root, None, "Safe pause over. Carry on where you stopped.", author="colony")
@@ -1405,7 +1429,7 @@ class MonitorTest(BoardBase):
     def test_where_it_doesnt_hold_the_helm_the_monitor_sleeps_and_handed_it_hears_whats_waiting(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         board.record_ask(self.root, "t1", "Which format do you want?")
         w = monitor.Watcher(quiet=0)
@@ -1424,7 +1448,7 @@ class MonitorTest(BoardBase):
     def test_events_wait_until_the_monitor_is_free_and_a_new_gate_wakes_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: busy
         w = monitor.Watcher(quiet=0)
         w.tick()
@@ -1441,7 +1465,7 @@ class MonitorTest(BoardBase):
     def test_each_thing_waiting_is_announced_once_even_across_a_restart_and_every_view_counts_it_alike(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent = []
-        console.type_into = lambda name, text: sent.append(text) or True
+        console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
         board.record_ask(self.root, "t1", "Which format do you want?")
@@ -1504,7 +1528,7 @@ class MonitorTest(BoardBase):
         board.track(self.root)
         typed = []
         saved = (console.type_into, console.ensure, console.snapshot)
-        console.type_into = lambda name, text: typed.append(text) or True
+        console.type_into = hearing(typed)
         console.ensure = lambda root, name=None, label=None: "s"
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         try:
@@ -1861,7 +1885,7 @@ class MessagingTest(BoardBase):
         board.record_ask(self.root, "t1", "Which format do you want?")
         typed, pasted = [], []
         saved = (console.type_into, console.paste_into, console.ensure)
-        console.type_into = lambda name, text: typed.append(text) or True
+        console.type_into = hearing(typed)
         console.paste_into = lambda name, text: pasted.append((name, text)) or True
         console.ensure = lambda root, name=None, label=None: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
@@ -1954,7 +1978,7 @@ class MailWakeTest(BoardBase):
         self.saved = (console.snapshot, console.type_into, console.ensure, monitor.snapshot)
         self.typed, self.started, self.state = [], [], {"state": "idle"}
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}
-        console.type_into = lambda name, text: self.typed.append(text) or True
+        console.type_into = hearing(self.typed)
         console.ensure = lambda root, name=None, label=None: self.started.append(root)
         monitor.snapshot = lambda: {"state": "working", "lines": []}
 
@@ -2018,7 +2042,8 @@ class MailWakeTest(BoardBase):
         (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {
             "provider": "claude", "window": "5-hour", "resets_at": reset}}))
         for misread in ("working", "idle"):          # even read as busy, it is woken: typed mid-turn, it is queued
-            self.state["state"], self.typed = misread, []
+            self.state["state"] = misread
+            self.typed.clear()
             w = monitor.Watcher()
             w.usage_checked = 0
             with patch("colony.turbo.tick"):
@@ -2033,7 +2058,8 @@ class MailWakeTest(BoardBase):
             self.assertEqual(len(self.typed), 2, "a nudge that didn't hand it over is tried again")
             (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {
                 "provider": "claude", "window": "5-hour", "resets_at": reset}}))
-        self.state["state"], self.typed = "needs you", []
+        self.state["state"] = "needs you"
+        self.typed.clear()
         w = monitor.Watcher()
         w.mail()
         self.assertEqual(self.typed, [], "a choice on screen isn't answered by typing into it")
@@ -2058,7 +2084,7 @@ class NeedsYouTest(BoardBase):
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": ["done."]}
         console.screen = lambda name: self.CHOICE
         console.press = lambda name, keys: self.pressed.append(keys)
-        console.type_into = lambda name, text: self.typed.append(text) or True
+        console.type_into = hearing(self.typed)
 
     def tearDown(self):
         console.snapshot, console.screen, console.press, console.type_into = self.saved
@@ -2107,7 +2133,7 @@ class SupportsTest(BoardBase):
         self.saved = (console.snapshot, console.type_into, monitor.snapshot)
         self.sent = []
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
-        console.type_into = lambda name, text: self.sent.append(text) or True
+        console.type_into = hearing(self.sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
 
     def tearDown(self):
@@ -2129,9 +2155,10 @@ class SupportsTest(BoardBase):
         self.due(49)
         w.tick()
         self.assertEqual(len(self.sent), 1)
-        self.assertIn("Scouting check, worked on since", self.sent[0])
-        self.assertIn("plants", self.sent[0])
-        self.assertIn("favour: faster test runs", self.sent[0], "what the person wants it to favour goes with it")
+        self.assertIn("Scouting check for plants", self.sent[0])
+        details = (monitor.home() / "scouting-check.md").read_text()
+        self.assertIn("plants", details, "the details wait in a file, out of the conversation")
+        self.assertIn("favour: faster test runs", details, "what the person wants it to favour goes with it")
         self.assertIn("afresh", self.sent[0], "the brief is read as it is now, not as the session remembers it")
         self.due(49)
         saved, monitor.last_commit = monitor.last_commit, lambda root: 0       # no commit since
@@ -2497,7 +2524,7 @@ class ClearTest(BoardBase):
         typed = []
         console.snapshot = lambda root, lines=6, name=None: {"state": state["state"], "lines": ["x"]}
         console.screen = lambda name: NeedsYouTest.CHOICE
-        console.type_into = lambda name, text: typed.append(text) or True
+        console.type_into = hearing(typed)
         console.ensure = lambda root, name=None, label=None: None
         try:
             (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
@@ -3224,7 +3251,7 @@ class MonitorUpkeepTest(BoardBase):
         try:
             with patch.object(bench, "role_pick", lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5", "effort": "xhigh", "why": "Goal for the monitor"}):
                 cmd = console.command("monitor", None, folder=monitor.home())
-                self.assertIn("--model claude-opus-5-5 --effort xhigh --autocompact 150k", cmd)
+                self.assertIn("--model claude-opus-5-5 --effort xhigh --autocompact 100k", cmd)
                 self.assertIn("Auto: claude-opus-5-5 at xhigh", board.settings_page(board.registry()))
                 board.set_setting("monitor_model", "claude-sonnet-5:max")
                 self.assertIn("--model claude-sonnet-5 --effort max", console.command("monitor", None, folder=monitor.home()))
@@ -3696,7 +3723,7 @@ class HoursBase(BoardBase):
         self.saved = (console.snapshot, console.type_into, monitor.snapshot)
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         self.sent = []
-        console.type_into = lambda name, text: self.sent.append(text) or True
+        console.type_into = hearing(self.sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
 
     def tearDown(self):
@@ -3910,12 +3937,33 @@ class ActiveHoursTest(HoursBase):
         self.assertFalse((board.home() / "to_monitor.jsonl").exists())
 
     def test_a_word_queued_while_the_monitor_is_being_told_waits_for_the_next_time(self):
+        console.type_into = lambda name, text: self.sent.append(text) or True     # no hook here: what is typed
         monitor.queue("first")
-        console.type_into = lambda name, text: (monitor.queue("second"), self.sent.append(text))[0] or True
         with self.clock(12):
             monitor.Watcher(quiet=0).tell()
-        self.assertEqual(self.sent, ["[colony] first"])
+            self.assertEqual(self.sent, [monitor.INBOX_LINE], "one short line is all that is typed")
+            handed = monitor.inbox()                                   # its hook reads the inbox
+            monitor.queue("second")                                    # a word comes in meanwhile
+            monitor.taken(handed)
+        self.assertIn("From colony, for you (not the person's words", monitor.render_inbox(handed))
+        self.assertNotIn('"first"', (board.home() / "to_monitor.jsonl").read_text())
         self.assertIn('"second"', (board.home() / "to_monitor.jsonl").read_text(), "not lost: it goes next time")
+
+    def test_the_inbox_line_is_typed_once_for_what_waits_and_again_only_if_it_still_waits_later(self):
+        console.type_into = lambda name, text: self.sent.append(text) or True     # no hook here: what is typed
+        monitor.queue("first")
+        w = monitor.Watcher(quiet=0)
+        with self.clock(12):
+            w.tell()
+            w.tell()
+            self.assertEqual(self.sent, [monitor.INBOX_LINE], "once for what waits")
+            w.told = (w.told[0] - monitor.RETELL - 1, w.told[1])
+            w.tell()
+            self.assertEqual(len(self.sent), 2, "still waiting later: told again")
+            monitor.taken(monitor.inbox())
+            monitor.queue("first")                                     # the same words, new
+            w.tell()
+            self.assertEqual(len(self.sent), 3, "a new arrival is told at once")
 
     def test_turbo_keeps_projects_working_at_night_and_its_turns_hear_the_hours(self):
         from colony import turbo
