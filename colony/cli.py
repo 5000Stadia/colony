@@ -292,6 +292,17 @@ def cmd_doctor(a):
 def cmd_gate(a):
     from . import board
     root = board.root_of()
+    if a.withdraw:                       # it no longer applies: off the person's list, as the agent's own record
+        try:
+            board.withdraw_gate(root, a.withdraw, a.question)
+        except StopIteration:
+            print(f"no gate {a.withdraw}", file=sys.stderr)
+            return 2
+        except ValueError as err:
+            print(str(err), file=sys.stderr)
+            return 2
+        print(f"gate {a.withdraw} withdrawn: {a.question}")
+        return 0
     if a.answered:                       # the person settled it in conversation: record it, and it stops waiting
         try:
             if a.consult or a.points:
@@ -682,9 +693,12 @@ def cmd_notes(a):
         # The person typing to it now is awake: their own turn gets no such line.
         night = ("" if Path(root).resolve() == monitor.home().resolve() or _persons(prompt)
                  else hours.notice())
+        spoke = _persons(prompt) or any(n.get("author") not in ("colony", "observation", "monitor", "suggestion")
+                                        for n in fresh)          # the person, in the console or on the board
         text = "\n\n".join(filter(None, [
             standing,
             _monitor.render_inbox(handed),
+            board.open_gates_line(root) if spoke and not own_monitor else "",
             lead.role_text(root) if a.session else '',
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
@@ -1231,6 +1245,7 @@ def main(argv=None):
                    "been on their page a whole day; a costly or irreversible decision has no default")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")
+    p.add_argument("--withdraw", metavar="ID", help="gate ID no longer applies (superseded, moot); QUESTION says why")
     p.add_argument("--when", metavar="ITEM", help="the question waits, off the person's list, until roadmap ITEM starts")
     p.add_argument("--consult", metavar="ID", help="the first-round consultation that supplied this gate's points")
     p.add_argument("--points", metavar="FILE", help="JSON list of points with text and consultant numbers (- for stdin)")

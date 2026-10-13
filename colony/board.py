@@ -83,7 +83,7 @@ steer all of them from one board, and the projects can write to each other.
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
-  `--default "what stands if they skip it"`); the answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`.
+  `--default "what stands if they skip it"`); the answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`. An open gate stays on their list.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
@@ -1114,6 +1114,33 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
     return answer
 
 
+def withdraw_gate(root, gate_id, why):
+    """A gate the agent closes because it no longer applies (superseded, moot): off the person's list, kept on record
+    as the agent's, never as their answer."""
+    why = why.strip()
+    if not why:
+        raise ValueError("Say why the gate no longer applies.")
+    with gate_lock(root):
+        gate = next(g for g in gates(root) if g["id"] == gate_id)
+        if gate["answer"]:
+            raise ValueError(f"Gate {gate_id} is already answered: {gate['answer']}")
+        append(root, "gates.jsonl", dict(type="answer", of=gate_id, at=now(), text=f"Withdrawn by the agent: {why}",
+                                         author="agent"))
+
+
+def open_gates_line(root, cap=160):
+    """For the agent when the person speaks to it directly: the gates still open on their list here, so one their
+    words settle, or that no longer applies, leaves it rather than being raised to them again."""
+    open_ = [g for g in gates(root) if due(g)]
+    if not open_:
+        return ""
+    short = lambda q: (lambda t: t if len(t) <= cap else t[:cap - 1].rstrip() + "…")(" ".join(q.split()))
+    return ("Decisions still open on the person's list here; the board and their monitor keep raising them until "
+            "closed:\n" + "\n".join(f"- {g['id']}: {short(g['question'])}" for g in open_)
+            + "\nIf what they say now settles one: colony gate --answered ID \"their words\" --context \"your reading\". "
+            "If one no longer applies: colony gate --withdraw ID \"why\".")
+
+
 def clear_gate(root, gate_id):
     """Close without inventing point choices; a retry repairs the quiet receipt."""
     with gate_lock(root):
@@ -1973,7 +2000,7 @@ def gate_body(root, pid, gate, back, number=None, fold=False):
                 + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
     if gate["answer"]:
         answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
-                       if gate.get("answered_by") == "colony" else f"Your answer: {e(gate['answer'])}")
+                       if gate.get("answered_by") in ("colony", "agent") else f"Your answer: {e(gate['answer'])}")
         body += "".join(rows) + f"<div class='pre'>{answer_text}</div>"
         if points:
             body += ("<p class='muted'>The checking round is already recorded; this decision has used both rounds.</p>"

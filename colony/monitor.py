@@ -53,8 +53,8 @@ own app, where it has one); each project also has its own session they can talk 
 - **Keep messages short:** the person is often on a phone.
 - **Updates.** Every so often, helm or not, colony hands you what the projects finished and what waits on the
   person (`colony settings updates`, in minutes). Tell them in that order: what was completed, then what was
-  already waiting on them, then new asks at the end, leaving out what's empty, and close with "(Say mute to
-  mute)". When they say mute: `colony mute on` (holding the helm, `colony settings updates off` instead), then
+  already waiting on them, then new asks at the end, leaving out what's empty, and close with the status line it
+  gives (the monitor on or off, the helm). When they say mute: `colony mute on` (holding the helm, `colony settings updates off` instead), then
   reply only with a short offer to pick the updates up again whenever they like.
 
 ## How colony works for you
@@ -854,8 +854,17 @@ def update(now=None):
     old = [t for k, t in asked if k in before]
     part = lambda head, rows: f"{head}: " + ("; ".join(rows) if rows else "none")
     return ("Update for the person, helm or not: tell them briefly, in this order, leaving out what's empty, and close "
-            "with (Say mute to mute). " + " · ".join([part("1) Completed since the last update", done),
-                                                    part("2) Already waiting on them", old), part("3) New asks", new)]))
+            f"with this status line as it is: {status_line()} " + " · ".join([
+                part("1) Completed since the last update", done), part("2) Already waiting on them", old),
+                part("3) New asks", new)]))
+
+
+def status_line():
+    """The update's last line: the monitor (mute turns it off) and the helm, on, off, or on for some projects."""
+    ps = [p for p in board.projects() if p.exists()]
+    held = sum(helm_for(p) for p in ps)
+    helm_ = "Off" if not held else "On" if held == len(ps) else f"On for {held} of {len(ps)}"
+    return f"(Monitor: {'Off' if muted() else 'On'} | Helm Control: {helm_})"
 
 
 def first_sentence(text, cap=160):

@@ -130,7 +130,7 @@ class BoardTest(BoardBase):
             self.assertIsNone(monitor.update(t0 + 7400), "nothing completed and nothing new: nothing to say")
         self.assertIn("1) Completed since the last update: plants R2: water log.", first)
         self.assertIn("2) Already waiting on them: none · 3) New asks: plants opened a gate: Which pot size?", first)
-        self.assertIn("(Say mute to mute)", first)
+        self.assertIn("(Monitor: On | Helm Control: Off)", first)
         self.assertIn("1) Completed since the last update: none · 2) Already waiting on them: plants opened a gate: "
                       "Which pot size? · 3) New asks: plants opened a gate: Repot in spring?", second)
         board.set_setting("updates", "off")
@@ -148,6 +148,40 @@ class BoardTest(BoardBase):
         self.assertIn("plants finished a turn", r.stdout)
         self.assertNotIn("Your helpers (subagents)", r.stdout, "the helper tiers are a project's, not the monitor's")
         self.assertEqual(monitor.inbox(), [], "handed over once")
+
+    def test_the_status_line_shows_the_monitor_and_the_helm_whole_or_in_part(self):
+        board.track(self.root)
+        other = Path(self.tmp.name) / "seeds"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        monitor.helm(False)
+        self.assertEqual(monitor.status_line(), "(Monitor: On | Helm Control: Off)")
+        monitor.helm(True)
+        self.assertEqual(monitor.status_line(), "(Monitor: On | Helm Control: On)")
+        monitor.set_posture(other, helm=False)
+        self.assertEqual(monitor.status_line(), "(Monitor: On | Helm Control: On for 1 of 2)")
+        monitor.helm(False)
+
+    def test_a_gate_the_person_settles_directly_leaves_their_list_and_one_that_no_longer_applies_can_be_withdrawn(self):
+        board.track(self.root)
+        g1 = board.add_gate(self.root, "Which pot size?")
+        g2 = board.add_gate(self.root, "Repot in spring?")
+        hook = lambda prompt: subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver"], cwd=self.root,
+                                             input=json.dumps({"session_id": "s1", "prompt": prompt}), capture_output=True,
+                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT))).stdout
+        said = hook("go with the big pots")
+        self.assertIn("Decisions still open on the person's list here", said, "the person spoke: the open gates go beside")
+        self.assertIn(g1["id"] + ": Which pot size?", said)
+        self.assertNotIn("Decisions still open", hook("[colony] You have mail."), "colony's own nudge isn't the person")
+        self.assertEqual(self.cli("gate", "--answered", g1["id"], "the big pots").returncode, 0)
+        r = self.cli("gate", "--withdraw", g2["id"], "superseded: repotting dropped from the plan")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([w for w in board.waiting_items(self.root) if w["kind"] == "gate"], [], "both off their list")
+        self.assertEqual(next(g for g in board.gates(self.root) if g["id"] == g2["id"])["answered_by"], "agent",
+                         "a withdrawal is the agent's, never the person's answer")
+        self.assertNotEqual(self.cli("gate", "--withdraw", g2["id"], "again").returncode, 0)
+        self.assertNotIn("Decisions still open", hook("thanks"))
 
     def test_the_update_reaches_the_monitor_only_while_it_is_not_muted(self):
         watcher = monitor.Watcher.__new__(monitor.Watcher)
