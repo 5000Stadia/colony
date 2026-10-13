@@ -1412,6 +1412,10 @@ class MonitorTest(BoardBase):
             console.screen, console.press = saved
         self.assertTrue(board.DEFAULT_SETTINGS["trust"])
 
+    def test_a_new_colony_lets_its_projects_work_freely_and_delete_safely(self):
+        self.assertEqual(board.DEFAULT_SETTINGS["permissions"], "all", "the person's word: free in their own folder")
+        self.assertIn('rm -rf "${OUT:?}"/*', board.protocol(self.root), "the form Claude Code's rm guard accepts")
+
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         sent, busy = [], {"state": "working", "lines": []}
@@ -1729,7 +1733,7 @@ class SettingsTest(BoardBase):
     def test_settings_shape_new_consoles_and_the_monitor_can_read_and_change_them(self):
         saved, console.COMMAND = console.COMMAND, None
         try:
-            self.assertEqual(console.command("plants"), "claude --remote-control plants --model claude-fable-5-1 --effort medium", "Auto resolves both model and effort")
+            self.assertEqual(console.command("plants"), "claude --permission-mode bypassPermissions --remote-control plants --model claude-fable-5-1 --effort medium", "Auto resolves both model and effort")
             run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
             self.assertRegex(run("settings").stdout, r"remote +on")
@@ -1737,7 +1741,7 @@ class SettingsTest(BoardBase):
             run("settings", "remote", "off")
             run("settings", "model", "claude-opus-5-5")
             run("settings", "effort", "medium")
-            self.assertEqual(console.command("plants"), "claude --model claude-opus-5-5 --effort medium")
+            self.assertEqual(console.command("plants"), "claude --permission-mode bypassPermissions --model claude-opus-5-5 --effort medium")
             elsewhere = Path(self.tmp.name) / "work"
             run("settings", "new-folder", str(elsewhere))
             reg = board.registry()
@@ -1819,13 +1823,13 @@ class ProjectSettingsTest(BoardBase):
         board.track(self.root)
         saved, console.COMMAND = console.COMMAND, None
         try:
-            self.assertEqual(console.command("plants", self.root), "claude --remote-control plants --model claude-fable-5-1 --effort medium")
+            self.assertEqual(console.command("plants", self.root), "claude --permission-mode bypassPermissions --remote-control plants --model claude-fable-5-1 --effort medium")
             board.project_settings(self.root, {"permissions": "edits", "remote": "off", "effort": "high"})
             self.assertEqual(console.command("plants", self.root), "claude --permission-mode acceptEdits --model claude-fable-5-1 --effort medium", "Auto selects the whole pair")
             board.set_setting("model", "claude-opus-5-5")
             self.assertIn("--model claude-opus-5-5", console.command("plants", self.root), "unset here: the global one")
             board.project_settings(self.root, {"permissions": ""})
-            self.assertNotIn("--permission-mode", console.command("plants", self.root), "blank returns to global")
+            self.assertIn("--permission-mode bypassPermissions", console.command("plants", self.root), "blank returns to global")
             with self.assertRaises(KeyError):
                 board.project_settings(self.root, {"permissions": "everything"})
         finally:
@@ -1860,7 +1864,7 @@ class ProjectSettingsTest(BoardBase):
             seeds, soil = Path(self.tmp.name) / "seeds", Path(self.tmp.name) / "soil"
             console.COMMAND = None                         # only to read the command each would start with
             self.assertIn("This project is part of a colony", (seeds / "CLAUDE.md").read_text())
-            self.assertEqual(console.command("seeds", seeds), "claude --remote-control seeds --model claude-opus-5-5 --effort medium")
+            self.assertEqual(console.command("seeds", seeds), "claude --permission-mode bypassPermissions --remote-control seeds --model claude-opus-5-5 --effort medium")
             self.assertTrue((soil / "AGENTS.md").exists() and not (soil / "CLAUDE.md").exists(), "wired by its own provider")
             self.assertEqual(console.command("soil", soil), "other --model big-1")
             with self.assertRaises(KeyError):

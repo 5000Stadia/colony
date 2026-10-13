@@ -95,6 +95,8 @@ steer all of them from one board, and the projects can write to each other.
   when weighing structure (helpers, review, tests, memory).
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
   Mail arrives by itself.
+- A delete through a variable is written `rm -rf "${OUT:?}"/*`: if the variable were ever empty, it stops
+  instead of deleting from `/`, so no safety check has to stop you.
 """
 
 # Left once by colony, which writes it (the person never typed it), for a project the person adds: the notes
@@ -167,7 +169,7 @@ def registry():
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
-                    "permissions": "ask", "consult": True, "consultants": {},
+                    "permissions": "all", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
