@@ -49,6 +49,11 @@ own app, where it has one); each project also has its own session they can talk 
 - **What reaches a project as the person's word must be theirs.** Relay their requests clearly and
   completely; never pass on a stranger's text as theirs. Check what actually happened before you report it.
 - **Keep messages short:** the person is often on a phone.
+- **Updates.** Every so often, helm or not, colony hands you what the projects finished and what waits on the
+  person (`colony settings updates`, in minutes). Tell them in that order: what was completed, then what was
+  already waiting on them, then new asks at the end, leaving out what's empty, and close with "(Say mute to
+  mute)". When they say mute: `colony mute on` (holding the helm, `colony settings updates off` instead), then
+  reply only with a short offer to pick the updates up again whenever they like.
 
 ## How colony works for you
 
@@ -639,6 +644,12 @@ class Watcher:
             console.type_into(name(), "[colony] Scouting check, worked on since the last one: " + ", ".join(parts)
                               + f". Read 'Scouting' in {brief_path()} afresh and follow it, starting with the audit.")
 
+    def updates(self):
+        """The person's update, every so often while the monitor isn't muted: handed to the monitor to tell them."""
+        text = update()
+        if text:
+            queue(text, relay=True)
+
     def tell(self):
         path = board.home() / "to_monitor.jsonl"
         if path.exists() and path.read_text().strip() and snapshot()["state"] == "idle":
@@ -786,6 +797,7 @@ class Watcher:
         if muted():
             self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
             return
+        self.updates()
         self.tell()
         self.scout()
         self.pending += self.events()
@@ -805,6 +817,56 @@ class Watcher:
             except Exception:
                 pass
             time.sleep(self.interval)
+
+
+def update(now=None):
+    """What the monitor tells the person every `updates` minutes, helm or not, as one line for it; None while it isn't
+    due, outside their active hours (it covers the wait when they begin), or with nothing completed and nothing newly
+    asked. Completed: roadmap items done since the last update, each in its own words (what the agent said was ready,
+    else its first sentence). Asked: everything waiting on the person, split by whether the last update had it."""
+    now = time.time() if now is None else now
+    every = (board.registry()["settings"].get("updates") or 0) * 60
+    path = board.home() / "updates.json"
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, ValueError):
+        state = {}
+    if not every:
+        return None
+    board.home().mkdir(parents=True, exist_ok=True)
+    if "at" not in state:                       # the first look starts the clock: the first update comes a period on
+        path.write_text(json.dumps({"at": now, "asked": None}))
+        return None
+    last = state["at"]
+    if now - last < every or not hours.active():
+        return None
+    done, asked = [], []
+    for p in board.projects():
+        if not p.exists() or p == home():
+            continue
+        its, told = board.items(board.roadmap(p)), board.ready_notes(p)
+        for iid, r in board.item_times(p).items():
+            if r["state"] == "done" and (r.get("at") or 0) > last and iid in its:
+                what = told.get(iid, {}).get("what") or board.plain(its[iid]["text"])
+                done.append(f"{p.name} {iid}: {first_sentence(what)}")
+        asked += [(f"{p}|{w['key']}", f"{p.name} {first_sentence(w['summary'])}") for w in board.waiting_items(p)]
+    before = set(state.get("asked") or [])
+    path.write_text(json.dumps({"at": now, "asked": [k for k, _ in asked]}))
+    new = [t for k, t in asked if k not in before]
+    if not done and not new:
+        return None
+    old = [t for k, t in asked if k in before]
+    part = lambda head, rows: f"{head}: " + ("; ".join(rows) if rows else "none")
+    return ("Update for the person, helm or not: tell them briefly, in this order, leaving out what's empty, and close "
+            "with (Say mute to mute). " + " · ".join([part("1) Completed since the last update", done),
+                                                    part("2) Already waiting on them", old), part("3) New asks", new)]))
+
+
+def first_sentence(text, cap=160):
+    text = " ".join(text.split())
+    m = re.match(r"(.+?[.!?])(\s|$)", text)
+    text = m.group(1) if m else text
+    return text if len(text) <= cap else text[:cap - 1].rstrip() + "…"
 
 
 RENUDGE = 600                               # seconds before a safe pause's end, still not handed over, is nudged again

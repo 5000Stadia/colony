@@ -169,7 +169,7 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "ask", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT}
+                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -197,6 +197,7 @@ SETTING_HELP = {
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
+    "updates": "minutes between the monitor's updates to you, helm or not: what the projects finished, then what was already waiting on you, then new asks (off: none); never while it is muted or outside your active hours",
     "active_hours": "when you're around, as HH:MM-HH:MM on this machine's clock (off: always): outside them agents keep working but hold their questions, which reach you together when your hours begin",
 }
 
@@ -236,6 +237,15 @@ def set_setting(key, value):
             if not 0 < n <= 100:
                 raise KeyError(key)
             reg["settings"][key] = int(n) if n.is_integer() else n
+    elif key == "updates":
+        v = str(value).strip().lower().removesuffix("m").removesuffix("min").strip()
+        try:
+            n = 0 if v == "off" else int(float(v))
+        except ValueError:
+            raise KeyError(key)
+        if n < 0:
+            raise KeyError(key)
+        reg["settings"][key] = n
     elif key == "active_hours":
         reg["settings"][key] = hours.normal(value)          # ValueError, saying what reads, for anything else
     elif key == "monitor_model":

@@ -100,6 +100,48 @@ class BoardTest(BoardBase):
         self.assertIsNone(usage.limit("5-hour", None), "safe pause off is off for the session too")
         self.assertEqual(board.registry()["settings"]["safe_pause_session"], 97)
 
+    def test_the_persons_update_comes_hourly_completed_first_then_old_asks_then_new(self):
+        board.track(self.root)
+        board.set_setting("active_hours", "off")
+        self.assertEqual(board.registry()["settings"]["updates"], 60, "hourly by default")
+        t0 = time.time()
+        board.item_times(self.root)
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [x] R2 water log. Kept daily."))
+        board.add_gate(self.root, "Which pot size?", item="R3")
+        with patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
+            self.assertIsNone(monitor.update(t0 - 3600), "the first look starts the clock")
+            first = monitor.update(t0 + 10)
+            self.assertIsNone(monitor.update(t0 + 20), "not again within the hour")
+            board.add_gate(self.root, "Repot in spring?", item="R3")
+            second = monitor.update(t0 + 3700)
+            self.assertIsNone(monitor.update(t0 + 7400), "nothing completed and nothing new: nothing to say")
+        self.assertIn("1) Completed since the last update: plants R2: water log.", first)
+        self.assertIn("2) Already waiting on them: none · 3) New asks: plants opened a gate: Which pot size?", first)
+        self.assertIn("(Say mute to mute)", first)
+        self.assertIn("1) Completed since the last update: none · 2) Already waiting on them: plants opened a gate: "
+                      "Which pot size? · 3) New asks: plants opened a gate: Repot in spring?", second)
+        board.set_setting("updates", "off")
+        self.assertIsNone(monitor.update(t0 + 20000))
+        board.set_setting("updates", "30")
+        self.assertEqual(board.registry()["settings"]["updates"], 30)
+
+    def test_the_update_reaches_the_monitor_only_while_it_is_not_muted(self):
+        watcher = monitor.Watcher.__new__(monitor.Watcher)
+        watcher.enabled, watcher.pending = True, []
+        for step in ('freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
+            setattr(watcher, step, lambda *a: [])
+        watcher.updates = lambda: called.append(1)
+        called = []
+        with patch.object(monitor, 'snapshot', return_value={'state': 'working'}), \
+                patch('colony.vision.observe_all'), patch('colony.continuation.tick_all'), patch('colony.recovery.tick_all'):
+            monitor.helm(False)
+            monitor.muted(True)
+            watcher.tick()
+            self.assertEqual(called, [], "muted: no updates")
+            monitor.muted(False)
+            watcher.tick()
+            self.assertEqual(called, [1])
+
     def test_a_helpers_result_handed_back_as_a_prompt_is_never_the_persons_words(self):
         from colony import cli
         self.assertTrue(cli._persons("Please carry on"))
