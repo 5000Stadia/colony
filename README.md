@@ -52,7 +52,13 @@ conversation when you open it.
   or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
   routine questions within the direction you set for each project, and brings back anything about scope,
   cost or that can't be undone. It never polls: a watcher reads every screen every few seconds for
-  free and wakes it only when there is something to hear.
+  free and wakes it only when there is something to hear. Colony's own words reach it through an inbox
+  its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
+  hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
+  you, and what's new, closing with `(Monitor: On | Helm Control: Off)`; say mute to mute it.
+- **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
+  in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
+  wakes them at the reset to carry on.
 - **Projects talk to each other:** `colony send NAME "…"` (`--ask` for an answer), `colony reply`,
   and `colony projects` lists them with their goals, so an agent asks rather than guesses.
 - **Turbo:** when a program's weekly usage runs more than 5 points behind pace (from day 2, aiming for 99%
@@ -62,7 +68,9 @@ conversation when you open it.
   agent with nothing worth doing says so (`colony turbo --nothing`) and isn't woken again until its roadmap
   changes. Once a day, with consulting on, the program's strongest model also writes each such project a
   short research advice, apart from its agent: a report in its `research/` folder, with a quiet note.
-  `colony turbo` shows each program's pace; Settings turns it off per program.
+  `colony turbo` shows each program's pace; Settings turns it off per program. When turbo ends (caught up,
+  at the limit, or the week turns over), each project it reached gets a note returning it to its usual
+  posture, and raised models go back at the next idle moment.
 - **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
   Outside them agents keep working but don't end on a question to you: the decisions they need, and any
   question asked in a console, are held off Waiting on you and arrive together when your hours begin (new
@@ -97,7 +105,8 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony settings          global settings; a project's own with `colony settings --project NAME`
 
 **Settings.** Each project can have its own model, effort, permissions and Remote Control; blank keeps
-the global choice. The **provider** (the program that runs the agent) is Claude Code or Codex. Another joins
+the global choice. A new colony lets agents do anything in their own folders without asking ("allow
+everything"); Settings can make that ask, accept edits only, or plan only. The **provider** (the program that runs the agent) is Claude Code or Codex. Another joins
 by adding an entry to `colony/providers.py`; every place specific to one program is marked `PROVIDER:` in
 the code.
 
@@ -141,6 +150,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation` (they start no real agent).
+Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo` (they start no real agent).
 
 MIT licensed: see [LICENSE](LICENSE).
