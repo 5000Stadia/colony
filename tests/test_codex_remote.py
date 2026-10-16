@@ -384,9 +384,13 @@ class ConsoleConfigTest(unittest.TestCase):
                 self.assertIsNone(remote.remote_problem(root, {'remote': False}), 'app access off: nothing to miss')
             with patch.object(codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]):
                 self.assertIsNone(remote.remote_problem(root, {'remote': True}))
-                remote.report(remote.home_for(root), root, 'local', 'Remote integration requires a tested Codex version')
+                remote.report(remote.home_for(root), root, 'local', remote.UNTESTED + '0.159.3')
                 self.assertIn('runs local', remote.remote_problem(root, {'remote': True}),
                               'a console started on an untested Codex stays local until its next start')
+                board.save_registry({'roots': [], 'settings': {}})
+                self.assertIn('available again', codex.stale(root), 'so the watcher reloads it at its next idle moment')
+            with patch.object(codex, 'version', return_value='codex-cli 9.9.9'):
+                self.assertIsNone(codex.stale(root), 'still untested: a reload would come back local')
 
 
 class PairingTest(unittest.TestCase):

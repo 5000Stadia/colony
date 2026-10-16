@@ -675,6 +675,17 @@ class Codex:
     def catalog(self):
         return self.discover()
 
+    def stale(self, root):
+        """Why a running console would start differently now beyond its command: one that fell back to local on a
+        Codex colony hadn't checked, now that this Codex is checked and the project wants app access."""
+        from . import board, codex_remote
+        status = codex_remote.read_json(codex_remote.home_for(root) / "colony-status.json")
+        if (status.get("mode") == "local" and status.get("reason", "").startswith(codex_remote.UNTESTED)
+                and board.project_settings(root)[0].get("remote", True)
+                and codex_remote.supported_version(self.version())):
+            return "app access is available again on this Codex"
+        return None
+
     # PROVIDER: Codex sandboxes its commands with bubblewrap on Linux. Ubuntu 24.04 and later forbid the user
     # namespaces bubblewrap needs unless an AppArmor profile allows them: without one, a Codex agent or consultant
     # can't run a command, or even read a file, in its read-only or workspace sandbox.

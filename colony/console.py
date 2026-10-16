@@ -212,6 +212,9 @@ def stale(root, name=None, label=None):
     ran = running_version(name)
     if now and ran and now.group(0) != ran:
         return f"{p.label} {ran} → {now.group(0)}"
+    why = not label and hasattr(p, "stale") and p.stale(root)       # what only its program knows (Codex's app access)
+    if why:
+        return why
     try:
         was = json.loads(_started_path().read_text()).get(name)
     except (OSError, ValueError):

@@ -26,6 +26,7 @@ class RemoteError(RuntimeError):
 
 _processes = {}                    # reap daemons started by this process after a graceful drain
 TESTED_VERSIONS = ('0.159.3', '0.160.0', '0.163.0')
+UNTESTED = 'Remote integration requires a tested Codex version on Linux: '
 
 
 def supported_version(version):
@@ -426,7 +427,7 @@ def launch(root, settings, resume=None):
     owned = read_json(home / 'colony-transfer.json').get('state') == 'published' or (home / 'colony-owned').exists()
     remote = settings.get('remote', True)
     if not sys.platform.startswith('linux') or not supported_version(provider.version()):
-        report(home, root, 'local', 'Remote integration requires a tested Codex version on Linux: ' + ', '.join(TESTED_VERSIONS))
+        report(home, root, 'local', UNTESTED + ', '.join(TESTED_VERSIONS))
         return local(root, settings, resume, home if owned else source)
     if not remote and not alive(home):
         report(home, root, 'off')
