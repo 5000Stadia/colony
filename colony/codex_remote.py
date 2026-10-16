@@ -25,7 +25,7 @@ class RemoteError(RuntimeError):
 
 
 _processes = {}                    # reap daemons started by this process after a graceful drain
-TESTED_VERSIONS = ('0.159.3', '0.160.0')
+TESTED_VERSIONS = ('0.159.3', '0.160.0', '0.163.0')
 
 
 def supported_version(version):
@@ -95,6 +95,23 @@ def statuses():
 def report(home, root, mode, reason='', **extra):
     atomic_json(Path(home) / 'colony-status.json', dict(project=str(root), mode=mode, reason=reason,
                                                       at=time.time(), **extra))
+
+
+def remote_problem(root, settings):
+    """What keeps a project set to app access off it, for colony doctor: the installed Codex untested (it would fall
+    back to local at its next start), or its console already running local for a reason. None when nothing does."""
+    from . import providers
+    if not settings.get('remote', True):
+        return None
+    version = providers.get('codex').version() or ''
+    if not supported_version(version):
+        return (f'{version.strip() or "this Codex"} is not a version colony has checked for app access, so its consoles '
+                f'fall back to local (checked: {", ".join(TESTED_VERSIONS)}): add it to TESTED_VERSIONS once '
+                f'tests.test_codex_remote passes on it')
+    status = read_json(home_for(root) / 'colony-status.json')
+    if status.get('mode') == 'local' and status.get('reason'):
+        return f'its console runs local ({status["reason"]}): it reaches the app again at its next start'
+    return None
 
 
 def pair(root, manual_code=None):

@@ -263,6 +263,11 @@ def cmd_doctor(a):
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
+            if providers.key(providers.of(p)) == "codex":
+                from . import codex_remote
+                trouble = codex_remote.remote_problem(p, board.project_settings(p)[0])
+                if trouble:
+                    problems.append(f"{p.name}: no app access: {trouble}")
     try:
         from . import intelligence
         trouble, notes, summary = intelligence.health()

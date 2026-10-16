@@ -71,11 +71,11 @@ class Responses(BaseHTTPRequestHandler):
 
 
 def installed():
-    return shutil.which('codex') and any(v in subprocess.run(
-        ['codex', '--version'], capture_output=True, text=True).stdout for v in ('0.159.3', '0.160.0'))
+    return shutil.which('codex') and remote.supported_version(subprocess.run(
+        ['codex', '--version'], capture_output=True, text=True).stdout)
 
 
-@unittest.skipUnless(installed(), 'native checks require Codex 0.159.3 or 0.160.0')
+@unittest.skipUnless(installed(), 'native checks require a tested Codex: ' + ', '.join(remote.TESTED_VERSIONS))
 class NativeRemoteTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='colony-remote-test-')
@@ -364,6 +364,7 @@ class ConsoleConfigTest(unittest.TestCase):
     def test_remote_version_gate_allows_only_checked_releases(self):
         self.assertTrue(remote.supported_version('codex-cli 0.160.0'))
         self.assertTrue(remote.supported_version('codex-cli 0.159.3'))
+        self.assertTrue(remote.supported_version('codex-cli 0.163.0'))
         self.assertFalse(remote.supported_version('codex-cli 0.160.1'))
         self.assertFalse(remote.supported_version('codex-cli 0.159.30'))
 
@@ -372,6 +373,20 @@ class ConsoleConfigTest(unittest.TestCase):
         config = {"model": "gpt-6-astra", "sandbox_workspace_write.writable_roots": ["/x"], "hooks.Stop": [],
                   "sandbox_mode": "danger-full-access", "approval_policy": "never"}
         self.assertEqual(sorted(codex_remote.console_config(config)), ["hooks.Stop", "model"])
+
+    def test_the_doctor_hears_when_a_project_set_for_app_access_cant_have_it(self):
+        from colony import providers
+        codex = providers.get('codex')
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder):
+            root = Path(folder) / 'codex-project'
+            with patch.object(codex, 'version', return_value='codex-cli 9.9.9'):
+                self.assertIn('not a version colony has checked', remote.remote_problem(root, {'remote': True}))
+                self.assertIsNone(remote.remote_problem(root, {'remote': False}), 'app access off: nothing to miss')
+            with patch.object(codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]):
+                self.assertIsNone(remote.remote_problem(root, {'remote': True}))
+                remote.report(remote.home_for(root), root, 'local', 'Remote integration requires a tested Codex version')
+                self.assertIn('runs local', remote.remote_problem(root, {'remote': True}),
+                              'a console started on an untested Codex stays local until its next start')
 
 
 class PairingTest(unittest.TestCase):
