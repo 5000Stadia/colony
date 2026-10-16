@@ -896,7 +896,7 @@ class Codex:
 
     def command(self, label, s, resume=None, root=None):
         if root:
-            parts = [sys.executable, '-m', 'colony.codex_remote', 'launch', '--project', str(root),
+            parts = own_module('colony.codex_remote') + ['launch', '--project', str(root),
                      '--settings', json.dumps(s, sort_keys=True)]
             if resume:
                 parts += ['--resume', resume]
@@ -1114,6 +1114,17 @@ def starting(provider, screen, fresh=True):
 
 
 PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
+
+
+# A colony module run as a command inside a project folder: `python -m` would import that folder's own colony first,
+# and a project can be a checkout of colony itself (colony-codex), running its older code.
+RUN_OWN = ("import runpy, sys; sys.path[:1] = [] if sys.path and sys.path[0] == '' else sys.path[:1]; "
+           "runpy.run_module(sys.argv.pop(1), run_name='__main__', alter_sys=True)")
+
+
+def own_module(module):
+    """The command start for one of colony's own modules, imported from where colony is installed, whatever the folder."""
+    return [sys.executable, "-c", RUN_OWN, module]
 
 
 def _run(cmd, cwd=None, timeout=120):

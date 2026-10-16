@@ -284,7 +284,7 @@ def overrides(root, home, settings):
         config['sandbox_workspace_write.writable_roots'] += [str(p) for p in lead.workspaces(root)]
     for event, entries in providers.hook_entries(provider).items():
         config['hooks.' + event] = entries
-    hook = shlex.join([sys.executable, '-m', 'colony.codex_remote', 'hook'])
+    hook = shlex.join(providers.own_module('colony.codex_remote') + ['hook'])
     for event in ('PreToolUse', 'PostToolUse'):
         config['hooks.' + event] = [{'matcher': '.*request_user_input.*', 'hooks': [{'type': 'command', 'command': hook}]}]
     tiers = bench.effective(root)
