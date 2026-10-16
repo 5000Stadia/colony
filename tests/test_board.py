@@ -1438,6 +1438,11 @@ class MonitorTest(BoardBase):
             console.screen, console.press = saved
         self.assertTrue(board.DEFAULT_SETTINGS["trust"])
 
+    def test_a_reload_waits_for_the_old_program_to_let_go(self):
+        child = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(child.kill)
+        self.assertIn(child.pid, console._descendants(os.getpid()), "what a console started is waited for too")
+
     def test_a_new_colony_lets_its_projects_work_freely_and_delete_safely(self):
         self.assertEqual(board.DEFAULT_SETTINGS["permissions"], "all", "the person's word: free in their own folder")
         self.assertIn('rm -rf "${OUT:?}"/*', board.protocol(self.root), "the form Claude Code's rm guard accepts")

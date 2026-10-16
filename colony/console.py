@@ -235,8 +235,32 @@ def attached(name):
 def reload(root, name=None, label=None):
     """Restart a console on what it would be started with now, back in the same conversation."""
     name = name or session_name(root)
+    pane = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True).stdout.strip()
+    held = _descendants(int(pane)) if pane.isdigit() else []
     subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+    # The old program lets go of its conversation only as it exits: started before then, the new one finds it held
+    # (Codex: "thread already has an active writer") and the app can't reach it.
+    deadline = time.time() + 15
+    while time.time() < deadline and any(Path(f"/proc/{pid}").exists() for pid in held):
+        time.sleep(0.2)
     return ensure(root, name, label)
+
+
+def _descendants(pid):
+    """A process and everything it started, by their parent links in /proc (Linux; elsewhere, just itself)."""
+    children = {}
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+            children.setdefault(int(fields[1]), []).append(int(stat.parent.name))
+        except (OSError, ValueError, IndexError):
+            continue
+    out, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        out.append(p)
+        todo += children.get(p, [])
+    return out
 
 
 def provider(name):
