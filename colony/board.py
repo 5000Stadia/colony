@@ -395,6 +395,8 @@ def projects(reg=None):
         if not root.is_dir():
             continue
         for sub in sorted(d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")):
+            if (sub / ".git").is_file():          # a git worktree a project made for a branch: part of it, not another
+                continue
             if sub not in out and str(sub) not in reg["hidden"]:
                 if not (sub / ".board").exists():
                     track(sub, register=False)

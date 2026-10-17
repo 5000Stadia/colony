@@ -1706,11 +1706,14 @@ class FoldersTest(BoardBase):
         (shelf / "novel").mkdir(parents=True)
         (shelf / "shop").mkdir()
         (shelf / ".hidden").mkdir()
+        (shelf / "novel-branch").mkdir()
+        (shelf / "novel-branch" / ".git").write_text("gitdir: ../novel/.git/worktrees/novel-branch\n")
         reg = board.registry()
         reg["roots"] = [str(shelf)]
         board.save_registry(reg)
         names = [p.name for p in board.projects()]
-        self.assertEqual(names, ["novel", "shop"])
+        self.assertEqual(names, ["novel", "shop"], "a worktree a project made for a branch is part of it, not a project")
+        self.assertFalse((shelf / "novel-branch" / ".board").exists())
         self.assertTrue((shelf / "novel" / "ROADMAP.md").exists(), "found and put on the board")
         self.assertEqual(board.registry()["projects"], [], "found in a folder, not listed one by one")
 
