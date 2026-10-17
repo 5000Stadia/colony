@@ -30,7 +30,69 @@ UNTESTED = 'Remote integration requires a tested Codex version on Linux: '
 
 
 def supported_version(version):
-    return any(re.search(r'\b' + re.escape(v) + r'\b', version or '') for v in TESTED_VERSIONS)
+    if any(re.search(r'\b' + re.escape(v) + r'\b', version or '') for v in TESTED_VERSIONS):
+        return True
+    number = release(version)
+    return bool(number) and checked().get(number, {}).get('passed') is True
+
+
+def release(version):
+    found = re.search(r'\d+\.\d+\.\d+', version or '')
+    return found.group(0) if found else None
+
+
+def checked():
+    """Codex versions colony has checked for app access on this machine, {version: {at, passed, detail}}."""
+    from . import board
+    return read_json(board.home() / 'codex-checked.json')
+
+
+# Run with the new version admitted for the run, so the native checks don't skip it, leaving out the conversation
+# transfer: it refuses a schema it hasn't seen, by design, and keeps that conversation local, so it never blocks.
+CHECK = ("import sys, unittest; from colony import codex_remote as r; r.TESTED_VERSIONS += (sys.argv[1],); "
+         "from tests import test_codex_remote as t; "
+         "cases = unittest.defaultTestLoader.loadTestsFromTestCase(t.NativeRemoteTest); "
+         "suite = unittest.TestSuite(c for c in cases if 'transfer' not in c.id()); "
+         "result = unittest.TextTestRunner(verbosity=0).run(suite); "
+         "sys.exit(0 if result.wasSuccessful() and result.testsRun and not result.skipped else 1)")
+
+
+def check_version(version=None):
+    """A Codex colony hasn't checked: run colony's native remote checks on it (a local fixture stands in for the
+    model, so no tokens), once per version, and admit it for app access if they pass. Returns the record, or None
+    when there's nothing to check or another check is running."""
+    import fcntl
+    from . import board, providers
+    version = version if version is not None else providers.get('codex').version()
+    number = release(version)
+    tests = Path(__file__).resolve().parent.parent / 'tests' / 'test_codex_remote.py'
+    if not number or supported_version(version) or number in checked() or not tests.exists():
+        return None
+    board.home().mkdir(parents=True, exist_ok=True)
+    with (board.home() / 'codex-check.lock').open('a+') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        if number in checked():
+            return None
+        try:
+            r = subprocess.run([sys.executable, '-c', CHECK, number], cwd=tests.parent.parent, capture_output=True,
+                               text=True, timeout=1800)
+            passed, detail = r.returncode == 0, (r.stderr or r.stdout)[-600:]
+        except subprocess.TimeoutExpired:
+            passed, detail = False, 'the checks did not finish in 30 minutes'
+        record = dict(at=board.now(), passed=passed, detail=detail)
+        atomic_json(board.home() / 'codex-checked.json', dict(checked(), **{number: record}))
+        return record
+
+
+def start_check():
+    """check_version in the background, detached, so a console starting meanwhile isn't held up: it comes up local,
+    and reloads onto app access at its next idle moment once the check passes (Codex.stale)."""
+    from . import providers
+    subprocess.Popen(providers.own_module('colony.codex_remote') + ['check'], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def home_for(root):
@@ -106,9 +168,12 @@ def remote_problem(root, settings):
         return None
     version = providers.get('codex').version() or ''
     if not supported_version(version):
-        return (f'{version.strip() or "this Codex"} is not a version colony has checked for app access, so its consoles '
-                f'fall back to local (checked: {", ".join(TESTED_VERSIONS)}): add it to TESTED_VERSIONS once '
-                f'tests.test_codex_remote passes on it')
+        failed = checked().get(release(version) or '', {})
+        if failed:
+            return (f'{version.strip()} failed colony\'s app-access checks on {failed["at"][:10]}, so its consoles run '
+                    f'local; python3 -m unittest tests.test_codex_remote shows why: {failed["detail"][-200:]}')
+        return (f'{version.strip() or "this Codex"} is not yet checked for app access, so its consoles run local '
+                f'until it is; colony checks it by itself (python3 -m colony.codex_remote check runs it now)')
     status = read_json(home_for(root) / 'colony-status.json')
     if status.get('mode') == 'local' and status.get('reason'):
         return f'its console runs local ({status["reason"]}): it reaches the app again at its next start'
@@ -428,6 +493,8 @@ def launch(root, settings, resume=None):
     remote = settings.get('remote', True)
     if not sys.platform.startswith('linux') or not supported_version(provider.version()):
         report(home, root, 'local', UNTESTED + ', '.join(TESTED_VERSIONS))
+        if sys.platform.startswith('linux') and release(provider.version()) not in checked():
+            start_check()
         return local(root, settings, resume, home if owned else source)
     if not remote and not alive(home):
         report(home, root, 'off')
@@ -560,13 +627,16 @@ def accepts_hook(root, payload):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['launch', 'hook'])
+    parser.add_argument('action', choices=['launch', 'hook', 'check'])
     parser.add_argument('--project')
     parser.add_argument('--settings')
     parser.add_argument('--resume')
     args = parser.parse_args()
     if args.action == 'hook':
         return hook()
+    if args.action == 'check':
+        record = check_version()
+        return 0 if record is None or record['passed'] else 1
     import fcntl
     home = home_for(args.project)
     home.mkdir(parents=True, exist_ok=True, mode=0o700)

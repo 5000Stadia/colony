@@ -697,6 +697,9 @@ class Watcher:
             for p in providers.PROVIDERS.values():
                 if providers.usable(p) and hasattr(p, "update"):
                     p.update()                          # installed beside the running version: consoles move over when idle
+        from . import codex_remote
+        if providers.usable(providers.get("codex")):
+            codex_remote.check_version()                # a new Codex, checked for app access with no tokens
         self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()

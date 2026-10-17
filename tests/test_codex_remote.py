@@ -374,13 +374,35 @@ class ConsoleConfigTest(unittest.TestCase):
                   "sandbox_mode": "danger-full-access", "approval_policy": "never"}
         self.assertEqual(sorted(codex_remote.console_config(config)), ["hooks.Stop", "model"])
 
+    def test_a_new_codex_is_checked_once_with_no_tokens_and_admitted_only_if_it_passes(self):
+        from colony import providers
+        codex = providers.get('codex')
+        runs = []
+
+        def run(cmd, **kw):
+            runs.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0 if cmd[-1] == '9.9.1' else 1, '', 'FAILED (errors=1)')
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder), \
+                patch.object(remote.subprocess, 'run', side_effect=run):
+            self.assertFalse(remote.supported_version('codex-cli 9.9.1'))
+            self.assertTrue(remote.check_version('codex-cli 9.9.1')['passed'])
+            self.assertTrue(remote.supported_version('codex-cli 9.9.1'), 'passed: admitted for app access')
+            self.assertIsNone(remote.check_version('codex-cli 9.9.1'), 'once per version')
+            self.assertFalse(remote.check_version('codex-cli 9.9.2')['passed'])
+            self.assertFalse(remote.supported_version('codex-cli 9.9.2'), 'failed: stays local')
+            self.assertIsNone(remote.check_version('codex-cli 9.9.2'), 'a failure is not rerun every day')
+            self.assertIsNone(remote.check_version('codex-cli 0.163.0'), 'a version checked by hand needs nothing')
+            self.assertEqual(runs, ['9.9.1', '9.9.2'])
+            with patch.object(codex, 'version', return_value='codex-cli 9.9.2'):
+                self.assertIn('failed colony', remote.remote_problem(Path(folder) / 'p', {'remote': True}))
+
     def test_the_doctor_hears_when_a_project_set_for_app_access_cant_have_it(self):
         from colony import providers
         codex = providers.get('codex')
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder):
             root = Path(folder) / 'codex-project'
             with patch.object(codex, 'version', return_value='codex-cli 9.9.9'):
-                self.assertIn('not a version colony has checked', remote.remote_problem(root, {'remote': True}))
+                self.assertIn('not yet checked', remote.remote_problem(root, {'remote': True}))
                 self.assertIsNone(remote.remote_problem(root, {'remote': False}), 'app access off: nothing to miss')
             with patch.object(codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]):
                 self.assertIsNone(remote.remote_problem(root, {'remote': True}))
