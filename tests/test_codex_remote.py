@@ -407,8 +407,10 @@ class ConsoleConfigTest(unittest.TestCase):
             with patch.object(codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]):
                 self.assertIsNone(remote.remote_problem(root, {'remote': True}))
                 remote.report(remote.home_for(root), root, 'local', remote.UNTESTED + '0.159.3')
-                self.assertIn('runs local', remote.remote_problem(root, {'remote': True}),
-                              'a console started on an untested Codex stays local until its next start')
+                self.assertIsNone(remote.remote_problem(root, {'remote': True}), 'its console is closed: moot')
+                with patch.object(console, 'running', return_value=True):
+                    self.assertIn('runs local', remote.remote_problem(root, {'remote': True}),
+                                  'a console started on an untested Codex stays local until its next start')
                 board.save_registry({'roots': [], 'settings': {}})
                 self.assertIn('available again', codex.stale(root), 'so the watcher reloads it at its next idle moment')
             with patch.object(codex, 'version', return_value='codex-cli 9.9.9'):

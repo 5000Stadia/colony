@@ -174,8 +174,9 @@ def remote_problem(root, settings):
                     f'local; python3 -m unittest tests.test_codex_remote shows why: {failed["detail"][-200:]}')
         return (f'{version.strip() or "this Codex"} is not yet checked for app access, so its consoles run local '
                 f'until it is; colony checks it by itself (python3 -m colony.codex_remote check runs it now)')
-    status = read_json(home_for(root) / 'colony-status.json')
-    if status.get('mode') == 'local' and status.get('reason'):
+    from . import console
+    status = read_json(home_for(root) / 'colony-status.json') if console.running(console.session_name(root)) else {}
+    if status.get('mode') == 'local' and status.get('reason'):              # an old record of a console now closed is moot
         return f'its console runs local ({status["reason"]}): it reaches the app again at its next start'
     return None
 
