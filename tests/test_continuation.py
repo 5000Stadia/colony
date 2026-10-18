@@ -976,6 +976,15 @@ class RecoveryTest(unittest.TestCase):
 CLAUDE_WORKING = "● Running the checks.\n\n✶ Flowing… ({} · ↓ 1.7k tokens)\n\n────────────\n❯ \n────────────\n"
 
 
+# Codex 0.163.0's, from colony's colony-codex console, 2026-10-18, and colony-codex's review reproduction: a finished
+# reply quoting a working line (/home/k/.config/colony/reviews/2026-10-18-r87-completed-codex-screen.txt).
+CODEX_WORKING = ("  Worked for 7m 51s • 2:51 AM\n\n› [colony] You have mail from another project in the colony.\n\n"
+                 "• Working ({} • esc to interrupt)\n\n\n› Ask Codex to do anything\n\n  GPT-6.1-Sol max · ~/Projects/x\n")
+CODEX_QUOTED = ("› Show the recorded display example.\n\n\n• An example of the old status display:\n\n"
+                "  • Working (5m 12s • esc to interrupt)\n\n  The operation has finished.\n\n\n"
+                "  Worked for <1s • 02:50\n\n› Ask Codex to do anything\n\n  GPT-6.1-Sol default · /tmp/work\n")
+
+
 class FrozenTest(unittest.TestCase):
     """No console is touched: the screen, its process, the restart, the typing and the monitor are stand-ins."""
     def setUp(self):
@@ -989,8 +998,9 @@ class FrozenTest(unittest.TestCase):
         self.addCleanup(env.stop)
         board.save_registry(dict(projects=[str(self.root)], roots=[], settings=dict(messaging=False, active_hours='off')))
         self.screen, self.process, self.state, self.draft = CLAUDE_WORKING.format('4m 12s'), ('41', '900'), 'working', False
-        self.restarted, self.typed, self.told = [], [], []
+        self.restarted, self.typed, self.told, self.talk = [], [], [], ('c1', (4096, 1))
         for target, name, value in ((console, 'screen', lambda name: self.screen),
+                                    (recovery, '_conversation', lambda root: self.talk),
                                     (recovery, '_process', lambda name: self.process),
                                     (console, 'reload', lambda root, name=None, label=None: self.restarted.append(root)),
                                     (console, 'snapshot', lambda root, lines=6, name=None: dict(state=self.state, lines=[])),
@@ -1009,9 +1019,9 @@ class FrozenTest(unittest.TestCase):
         self.assertEqual(providers.get('claude').elapsed(CLAUDE_WORKING.format('1h 2m 5s')), '1h 2m 5s')
         self.assertIsNone(providers.get('claude').elapsed("✻ Worked for 3s\n\n────────────\n❯ \n────────────\n"),
                           'a finished turn')
-        self.assertEqual(providers.get('codex').elapsed("• Working (12s • esc to interrupt)\n"
-                                                        "• Working (5m 12s • esc to interrupt)\n"), '5m 12s')
+        self.assertEqual(providers.get('codex').elapsed(CODEX_WORKING.format('5m 12s')), '5m 12s')
         self.assertIsNone(providers.get('codex').elapsed("› Ask Codex to do anything\n"))
+        self.assertIsNone(providers.get('codex').elapsed(CODEX_QUOTED), 'the words quoted in a finished reply')
 
     def test_a_timer_standing_still_for_fifteen_minutes_restarts_it_and_it_is_told_to_carry_on(self):
         t = 1791361623.0
@@ -1069,7 +1079,7 @@ class FrozenTest(unittest.TestCase):
         stopped = []
         with patch.object(providers, 'of', return_value=providers.get('codex')), \
                 patch.object(codex_remote, 'stop_host', side_effect=lambda root: stopped.append(root) or True):
-            self.screen = "• Working (5m 12s • esc to interrupt)\n"
+            self.screen = CODEX_WORKING.format('5m 12s')
             t = 1791361623.0
             self.beat(t)
             self.assertEqual(self.beat(t + recovery.FROZEN), 'restarted')
@@ -1087,6 +1097,31 @@ class FrozenTest(unittest.TestCase):
         self.assertTrue(codex_remote.stop_host(self.root, timeout=1), 'it ignores TERM, so KILL ends it')
         host.wait(5)
         self.assertEqual(host.returncode, -9)
+
+    def test_a_conversation_still_being_written_or_a_question_to_the_person_is_left_alone(self):
+        t = 1791361623.0
+        self.beat(t)
+        self.talk = ('c1', (5120, 2))                 # its program wrote to the conversation: alive
+        self.assertIsNone(self.beat(t + recovery.FROZEN))
+        self.assertIsNone(self.beat(t + 2 * recovery.FROZEN - 1))
+        board.record_ask(self.root, 'k1', 'Which of the two layouts do you want?')
+        self.assertIsNone(self.beat(t + 2 * recovery.FROZEN), 'a question waits on the person')
+        board.answer_asks(self.root, 'in the console')
+        self.assertEqual(self.restarted, [])
+
+    def test_the_word_to_carry_on_goes_only_to_the_conversation_restarted_and_within_the_hour(self):
+        t = 1791361623.0
+        self.beat(t)
+        self.assertEqual(self.beat(t + recovery.FROZEN), 'restarted')
+        self.talk, self.state = ('c2', (10, 1)), 'idle'   # another conversation took the console
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 10))
+        self.talk = ('c1', (4096, 1))
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 20), 'dropped, not kept for later')
+        self.state = 'working'
+        self.assertEqual(self.beat(t + 2 * recovery.FROZEN + 20), 'restarted', 'frozen again')
+        self.state = 'idle'
+        self.assertIsNone(self.beat(t + 2 * recovery.FROZEN + 20 + 3601), 'an hour on, it is stale')
+        self.assertEqual(self.typed, [])
 
     def test_past_three_restarts_a_day_the_person_is_told_once_instead(self):
         t = 1791361623.0

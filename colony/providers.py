@@ -1094,10 +1094,16 @@ class Codex:
         codex_remote.stop_host(root)
 
     def elapsed(self, screen):
-        """The timer on its working line: "• Working (5m 12s • esc to interrupt)" gives "5m 12s"."""
+        """The timer on its live working line, the one just above its `›` prompt: "• Working (5m 12s • esc to
+        interrupt)" gives "5m 12s". The same words quoted in a reply or a command's output are indented, or stand
+        above other lines, so they never count."""
         import re
-        found = re.findall(r"^\s*• Working \(((?:\d+h )?(?:\d+m )?\d+s)\b", screen, re.M)
-        return found[-1] if found else None
+        lines = [l for l in screen.splitlines() if l.strip()]
+        prompt = max((i for i, l in enumerate(lines) if l.startswith("› ")), default=None)
+        if not prompt:
+            return None
+        m = re.match(r"• Working \(((?:\d+h )?(?:\d+m )?\d+s) • esc to interrupt\)", lines[prompt - 1])
+        return m.group(1) if m else None
 
     def activity(self, screen):
         import re
