@@ -59,6 +59,9 @@ conversation when you open it.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.
+- **Work keeps going without you:** when a network drop stops an agent or its helpers, colony tells it to
+  carry on once the network is back. A console frozen mid-work (its working timer unchanged for 15 minutes)
+  is restarted in the same conversation and told to carry on, up to 3 times a day; after that, you hear of it.
 - **Projects talk to each other:** `colony send NAME "…"` (`--ask` for an answer), `colony reply`,
   and `colony projects` lists them with their goals, so an agent asks rather than guesses.
 - **Turbo:** when a program's weekly usage runs more than 5 points behind pace (from day 2, aiming for 99%

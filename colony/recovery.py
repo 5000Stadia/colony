@@ -11,9 +11,15 @@ program reads its own transcript (network_stop in providers.py); this decides wh
 Never while the person has something typed there or a question waits on them, nor while the safe pause holds the
 project, the person has paused it, its lead is changing or its context is being refreshed. At any hour: this is work,
 not a question. Once per loss; a nudge whose turn the network stops again waits longer before the next.
+
+A console can also freeze mid-work, and then shows "working" until the person looks. It counts as frozen only on
+positive evidence: the timer on its working line (elapsed in providers.py) reads the same for FROZEN seconds on the
+same process. It is then restarted in the same conversation and told to carry on, at most RESTARTS times a day;
+after that the person hears of it through the monitor. A screen whose working line isn't recognised is never touched.
 """
 import json
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -24,7 +30,9 @@ GRACE = 120              # seconds a stop stands before colony steps in: a perso
 RETRY = 300              # the wait before nudging again when the last nudge's turn was stopped too; it doubles...
 LONGEST = 2 * 3600       # ...up to this
 PROBE = 60               # seconds between checks that the network answers, while something waits on it
-_scans, _probes = {}, {}
+FROZEN = 15 * 60         # seconds a working line's timer stands still before the console counts as frozen
+RESTARTS = 3             # restarts of a frozen console a day; past them, the person is told instead
+_scans, _probes, _timers = {}, {}, {}
 
 
 def records():
@@ -117,11 +125,77 @@ def tick(root):
     return text
 
 
+def _process(name):
+    """The console's process as (pid, start time): a pid the system reuses later is another process."""
+    pane = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True).stdout.strip()
+    try:
+        return pane, Path(f"/proc/{pane}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _frozen_path():
+    return board.home() / "frozen.json"
+
+
+def frozen(root, now=None):
+    """Restart the project's console if it froze mid-work, or carry on one restarted earlier: what was done, or None."""
+    now = now or time.time()
+    name, key = console.session_name(root), str(root)
+    try:
+        rows = json.loads(_frozen_path().read_text())
+    except (OSError, ValueError):
+        rows = {}
+    mine = rows.get(key, {"restarts": []})
+    if mine.get("tell"):                    # restarted: once it is back at its prompt, tell it to carry on
+        if console.snapshot(root, lines=1)["state"] == "idle" and not console.drafting(name) \
+                and console.type_into(name, mine["tell"]):
+            rows[key] = dict(mine, tell=None)
+            _frozen_path().write_text(json.dumps(rows, indent=1))
+            return "told to carry on"
+        return None
+    shown = getattr(providers.of(root), "elapsed", lambda screen: None)(console.screen(name))
+    proc = _process(name) if shown else None
+    if not shown or not proc:
+        _timers.pop(key, None)
+        return None
+    seen = _timers.get(key)
+    if not seen or (seen["timer"], seen["process"]) != (shown, proc):
+        _timers[key] = {"timer": shown, "process": proc, "since": now}
+        return None
+    if now - seen["since"] < FROZEN:
+        return None
+    g = lead.info(root)
+    if str(root) in usage.paused() or g.get("paused") or g.get("handoff") or context.refreshing(root) or console.drafting(name):
+        return None
+    _timers.pop(key, None)
+    recent = [t for t in mine["restarts"] if now - t < 86400]
+    if len(recent) >= RESTARTS:
+        if not mine.get("told") or now - mine["told"] >= 86400:
+            from . import monitor
+            monitor.queue(f"{root.name}'s console froze mid-work again (its timer stood at {shown} for "
+                          f"{FROZEN // 60} minutes), after {RESTARTS} restarts in a day, so colony left it as it is. "
+                          "It needs a look: open its console on the board.", relay=True)
+            rows[key] = dict(mine, restarts=recent, told=now)
+            _frozen_path().write_text(json.dumps(rows, indent=1))
+            return "the person told"
+        return None
+    console.reload(root, name)
+    rows[key] = dict(mine, restarts=recent + [now], tell=(
+        f"[colony] Your console froze mid-work (its timer stood at {shown} for {FROZEN // 60} minutes), so colony "
+        "restarted it in this conversation. Whatever was running then was stopped: check what it left, and carry on "
+        "where you were."))
+    board.home().mkdir(parents=True, exist_ok=True)
+    _frozen_path().write_text(json.dumps(rows, indent=1))
+    return "restarted"
+
+
 def tick_all():
     """Every project's console. One's trouble stops no other's, nor the rest of the watcher's round."""
     for p in board.projects():
         if p.exists():
-            try:
-                tick(p)
-            except Exception:
-                pass
+            for check in (tick, frozen):
+                try:
+                    check(p)
+                except Exception:
+                    pass

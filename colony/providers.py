@@ -59,6 +59,9 @@ what it assumes and what a second provider needs there. What a provider supplies
                            "at", "error"}), and "ok_at": when it last replied; else None. Once the console is idle and
                            api_host answers again, the watcher types one nudge (recovery.py). Optional.
   api_host                 a host its requests go to: when it takes a connection again, the network is back
+  elapsed(screen)          the timer its live working line shows ("3m 12s"), or None when no working line it
+                           recognises is on screen; a timer that reads the same for 15 minutes on the same
+                           process means the program froze, and the watcher restarts it (recovery.py). Optional.
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -573,6 +576,17 @@ class ClaudeCode:
             return "needs you"
         return "idle"
 
+    def elapsed(self, screen):
+        """The timer on its live spinner line: "✶ Flowing… (3m 12s · ↓ 1.7k tokens)" gives "3m 12s"."""
+        import re
+        lines = screen.splitlines()
+        box = self._box(lines)
+        if box is None:
+            return None
+        above = [l for l in lines[:box - 1] if l.strip() and not l[:1].isspace()]
+        m = re.match(r"\s*[✻✶✳✢✽·*+] \S[^\n]*?… \(((?:\d+h )?(?:\d+m )?\d+s)\b", above[-1] if above else "")
+        return m.group(1) if m else None
+
     @staticmethod
     def _box(lines):
         """The line its typing box starts on (`❯` just under a rule), or None while a choice has taken its place."""
@@ -1070,6 +1084,12 @@ class Codex:
         if re.search(r"^\s*› \d+\. ", screen, re.M):
             return "needs you"
         return "idle"
+
+    def elapsed(self, screen):
+        """The timer on its working line: "• Working (5m 12s • esc to interrupt)" gives "5m 12s"."""
+        import re
+        found = re.findall(r"^\s*• Working \(((?:\d+h )?(?:\d+m )?\d+s)\b", screen, re.M)
+        return found[-1] if found else None
 
     def activity(self, screen):
         import re

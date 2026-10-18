@@ -969,5 +969,112 @@ class RecoveryTest(unittest.TestCase):
         recovery._probes.clear()
 
 
+# ---------------------------------------------------------------- a console frozen mid-work (recovery.py)
+# Working lines as each program shows them: Claude Code's from colony's own console, 2026-10-18; Codex's from its
+# classify docstring.
+
+CLAUDE_WORKING = "● Running the checks.\n\n✶ Flowing… ({} · ↓ 1.7k tokens)\n\n────────────\n❯ \n────────────\n"
+
+
+class FrozenTest(unittest.TestCase):
+    """No console is touched: the screen, its process, the restart, the typing and the monitor are stand-ins."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='colony-frozen-')
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.root = base / 'project'
+        (self.root / '.board').mkdir(parents=True)
+        env = patch.dict(os.environ, COLONY_BOARD_HOME=str(base / 'board'))
+        env.start()
+        self.addCleanup(env.stop)
+        board.save_registry(dict(projects=[str(self.root)], roots=[], settings=dict(messaging=False, active_hours='off')))
+        self.screen, self.process, self.state, self.draft = CLAUDE_WORKING.format('4m 12s'), ('41', '900'), 'working', False
+        self.restarted, self.typed, self.told = [], [], []
+        for target, name, value in ((console, 'screen', lambda name: self.screen),
+                                    (recovery, '_process', lambda name: self.process),
+                                    (console, 'reload', lambda root, name=None, label=None: self.restarted.append(root)),
+                                    (console, 'snapshot', lambda root, lines=6, name=None: dict(state=self.state, lines=[])),
+                                    (console, 'drafting', lambda name: self.draft),
+                                    (console, 'type_into', lambda name, text: self.typed.append(text) or True),
+                                    (monitor, 'queue', lambda text, relay=False: self.told.append((text, relay)))):
+            p = patch.object(target, name, side_effect=value)
+            p.start()
+            self.addCleanup(p.stop)
+        recovery._timers.clear()
+
+    def beat(self, at):
+        return recovery.frozen(self.root, now=at)
+
+    def test_each_program_shows_its_timer(self):
+        self.assertEqual(providers.get('claude').elapsed(CLAUDE_WORKING.format('1h 2m 5s')), '1h 2m 5s')
+        self.assertIsNone(providers.get('claude').elapsed("✻ Worked for 3s\n\n────────────\n❯ \n────────────\n"),
+                          'a finished turn')
+        self.assertEqual(providers.get('codex').elapsed("• Working (12s • esc to interrupt)\n"
+                                                        "• Working (5m 12s • esc to interrupt)\n"), '5m 12s')
+        self.assertIsNone(providers.get('codex').elapsed("› Ask Codex to do anything\n"))
+
+    def test_a_timer_standing_still_for_fifteen_minutes_restarts_it_and_it_is_told_to_carry_on(self):
+        t = 1791361623.0
+        self.assertIsNone(self.beat(t))
+        self.assertIsNone(self.beat(t + recovery.FROZEN - 1), 'not yet fifteen minutes')
+        self.assertEqual(self.beat(t + recovery.FROZEN), 'restarted')
+        self.assertEqual(self.restarted, [self.root])
+        self.state = 'working'
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 5), 'still starting up: nothing typed yet')
+        self.state = 'idle'
+        self.assertEqual(self.beat(t + recovery.FROZEN + 10), 'told to carry on')
+        self.assertIn('froze mid-work (its timer stood at 4m 12s for 15 minutes)', self.typed[0])
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 15))
+        self.assertEqual(len(self.typed), 1, 'told once')
+
+    def test_a_moving_timer_a_new_process_or_an_unrecognised_screen_is_left_alone(self):
+        t = 1791361623.0
+        for minute in range(30):                      # a long command: the timer moves on
+            self.screen = CLAUDE_WORKING.format(f'{minute}m 0s')
+            self.assertIsNone(self.beat(t + 60 * minute))
+        self.beat(t + 1800)
+        self.process = ('77', '1200')                 # the console was restarted some other way
+        self.assertIsNone(self.beat(t + 1800 + recovery.FROZEN))
+        self.screen = 'something colony does not recognise'
+        for minute in range(60):
+            self.assertIsNone(self.beat(t + 4000 + 60 * minute))
+        self.assertEqual(self.restarted, [])
+
+    def test_never_while_typed_into_or_paused(self):
+        t = 1791361623.0
+        self.beat(t)
+        self.draft = True
+        self.assertIsNone(self.beat(t + recovery.FROZEN), 'the person is typing there')
+        self.draft = False
+        progress.pause(self.root, True)
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 1), 'the person paused it')
+        progress.pause(self.root, False)
+        self.assertEqual(self.beat(t + recovery.FROZEN + 2), 'restarted')
+
+    def test_past_three_restarts_a_day_the_person_is_told_once_instead(self):
+        t = 1791361623.0
+        for n in range(recovery.RESTARTS):
+            start = t + n * 2000
+            self.state = 'working'
+            self.beat(start)
+            self.assertEqual(self.beat(start + recovery.FROZEN), 'restarted')
+            self.state = 'idle'
+            self.beat(start + recovery.FROZEN + 10)
+        start = t + recovery.RESTARTS * 2000
+        self.state = 'working'
+        self.beat(start)
+        self.assertEqual(self.beat(start + recovery.FROZEN), 'the person told')
+        self.assertEqual(len(self.restarted), recovery.RESTARTS)
+        self.assertEqual(len(self.told), 1)
+        self.assertTrue(self.told[0][1], 'relayed to the person')
+        self.assertIn('after 3 restarts in a day', self.told[0][0])
+        self.beat(start + recovery.FROZEN + 60)
+        self.assertIsNone(self.beat(start + 2 * recovery.FROZEN + 60))
+        self.assertEqual(len(self.told), 1, 'once a day')
+        self.beat(t + 86400 + 10)
+        self.assertEqual(self.beat(t + 86400 + 10 + recovery.FROZEN), 'restarted', 'a day on, restarts are open again')
+
+
+
 if __name__ == '__main__':
     unittest.main()
