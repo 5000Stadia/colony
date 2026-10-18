@@ -1075,15 +1075,22 @@ class FrozenTest(unittest.TestCase):
         self.assertEqual(self.beat(t + 2 * recovery.FROZEN + 20), 'restarted', 'a pending word to it holds nothing up')
         self.assertEqual((len(self.restarted), self.typed), (2, []))
 
-    def test_codex_stops_its_app_host_before_the_restart(self):
-        stopped = []
+    def test_codex_stops_its_app_host_only_if_it_no_longer_answers(self):
+        stopped, self.answers = [], False
         with patch.object(providers, 'of', return_value=providers.get('codex')), \
+                patch.object(codex_remote, 'responsive', side_effect=lambda root: self.answers), \
                 patch.object(codex_remote, 'stop_host', side_effect=lambda root: stopped.append(root) or True):
             self.screen = CODEX_WORKING.format('5m 12s')
             t = 1791361623.0
             self.beat(t)
             self.assertEqual(self.beat(t + recovery.FROZEN), 'restarted')
-        self.assertEqual((stopped, self.restarted), ([self.root], [self.root]))
+            self.assertEqual((stopped, self.restarted), ([self.root], [self.root]))
+            self.assertIn('Whatever was running then was stopped', json.loads(recovery._frozen_path().read_text())[str(self.root)]['tell'])
+            self.answers = True                       # its host answers: a quiet turn, only its screen froze
+            self.beat(t + 2 * recovery.FROZEN)
+            self.assertEqual(self.beat(t + 3 * recovery.FROZEN), 'restarted')
+            self.assertEqual((stopped, len(self.restarted)), ([self.root], 2), 'the host and its turn are kept')
+            self.assertIsNone(json.loads(recovery._frozen_path().read_text())[str(self.root)]['tell'], 'nothing to say')
 
     def test_stop_host_ends_a_host_that_answers_nothing(self):
         import subprocess, sys

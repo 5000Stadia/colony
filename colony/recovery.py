@@ -202,13 +202,14 @@ def frozen(root, now=None):
             return "the person told"
         return None
     program = providers.of(root)
-    if hasattr(program, "unfreeze"):
-        program.unfreeze(root)              # what runs the turn apart from the console, stopped too (Codex's app host)
+    # What runs the turn apart from the console (Codex's app host) is stopped too if it froze; one that still
+    # answers keeps its turn, the console is only reconnected to it, and nothing needs saying.
+    stopped = program.unfreeze(root) if hasattr(program, "unfreeze") else True
     console.reload(root, name)
     rows[key] = dict(mine, restarts=recent + [now], conversation=talk[0], tell_until=now + 3600, tell=(
         f"[colony] Your console froze mid-work (its timer stood at {shown} for {FROZEN // 60} minutes), so colony "
         "restarted it in this conversation. Whatever was running then was stopped: check what it left, and carry on "
-        "where you were."))
+        "where you were.") if stopped else None)
     board.home().mkdir(parents=True, exist_ok=True)
     _frozen_path().write_text(json.dumps(rows, indent=1))
     return "restarted"

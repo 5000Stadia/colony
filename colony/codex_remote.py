@@ -413,6 +413,20 @@ def drain(home, timeout=15):
     return not alive(home)
 
 
+def responsive(root, timeout=5):
+    """Whether the project's app host is running and answers: a host that answers is running its turn, however
+    quiet that turn is or however its console looks."""
+    home = home_for(root)
+    if not alive(home):
+        return False
+    try:
+        with Client(socket_for(home), timeout=timeout) as client:
+            client.call('remoteControl/status/read')
+        return True
+    except (RPCError, OSError, ValueError):
+        return False
+
+
 def stop_host(root, timeout=15):
     """Stop the project's app host whatever it is doing (a frozen one answers nothing): TERM, then KILL. The pid
     is signalled only while its start time still matches the record. Whether it is gone."""
