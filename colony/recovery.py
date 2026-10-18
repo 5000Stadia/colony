@@ -14,7 +14,8 @@ not a question. Once per loss; a nudge whose turn the network stops again waits 
 
 A console can also freeze mid-work, and then shows "working" until the person looks. It counts as frozen only on
 positive evidence: the timer on its working line (elapsed in providers.py) reads the same for FROZEN seconds on the
-same process. It is then restarted in the same conversation and told to carry on, at most RESTARTS times a day;
+same process. It is then restarted in the same conversation (with whatever its program runs the turn in apart
+from the console: unfreeze in providers.py) and told to carry on, at most RESTARTS times a day;
 after that the person hears of it through the monitor. A screen whose working line isn't recognised is never touched.
 """
 import json
@@ -147,13 +148,17 @@ def frozen(root, now=None):
     except (OSError, ValueError):
         rows = {}
     mine = rows.get(key, {"restarts": []})
-    if mine.get("tell"):                    # restarted: once it is back at its prompt, tell it to carry on
-        if console.snapshot(root, lines=1)["state"] == "idle" and not console.drafting(name) \
-                and console.type_into(name, mine["tell"]):
-            rows[key] = dict(mine, tell=None)
-            _frozen_path().write_text(json.dumps(rows, indent=1))
-            return "told to carry on"
+    g = lead.info(root)
+    if str(root) in usage.paused() or g.get("paused") or g.get("handoff") or context.refreshing(root):
+        _timers.pop(key, None)
         return None
+    # Restarted: once it is back at its prompt, it is told to carry on. Until then its timer is still watched, so a
+    # console that comes back frozen is restarted again, and counted.
+    if mine.get("tell") and console.snapshot(root, lines=1)["state"] == "idle" and not console.drafting(name) \
+            and console.type_into(name, mine["tell"]):
+        rows[key] = dict(mine, tell=None)
+        _frozen_path().write_text(json.dumps(rows, indent=1))
+        return "told to carry on"
     shown = getattr(providers.of(root), "elapsed", lambda screen: None)(console.screen(name))
     proc = _process(name) if shown else None
     if not shown or not proc:
@@ -163,10 +168,7 @@ def frozen(root, now=None):
     if not seen or (seen["timer"], seen["process"]) != (shown, proc):
         _timers[key] = {"timer": shown, "process": proc, "since": now}
         return None
-    if now - seen["since"] < FROZEN:
-        return None
-    g = lead.info(root)
-    if str(root) in usage.paused() or g.get("paused") or g.get("handoff") or context.refreshing(root) or console.drafting(name):
+    if now - seen["since"] < FROZEN or console.drafting(name):
         return None
     _timers.pop(key, None)
     recent = [t for t in mine["restarts"] if now - t < 86400]
@@ -180,6 +182,9 @@ def frozen(root, now=None):
             _frozen_path().write_text(json.dumps(rows, indent=1))
             return "the person told"
         return None
+    program = providers.of(root)
+    if hasattr(program, "unfreeze"):
+        program.unfreeze(root)              # what runs the turn apart from the console, stopped too (Codex's app host)
     console.reload(root, name)
     rows[key] = dict(mine, restarts=recent + [now], tell=(
         f"[colony] Your console froze mid-work (its timer stood at {shown} for {FROZEN // 60} minutes), so colony "

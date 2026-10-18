@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from colony import board, console, context, continuation, lead, progress, providers
-from colony import hours, monitor, recovery, vision
+from colony import codex_remote, hours, monitor, recovery, vision
 from colony.codex_rpc import RPCError
 from colony.codex_transfer import atomic_json
 
@@ -1049,7 +1049,44 @@ class FrozenTest(unittest.TestCase):
         progress.pause(self.root, True)
         self.assertIsNone(self.beat(t + recovery.FROZEN + 1), 'the person paused it')
         progress.pause(self.root, False)
-        self.assertEqual(self.beat(t + recovery.FROZEN + 2), 'restarted')
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 2), 'a pause starts the watch over')
+        self.assertEqual(self.beat(t + 2 * recovery.FROZEN + 2), 'restarted')
+
+    def test_restarted_it_is_told_nothing_while_paused_and_a_console_back_frozen_is_restarted_again(self):
+        t = 1791361623.0
+        self.beat(t)
+        self.assertEqual(self.beat(t + recovery.FROZEN), 'restarted')
+        progress.pause(self.root, True)
+        self.state = 'idle'
+        self.assertIsNone(self.beat(t + recovery.FROZEN + 10), 'the person paused it since: nothing typed')
+        progress.pause(self.root, False)
+        self.state = 'working'                        # back, and frozen again before it reached its prompt
+        self.beat(t + recovery.FROZEN + 20)
+        self.assertEqual(self.beat(t + 2 * recovery.FROZEN + 20), 'restarted', 'a pending word to it holds nothing up')
+        self.assertEqual((len(self.restarted), self.typed), (2, []))
+
+    def test_codex_stops_its_app_host_before_the_restart(self):
+        stopped = []
+        with patch.object(providers, 'of', return_value=providers.get('codex')), \
+                patch.object(codex_remote, 'stop_host', side_effect=lambda root: stopped.append(root) or True):
+            self.screen = "• Working (5m 12s • esc to interrupt)\n"
+            t = 1791361623.0
+            self.beat(t)
+            self.assertEqual(self.beat(t + recovery.FROZEN), 'restarted')
+        self.assertEqual((stopped, self.restarted), ([self.root], [self.root]))
+
+    def test_stop_host_ends_a_host_that_answers_nothing(self):
+        import subprocess, sys
+        home = codex_remote.home_for(self.root)
+        home.mkdir(parents=True)
+        host = subprocess.Popen([sys.executable, '-c', 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'],
+                                start_new_session=True)
+        self.addCleanup(lambda: host.poll() is None and host.kill())
+        time.sleep(.3)
+        atomic_json(home / 'colony-daemon.json', dict(pid=host.pid, start=codex_remote.process_start(host.pid)))
+        self.assertTrue(codex_remote.stop_host(self.root, timeout=1), 'it ignores TERM, so KILL ends it')
+        host.wait(5)
+        self.assertEqual(host.returncode, -9)
 
     def test_past_three_restarts_a_day_the_person_is_told_once_instead(self):
         t = 1791361623.0

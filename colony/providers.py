@@ -62,6 +62,8 @@ what it assumes and what a second provider needs there. What a provider supplies
   elapsed(screen)          the timer its live working line shows ("3m 12s"), or None when no working line it
                            recognises is on screen; a timer that reads the same for 15 minutes on the same
                            process means the program froze, and the watcher restarts it (recovery.py). Optional.
+  unfreeze(root)           before a frozen console is restarted, stop what runs its turn outside the console's
+                           own process, which the restart would otherwise reconnect to frozen. Optional.
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -1084,6 +1086,12 @@ class Codex:
         if re.search(r"^\s*› \d+\. ", screen, re.M):
             return "needs you"
         return "idle"
+
+    def unfreeze(self, root):
+        """Its app host runs the turn in a session of its own, which a console restart leaves running and reconnects
+        to: a frozen host is stopped, so the restart starts a fresh one on the same conversation."""
+        from . import codex_remote
+        codex_remote.stop_host(root)
 
     def elapsed(self, screen):
         """The timer on its working line: "• Working (5m 12s • esc to interrupt)" gives "5m 12s"."""

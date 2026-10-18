@@ -413,6 +413,23 @@ def drain(home, timeout=15):
     return not alive(home)
 
 
+def stop_host(root, timeout=15):
+    """Stop the project's app host whatever it is doing (a frozen one answers nothing): TERM, then KILL. The pid
+    is signalled only while its start time still matches the record. Whether it is gone."""
+    home = home_for(root)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not alive(home):
+            return True
+        try:
+            os.kill(read_json(home / 'colony-daemon.json')['pid'], sig)
+        except (OSError, KeyError):
+            pass
+        deadline = time.monotonic() + timeout
+        while alive(home) and time.monotonic() < deadline:
+            time.sleep(.1)
+    return not alive(home)
+
+
 def start(root, home, source, config):
     from . import board
     command = ['codex', 'app-server', '--listen', 'unix://' + str(socket_for(home)), '--remote-control', *flags(config)]
