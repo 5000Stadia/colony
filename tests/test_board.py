@@ -1390,6 +1390,34 @@ class MonitorTest(BoardBase):
             update = monitor.update(time.time() + 3700)
         self.assertIn("1) Completed since the last update: none", update, "already said: the update leaves it out")
 
+    def test_a_completion_is_said_once_whether_by_a_wake_or_the_update_and_never_lost(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        sent, me = [], {"state": "working", "lines": []}
+        console.type_into = hearing(sent)
+        monitor.snapshot = lambda: me
+        monitor.helm(True)
+        clock = board.home() / "updates.json"
+        said = lambda: " ".join(sent).count("plants R3: reminders")
+        w = monitor.Watcher()
+        w.tick()                                                        # the first look starts the update's clock
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders"))
+        w.tick()                                                        # the monitor is busy: it waits in memory
+        w = monitor.Watcher()                                           # and the board restarts
+        me["state"] = "idle"
+        w.tick()
+        self.assertEqual(said(), 0, "the new watcher only notes where things are")
+        clock.write_text(json.dumps(dict(json.loads(clock.read_text()), at=time.time() - 4000)))
+        w.tick()
+        self.assertEqual(said(), 1, "not lost: the update carries it")
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [ ] R3 reminders\n- [x] R4 pots"))
+        clock.write_text(json.dumps(dict(json.loads(clock.read_text()), at=time.time() - 4000)))
+        w.tick()                                                        # due in the same tick as the wake
+        self.assertEqual(" ".join(sent).count("plants R4: pots"), 1, "once, not by both")
+        time.sleep(1.1)                                                 # done again, a second on
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders"))
+        w.tick()
+        self.assertEqual(said(), 2, "undone and done again is news again")
+
     def test_a_session_stops_working_only_when_its_screen_says_so_twice_at_the_latest(self):
         reads = iter([("working", False), ("idle", False), ("working", False), ("idle", True), ("idle", True),
                       ("working", False), ("idle", False), ("idle", False)])

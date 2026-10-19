@@ -540,8 +540,7 @@ class Watcher:
                 continue
             mark = len(out)
             for key, text in new.items():
-                out.append((str(p), None, text))
-            mentioned([f"{p}|{k}" for k in new])
+                out.append((str(p), f"done:{p}|{key}", text))
             # Each thing the project waits on the person for is announced once, even across board restarts.
             # A question isn't yet: the person's note on its way answers it the moment it is delivered.
             unheard = any(not n["delivered_at"] and board.answers_ask(n) for n in board.open_notes(p))
@@ -809,9 +808,15 @@ class Watcher:
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             # What waited while the monitor was busy may have been answered meanwhile: only what still waits goes.
-            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
+            # A completion goes once: unless the person's update already said it. It counts as said once it is in the
+            # inbox, which outlives a board restart; until then the update would still carry it.
+            said = mentioned()
+            done = [key[5:] for p, key, _ in self.pending if key and key.startswith("done:") and key[5:] not in said]
+            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())
+                     or key.startswith("done:") and key[5:] in done]
             if fresh:
                 queue(" | ".join(fresh) + f" ({HELM_ON_NOTE})")
+            mentioned(done)
             self.pending = []
         self.tell()
 
@@ -845,14 +850,19 @@ def update(now=None):
     last = state["at"]
     if now - last < every or not hours.active():
         return None
-    done, asked, said = [], [], set(state.get("mentioned") or [])
+    done, asked, said, saying = [], [], set(state.get("mentioned") or []), []
     for p in board.projects():
         if not p.exists() or p == home():
             continue
-        done += [text for key, text in completed(p, since=last).items() if f"{p}|{key}" not in said]
+        for key, text in completed(p, since=last).items():
+            if f"{p}|{key}" not in said:
+                done.append(text)
+                saying.append(f"{p}|{key}")
         asked += [(f"{p}|{w['key']}", f"{p.name} {first_sentence(w['summary'])}") for w in board.waiting_items(p)]
     before = set(state.get("asked") or [])
-    path.write_text(json.dumps({"at": now, "asked": [k for k, _ in asked]}))
+    # What this update says is kept as said, so a completion woken for meanwhile isn't said again; what was said
+    # before it was completed before `now`, so no later update would carry it.
+    path.write_text(json.dumps({"at": now, "asked": [k for k, _ in asked], "mentioned": saying}))
     new = [t for k, t in asked if k not in before]
     if not done and not new:
         return None
@@ -867,30 +877,32 @@ def update(now=None):
 def completed(root, since=None):
     """What a project has completed, each as the one line the person hears: roadmap items done, in the agent's own
     words (what it said was ready, else the item's first sentence), and showcase entries. With `since`, only what
-    was completed after it."""
+    was completed after it. Each is keyed by when it was completed too: an item undone and done again is news again."""
     from . import showcase
     its, told, out = board.items(board.roadmap(root)), board.ready_notes(root), {}
     for iid, r in board.item_times(root).items():
         if r["state"] == "done" and iid in its and (since is None or (r.get("at") or 0) > since):
             what = told.get(iid, {}).get("what") or board.plain(its[iid]["text"])
-            out[iid] = f"{root.name} {iid}: {first_sentence(what)}"
+            out[f"{iid}@{int(r.get('at') or 0)}"] = f"{root.name} {iid}: {first_sentence(what)}"
     for e in showcase.entries(root)[::-1]:
         if since is None or board.epoch(e["at"]) > since:
             out[e["id"]] = f"{root.name} showed \"{e['title']}\" in its showcase: {first_sentence(e['what'])}"
     return out
 
 
-def mentioned(keys):
-    """Completions the monitor was woken for: the next update leaves them out, having said them already."""
-    if not keys:
-        return
+def mentioned(keys=None):
+    """Completions already said, by the person's update or a wake: neither says one the other has. With `keys`,
+    these are added."""
     path = board.home() / "updates.json"
     try:
         state = json.loads(path.read_text())
     except (OSError, ValueError):
-        return                                  # no update has started its clock: none would repeat them
-    state["mentioned"] = sorted(set(state.get("mentioned") or []) | set(keys))
-    path.write_text(json.dumps(state))
+        state = None
+    said = set((state or {}).get("mentioned") or [])
+    if keys and state is not None:              # no update has started its clock: none would repeat them
+        state["mentioned"] = sorted(said | set(keys))
+        path.write_text(json.dumps(state))
+    return said | set(keys or [])
 
 
 def status_line():
