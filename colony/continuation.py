@@ -347,6 +347,8 @@ def tick(root, *, forced_hold=None, force=False):
     g = lead.group(root)
     if not g:
         return {}
+    if board.fenced(root) and not forced_hold:
+        forced_hold = 'closing'                     # being closed, or closed: held, so nothing sets it going again
     receipt = status(root)
     # This check precedes provider/session discovery. A lone project with no
     # selected version and unassigned helpers cost no native/provider calls.

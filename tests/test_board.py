@@ -1456,9 +1456,12 @@ class MonitorTest(BoardBase):
         self.assertNotIn(self.root, board.projects(), "landed: off the board")
         self.assertTrue((self.root / "ROADMAP.md").exists(), "its files stay")
         self.assertEqual(board.closing(), {})
+        self.assertFalse(any("cancelled" in n["text"] for n in board.notes(self.root)), "closed, not cancelled")
+        self.assertTrue(board.fenced(self.root), "closed: continuation leaves it alone")
         self.assertIn("plants is closed", " ".join(r["text"] for r in monitor._rows()))
         board.track(self.root)
         self.assertEqual(console.last_conversation(self.root), "conv-1", "reopened, it resumes its conversation")
+        self.assertFalse(board.fenced(self.root), "reopened: free to carry on")
         self.assertEqual(board.close_project(self.root), "closing")
         self.assertEqual(board.close_project(self.root, cancel=True), "kept")
         state["state"] = "off"
@@ -1491,6 +1494,18 @@ class MonitorTest(BoardBase):
                 board.close_project(self.root)
         self.assertIn("shares its roadmap with plants-codex", str(refused.exception))
         self.assertEqual(board.closing(), {})
+        from colony import continuation
+        me = str(self.root.resolve())
+        alone = dict(id="g1", canonical=me, members=[me], lead=me, generation=1, owners={}, assignments={},
+                     checkpoints=[], goals={}, paused=False)
+        console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
+        heard = []
+        with patch.object(lead, "group", lambda root: alone), \
+                patch.object(continuation, "_engaged", lambda g, root: True), \
+                patch.object(continuation, "wake", lambda root, g, receipt, desired, reason: heard.append(reason) or {}):
+            self.assertEqual(board.close_project(self.root), "closing", "a project on its own closes, continuation or not")
+            continuation.tick(self.root)
+        self.assertEqual(heard, ["closing"], "and its continuation is held while it closes")
 
     def test_a_cancelled_close_is_withdrawn_and_a_closing_project_takes_no_new_work_and_reopens_from_a_projects_folder(self):
         state = {"state": "working"}

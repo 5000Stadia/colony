@@ -972,6 +972,8 @@ def track(path, register=True):
         save_registry(reg)
     if register and str(root) in reg["hidden"]:      # taken off (closed, removed) inside a projects folder: back on
         show_project(root)
+    if register:
+        _closed(root, False)                          # reopened: continuation may take it up again
     from . import monitor
     monitor.rebrief()                                 # colony's own source joining the board changes the monitor's part
     return root
@@ -1033,6 +1035,40 @@ def _save_closing(rows):
     tmp.replace(_closing_path())
 
 
+def _closed_path():
+    return home() / "closed.json"
+
+
+def fenced(root):
+    """Whether a project is being closed or was closed and not reopened: continuation leaves it alone, so nothing
+    sets it going again behind the person's close."""
+    try:
+        closed = json.loads(_closed_path().read_text())
+    except (OSError, ValueError):
+        closed = []
+    return str(Path(root)) in closing() or str(Path(root)) in closed
+
+
+def _closed(root, value):
+    try:
+        closed = set(json.loads(_closed_path().read_text()))
+    except (OSError, ValueError):
+        closed = set()
+    (closed.add if value else closed.discard)(str(Path(root)))
+    home().mkdir(parents=True, exist_ok=True)
+    _closed_path().write_text(json.dumps(sorted(closed)))
+
+
+def finish_closing(root):
+    """A project that landed its work comes off the board (its close done, not cancelled): files and conversation
+    kept, and fenced until it is put back on the board."""
+    rows = closing()
+    rows.pop(str(Path(root)), None)
+    _save_closing(rows)
+    _closed(root, True)
+    remove_project(root)
+
+
 def close_project(root, cancel=False):
     """Close a project safely: its agent is told to land its work, and once that turn has ended with nothing running,
     the project comes off the board (remove_project), its files and conversation kept. One whose console isn't
@@ -1050,15 +1086,13 @@ def close_project(root, cancel=False):
         return "kept"
     from . import lead
     shared = lead.group(root)
-    if shared:
+    if shared and len(shared["members"]) > 1:
         # Its seats share one roadmap and lead record: one alone coming off leaves the others' work and assignments
         # pointing at it. Closing them together is a step of its own, not built.
         raise ValueError(f"{root.name} shares its roadmap with " + ", ".join(Path(m).name for m in shared["members"]
                          if Path(m) != root.resolve()) + "; colony close doesn't close one seat of a shared project")
     if console.snapshot(root, lines=1)["state"] == "off" and at_rest(root):
-        rows.pop(str(root), None)
-        _save_closing(rows)
-        remove_project(root)
+        finish_closing(root)
         return "closed"
     if str(root) not in rows:
         note = add_note(root, None, CLOSE_NOTE, author="colony", kind="close")

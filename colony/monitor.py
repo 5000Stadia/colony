@@ -626,14 +626,13 @@ class Watcher:
         for path, row in board.closing().items():
             p = Path(path)
             if p not in board.projects() or not p.exists():
-                board.close_project(p, cancel=True)
+                board.finish_closing(p)               # taken off some other way: nothing to land any more
                 continue
             delivered = any(n["id"] == row["note"] and n["delivered_at"] for n in board.notes(p))
             state = console.snapshot(p, lines=1)["state"]
             self.close_idle[path] = self.close_idle.get(path, 0) + 1 if delivered and state == "idle" else 0
             if board.close_ready(p, state, self.close_idle[path]):
-                board.close_project(p, cancel=True)
-                board.remove_project(p)
+                board.finish_closing(p)
                 self.close_idle.pop(path, None)
                 queue(f"{p.name} is closed, as the person asked: it landed its work and is off the board; its files and "
                       f"conversation are kept, and colony track {p} reopens it where it stopped.", relay=True)
