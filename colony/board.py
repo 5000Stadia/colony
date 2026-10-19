@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import console, hours, pins, providers
+from . import console, hours, pins, providers, showcase
 
 MILESTONE = re.compile(r"^##\s+(M\d+(?:\.\d+)?)\s*[—–-]+\s*(.+?)\s*$")      # M3, and M3.5 between M3 and M4
 ITEM = re.compile(r"^\s*-\s*\[( |x|X|~|\?)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
@@ -1549,7 +1549,8 @@ setInterval(poll, 2500);
 def tabs(pid, view):
     tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
     return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview") + tab("today", "Today", f"/?p={pid}&view=today")
-            + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap") + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
+            + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap") + tab("showcase", "Showcase", f"/?p={pid}&view=showcase")
+            + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
 def held(who, back):
@@ -1700,6 +1701,8 @@ def render(reg, pid, view="overview"):
     out.append(progress_panel(root, pid))
     if view == "today":
         out.append(today_html(pid, root))
+    elif view == "showcase":
+        out.append(showcase_html(pid, root))
     elif view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         # the person's own notes the agent has not acted on yet, wherever they were left
         its_now = items(road)
@@ -2460,6 +2463,42 @@ def status_card(pid, snap):
             f"<span class='sdot {snap['state'].replace(' ', '-')}'></span><b>{e(snap['state'])}</b>"
             f"<span class='muted'>{(' · ' + e(act['line'])) if act.get('line') else ''}</span></div>"
             f"<div class='agents'>{agents}</div></a>")
+
+
+def showcase_html(pid, root):
+    """What the project made that's worth seeing, newest first: what it is, how to see or try it, and the person's
+    rating and comments, none of them required. The rest folds into Earlier, the project's history of what it showed."""
+    rows = showcase.entries(root)
+    if not rows:
+        return ("<h2>Showcase</h2><p class='muted'>Nothing shown yet. When a deliverable reaches a stage where it should be "
+                "good, the agent puts it here: what it is and how to see it. Rate or comment if you like; nothing waits on you.</p>")
+    back = f"/?p={pid}&view=showcase"
+
+    def card(x):
+        hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='id' value='{e(x['id'])}'>"
+                  f"<input type='hidden' name='back' value='{e(back)}'>")
+        link = ""
+        if x.get("link"):
+            new_tab = " target='_blank' rel='noopener'"
+            href = f"/showcase/open?p={pid}&id={e(x['id'])}"
+            image = not showcase.is_url(x) and showcase.mime(x).startswith("image/")
+            link = (f"<a href='{href}'{new_tab}><img class='shot' src='{href}' alt='{e(x['title'])}'></a>" if image
+                    else f"<a class='open' href='{href}'{new_tab}>Open {e(x['link'] if not showcase.is_url(x) else 'it')} →</a>")
+        stars = "".join(f"<button name='stars' value='{n}' class='star{' on' if (x['stars'] or 0) >= n else ''}' "
+                        f"title='{n} of 5'>★</button>" for n in range(1, 6))
+        said = "".join(f"<div class='note'><span class='who'>you · {e(c['at'][:10])}</span><div>{e(c['text'])}</div></div>"
+                       for c in x["comments"])
+        return (f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b>"
+                f"<span class='who'>{e(x.get('item') or '')} {e(x['at'][:10])}</span></div>"
+                f"<div>{e(x['what'])}</div>" + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "")
+                + link + f"<form class='rate' method='post' action='/showcase/rate'>{hidden}{stars}</form>{said}"
+                f"<details><summary class='muted'>Comment</summary><form class='add' method='post' action='/showcase/comment'>"
+                f"{hidden}<textarea name='text' placeholder='What you think of it: it reaches the agent'></textarea>"
+                f"<button>Send</button></form></details></div>")
+    fresh, earlier = rows[:showcase.FRESH], rows[showcase.FRESH:]
+    return ("<h2>Showcase</h2>" + "".join(card(x) for x in fresh)
+            + (f"<details class='card'><summary><h3>Earlier ({len(earlier)})</h3></summary>"
+               + "".join(card(x) for x in earlier) + "</details>" if earlier else ""))
 
 
 def pinned_section(pid, root):
@@ -3397,7 +3436,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/":
             view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
-            return self._send(200, render(reg, pid, view if view in ("overview", "today", "roadmap", "console") else "overview").encode())
+            return self._send(200, render(reg, pid, view if view in ("overview", "today", "roadmap", "showcase", "console") else "overview").encode())
         if url.path == "/add":
             if (q.get("for") or ["project"])[0] == "project":
                 return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())
@@ -3413,6 +3452,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, pin_add_page(reg, pid).encode())
         if url.path == "/pins/browse":
             return self._send(200, pin_browse(plist[pid], (q.get("dir") or [""])[0]).encode())
+        if url.path == "/showcase/open":
+            x = showcase.get(plist[pid], (q.get("id") or [""])[0])
+            if not x or not x.get("link"):
+                return self._send(404, b"no such showcase entry")
+            if showcase.is_url(x):
+                target = x["link"]
+                host = self.headers.get("Host", "").split(":")[0]
+                parts = urllib.parse.urlsplit(target)
+                if parts.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and host not in ("", "localhost", "127.0.0.1"):
+                    target = urllib.parse.urlunsplit(parts._replace(netloc=host + (f":{parts.port}" if parts.port else "")))
+                self.send_response(303)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            path = pins.inside(plist[pid], x["link"])
+            if not path or not path.is_file():
+                return self._send(404, b"the file is gone")
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", showcase.mime(x))
+            self.send_header("Content-Disposition", f"inline; filename=\"{path.name}\"")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         if url.path == "/pin/open":
             pin = pins.get(plist[pid], (q.get("id") or [""])[0])
             if not pin:
@@ -3946,6 +4010,10 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         elif path == "/unpin" and form.get("id"):
             pins.remove(root, form["id"])
+        elif path == "/showcase/rate" and form.get("id") and form.get("stars", "").isdigit():
+            showcase.rate(root, form["id"], int(form["stars"]))
+        elif path == "/showcase/comment" and text and form.get("id"):
+            showcase.comment(root, form["id"], text)
         elif path == "/pin/comment" and text and form.get("id"):
             pin = pins.get(root, form["id"])
             if pin:
@@ -4105,6 +4173,10 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .focus ul { margin:6px 0 0; padding-left:0; list-style:none } .focus li .kind { display:inline-block; min-width:52px; font-size:12px; color:var(--muted) }
 .mstatus .who { margin:10px 0 -6px }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
+.show .showhead { display:flex; gap:8px; align-items:baseline } .show .showhead .who { margin-left:auto; white-space:nowrap }
+.show .try { margin-top:6px } .show .open { display:inline-block; margin-top:6px } .show .shot { display:block; max-width:100%; margin-top:8px; border-radius:6px }
+.rate { display:flex; gap:2px; margin-top:6px } .star { background:none; border:none; padding:2px 4px; font-size:20px; color:var(--line); cursor:pointer }
+.star.on { color:var(--accent) }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
 .pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }

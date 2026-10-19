@@ -461,6 +461,22 @@ def cmd_pin(a):
     return 0
 
 
+def cmd_show(a):
+    """Put a deliverable in the project's showcase for the person to see, rate and comment on, if they like."""
+    from . import board, showcase
+    root = board.root_of()
+    try:
+        x = showcase.add(root, a.title, a.what, a.try_ or "", a.link or "", a.item)
+    except FileNotFoundError:
+        print(f"no file {a.link} in this project", file=sys.stderr)
+        return 2
+    except ValueError as err:
+        print(f"colony: {err}", file=sys.stderr)
+        return 2
+    print(f"shown {x['id']}: {x['title']} (the person may rate and comment; it arrives as a note)")
+    return 0
+
+
 def cmd_unpin(a):
     from . import board, pins
     root = board.root_of()
@@ -1294,6 +1310,10 @@ def main(argv=None):
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why"); p.set_defaults(fn=cmd_pin)
     p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
+    p = sub.add_parser("show", help="put a deliverable worth seeing in the project's showcase")
+    p.add_argument("title"); p.add_argument("--what", required=True, help="what it is, plainly")
+    p.add_argument("--try", dest="try_", help="how to see or try it"); p.add_argument("--link", help="a URL or a file in the project")
+    p.add_argument("--item", help="the roadmap item it comes from"); p.set_defaults(fn=cmd_show)
     sub.add_parser("setup", help="the monitor walks you through first-time setup").set_defaults(fn=cmd_setup)
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")

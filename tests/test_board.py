@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from unittest.mock import patch  # noqa: E402
-from colony import board, console, hours, mail, monitor, pins, providers  # noqa: E402
+from colony import board, console, hours, mail, monitor, pins, providers, showcase  # noqa: E402
 import base64, io, socket, time  # noqa: E402
 from contextlib import contextmanager, redirect_stdout  # noqa: E402
 
@@ -2583,6 +2583,57 @@ class PinTest(BoardBase):
             self.assertEqual((self.root / ".board" / "uploads" / ".gitignore").read_text(), "*\n", "uploads stay out of git")
             post("/unpin", p=0, id=ps["The app"]["id"])
             self.assertNotIn("The app", [p["title"] for p in pins.pins(self.root)])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+    def test_the_showcase_shows_what_was_made_and_tells_the_agent_what_the_person_thinks(self):
+        board.track(self.root)
+        (self.root / "lab").mkdir()
+        (self.root / "lab" / "street.png").write_bytes(b"\x89PNG\r\n")
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        out = run("show", "The London street at night", "--what", "838 lit windows on a phone", "--try",
+                  "drag the hour slider", "--link", "lab/street.png", "--item", "R12")
+        self.assertIn("shown", out.stdout)
+        self.assertEqual(run("show", "Outside", "--what", "x", "--link", "../../etc/passwd").returncode, 2,
+                         "nothing outside the project is shown")
+        self.assertEqual(run("show", "No what").returncode, 2, "an entry says what it is")
+        run("show", "The playable case", "--what", "the 1660 investigation, end to end", "--link", "http://localhost:5173/case")
+        for n in range(showcase.FRESH):
+            showcase.add(self.root, f"Older {n}", "an earlier build")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        post = lambda path, **f: urllib.request.urlopen(urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}", data=urllib.parse.urlencode(f).encode()))
+        try:
+            xs = {x["title"]: x for x in showcase.entries(self.root)}
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=showcase").read().decode()
+            self.assertIn("Showcase", urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode(), "a tab on every page")
+            self.assertIn("Older 5", page)
+            self.assertIn("Earlier (2)", page, "past the newest few, the rest fold into the project's history")
+            self.assertLess(page.index("Older 5"), page.index("Earlier (2)"))
+            self.assertGreater(page.index("The London street at night"), page.index("Earlier (2)"))
+            self.assertIn("<b>Try:</b> drag the hour slider", page)
+            shot = urllib.request.urlopen(f"http://127.0.0.1:{port}/showcase/open?p=0&id={xs['The London street at night']['id']}")
+            self.assertEqual(shot.headers["Content-Type"], "image/png")
+            self.assertEqual(board.notes(self.root), [], "showing it waits on nobody")
+            street = xs["The London street at night"]["id"]
+            post("/showcase/rate", p=0, id=street, stars=2)
+            post("/showcase/rate", p=0, id=street, stars=4)
+            post("/showcase/comment", p=0, id=street, text="The far windows flicker")
+            post("/showcase/rate", p=0, id=street, stars=9)
+            x = showcase.get(self.root, street)
+            self.assertEqual((x["stars"], [c["text"] for c in x["comments"]]), (4, ["The far windows flicker"]))
+            told = [(n["text"], n.get("quiet", False)) for n in board.notes(self.root)]
+            self.assertEqual(told, [('The person rated "The London street at night" in the showcase 2 of 5.', True),
+                                    ('The person rated "The London street at night" in the showcase 4 of 5.', True),
+                                    ('On "The London street at night" in the showcase: The far windows flicker', False)],
+                             "a rating reaches the agent quietly, a comment as a message; a bad rating is ignored")
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=showcase").read().decode()
+            self.assertIn("The far windows flicker", page)
         finally:
             httpd.shutdown()
             httpd.server_close()
