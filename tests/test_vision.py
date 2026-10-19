@@ -494,3 +494,36 @@ class PageTest(BoardBase):
         self.assertEqual(names()[0], "photonic")
         board.woke(self.root)
         self.assertEqual(names()[0], "plants")
+
+
+class ArchiveAndListTest(BoardBase):
+    def test_an_archived_project_packages_where_it_stands_and_hears_why_when_it_reopens(self):
+        board.track(self.root)
+        self.assertEqual(board.close_project(self.root, why="Parked until the engine settles", archive=True), "closing")
+        note = [n for n in board.notes(self.root) if n.get("kind") == "close"][-1]
+        self.assertIn("ARCHIVE.md", note["text"])
+        self.assertIn('"Parked until the engine settles"', note["text"])
+        self.assertTrue(console.live(self.root))                    # off, it was started to get its moment to package
+        board.finish_closing(self.root)
+        board.track(self.root)
+        back = [n for n in board.notes(self.root) if "is open again" in n["text"]]
+        self.assertEqual(len(back), 1)
+        self.assertIn("Parked until the engine settles", back[0]["text"])
+        board.track(self.root)
+        self.assertEqual(len([n for n in board.notes(self.root) if "is open again" in n["text"]]), 1)   # said once
+
+    def test_all_projects_are_listed_under_their_nests_and_a_project_can_join_or_leave_one_from_its_page(self):
+        from colony import nest
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        self.assertIn("Put in nest", board.nest_form(0, self.root))
+        nest.join(other, "holodeck")
+        page = board.all_projects_page(board.registry())
+        self.assertLess(page.index("holodeck nest"), page.index("<b>photonic</b>"))
+        self.assertLess(page.index("Other projects"), page.index("<b>plants</b>"))
+        self.assertIn("value='holodeck'", board.nest_form(0, self.root))          # existing nests offered
+        self.assertIn("Take it out", board.nest_form(1, other))
+        self.assertIn("href='/projects'", board.sidebar(board.registry(), 0))

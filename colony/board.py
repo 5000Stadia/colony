@@ -985,6 +985,11 @@ def track(path, register=True):
         show_project(root)
     if register:
         _closed(root, False)                          # reopened: continuation may take it up again
+        was = _archived(root, drop=True)
+        if was:
+            said = f' The person\'s reason then: "{was["why"]}".' if was.get("why") else ""
+            add_note(root, None, f"This project was archived on {was['at'][:10]} and is open again.{said} ARCHIVE.md, "
+                     "if you wrote one, says where it stood; read it before going on.", author="colony")
     from . import monitor
     monitor.rebrief()                                 # colony's own source joining the board changes the steward's part
     return root
@@ -1080,12 +1085,39 @@ def finish_closing(root):
     remove_project(root)
 
 
-def close_project(root, cancel=False):
+def archive_note(why):
+    said = f' Their reason, in their words: "{why.strip()}".' if why and why.strip() else ""
+    return ("The person is archiving this project." + said + " Before it comes off the board, package where it stands so "
+            "it can be picked up again: write ARCHIVE.md at the project's root (where things stand, what's done and "
+            "half-done, what you'd do next and why, open questions, and whatever a future agent needs that the roadmap "
+            "and commits don't already say) and commit it. " + CLOSE_NOTE.replace("The person is closing this project. ", ""))
+
+
+def _archived(root=None, value=None, drop=False):
+    """Projects archived and not yet reopened, with when and the person's reason; reopening tells the agent."""
+    path = home() / "archived.json"
+    try:
+        rows = json.loads(path.read_text())
+    except (OSError, ValueError):
+        rows = {}
+    if root is None:
+        return rows
+    key = str(Path(root))
+    if value is None and not drop:
+        return rows.get(key)
+    row = rows.pop(key, None) if drop else rows.setdefault(key, value)
+    home().mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(rows))
+    return row
+
+
+def close_project(root, cancel=False, why="", archive=False):
     """Close a project safely: its agent is told to land its work, and once that turn has ended with nothing running,
     the project comes off the board (remove_project), its files and conversation kept. One whose console isn't
     running has nothing in flight, so it comes off at once. Returns "closing", "closed" or "kept" (cancelled)."""
     root, rows = Path(root), closing()
     if cancel:
+        _archived(root, drop=True)
         row = rows.pop(str(root), None)
         _save_closing(rows)
         note = row and next((n for n in notes(root) if n["id"] == row["note"]), None)
@@ -1102,11 +1134,15 @@ def close_project(root, cancel=False):
         # pointing at it. Closing them together is a step of its own, not built.
         raise ValueError(f"{root.name} shares its roadmap with " + ", ".join(Path(m).name for m in shared["members"]
                          if Path(m) != root.resolve()) + "; colony close doesn't close one seat of a shared project")
+    if archive:
+        _archived(root, {"at": now(), "why": (why or "").strip()})
     if console.snapshot(root, lines=1)["state"] == "off" and at_rest(root):
-        finish_closing(root)
-        return "closed"
+        if not archive:
+            finish_closing(root)
+            return "closed"
+        console.ensure(root)              # archiving: its agent gets a moment to package where it stands first
     if str(root) not in rows:
-        note = add_note(root, None, CLOSE_NOTE, author="colony", kind="close")
+        note = add_note(root, None, archive_note(why) if archive else CLOSE_NOTE, author="colony", kind="close")
         rows[str(root)] = {"at": now(), "note": note["id"]}
         _save_closing(rows)
     return "closing"
@@ -1596,6 +1632,53 @@ def thread(ns, road_items=None):
     return out
 
 
+def arranged(plist):
+    """(index, project, nest) in the board's order: the project that last went from idle to working first, its nest
+    with it, then the rest by the same. The nest is "" for a project in none, or None when there are no nests."""
+    from . import nest
+    homes = {p: n for n, v in nest.nests().items() for p in v.get("members", [])}
+    rec, grp = woken(), (lambda p: homes.get(str(p.resolve()), ""))
+    best = {}
+    for p in plist:
+        best[grp(p)] = max(best.get(grp(p), ""), rec.get(str(p.resolve()), ""))
+    return [(i, p, grp(p) if homes else None) for i, p in sorted(enumerate(plist), reverse=True,
+            key=lambda ip: (best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0]))]
+
+
+def nest_form(pid, root):
+    """Put the project in a nest, or take it out."""
+    from . import nest
+    hidden, here = f"<input type='hidden' name='p' value='{pid}'>", nest.nest_of(root)
+    if here:
+        return (f"<form method='post' action='/nest/leave'>{hidden}In the <a href='/nest?n={urllib.parse.quote(here)}'>"
+                f"{e(here)} nest</a> <button class='quiet'>Take it out</button></form>")
+    names = "".join(f"<option value='{e(n)}'>" for n in nest.nests())
+    return (f"<form method='post' action='/nest/join'>{hidden}<input name='name' list='nests-{pid}' "
+            f"placeholder='A nest: projects that share a purpose'><datalist id='nests-{pid}'>{names}</datalist>"
+            "<button class='quiet'>Put in nest</button></form>")
+
+
+def all_projects_page(reg):
+    """Every project at a glance, under its nest: what it's doing, what waits on the person, what it's for."""
+    plist, out, heading = projects(reg), ["<h1>All projects</h1>"], None
+    for i, p, here in arranged(plist):
+        if here != heading and here is not None:
+            if heading is not None or out[-1] != "<h1>All projects</h1>":
+                out.append("</div>")
+            out.append(f"<h2>{f'<a href=/nest?n={urllib.parse.quote(here)}>{e(here)} nest</a>' if here else 'Other projects'}</h2><div class='card'>")
+        elif heading is None and here is None and out[-1] == "<h1>All projects</h1>":
+            out.append("<div class='card'>")
+        heading = here
+        snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
+        waiting = len(moments(p)) if p.exists() else 0
+        goal = first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"]) if p.exists() else ""
+        out.append(f"<div class='note'><a href='/?p={i}'><span class='sdot {snap['state'].replace(' ', '-')}'></span> <b>{e(p.name)}</b></a>"
+                   f" <span class='who'>{e(snap['state'])}{' · ' + str(waiting) + ' waiting on you' if waiting else ''}</span>"
+                   f"<div class='muted'>{e(goal)}</div></div>")
+    out.append("</div>" if plist else "<p class='muted'>No projects yet.</p>")
+    return shell(reg, -2, "".join(out))
+
+
 def woke(root):
     """A project just went from idle to working: it comes to the front of the board's list."""
     path = home() / "woke.json"
@@ -1625,17 +1708,8 @@ def sidebar(reg, pid):
     side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
             f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward</span>"
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
-    from . import nest
-    homes = {p: n for n, v in nest.nests().items() for p in v.get("members", [])}
-    # The project that last went from idle to working comes first, and its nest with it; then the rest, by the same.
-    rec, grp = woken(), (lambda p: homes.get(str(p.resolve()), ""))
-    best = {}
-    for p in plist:
-        best[grp(p)] = max(best.get(grp(p), ""), rec.get(str(p.resolve()), ""))
     heading = None
-    for i, p in sorted(enumerate(plist), reverse=True,
-                       key=lambda ip: (best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0])):
-        here = grp(p) if homes else None
+    for i, p, here in arranged(plist):
         if here != heading and here is not None:
             label = e(here + ' nest' if here else 'other projects')
             side.append(f"<div class='sline nesthead' style='padding:8px 10px 2px;text-transform:uppercase;letter-spacing:.06em'>"
@@ -1657,7 +1731,8 @@ def sidebar(reg, pid):
         if ws:
             side.append(f"<div class='sline long' style='padding:2px 10px'>{e(prov.label)}: "
                         + " · ".join(f"{e(w)} {v['used']:g}%" for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly")) + "</div>")
-    side.append("<div class='navfoot'><a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
+    side.append("<div class='navfoot'><a href='/projects' title='All projects'><span class='long'>All projects</span><span class='short'>☰</span></a>"
+                "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
     return "".join(side)
@@ -1916,7 +1991,11 @@ def render(reg, pid, view="overview"):
     merged, own = project_settings(root)
     # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
     settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
-                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p><hr><div class='dangers'>"
+                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
+                f"<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
+                f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
+                f"<input name='why' placeholder='Why it is being archived (its agent reads this if it reopens)'>"
+                f"<button class='quiet'>Archive</button></form>"
                 f"<form method='post' action='/project/remove' onsubmit=\"return confirm('Take {e(root.name)} off the board? Its session stops; its files stay where they are.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
@@ -3824,6 +3903,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return self.wfile.write(body)
+        if url.path == "/projects":
+            return self._send(200, all_projects_page(reg).encode())
         if url.path == "/nest":
             return self._send(200, nest_page(reg, (q.get("n") or [""])[0]).encode())
         if url.path == "/needs":
@@ -4302,6 +4383,22 @@ class Handler(BaseHTTPRequestHandler):
             keys = providers.of(root).choose(console.screen(name), form["option"])
             if keys:
                 console.press(name, keys)
+        elif path in ("/project/archive", "/nest/join", "/nest/leave"):
+            from . import nest
+            if path == "/project/archive":
+                try:
+                    close_project(root, why=form.get("why", ""), archive=True)
+                except ValueError:
+                    pass
+            elif path == "/nest/join" and form.get("name", "").strip():
+                nest.join(root, form["name"])
+            elif path == "/nest/leave":
+                nest.leave(root)
+            self.send_response(303)
+            self.send_header("Location", f"/?p={pid}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif path in ("/project/remove", "/project/delete"):
             (remove_project if path == "/project/remove" else delete_project)(root)
             self.send_response(303)

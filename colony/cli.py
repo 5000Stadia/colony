@@ -20,6 +20,8 @@ waits on them for, its roadmap, and a steward that can act for them.
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony close NAME [--cancel]    close a project safely: it lands its work, then comes off the board (files and
                                     conversation kept; colony track reopens it where it stopped)
+    colony archive NAME [--why W]   archive a project: its agent packages where it stands (ARCHIVE.md), then it
+                                    comes off the board; reopened (colony track), its agent hears why
     colony nest [NAME [PROJECT...]] [--leave] [--vision --file PATH --words W --context C]
                                     nests: projects that share a purpose; a nest's shared vision is the why they serve
     colony consult R4 "QUESTION" --digest FILE   two fresh views at a decision costly to change
@@ -1290,6 +1292,19 @@ def cmd_nest(a):
     return 0
 
 
+def cmd_archive(a):
+    from . import board
+    try:
+        out = board.close_project(_project(a.name), why=a.why or "", archive=True)
+    except ValueError as e:
+        print(e)
+        return 1
+    print(f"{a.name} is packaging where it stands (ARCHIVE.md) and landing its work; then it comes off the board, its "
+          "files and conversation kept. colony track reopens it, and its agent hears why it was archived."
+          if out == "closing" else f"{a.name} is archived")
+    return 0
+
+
 def cmd_delete(a):
     from . import board
     dest = board.delete_project(_project(a.name))
@@ -1517,6 +1532,9 @@ def main(argv=None):
     p = sub.add_parser("close", help="close a project safely: it lands its work, then comes off the board (files and conversation kept)")
     p.add_argument("name"); p.add_argument("--cancel", action="store_true", help="keep it on the board after all")
     p.set_defaults(fn=cmd_close)
+    p = sub.add_parser("archive", help="archive a project: its agent packages where it stands, then it comes off the board")
+    p.add_argument("name"); p.add_argument("--why", help="why, in the person's words: its agent reads it if it reopens")
+    p.set_defaults(fn=cmd_archive)
     p = sub.add_parser("nest", help="nests: projects that share a purpose, and the shared vision they serve")
     p.add_argument("name", nargs="?"); p.add_argument("projects", nargs="*", help="projects to put in it (default: this one)")
     p.add_argument("--leave", action="store_true", help="take the projects (default: this one) out of their nest")
