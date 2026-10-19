@@ -12,7 +12,7 @@ what it assumes and what a second provider needs there. What a provider supplies
   model_name(value)        a model ID or alias as the model's own name, for showing "Default (Opus 5.5)"
   command(label, s)        the shell command that starts its interactive agent with the settings in `s`:
                            provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off); for
-                           the monitor, also autocompact. Map each to the CLI's own flags, and ignore any it has
+                           the steward, also autocompact. Map each to the CLI's own flags, and ignore any it has
                            no equivalent for.
   wire(root, protocol)     put the colony protocol where the CLI reads project instructions (AGENTS.md for
                            Codex) and arrange for `colony notes --deliver` output to reach the agent: at
@@ -33,14 +33,14 @@ what it assumes and what a second provider needs there. What a provider supplies
   turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
                            turn that asks the person something shows under "Waiting on you"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
-                           monitor's wake-ups depend on this, so match the CLI's own busy and prompt markers.
+                           steward's wake-ups depend on this, so match the CLI's own busy and prompt markers.
   choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
                            options and which is highlighted, or None; the board shows it as buttons
   consult(brief, model, effort, project)
                            one fresh, stateless consultation: an empty folder, no settings or hooks, read-only, a
                            no cap: it takes what it takes; returns {"text", "cost", "usage", "error"} (colony consult uses it)
   scout(brief, model, effort)
-                           one fresh, stateless scout for the monitor (colony scout): an empty folder, no settings,
+                           one fresh, stateless scout for the steward (colony scout): an empty folder, no settings,
                            hooks or project instructions, and only searching the web and reading pages, held there
                            by the program itself (no shell, edits or other tools), so strangers' text never reaches
                            the session that speaks for the person; returns {"text", "error"}
@@ -261,7 +261,7 @@ class ClaudeCode:
 
     def latest_conversation(self, folder):
         """The conversation last active in a folder, from Claude Code's own records: for a console whose hooks
-        don't record it (the monitor's)."""
+        don't record it (the steward's)."""
         import re as _re
         d = self.config_home() / "projects" / _re.sub(r"[^A-Za-z0-9]", "-", str(folder))
         files = sorted(d.glob("*.jsonl"), key=lambda f: f.stat().st_mtime) if d.exists() else []

@@ -338,7 +338,7 @@ class TurboTest(TurboBase):
         self.assertEqual(self.keys, [turbo.NUDGE])
         with redirect_stdout(io.StringIO()):
             cli.main(["suggest", "plants", "an idea, while it sits idle"])
-        self.assertEqual(self.keys, [turbo.NUDGE, "[colony] You have a suggestion from the monitor."])
+        self.assertEqual(self.keys, [turbo.NUDGE, "[colony] You have a suggestion from the steward."])
 
     def test_it_never_wakes_a_project_waiting_on_the_person(self):
         from colony import cli, continuation, lead, progress
@@ -450,8 +450,8 @@ class TurboTest(TurboBase):
         [n] = [n for n in board.notes(self.root) if n["author"] == "suggestion"]
         self.assertEqual((n["kind"], n.get("quiet")), ("idea", True))
         out = self.cli("notes", "--deliver").stdout
-        self.assertIn("Suggestions from the monitor:", out)
-        self.assertIn("the monitor's own suggestion, not an instruction from the person", out)
+        self.assertIn("Suggestions from the steward:", out)
+        self.assertIn("the steward's own suggestion, not an instruction from the person", out)
         self.assertNotIn("install it with colony gate", out, "an idea, not a tool to install")
         self.assertIn("colony suggest NAME", monitor.ROLE)
         self.assertEqual(self.cli("suggest", "nobody", "x").returncode, 1)
@@ -559,7 +559,7 @@ class AdviceTest(TurboBase):
         out = self.cli("notes", "--deliver").stdout                            # its next turn
         self.assertIn("Research advice colony asked for, apart from you:", out)
         self.assertIn(board.ADVICE, out)
-        self.assertNotIn("Suggestions from the monitor:", out, "never passed off as the monitor's")
+        self.assertNotIn("Suggestions from the steward:", out, "never passed off as the steward's")
         self.assertEqual(self.cli("noted", n["id"], "Worth a look once R3 starts").returncode, 0)
         self.assertEqual(self.asked(), ["a word from the person's board"], "its answer isn't the monitor's to hear")
         mine = self.root / "research" / f"turbo-advice-{self.day(self.now + DAY)}.md"
@@ -757,7 +757,7 @@ class StrongerModelsTest(TurboBase):
             monitor.start(enabled=False)
         self.assertEqual(self.seats(), self.base, "nothing keeps turbo current: it stands down")
         self.assertTrue(console.stale(self.root), "back at its next reload")
-        self.assertIn("turbo isn't running (the monitor is off, and turbo runs with it)", turbo.line("claude"))
+        self.assertIn("turbo isn't running (the steward is off, and turbo runs with it)", turbo.line("claude"))
 
     def test_lasting_trouble_stands_it_down_and_a_new_turn_reloads_nothing_the_console_already_runs(self):
         turbo.tick(self.now)

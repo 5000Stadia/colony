@@ -130,7 +130,7 @@ class BoardTest(BoardBase):
             self.assertIsNone(monitor.update(t0 + 7400), "nothing completed and nothing new: nothing to say")
         self.assertIn("1) Completed since the last update: plants R2: water log.", first)
         self.assertIn("2) Already waiting on them: none · 3) New asks: plants opened a gate: Which pot size?", first)
-        self.assertIn("(Monitor: On | Helm Control: Off)", first)
+        self.assertIn("(Steward: On | Helm Control: Off)", first)
         self.assertIn("1) Completed since the last update: none · 2) Already waiting on them: plants opened a gate: "
                       "Which pot size? · 3) New asks: plants opened a gate: Repot in spring?", second)
         board.set_setting("updates", "off")
@@ -182,11 +182,11 @@ class BoardTest(BoardBase):
         (other / "ROADMAP.md").write_text(ROADMAP)
         board.track(other)
         monitor.helm(False)
-        self.assertEqual(monitor.status_line(), "(Monitor: On | Helm Control: Off)")
+        self.assertEqual(monitor.status_line(), "(Steward: On | Helm Control: Off)")
         monitor.helm(True)
-        self.assertEqual(monitor.status_line(), "(Monitor: On | Helm Control: On)")
+        self.assertEqual(monitor.status_line(), "(Steward: On | Helm Control: On)")
         monitor.set_posture(other, helm=False)
-        self.assertEqual(monitor.status_line(), "(Monitor: On | Helm Control: On for 1 of 2)")
+        self.assertEqual(monitor.status_line(), "(Steward: On | Helm Control: On for 1 of 2)")
         monitor.helm(False)
 
     def test_a_gate_the_person_settles_directly_leaves_their_list_and_one_that_no_longer_applies_can_be_withdrawn(self):
@@ -1018,7 +1018,7 @@ class GlanceTest(BoardBase):
         monitor.brief()
         self.assertEqual(monitor.brief_path(), monitor.home() / "AGENTS.md")
         for f in ("AGENTS.md", "CLAUDE.md"):                  # whichever program runs it reads its own
-            self.assertIn("You are `monitor", (monitor.home() / f).read_text())
+            self.assertIn("You are `steward", (monitor.home() / f).read_text())
         stand_in, console.COMMAND = console.COMMAND, None
         try:
             self.assertTrue(console.command("monitor").startswith("codex "), "started with the default provider's command")
@@ -1768,9 +1768,9 @@ class MonitorTest(BoardBase):
         try:
             helm_tab = board.monitor_page(board.registry(), "helm")
             self.assertIn("never push", helm_tab)
-            self.assertIn("monitor holds the helm", helm_tab)
+            self.assertIn("steward holds the helm", helm_tab)
             overview = board.monitor_page(board.registry(), "overview")
-            for part in ("Needs you", "Projects", "What the monitor decided", ">Helm<", ">Console<"):
+            for part in ("Needs you", "Projects", "What the steward decided", ">Helm<", ">Console<"):
                 self.assertIn(part, overview)
         finally:
             console.ensure, console.snapshot = saved
@@ -1787,12 +1787,12 @@ class MonitorTest(BoardBase):
             cli.main(["tell", "plants", "Keep to V1.5: a long direction the monitor relays for the person.\nWith a second line."])
         finally:
             console.type_into, console.ensure, console.snapshot = saved
-        self.assertEqual(typed, ["[colony] You have a note from the person's monitor."], "only a one-line nudge is typed")
+        self.assertEqual(typed, ["[colony] You have a note from the person's steward."], "only a one-line nudge is typed")
         fresh, _ = board.deliver(self.root)
         text = board.render_notes(fresh, "The person left notes for you on the board:")
-        self.assertIn("from the person's monitor, acting for them", text)
+        self.assertIn("from the person's steward, acting for them", text)
         self.assertIn("Keep to V1.5", text)
-        self.assertIn("The monitor's notes and messages", " ".join((self.root / "CLAUDE.md").read_text().split()))
+        self.assertIn("The steward's notes and messages", " ".join((self.root / "CLAUDE.md").read_text().split()))
 
     def test_tell_new_and_helm_from_the_command_line(self):
         env = {"COLONY_CONSOLE_CMD": "cat"}
@@ -1813,6 +1813,69 @@ class MonitorTest(BoardBase):
         self.assertIn("helm is with the person", run("helm").stdout)
         self.assertIn("holds the helm", run("helm", "on").stdout)
         self.assertTrue(monitor.helm())
+
+    def test_the_steward_command_and_its_old_name_monitor_both_work(self):
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_CONSOLE_CMD="cat"))
+        out = run("steward", "helm", "on")
+        self.assertIn("the steward holds the helm", out.stdout, out.stderr)
+        self.assertTrue(monitor.helm())
+        out = run("monitor", "helm", "off")                           # the old name, same subcommands
+        self.assertIn("the helm is with the person", out.stdout, out.stderr)
+        self.assertFalse(monitor.helm())
+        self.assertIn("the steward is awake", run("steward", "mute").stdout)
+        self.assertIn("the steward is muted", run("monitor", "mute", "on").stdout)
+        self.assertTrue(monitor.muted(), "stored where it always was")
+        self.assertTrue((board.home() / "monitor-muted").exists())
+        self.assertIn("mute", run("steward").stdout, "bare, it lists its commands")
+
+    def test_settings_are_typed_and_shown_as_steward_and_stay_stored_as_monitor(self):
+        from colony import cli
+        board.set_setting("steward", "off")
+        self.assertFalse(board.registry()["settings"]["monitor"])
+        board.set_setting("monitor", "on")                             # the old key still works
+        self.assertTrue(board.registry()["settings"]["monitor"])
+        board.set_setting("steward_model", "claude-opus-5-5:high")
+        self.assertEqual(board.registry()["settings"]["monitor_model"], {"model": "claude-opus-5-5", "effort": "high"})
+        self.assertNotIn("steward", board.registry()["settings"])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.main(["settings"])
+        self.assertRegex(out.getvalue(), r"(?m)^steward +on +the steward session runs with the board")
+        self.assertIn("steward_model", out.getvalue())
+
+    def test_a_record_stored_as_from_the_monitor_is_shown_as_from_the_steward(self):
+        board.add_note(self.root, None, "keep to V1.5", author="monitor")
+        note = next(n for n in board.notes(self.root) if n["author"] == "monitor")
+        self.assertTrue(board.answers_ask(note), "still recognized as the person's word relayed")
+        text = board.render_notes([note], "The person left notes for you on the board:")
+        self.assertIn("from the person's steward, acting for them", text)
+        self.assertNotIn("monitor", text)
+        self.assertIn("the steward, for you", board.thread([note]))
+        self.assertEqual(mail.shown("monitor"), "steward")
+        self.assertEqual(mail.shown("plants"), "plants")
+        line = mail.render([{"id": "m1", "from": "monitor", "ask": True, "text": "status?"}], "Mail:")
+        self.assertIn("steward asks: status?", line)
+        self.assertNotIn("monitor", line)
+
+    def test_the_old_monitor_page_address_still_serves_the_steward_page(self):
+        saved = board.MONITOR
+        board.MONITOR = False                                          # looking at the page starts no session
+        monitor.snapshot = lambda: {"state": "idle", "lines": []}
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        try:
+            new = urllib.request.urlopen(f"http://127.0.0.1:{port}/steward?view=helm").read().decode()
+            old = urllib.request.urlopen(f"http://127.0.0.1:{port}/monitor?view=helm").read().decode()
+            self.assertIn("<h1>steward</h1>", new)
+            self.assertEqual(old, new)
+            self.assertIn("href='/steward?view=helm'", old)
+            self.assertNotIn("href='/monitor", old, "links lead on to the new address")
+        finally:
+            board.MONITOR = saved
+            httpd.shutdown()
+            httpd.server_close()
 
 
 class CodexPairingTest(BoardBase):
@@ -1977,7 +2040,7 @@ class SettingsTest(BoardBase):
         try:
             with self.assertRaises(urllib.error.HTTPError) as r:
                 opener.open(f"http://127.0.0.1:{port}/")
-            self.assertEqual(r.exception.headers["Location"], "/monitor")
+            self.assertEqual(r.exception.headers["Location"], "/steward")
             data = urllib.parse.urlencode({"monitor": "on", "model": "", "effort": "high", "new_root": ""}).encode()
             urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/options", data=data))
             s = board.registry()["settings"]
@@ -2269,7 +2332,7 @@ class MailWakeTest(BoardBase):
         board.add_note(self.root, None, 'A delegated direction', author='monitor')
         board.add_note(self.root, None, 'Their actual words', author='person')
         w.mail()
-        self.assertEqual(self.typed, ["[colony] You have a note from the person on the board and a note from the person's monitor and an update from Colony."])
+        self.assertEqual(self.typed, ["[colony] You have a note from the person on the board and a note from the person's steward and an update from Colony."])
 
     def test_busy_projects_wait_unless_the_mail_is_urgent(self):
         w = monitor.Watcher()
@@ -2503,11 +2566,11 @@ class SupportsTest(BoardBase):
         self.cli("supports", "ask", "s1", "--project", "plants",
                  "--text", "plants' agent opened 40 files to find one caller; a language server answers that directly. Test it?")
         html = board.needs_you(board.registry())
-        self.assertIn("a find the monitor brought", html)
+        self.assertIn("a find the steward brought", html)
         self.assertIn("opened 40 files", html)
         self.assertIn("value='test'", html)
         self.assertNotIn("value='approve'", html, "a candidate tool can be tested or dropped, not suggested")
-        self.assertIn("Talk it over with the monitor", html)
+        self.assertIn("Talk it over with the steward", html)
         supports.decide("s1", "test", "only on the importer bugs")
         self.assertEqual(supports.asking(), [], "answered: it leaves Needs you")
         self.assertIn("[testing]", supports.text())
@@ -2629,9 +2692,9 @@ class DirectionTest(BoardBase):
         self.assertIn("Always come back to the person", brief)
         self.assertNotIn("{direction}", brief)
         helm = board.monitor_page(board.registry(), "helm")
-        self.assertIn("href='/monitor?view=direction'", helm, "the Helm page links to it")
+        self.assertIn("href='/steward?view=direction'", helm, "the Helm page links to it")
         self.assertIn("Empty: the standing direction alone", helm)
-        self.assertIn("Have the monitor send it", helm, "the monitor can message a project for the person")
+        self.assertIn("Have the steward send it", helm, "the monitor can message a project for the person")
         self.assertIn("value='monitor'", helm)
         page = board.monitor_page(board.registry(), "direction")
         self.assertIn("colony's default", page)

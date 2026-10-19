@@ -379,7 +379,7 @@ def due(root, st, tokens, window, now):
 
 def tick(root):
     if is_monitor(root):
-        return  # the monitor compacts natively, at its cap: nothing typed into the conversation the person reads
+        return  # the steward compacts natively, at its cap: nothing typed into the conversation the person reads
     s = session(root)
     if not s:
         return
