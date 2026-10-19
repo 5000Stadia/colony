@@ -2557,6 +2557,7 @@ class PinTest(BoardBase):
             self.assertIn("stormy", (self.root / "notes.md").read_text())
             pdf = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['report.pdf']['id']}")
             self.assertEqual(pdf.headers["Content-Type"], "application/pdf")
+            self.assertEqual(pdf.headers["Content-Security-Policy"], "sandbox allow-scripts")
             req = urllib.request.Request(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['The app']['id']}")
             class NoRedirect(urllib.request.HTTPRedirectHandler):
                 def redirect_request(self, *a):
@@ -2619,6 +2620,12 @@ class PinTest(BoardBase):
             self.assertIn("<b>Try:</b> drag the hour slider", page)
             shot = urllib.request.urlopen(f"http://127.0.0.1:{port}/showcase/open?p=0&id={xs['The London street at night']['id']}")
             self.assertEqual(shot.headers["Content-Type"], "image/png")
+            self.assertEqual(shot.headers["Content-Security-Policy"], "sandbox allow-scripts",
+                             "a project's file runs as no origin: what it posts back is refused")
+            forged = urllib.request.Request(f"http://127.0.0.1:{port}/showcase/comment", headers={"Origin": "null"},
+                                            data=urllib.parse.urlencode(dict(p=0, id="x", text="forged")).encode())
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(forged)
             self.assertEqual(board.notes(self.root), [], "showing it waits on nobody")
             street = xs["The London street at night"]["id"]
             post("/showcase/rate", p=0, id=street, stars=2)

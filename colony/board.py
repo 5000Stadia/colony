@@ -3342,6 +3342,11 @@ def settings_page(reg):
     return shell(reg, -2, body)
 
 
+# A project's own file opened from the board (a pin, a showcase entry) runs in a sandbox of its own: its scripts may run,
+# so an interactive page works, but as no origin at all, so anything it posts back to the board is refused (Origin: null).
+SANDBOX = "sandbox allow-scripts"
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -3483,6 +3488,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", showcase.mime(x))
             self.send_header("Content-Disposition", f"inline; filename=\"{path.name}\"")
+            self.send_header("Content-Security-Policy", SANDBOX)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
@@ -3512,6 +3518,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", pins.mime(pin))
             self.send_header("Content-Disposition", f"inline; filename=\"{path.name}\"")
+            self.send_header("Content-Security-Policy", SANDBOX)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
