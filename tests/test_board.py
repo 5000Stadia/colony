@@ -2601,6 +2601,8 @@ class PinTest(BoardBase):
         self.assertEqual(run("show", "Outside", "--what", "x", "--link", "../../etc/passwd").returncode, 2,
                          "nothing outside the project is shown")
         self.assertEqual(run("show", "No what").returncode, 2, "an entry says what it is")
+        (self.root / "Pip’s Puddle Parade.pdf").write_bytes(b"%PDF-1.4 x")
+        run("show", "The book", "--what", "the full draft", "--link", "Pip’s Puddle Parade.pdf")
         run("show", "The playable case", "--what", "the 1660 investigation, end to end", "--link", "http://localhost:5173/case")
         for n in range(showcase.FRESH):
             showcase.add(self.root, f"Older {n}", "an earlier build")
@@ -2614,9 +2616,9 @@ class PinTest(BoardBase):
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=showcase").read().decode()
             self.assertIn("Showcase", urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode(), "a tab on every page")
             self.assertIn("Older 5", page)
-            self.assertIn("Earlier (2)", page, "past the newest few, the rest fold into the project's history")
-            self.assertLess(page.index("Older 5"), page.index("Earlier (2)"))
-            self.assertGreater(page.index("The London street at night"), page.index("Earlier (2)"))
+            self.assertIn("Earlier (3)", page, "past the newest few, the rest fold into the project's history")
+            self.assertLess(page.index("Older 5"), page.index("Earlier (3)"))
+            self.assertGreater(page.index("The London street at night"), page.index("Earlier (3)"))
             self.assertIn("<b>Try:</b> drag the hour slider", page)
             shot = urllib.request.urlopen(f"http://127.0.0.1:{port}/showcase/open?p=0&id={xs['The London street at night']['id']}")
             self.assertEqual(shot.headers["Content-Type"], "image/png")
@@ -2626,6 +2628,9 @@ class PinTest(BoardBase):
                                             data=urllib.parse.urlencode(dict(p=0, id="x", text="forged")).encode())
             with self.assertRaises(urllib.error.HTTPError):
                 urllib.request.urlopen(forged)
+            book = urllib.request.urlopen(f"http://127.0.0.1:{port}/showcase/open?p=0&id={xs['The book']['id']}")
+            self.assertIn("filename*=UTF-8''Pip%E2%80%99s%20Puddle%20Parade.pdf", book.headers["Content-Disposition"],
+                          "a name beyond Latin-1 opens")
             self.assertEqual(board.notes(self.root), [], "showing it waits on nobody")
             street = xs["The London street at night"]["id"]
             post("/showcase/rate", p=0, id=street, stars=2)

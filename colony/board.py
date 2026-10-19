@@ -54,7 +54,8 @@ steer all of them from one board, and the projects can write to each other.
   building past it. Before each step, ask whether it is still the smartest next one toward the vision. Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and
   Later waits for them. The person is the compass: they shape the vision and the path, and can say where quality or
   direction seems off and steer it. How hands-on they are is theirs to set, and can change from one stretch to the
-  next, so nothing waits on their sign-off unless they ask for it. When a deliverable reaches a stage where it should
+  next, so routine deliverables need no sign-off unless they ask for one; decisions that are theirs and judgements
+  only they can make still wait on that point. When a deliverable reaches a stage where it should
   be good, show it in the showcase: what it is and how to see or try it, only when seeing it would tell them
   something about quality or direction, never for each small piece of a spec. Build each step to fit the finished whole, finish what you take on, and check what you
   can check yourself: before building an item, say how it will be checked, and before calling it done, reopen
@@ -3347,6 +3348,12 @@ def settings_page(reg):
 SANDBOX = "sandbox allow-scripts"
 
 
+def inline(name):
+    """A Content-Disposition for any file name: headers are Latin-1, so an ASCII fallback and the name in UTF-8."""
+    plain = re.sub(r'[^ -~]|["\\]', "_", name)
+    return f"inline; filename=\"{plain}\"; filename*=UTF-8''{urllib.parse.quote(name, safe='')}"
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -3487,7 +3494,7 @@ class Handler(BaseHTTPRequestHandler):
             data = path.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", showcase.mime(x))
-            self.send_header("Content-Disposition", f"inline; filename=\"{path.name}\"")
+            self.send_header("Content-Disposition", inline(path.name))
             self.send_header("Content-Security-Policy", SANDBOX)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -3517,7 +3524,7 @@ class Handler(BaseHTTPRequestHandler):
             data = path.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", pins.mime(pin))
-            self.send_header("Content-Disposition", f"inline; filename=\"{path.name}\"")
+            self.send_header("Content-Disposition", inline(path.name))
             self.send_header("Content-Security-Policy", SANDBOX)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -4190,7 +4197,8 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .mstatus .who { margin:10px 0 -6px }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
 .show .showhead { display:flex; gap:8px; align-items:baseline } .show .showhead .who { margin-left:auto; white-space:nowrap }
-.show .try { margin-top:6px } .show .open { display:inline-block; margin-top:6px } .show .shot { display:block; max-width:100%; margin-top:8px; border-radius:6px }
+.show { min-width:0 } .show .showhead { flex-wrap:wrap } .show > div { overflow-wrap:anywhere }
+.show .try { margin-top:6px } .show .open { display:inline-block; max-width:100%; margin-top:6px; overflow-wrap:anywhere } .show .shot { display:block; max-width:100%; margin-top:8px; border-radius:6px }
 .rate { display:flex; gap:2px; margin-top:6px } .star { background:none; border:none; padding:2px 4px; font-size:20px; color:var(--line); cursor:pointer }
 .star.on { color:var(--accent) }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
