@@ -16,7 +16,7 @@ A console can also freeze mid-work, and then shows "working" until the person lo
 positive evidence: the timer on its live working line (elapsed in providers.py) reads the same for FROZEN seconds on
 the same process, and its conversation's file hasn't changed meanwhile. It is then restarted in the same conversation (with whatever its program runs the turn in apart
 from the console: unfreeze in providers.py) and told to carry on, at most RESTARTS times a day;
-after that the person hears of it through the monitor. A screen whose working line isn't recognised is never touched.
+after that the person hears of it through the steward. A screen whose working line isn't recognised is never touched.
 """
 import json
 import socket

@@ -38,8 +38,13 @@ def resolve(name):
     raise KeyError(name)
 
 
+def shown(name):
+    """A sender's name as people and agents read it: the steward's messages are stored as from "monitor"."""
+    return "steward" if name == "monitor" else name
+
+
 def sender():
-    """Who is writing: the project whose folder this runs in, the monitor, or the person."""
+    """Who is writing: the project whose folder this runs in, the steward, or the person."""
     here = board.root_of()
     if here in names():
         return here, address(here)
@@ -106,7 +111,7 @@ def render(ms, heading):
     lines = [heading]
     for m in ms:
         kind = "asks" if m["ask"] else "writes"
-        lines.append(f"- [{m['id']}] {m['from']} {kind}: {m['text']}")
+        lines.append(f"- [{m['id']}] {shown(m['from'])} {kind}: {m['text']}")
     if any(m["ask"] for m in ms):
         lines.append('Answer a question with: colony reply ID "your answer"')
     return "\n".join(lines)

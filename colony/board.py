@@ -76,7 +76,7 @@ steer all of them from one board, and the projects can write to each other.
   digest, and anything taken from outside gets a safety pass first.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
-- **Who speaks for the person.** The monitor's notes and messages, text the board types into your console, and
+- **Who speaks for the person.** The steward's notes and messages, text the board types into your console, and
   colony's own notices (a usage limit, a reset) carry their direction. Act on them as theirs.
 - **Working alongside others.** Brief a helper with what it owns and where it ends; it reports as it goes
   rather than waiting. Paired with another project's agent, keep to your agreed role and talk at hand-offs.
@@ -121,7 +121,7 @@ section of CLAUDE.md, "This project is part of a colony", says how it works.
 First, read how this project already plans its work (its plan and spec documents, notes, open work and \
 recent history), so you arrive informed. Then have a conversation with the person about your shared vision: \
 draw out the image of the finished work with them. This is between you, this project's own agent, and the \
-person; the monitor's setup does not stand in for it. Leave distant details open until the work depends on \
+person; the steward's setup does not stand in for it. Leave distant details open until the work depends on \
 them. Keep existing plans intact and do not publish a new roadmap path before you clearly agree the vision. \
 Once agreed, record it with `colony vision --file PATH --words "the person's words agreeing it" --context "your reading"`.
 
@@ -134,7 +134,7 @@ the milestones before treating them as settled."""
 
 BEGIN = """The person has just added this project. Your first piece of work is a conversation with them about its
 vision: draw out your shared image of the finished work together. This is between you, this project's own
-agent, and the person; the monitor's setup does not stand in for it. Leave distant details open until the
+agent, and the person; the steward's setup does not stand in for it. Leave distant details open until the
 work depends on them. Once you clearly agree the vision, record it with
 `colony vision --file PATH --words "the person's words agreeing it" --context "your reading"`. Only then lay the roadmap toward it.
 Do not publish a roadmap path before that agreement."""
@@ -202,22 +202,29 @@ SETTING_HELP = {
     "messaging": "project agents can message each other (colony send, colony reply)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
-    "monitor": "the monitor session runs with the board",
+    "monitor": "the steward session runs with the board",
     "model": "main-agent model pin for this provider (blank: colony Auto)",
     "effort": "effort for a main-agent model pin (Auto chooses both model and effort)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
     "model_adoption": "when a new model becomes a recommendation: automatic or ask (one decision per model)",
     "helper_models": "provider-specific helper pins; edit the colony helper tiers in Settings",
-    "monitor_model": "the monitor's model, as MODEL:EFFORT (blank: its program's step-up tier)",
+    "monitor_model": "the steward's model, as MODEL:EFFORT (blank: its program's step-up tier)",
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
-    "updates": "minutes between the monitor's updates to you, helm or not: what the projects finished, then what was already waiting on you, then new asks (off: none); never while it is muted or outside your active hours",
+    "updates": "minutes between the steward's updates to you, helm or not: what the projects finished, then what was already waiting on you, then new asks (off: none); never while it is muted or outside your active hours",
     "active_hours": "when you're around, as HH:MM-HH:MM on this machine's clock (off: always): outside them agents keep working but hold their questions, which reach you together when your hours begin",
 }
 
 
+# The steward was once called the monitor: its settings are stored (and may be typed) under the old keys, and
+# shown and typed under the new names.
+SETTING_ALIASES = {"steward": "monitor", "steward_model": "monitor_model"}
+SETTING_NAMES = {v: k for k, v in SETTING_ALIASES.items()}
+
+
 def set_setting(key, value):
+    key = SETTING_ALIASES.get(key, key)
     if key in ('model', 'effort', 'provider', 'monitor_model', 'consultants'):
         from . import selection
         selection.migrate()
@@ -431,7 +438,7 @@ def providers_of(root):
 
 def settle_provider():
     """If the default provider's program isn't on this machine and another's is, that one becomes the default,
-    so new projects and the monitor start on something that runs. What changed, in a line, or None."""
+    so new projects and the steward start on something that runs. What changed, in a line, or None."""
     from . import providers
     now = providers.get(registry()["settings"]["provider"])
     if providers.usable(now):
@@ -440,7 +447,7 @@ def settle_provider():
     if not here:
         return None
     set_setting("provider", here)
-    return f"{providers.unusable(now)}, so new projects and the monitor run on {providers.get(here).label} (colony settings provider to change it)"
+    return f"{providers.unusable(now)}, so new projects and the steward run on {providers.get(here).label} (colony settings provider to change it)"
 
 
 def workdir(root):
@@ -796,7 +803,7 @@ def answer_asks(root, how):
 
 
 def answers_ask(n):
-    """A note that answers the agent's open question: the person's own words, or their monitor's, on the project."""
+    """A note that answers the agent's open question: the person's own words, or their steward's, on the project."""
     return not n.get("quiet") and not n["anchor"] and n.get("author") in ("person", "monitor")
 
 
@@ -909,13 +916,13 @@ def where(n):
             else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
 
 
-# A support the monitor proved elsewhere is still only a guess about this project's work: the agent doing the
+# A support the steward proved elsewhere is still only a guess about this project's work: the agent doing the
 # work knows it best, so it arrives as a suggestion to check, never as the person's word.
-SUGGESTION = (" (a suggestion from the monitor, not an instruction from the person, and not a new task: it serves the"
+SUGGESTION = (" (a suggestion from the steward, not an instruction from the person, and not a new task: it serves the"
               " work you are doing and widens nothing. Check it against what you know of that work; if it fits, ask the"
               " person to install it with colony gate; if not, say why with colony noted)")
-# The monitor's own idea for the work (colony suggest), a research question say: weighed, never obeyed.
-IDEA = (" (the monitor's own suggestion, not an instruction from the person and not a new task: weigh it against your"
+# The steward's own idea for the work (colony suggest), a research question say: weighed, never obeyed.
+IDEA = (" (the steward's own suggestion, not an instruction from the person and not a new task: weigh it against your"
         " work and what the person asked; take it up only if it is worth doing, within the agreed scope, and answer"
         " with colony noted either way)")
 # Research advice colony asked of a fresh model while turbo is on (colony/turbo.py): weighed, never obeyed.
@@ -930,7 +937,7 @@ def render_notes(ns, heading):
         return ""
     lines = [heading]
     for n in ns:
-        by = {"monitor": " (from the person's monitor, acting for them)",
+        by = {"monitor": " (from the person's steward, acting for them)",
               "suggestion": IDEA if n.get("kind") == "idea" else ADVICE if n.get("kind") == "advice" else SUGGESTION,
               "colony": " (from colony, the harness the person trusts: act on it as theirs)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
@@ -975,7 +982,7 @@ def track(path, register=True):
     if register:
         _closed(root, False)                          # reopened: continuation may take it up again
     from . import monitor
-    monitor.rebrief()                                 # colony's own source joining the board changes the monitor's part
+    monitor.rebrief()                                 # colony's own source joining the board changes the steward's part
     return root
 
 
@@ -1150,13 +1157,13 @@ def delete_project(root):
 
 def said(root, text):
     """The person's own words to a project's agent, typed in its console: kept (each up to 1,000 characters) so
-    the monitor can catch up on direction given without it."""
+    the steward can catch up on direction given without it."""
     append(root, "said.jsonl", {"at": now(), "text": text.strip()[:1000]})
 
 
 def said_reply(root, text):
     """The agent's answer to the person's last direct words: its closing lines (up to 600 characters), where it
-    says what it did, or why it pushed back. Context the monitor needs beside their words: an agent may have
+    says what it did, or why it pushed back. Context the steward needs beside their words: an agent may have
     shown a request cut against the project's own principles, and the person changed course."""
     rows = read(root, "said.jsonl")
     if not text.strip() or not rows or "reply" in rows[-1]:
@@ -1273,7 +1280,7 @@ def open_gates_line(root, cap=160):
     if not open_:
         return ""
     short = lambda q: (lambda t: t if len(t) <= cap else t[:cap - 1].rstrip() + "…")(" ".join(q.split()))
-    return ("Decisions still open on the person's list here; the board and their monitor keep raising them until "
+    return ("Decisions still open on the person's list here; the board and their steward keep raising them until "
             "closed:\n" + "\n".join(f"- {g['id']}: {short(g['question'])}" for g in open_)
             + "\nIf what they say now settles one: colony gate --answered ID \"their words\" --context \"your reading\". "
             "If one no longer applies: colony gate --withdraw ID \"why\".")
@@ -1574,8 +1581,8 @@ def note_box(pid, kind, ref, hint, back=None):
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        who = {'monitor': 'the monitor, for you',
-               'suggestion': 'research advice' if n.get('kind') == 'advice' else 'the monitor suggests',
+        who = {'monitor': 'the steward, for you',
+               'suggestion': 'research advice' if n.get('kind') == 'advice' else 'the steward suggests',
                'observation': 'file change observed', 'colony': 'colony'}.get(n.get('author'), 'you')
         out += (f"<div class='note'><span class='who'>{who} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
@@ -1590,8 +1597,8 @@ def sidebar(reg, pid):
     plist = projects(reg)
     ms = monitor.snapshot()
     helm = "at the helm" if monitor.helm() else "helm with you"
-    side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/monitor'><span class='pname'>"
-            f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>monitor</span>"
+    side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
+            f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward</span>"
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
     for i, p in enumerate(plist):
         waiting = len(moments(p))
@@ -1924,7 +1931,7 @@ def render(reg, pid, view="overview"):
             me = mail.address(root)
             rows = []
             for m in reversed(ms):
-                way = f"from <b>{e(m['from'])}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
+                way = f"from <b>{e(mail.shown(m['from']))}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
                 state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
                 if m["to"] == me and not m["delivered_at"]:
                     state = "reaches the agent on its next turn"
@@ -2347,7 +2354,7 @@ def auto_balance_fields(root=None):
                 held = state['accepted'].get(ident) or state['accepted'].get(selection.key(family, role))
                 waiting = bool(pick and settings['model_adoption'] == 'ask' and pick['model'] not in state['approved'])
                 text = (describe(pick) + (' · approval required' if waiting else '') + '. ' + pick['why']) if pick else 'Missing comparable evidence; retain accepted pick.'
-                rows.append(f"<tr><th>{e(family)} · {e(role)}</th><td>{e(text)}<div class='muted'>Accepted: {e(describe(held))}</div></td></tr>")
+                rows.append(f"<tr><th>{e(family)} · {e('steward' if role == 'monitor' else role)}</th><td>{e(text)}<div class='muted'>Accepted: {e(describe(held))}</div></td></tr>")
         panels.append(f"<div data-balance='{level}'{' hidden' if level != selected else ''}><p><strong>{e(label)}</strong></p><table class='bench'>{''.join(rows)}</table></div>")
     toggle = ("<label><input type='checkbox'" + (' checked' if inherited else '') +
               " onchange=\"const r=this.closest('.auto-balance').querySelector('input[type=range]');r.disabled=this.checked;"
@@ -2505,22 +2512,22 @@ def focus(root):
 
 
 def monitor_page(reg, view="overview"):
-    """The monitor, like a project: Overview (what needs the person, every project's status, what the
-    monitor decided), Helm (its stance toward each project), Console."""
+    """The steward, like a project: Overview (what needs the person, every project's status, what the
+    steward decided), Helm (its stance toward each project), Console."""
     from . import monitor
-    if MONITOR:                          # a board started without its monitor doesn't start one by being looked at
+    if MONITOR:                          # a board started without its steward doesn't start one by being looked at
         monitor.ensure()
-    tab = lambda v, label: f"<a class='{'on' if view == v else ''}' href='/monitor?view={v}'>{label}</a>"
+    tab = lambda v, label: f"<a class='{'on' if view == v else ''}' href='/steward?view={v}'>{label}</a>"
     on = monitor.helm()
     targets = "".join(f"<option value='{i}'>{e(p.name)}</option>" for i, p in enumerate(projects(reg)))
-    # the monitor relays for the person, so what it sends a project is taken as the person's word
+    # the steward relays for the person, so what it sends a project is taken as the person's word
     message = (f"<details class='psettings'><summary>Message a project</summary><div class='panel'>"
                f"<form class='options' method='post' action='/message'><input type='hidden' name='p' value='monitor'>"
                f"<label>To <select name='to'>{targets}</select></label>"
-               f"<label class='stack'>What should the monitor tell them for you?"
+               f"<label class='stack'>What should the steward tell them for you?"
                f"<textarea name='text' placeholder='It relays it as yours, in full, and checks it landed'></textarea></label>"
-               f"<button>Have the monitor send it</button></form></div></details>") if targets else ""
-    head = (f"<header class='project'><div class='titlerow'><h1>monitor</h1>{message}<form method='post' action='/helm' class='helmform'>"
+               f"<button>Have the steward send it</button></form></div></details>") if targets else ""
+    head = (f"<header class='project'><div class='titlerow'><h1>steward</h1>{message}<form method='post' action='/helm' class='helmform'>"
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form>"
             + ("" if on else f"<form method='post' action='/mute' class='helmform'><input type='hidden' name='state' "
@@ -2537,18 +2544,18 @@ def monitor_page(reg, view="overview"):
     if view == "direction":
         mine = (home() / "direction.md").exists()
         body = head + (f"<div class='card'><h3>Standing direction, for every project</h3>"
-                       f"<p class='muted'>How the monitor steers all your projects: what it settles, what always comes back to you, "
+                       f"<p class='muted'>How the steward steers all your projects: what it settles, what always comes back to you, "
                        f"how it holds a project to its vision. Each project's own direction, on the Helm tab, adds to this. "
                        f"{'This is your version.' if mine else 'This is colony' + chr(39) + 's default.'}</p>"
                        f"<form class='options' method='post' action='/direction'><textarea name='text' class='direction'>{e(monitor.direction())}</textarea>"
                        f"<div class='choices'><button>Save</button>"
                        + ("<button class='quiet' name='reset' value='1'>Back to colony's default</button>" if mine else "")
-                       + "</div></form><p><a href='/monitor?view=helm'>← Helm</a></p></div>")
+                       + "</div></form><p><a href='/steward?view=helm'>← Helm</a></p></div>")
         return shell(reg, -1, body)
     if view == "helm":
         cards = [f"<div class='card'><div class='titlerow'><h3>Every project</h3>"
-                 f"<a href='/monitor?view=direction'>Standing direction →</a></div>"
-                 f"<p class='muted'>What the monitor settles, what always comes back to you, and how it steers, for all projects"
+                 f"<a href='/steward?view=direction'>Standing direction →</a></div>"
+                 f"<p class='muted'>What the steward settles, what always comes back to you, and how it steers, for all projects"
                  f"{' (your version)' if (home() / 'direction.md').exists() else ''}. Each project below adds its own.</p></div>"]
         for pid, p in enumerate(plist):
             if not p.exists():
@@ -2559,11 +2566,11 @@ def monitor_page(reg, view="overview"):
             made = "".join(f"<div class='note'><span class='who'>{e(d['at'][:16].replace('T', ' '))}</span><div>{e(d['text'])}</div></div>"
                            for d in monitor.decisions(p, 8))
             cards.append(f"<div class='card helmcard'><div class='titlerow'><h3>{e(p.name)}</h3>"
-                         f"<span class='badge {'gate' if held else ''}'>{'monitor holds the helm' if held else 'helm with you'}</span></div>"
+                         f"<span class='badge {'gate' if held else ''}'>{'steward holds the helm' if held else 'helm with you'}</span></div>"
                          f"<form class='options' method='post' action='/posture'><input type='hidden' name='p' value='{pid}'>"
-                         f"<label><input type='checkbox' name='helm' value='on'{'' if pos['helm'] is False else ' checked'}> Include in the monitor's helm "
+                         f"<label><input type='checkbox' name='helm' value='on'{'' if pos['helm'] is False else ' checked'}> Include in the steward's helm "
                          f"<span class='muted'>({'held now' if held else 'the helm is with you' if not on else 'left out'})</span></label>"
-                         f"<label class='stack'>Direction for the monitor<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
+                         f"<label class='stack'>Direction for the steward<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
                          f"<label><input type='checkbox' name='scouting' value='on'{' checked' if pos['scouting'] else ''}> Scout for it every "
                          f"<input name='scout' type='number' min='1' step='1' value='{pos['scout'] or 24}' class='hours'> hours "
                          f"<span class='muted'>(if worked on since)</span></label>"
@@ -2580,7 +2587,7 @@ def monitor_page(reg, view="overview"):
     body = (head + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
             f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
             f"<h2>Projects</h2>{statuses or '<p class=muted>No projects yet.</p>'}"
-            + (f"<h2>What the monitor decided</h2><div class='card'>{recent}</div>" if recent else ""))
+            + (f"<h2>What the steward decided</h2><div class='card'>{recent}</div>" if recent else ""))
     return shell(reg, -1, body)
 
 
@@ -2723,7 +2730,7 @@ def pin_editor(reg, pid, pin):
 
 def waiting_items(p, snap=None):
     """Everything a project is waiting on the person for. The one definition: Needs you, the project's
-    Waiting on you, the sidebar's count, `colony projects` and the monitor's wake-ups all read this.
+    Waiting on you, the sidebar's count, `colony projects` and the steward's wake-ups all read this.
       gate    a decision the agent put to the person (`colony gate`), once due: not before its item, nor their hours;
               a skipped default that has come to stand is answered first
       choice  an on-screen choice in its console, such as a permission or trust question
@@ -2925,21 +2932,21 @@ def held_html(pid, root, back=None):
 
 
 def support_rows():
-    """Supports the monitor has brought the person: its question, and Test it / Approve suggesting it / Drop,
-    or talk it over in its console. The answer goes back to the monitor."""
+    """Supports the steward has brought the person: its question, and Test it / Approve suggesting it / Drop,
+    or talk it over in its console. The answer goes back to the steward."""
     from . import supports
     rows = []
     for r in supports.asking():
         a = r["asking"]
         approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
-        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the monitor brought</span></div>"
+        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the steward brought</span></div>"
                     f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
                     f"<div class='asktext'>{e(a['text'])}</div><p class='muted'>{e(supports.NOTICE)}</p>"
                     f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"
                     f"{approve}<button name='verdict' value='test' class='{'quiet' if approve else ''}'>Test it</button>"
-                    f"<input name='text' placeholder='anything to tell the monitor'>"
+                    f"<input name='text' placeholder='anything to tell the steward'>"
                     f"<button class='quiet' name='verdict' value='drop'>Drop</button></form>"
-                    f"<a href='/monitor?view=console'>Talk it over with the monitor →</a></div>")
+                    f"<a href='/steward?view=console'>Talk it over with the steward →</a></div>")
     return rows
 
 
@@ -2991,7 +2998,7 @@ def global_role_fields():
 
 
 def model_changes(pending_only=False):
-    """Colony decisions are deliberately outside project questions and monitor wake-ups."""
+    """Colony decisions are deliberately outside project questions and steward wake-ups."""
     from . import selection
     state = selection.read()
     if state.get('recovery') or (not state['accepted'] and not pending_only):
@@ -3061,9 +3068,9 @@ def model_changes(pending_only=False):
 
 def needs_you(reg):
     """Needs you: what every project is waiting on the person for, in one place, and the supports the
-    monitor has brought them."""
+    steward has brought them."""
     choices = model_changes(pending_only=True)
-    rows = ([choices] if choices else []) + support_rows() + [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/monitor")]
+    rows = ([choices] if choices else []) + support_rows() + [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/steward")]
     return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
@@ -3084,7 +3091,7 @@ def models_page(reg):
             held = state['accepted'].get(selection.key(family, role))
             desc = (pick['model'] + ' at ' + str(pick['effort']) + ': ' + pick['why']) if pick else 'Missing comparable evidence; retain accepted choice.'
             accepted = (held['model'] + ' at ' + str(held['effort'])) if held else 'No accepted choice yet'
-            rows.append(f"<tr><th>{e(family)} · {e(role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
+            rows.append(f"<tr><th>{e(family)} · {e('steward' if role == 'monitor' else role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
     cards = ''.join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     title = f'{ceiling:.2f}' if ceiling is not None else 'unavailable'
     problems, notes, _ = intelligence.health(entries)
@@ -3367,7 +3374,7 @@ def settings_page(reg):
                        "<span class='muted'>(when its weekly use runs behind pace, its projects with queued work are "
                        "turned up as each ticks in its own Settings)</span></label>"
                        for k, p in pv.PROVIDERS.items() if pv.usable(p)) +
-               f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the monitor with the board</label>"
+               f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the steward with the board</label>"
                f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
                f"<span class='muted'>(after colony restart)</span></label>"
                f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
@@ -3454,8 +3461,8 @@ def settings_page(reg):
                   f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
                   + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
     body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}{codex_pairing_options(reg)}</div>{signin}"
-            f"{model_changes()}{global_role_fields()}<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Monitor</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
-            f"<p class='muted'>Each project, and the monitor, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
+            f"{model_changes()}{global_role_fields()}<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Steward</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
+            f"<p class='muted'>Each project, and the steward, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
             f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
             f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
             f"<h2>Projects added one by one</h2><div class='card'><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>{('<h3>Hidden from the board</h3><ul class=folders>' + ''.join(f"<li><code class='path'>{e(h)}</code><div class='folderacts'><form method='post' action='/roots'><input type='hidden' name='show' value='{e(h)}'><button class='quiet'>Show again</button></form></div></li>" for h in reg['hidden']) + '</ul>') if reg['hidden'] else ''}"
@@ -3548,6 +3555,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._from_this_page():
             return self._send(403, b"not from this page")
         url = urllib.parse.urlparse(self.path)
+        if url.path == "/monitor":                     # the steward's page was once /monitor: old links and bookmarks still work
+            url = url._replace(path="/steward")
         q = urllib.parse.parse_qs(url.query)
         reg = registry()
         plist = projects(reg)
@@ -3571,8 +3580,8 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(body)
         if url.path == "/" and "p" not in q and reg["settings"]["monitor"]:
-            self.send_response(303)                    # the monitor is the front page; projects are a click away
-            self.send_header("Location", "/monitor")
+            self.send_response(303)                    # the steward is the front page; projects are a click away
+            self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -3667,7 +3676,7 @@ class Handler(BaseHTTPRequestHandler):
             if "p" in q:                                   # one project's Waiting on you
                 return self._send(200, waiting_html(pid, plist[pid]).encode())
             return self._send(200, needs_you(reg).encode())
-        if url.path == "/monitor":
+        if url.path == "/steward":
             return self._send(200, monitor_page(reg, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/status":
             from . import monitor
@@ -3895,8 +3904,8 @@ class Handler(BaseHTTPRequestHandler):
                 from . import monitor
                 dst = projects(reg)[int(form.get("to", "0"))]
                 if text and not console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}"):
-                    return self._send(409, held("the monitor", "/monitor").encode())
-                where = "/monitor?view=console"
+                    return self._send(409, held("the steward", "/steward").encode())
+                where = "/steward?view=console"
             else:
                 from . import mail
                 src = projects(reg)[int(form.get("p", "0"))]
@@ -4019,7 +4028,7 @@ class Handler(BaseHTTPRequestHandler):
             except (KeyError, ValueError):
                 pass                                   # answered already, or not a choice it offers
             self.send_response(303)
-            self.send_header("Location", "/monitor")
+            self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -4027,7 +4036,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             monitor.set_direction(None if form.get("reset") else form.get("text", ""))
             self.send_response(303)
-            self.send_header("Location", "/monitor?view=direction")
+            self.send_header("Location", "/steward?view=direction")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -4037,7 +4046,7 @@ class Handler(BaseHTTPRequestHandler):
             monitor.set_posture(root, helm=form.get("helm") == "on", direction=form.get("direction", ""), scout=form.get("scout"),
                                 scout_note=form.get("scout_note", ""), scouting=form.get("scouting") == "on")
             self.send_response(303)
-            self.send_header("Location", "/monitor?view=helm")
+            self.send_header("Location", "/steward?view=helm")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -4046,9 +4055,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 monitor.muted(form.get("state") == "on")
             except ValueError as err:
-                return self._send(409, shell(reg, -1, f"<p>{e(str(err))}</p><p><a href='/monitor'>Back</a></p>").encode())
+                return self._send(409, shell(reg, -1, f"<p>{e(str(err))}</p><p><a href='/steward'>Back</a></p>").encode())
             self.send_response(303)
-            self.send_header("Location", "/monitor")
+            self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -4056,7 +4065,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             monitor.helm(form.get("state") == "on")
             self.send_response(303)
-            self.send_header("Location", "/monitor")
+            self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -4065,7 +4074,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             subprocess.run(["tmux", "kill-session", "-t", monitor.name()], capture_output=True)
             self.send_response(303)
-            self.send_header("Location", "/monitor")
+            self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

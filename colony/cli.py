@@ -1,5 +1,5 @@
 """colony — one board for all of a person's long projects: each project's agent in its live console, what it
-waits on them for, its roadmap, and a monitor that can act for them.
+waits on them for, its roadmap, and a steward that can act for them.
 
     colony track [PATH]             put a project on the board (roadmap, notes, gates, delivery hooks)
     colony board [--port 8790] [--lan]  one page for all tracked projects, with each project's live console
@@ -8,7 +8,7 @@ waits on them for, its roadmap, and a monitor that can act for them.
     colony noted ID "TEXT"          mark a note as acted on, with what was done
     colony vision [--history]       read this project's vision or its dated changes
     colony restart                  reload the board with its code as it is now (consoles keep running)
-    colony stop                     end the board, the monitor and every project console
+    colony stop                     end the board, the steward and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
     colony projects                 every project on the board, its console state and latest line
     colony send NAME "TEXT" [--ask] a message to another project's agent; --ask expects an answer
@@ -21,17 +21,19 @@ waits on them for, its roadmap, and a monitor that can act for them.
     colony close NAME [--cancel]    close a project safely: it lands its work, then comes off the board (files and
                                     conversation kept; colony track reopens it where it stopped)
     colony consult R4 "QUESTION" --digest FILE   two fresh views at a decision costly to change
-    colony scout "BRIEF"            (monitor) a fresh scout that can only search and read the web; its report
+    colony scout "BRIEF"            (steward) a fresh scout that can only search and read the web; its report
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
-    colony setup                    the monitor walks you through first-time setup (again)
+    colony setup                    the steward walks you through first-time setup (again)
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
                                     fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
     colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores, rote)
-    colony helm [on|off]            whether the monitor answers routine questions for the person
+    colony helm [on|off]            whether the steward answers routine questions for the person
     colony turbo [--nothing]        each program's pace this week, and what turbo is doing about it; --nothing (a
                                     project's agent): nothing worth doing, so no more from turbo until its roadmap changes
-    colony suggest NAME "TEXT"      (monitor) your own suggestion to a project's agent, for it to weigh
+    colony suggest NAME "TEXT"      (steward) your own suggestion to a project's agent, for it to weigh
+    colony steward COMMAND ...      the steward's commands under one name: mute, helm, posture, scout, said, suggest,
+                                    decided, supports, setup (colony monitor ... is its old name and still works)
 
 Run a project's commands from inside its folder.
 """
@@ -148,13 +150,13 @@ def _launch(args):
 
 def cmd_board(a):
     """The board runs in its own tmux session, so it outlives the terminal that started it and the
-    monitor can restart it; --foreground runs it here instead."""
+    steward can restart it; --foreground runs it here instead."""
     from . import board, monitor
     fresh = not (board.home() / "board.json").exists() and not (board.home() / "setup-asked").exists()
     settled = board.settle_provider()            # the default runs on a program that is here
     if fresh and not a.no_monitor:
         board.home().mkdir(parents=True, exist_ok=True)
-        monitor.setup()                          # a new install: the monitor walks the person through setup
+        monitor.setup()                          # a new install: the steward walks the person through setup
     if settled:
         print(settled)
     if a.foreground:
@@ -200,7 +202,7 @@ def cmd_urls(a):
 
 
 def cmd_stop(a):
-    """End the board, the monitor and every project console this board started, and nothing else."""
+    """End the board, the steward and every project console this board started, and nothing else."""
     from . import board, console, monitor
     names = [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
     ended = [n for n in names if subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True).returncode == 0]
@@ -209,7 +211,7 @@ def cmd_stop(a):
 
 
 def cmd_restart(a):
-    """Reload the board with its code as it is now. Project consoles and the monitor keep running."""
+    """Reload the board with its code as it is now. Project consoles and the steward keep running."""
     from . import board
     saved = board.home() / "server.json"
     args = json.loads(saved.read_text()) if saved.exists() else []
@@ -223,7 +225,7 @@ def cmd_restart(a):
         time.sleep(0.25)
     if not _launch(args):
         return 1
-    print("the board restarted; consoles and the monitor were not touched")
+    print("the board restarted; consoles and the steward were not touched")
     return 0
 
 
@@ -252,8 +254,8 @@ def cmd_doctor(a):
         problems.append(f"the board does not answer on port {port}: colony board, or colony restart"
                         + ("" if _free(int(port), False) else " (another program holds that port: colony stop, then colony board)"))
     if "--no-monitor" not in args:
-        (print("ok    monitor session running") if monitor.snapshot()["state"] != "off"
-         else problems.append("the monitor session is not running: colony restart starts it"))
+        (print("ok    steward session running") if monitor.snapshot()["state"] != "off"
+         else problems.append("the steward session is not running: colony restart starts it"))
     for p in board.projects():
         if not p.exists():
             problems.append(f"{p}: the folder is gone; remove it from {board.home() / 'board.json'}")
@@ -407,7 +409,7 @@ def cmd_consult(a):
 
 
 def cmd_scout(a):
-    """(monitor) One fresh scout on a brief, apart from you: it can only search and read the web; prints its report."""
+    """(steward) One fresh scout on a brief, apart from you: it can only search and read the web; prints its report."""
     from . import monitor
     try:
         text = (Path(a.file).expanduser().read_text() if a.file and a.file != "-" else a.brief if a.brief not in (None, "-")
@@ -577,10 +579,10 @@ def cmd_models(a):
 
 
 def cmd_setup(a):
-    """Ask the monitor to walk the person through first-time setup again."""
+    """Ask the steward to walk the person through first-time setup again."""
     from . import monitor
     monitor.setup()
-    print("the monitor will walk you through setup when it's next free (the board's monitor page)")
+    print("the steward will walk you through setup when it's next free (the board's steward page)")
     return 0
 
 
@@ -695,17 +697,17 @@ def cmd_notes(a):
         prompt = str(payload.get("prompt") or "")
         if _persons(prompt):
             board.answer_asks(root, "in the console")        # the person answered there themselves
-            board.said(root, prompt)                         # their own words, for the monitor to catch up on
+            board.said(root, prompt)                         # their own words, for the steward to catch up on
         from . import bench, monitor as _monitor
         own_monitor = Path(root).resolve() == _monitor.home().resolve()
         standing = bench.plan_text(root) if a.session and not own_monitor else ""   # the helper tiers, every session
-        # colony's words for the monitor: held for this hand-off when delivering, so an overlapping hook skips them
+        # colony's words for the steward: held for this hand-off when delivering, so an overlapping hook skips them
         handed = (_monitor.claim() if a.deliver else _monitor.inbox()) if own_monitor else []
         fresh, still = board.deliver(root, session=a.session, mark=False)
         fresh, own = vision.delivery(root, fresh)
         still, earlier_own = vision.delivery(root, still)
         if any(board.answers_ask(n) for n in fresh):
-            board.answer_asks(root, "by a note")                 # the person (or their monitor) wrote back
+            board.answer_asks(root, "by a note")                 # the person (or their steward) wrote back
         new_mail, open_asks = mail.deliver(root, session=a.session, mark=False)
         try:
             engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
@@ -713,7 +715,7 @@ def cmd_notes(a):
             engagement, engagement_receipt = f"Colony could not sync this workspace: {error}", None
         from . import hours, monitor
         # Outside the person's active hours, a project's agent hears it on every turn; inside them, nothing. The
-        # monitor's own console isn't a project: its brief says what the hours mean for it.
+        # steward's own console isn't a project: its brief says what the hours mean for it.
         # The person typing to it now is awake: their own turn gets no such line.
         night = ("" if Path(root).resolve() == monitor.home().resolve() or _persons(prompt)
                  else hours.notice())
@@ -726,8 +728,8 @@ def cmd_notes(a):
             lead.role_text(root) if a.session else '',
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
-            board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's monitor, acting for them, left notes for you:"),
-            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"], "Suggestions from the monitor:"),
+            board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's steward, acting for them, left notes for you:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"], "Suggestions from the steward:"),
             board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") == "advice"], "Research advice colony asked for, apart from you:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
@@ -801,7 +803,7 @@ def cmd_noted(a):
     note = next(n for n in board.notes(root) if n["id"] == a.id)
     for ident in note.get('batch_ids') or [a.id]:
         board.append(root, "notes.jsonl", {"type": "addressed", "of": ident, "at": board.now(), "text": a.text})
-    if note.get("author") == "suggestion" and note.get("kind") != "advice":   # the monitor made it: its answer is the monitor's to hear
+    if note.get("author") == "suggestion" and note.get("kind") != "advice":   # the steward made it: its answer is the steward's to hear
         from . import monitor
         monitor.queue(f"{root.name} answered your suggestion ({note['text'][:80]}...): {a.text}")
     print(f"{a.id} marked as acted on")
@@ -835,8 +837,8 @@ def cmd_peek(a):
 
 
 def _caught_up(root):
-    """Run by the monitor's own console: if the person has spoken to this project directly since the monitor last
-    caught up, nothing is sent; their words are shown instead, so the monitor never acts on a stale picture of
+    """Run by the steward's own console: if the person has spoken to this project directly since the steward last
+    caught up, nothing is sent; their words are shown instead, so the steward never acts on a stale picture of
     what they want. True when it may go on."""
     from . import console, monitor
     if os.environ.get("COLONY_CONSOLE") != monitor.name():
@@ -852,7 +854,7 @@ def _caught_up(root):
 
 def cmd_said(a):
     """What the person has said to a project directly (in its console, or in a note on the board) since the
-    monitor last caught up on it: their own words only."""
+    steward last caught up on it: their own words only."""
     from . import monitor
     words = monitor.catch_up(_project(a.name))
     print(words or f"Nothing new from the person in {a.name} since you last caught up.")
@@ -860,7 +862,7 @@ def cmd_said(a):
 
 
 def cmd_tell(a):
-    """The monitor speaks for the person: as an attributed monitor note, delivered through hooks into the agent's own
+    """The steward speaks for the person: as an attributed steward note, delivered through hooks into the agent's own
     context (typed text arrives as a paste, which an agent rightly doesn't take as the person's word), and a
     one-line nudge if the session is idle. It shows on the board like any note."""
     from . import board, console
@@ -871,12 +873,12 @@ def cmd_tell(a):
     try:
         name = console.ensure(root)
         if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
-            console.type_into(name, "[colony] You have a note from the person's monitor.")
+            console.type_into(name, "[colony] You have a note from the person's steward.")
     except (OSError, subprocess.CalledProcessError):
         # The note is kept either way: sending it again would deliver it twice.
         print(f"sent to {a.name}; its console isn't ready, so the note waits for its next turn")
         return 0
-    print(f"sent to {a.name} as a note from the monitor, acting for the person")
+    print(f"sent to {a.name} as a note from the steward, acting for the person")
     return 0
 
 
@@ -915,7 +917,7 @@ def cmd_settings(a):
         try:
             board.set_setting(a.key, a.value or "")
         except KeyError:
-            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.DEFAULT_SETTINGS)}, new-folder")
+            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.SETTING_NAMES.get(k, k) for k in board.DEFAULT_SETTINGS)}, new-folder")
         except ValueError as err:                     # a setting that says what reads (active_hours)
             raise SystemExit(f"colony: {err}")
     reg = board.registry()
@@ -926,7 +928,7 @@ def cmd_settings(a):
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
                  if k == "consultants" else ",".join(f"{f}={'on' if v.get(f, True) else 'off'}" for f in providers.PROVIDERS)
                  if k == "turbo_by" else v or "(colony Auto)")
-        print(f"{k:14} {str(shown):28} {board.SETTING_HELP.get(k, '')}")
+        print(f"{board.SETTING_NAMES.get(k, k):14} {str(shown):28} {board.SETTING_HELP.get(k, '')}")
     print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
     return 0
@@ -982,7 +984,7 @@ def cmd_mail(a):
         print("no mail")
     me = mail.address(root)
     for m in ms[-a.last:]:
-        way = f"from {m['from']}" if m["to"] == me else f"to {m['to']}"
+        way = f"from {mail.shown(m['from'])}" if m["to"] == me else f"to {m['to']}"
         flag = (" [answered]" if m["answer"] else " [asks]") if m["ask"] else ""
         print(f"{m['id']}  {m['at'][:16]}  {way}{flag}: {m['text']}")
     return 0
@@ -995,8 +997,8 @@ def cmd_mute(a):
             monitor.muted(a.state == "on")
     except ValueError as err:
         raise SystemExit(str(err))
-    print("the monitor is muted: nothing wakes it, and it spends nothing unless you talk to it" if monitor.muted()
-          else "the monitor is awake" + (", holding the helm" if monitor.helm() else ""))
+    print("the steward is muted: nothing wakes it, and it spends nothing unless you talk to it" if monitor.muted()
+          else "the steward is awake" + (", holding the helm" if monitor.helm() else ""))
     return 0
 
 
@@ -1007,17 +1009,17 @@ def cmd_helm(a):
         if a.state:
             monitor.set_posture(root, helm=a.state == "on")
         included = monitor.posture(root)["helm"] is not False
-        print(f"{a.project}: " + ("the monitor holds the helm" if monitor.helm_for(root) else
+        print(f"{a.project}: " + ("the steward holds the helm" if monitor.helm_for(root) else
                                   "included in the helm, which is with the person" if included else "left out of the helm"))
         return 0
     if a.state:
         monitor.helm(a.state == "on")
-    print("the monitor holds the helm" if monitor.helm() else "the helm is with the person")
+    print("the steward holds the helm" if monitor.helm() else "the helm is with the person")
     return 0
 
 
 def cmd_posture(a):
-    """The monitor's stance toward each project: helm, the person's direction, the current focus."""
+    """The steward's stance toward each project: helm, the person's direction, the current focus."""
     from . import board, monitor
     if a.name and (a.direction is not None or a.scout is not None or a.favour is not None or a.scouting):
         monitor.set_posture(_project(a.name), direction=a.direction, scout=a.scout, scout_note=a.favour,
@@ -1222,7 +1224,7 @@ def cmd_decided(a):
 
 
 def cmd_suggest(a):
-    """(monitor) Your own suggestion to a project's agent, never the person's word: it weighs it against its work and
+    """(steward) Your own suggestion to a project's agent, never the person's word: it weighs it against its work and
     answers (colony noted). It wakes the project only if its console sits idle, with nothing typed, no one at it and
     nothing waiting on the person; otherwise the agent hears it on its next turn. Nothing is started for it."""
     from . import board, console, turbo
@@ -1232,7 +1234,7 @@ def cmd_suggest(a):
     snap = console.snapshot(root, lines=4)
     now = turbo.ready(root, snap) and not turbo.held(root, snap)
     board.add_note(root, None, a.text, author="suggestion", quiet=True, kind="idea")
-    woken = now and console.type_into(console.session_name(root), "[colony] You have a suggestion from the monitor.")
+    woken = now and console.type_into(console.session_name(root), "[colony] You have a suggestion from the steward.")
     print(f"suggested to {a.name}, as yours: " + ("its agent has it now" if woken else "its agent hears it on its next turn"))
     return 0
 
@@ -1264,7 +1266,7 @@ def main(argv=None):
     p.set_defaults(fn=cmd_track)
     p = sub.add_parser("board"); p.add_argument("--port", type=int)
     p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
-    p.add_argument("--no-monitor", action="store_true", help="don't start the monitor session and its watcher")
+    p.add_argument("--no-steward", "--no-monitor", dest="no_monitor", action="store_true", help="don't start the steward session and its watcher")
     p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
     p.add_argument("--local", action="store_true", help="answer only this machine, whatever the settings say")
     p.set_defaults(fn=cmd_board)
@@ -1274,7 +1276,7 @@ def main(argv=None):
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     sub.add_parser("whoami").set_defaults(fn=cmd_whoami)
-    p = sub.add_parser("mute", help="mute the monitor (on) so nothing wakes it, or wake it again (off)")
+    p = sub.add_parser("mute", help="mute the steward (on) so nothing wakes it, or wake it again (off)")
     p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_mute)
     p = sub.add_parser("pair", help="a ChatGPT pairing code for a Codex project (--check CODE confirms it)")
     p.add_argument("name", nargs="?"); p.add_argument("--check", metavar="CODE"); p.set_defaults(fn=cmd_pair)
@@ -1300,15 +1302,15 @@ def main(argv=None):
     p.add_argument("--context", help="with --adopt: your reading of what they meant")
     p.add_argument("--show", metavar="ID", help="show consultation ID again")
     p.set_defaults(fn=cmd_consult)
-    p = sub.add_parser("scout", help="(monitor) a fresh scout that can only search and read the web, on a brief")
+    p = sub.add_parser("scout", help="(steward) a fresh scout that can only search and read the web, on a brief")
     p.add_argument("brief", nargs="?", help="the need and where to look (- or none: read from stdin)")
     p.add_argument("--file", help="read the brief from a file")
-    p.add_argument("--provider", help="the program to run it on (default: the monitor's)")
+    p.add_argument("--provider", help="the program to run it on (default: the steward's)")
     p.set_defaults(fn=cmd_scout)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
-    p = sub.add_parser("said", help="(monitor) what the person said to a project directly since you last caught up")
+    p = sub.add_parser("said", help="(steward) what the person said to a project directly since you last caught up")
     p.add_argument("name"); p.set_defaults(fn=cmd_said)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
@@ -1330,7 +1332,7 @@ def main(argv=None):
     p.add_argument("title"); p.add_argument("--what", required=True, help="what it is, plainly")
     p.add_argument("--try", dest="try_", help="how to see or try it"); p.add_argument("--link", help="a URL or a file in the project")
     p.add_argument("--item", help="the roadmap item it comes from"); p.set_defaults(fn=cmd_show)
-    sub.add_parser("setup", help="the monitor walks you through first-time setup").set_defaults(fn=cmd_setup)
+    sub.add_parser("setup", help="the steward walks you through first-time setup").set_defaults(fn=cmd_setup)
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
@@ -1370,7 +1372,7 @@ def main(argv=None):
     p.set_defaults(fn=cmd_settings)
     p = sub.add_parser("helm"); p.add_argument("state", nargs="?", choices=("on", "off")); p.add_argument("--project")
     p.set_defaults(fn=cmd_helm)
-    p = sub.add_parser("posture", help="the monitor's stance toward each project: helm, direction, focus")
+    p = sub.add_parser("posture", help="the steward's stance toward each project: helm, direction, focus")
     p.add_argument("name", nargs="?"); p.add_argument("--direction")
     p.add_argument("--scout", help="every how many hours to look for supports here (0: never)")
     p.add_argument("--favour", help="what scouting here should favour")
@@ -1387,18 +1389,24 @@ def main(argv=None):
     p.add_argument("name"); p.add_argument("--cancel", action="store_true", help="keep it on the board after all")
     p.set_defaults(fn=cmd_close)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
-    p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
+    p = sub.add_parser("supports", help="(steward) tools offered to projects when their work calls for one, and how far each is trusted")
     p.add_argument("action", nargs="?", choices=("add", "set", "ask", "approve", "suggest", "check", "sources", "source", "block")); p.add_argument("name", nargs="?", help="add: its name; set: its id")
     p.add_argument("status", nargs="?"); p.add_argument("--for", dest="symptom", default=""); p.add_argument("--gives", default="")
     p.add_argument("--source", default=""); p.add_argument("--cost", default=""); p.add_argument("--remove", default="")
     p.add_argument("--evidence", default=""); p.add_argument("--project"); p.add_argument("--text", default=""); p.add_argument("--trust"); p.add_argument("--reference", action="store_true", help="add: a project to learn from, not a tool to install"); p.set_defaults(fn=cmd_supports)
-    p = sub.add_parser("decided", help="(monitor) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
+    p = sub.add_parser("decided", help="(steward) record what it settled for a project"); p.add_argument("name"); p.add_argument("text")
     p.set_defaults(fn=cmd_decided)
-    p = sub.add_parser("suggest", help="(monitor) your own suggestion to a project's agent, for it to weigh and answer")
+    p = sub.add_parser("suggest", help="(steward) your own suggestion to a project's agent, for it to weigh and answer")
     p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_suggest)
     p = sub.add_parser("turbo", help="each program's pace this week, and what turbo is doing about it")
     p.add_argument("--nothing", action="store_true",
                    help="(a project's agent) nothing worth doing: no more from turbo until the roadmap changes")
     p.set_defaults(fn=cmd_turbo)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] in (["steward"], ["monitor"]):       # the steward's commands under one name; `monitor` is its old name
+        if len(argv) == 1:
+            print("colony steward COMMAND ...: the steward's commands are mute, helm, posture, scout, said, suggest, decided, supports, setup")
+            return 0
+        argv = argv[1:]
     a = ap.parse_args(argv)
     return a.fn(a)

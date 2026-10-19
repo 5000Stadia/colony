@@ -2,7 +2,7 @@
 
 **One page to run all your long projects with Claude Code or Codex.** Each project gets its own agent, live in
 the browser and on your phone. You see what each one is doing, what it's waiting on you for, and how
-far along its roadmap it is, and you steer them all from one board. A monitor agent can hold the helm
+far along its roadmap it is, and you steer them all from one board. A steward agent can hold the helm
 for you across them.
 
 And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects with one strong agent.
@@ -20,7 +20,7 @@ During the Vision conversation, your agent proposes a few useful completed versi
 
 That's it. It installs colony, starts the board and prints where to open it: on this machine, from
 your phone on the same network, and in the Claude or ChatGPT app, where every project's session appears.
-The monitor, an agent of its own, then walks you through setup. You need
+The steward, an agent of its own, then walks you through setup. You need
 [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex), tmux and
 Python 3.10+.
 
@@ -53,7 +53,7 @@ conversation when you open it.
   see or try it, with older ones kept as its history. Rate or comment if you like; it reaches the agent, and
   nothing waits on you. How hands-on you are is yours to set.
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
-- **The monitor**, one more session at the top of the sidebar. It tells you when a project needs you
+- **The steward**, one more session at the top of the sidebar. It tells you when a project needs you
   or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
   routine questions within the direction you set for each project, and brings back anything about scope,
   cost or that can't be undone. It never polls: a watcher reads every screen every few seconds for
@@ -61,7 +61,7 @@ conversation when you open it.
   entry), never just because a turn ended, and it stays silent when there's nothing new for you. Colony's own words reach it through an inbox
   its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
   hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
-  you, and what's new, closing with `(Monitor: On | Helm Control: Off)`; say mute to mute it.
+  you, and what's new, closing with `(Steward: On | Helm Control: Off)`; say mute to mute it.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.
@@ -83,7 +83,7 @@ conversation when you open it.
 - **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
   Outside them agents keep working but don't end on a question to you: the decisions they need, and any
   question asked in a console, are held off Waiting on you and arrive together when your hours begin (new
-  hours move them), and the monitor isn't woken just to pass something on. What you send goes through at any hour.
+  hours move them), and the steward isn't woken just to pass something on. What you send goes through at any hour.
 - **Today:** each project's page for your day, made from colony's records at no token cost: what landed since
   you last looked on an earlier day, the day's decisions numbered, the queue, and what's held for your hours.
   Answer by number in one box (`1 yes; 2 email`). An agent can give a reversible decision a default, which
@@ -96,7 +96,7 @@ conversation when you open it.
 Code hooks. The agent keeps `ROADMAP.md` current, puts decisions to you with `colony gate`, marks work
 ready with `colony ready`, and records what it did with each of your notes (`colony noted`). The hooks
 hand it your notes, answers and mail at the start of each turn, so nothing relies on its memory. The
-board and the monitor reach a session by typing into its console, never over something you have
+board and the steward reach a session by typing into its console, never over something you have
 half-typed there. The board's record of a project is in its `.board/` folder.
 
 At consulted decisions, gates show the relevant recommendations with their sources.
@@ -105,7 +105,7 @@ the consultants' checking round. Choices and revisions stay in the decision's re
 [How agents link consultant points to a gate](docs/consultation-gates.md).
 
     colony board [--local]   start the board (open to your network by default; --local: this machine only)
-    colony restart           reload the board after a change; consoles and the monitor keep running
+    colony restart           reload the board after a change; consoles and the steward keep running
     colony doctor            is everything up and wired? what to do if not
     colony urls              where the board answers
     colony peek NAME [-n N]  a project's state and its last lines

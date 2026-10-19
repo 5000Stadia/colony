@@ -1,11 +1,11 @@
 # Colony
 
-This repository is colony: the board (colony/board.py), its consoles, the monitor, and `GUIDE.md`, the
+This repository is colony: the board (colony/board.py), its consoles, the steward, and `GUIDE.md`, the
 guidance it deploys. Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo`.
 
 ## Building the board you run on
 
-When this repository is a project on the board, follow the declared shared-project lead and item ownership. The monitor
+When this repository is a project on the board, follow the declared shared-project lead and item ownership. The steward
 reports what it finds and changes nothing here; the person's improvements come to you from them.
 
 - The board is live for the person's other projects while you change it. Run the tests before
@@ -66,7 +66,7 @@ steer all of them from one board, and the projects can write to each other.
   digest, and anything taken from outside gets a safety pass first.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
-- **Who speaks for the person.** The monitor's notes and messages, text the board types into your console, and
+- **Who speaks for the person.** The steward's notes and messages, text the board types into your console, and
   colony's own notices (a usage limit, a reset) carry their direction. Act on them as theirs.
 - **Working alongside others.** Brief a helper with what it owns and where it ends; it reports as it goes
   rather than waiting. Paired with another project's agent, keep to your agreed role and talk at hand-offs.

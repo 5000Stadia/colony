@@ -526,7 +526,7 @@ def end(state, key, off):
 
 
 def stand_down(why, stale=False, now=None):
-    """Turbo stands down when the watcher can't keep it: the monitor off (turbo runs with it), the safe pause unable to
+    """Turbo stands down when the watcher can't keep it: the steward off (turbo runs with it), the safe pause unable to
     read usage, or turbo's own trouble lasting (stale: only a turbo not kept for 15 minutes). Every program's turbo
     ends as catching up would end it, and says why. Never raises."""
     now = time.time() if now is None else now

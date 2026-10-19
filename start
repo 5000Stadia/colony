@@ -16,4 +16,4 @@ colony board "$@" >/dev/null
 echo "colony is running. Open the board:"
 colony urls
 echo
-echo "The monitor is the front page; your projects are in the sidebar. Stop everything with: colony stop"
+echo "The steward is the front page; your projects are in the sidebar. Stop everything with: colony stop"

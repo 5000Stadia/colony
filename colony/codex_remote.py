@@ -236,7 +236,7 @@ def pairing_choice(root, choice=None):
 
 def offer_pairing(root):
     """A project's first remote connection: someone asks the person whether to connect it to ChatGPT and, on
-    yes, hands them a fresh code. The monitor relays it when it runs; otherwise the project's own agent asks.
+    yes, hands them a fresh code. The steward relays it when it runs; otherwise the project's own agent asks.
 
     launch() holds the project lock. A reconnect must not repeat the offer.
     """

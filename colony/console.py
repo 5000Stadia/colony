@@ -40,7 +40,7 @@ COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the pr
 def command(label, root=None, folder=None):
     """How the project's provider starts its agent, with the project's settings (falling back to the global ones),
     back in the conversation it was last in, if it had one. folder: a console that isn't a project's (the
-    monitor's) resumes the conversation last active there."""
+    steward's) resumes the conversation last active there."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
     from . import board, providers, selection
@@ -303,7 +303,7 @@ def type_into(name, text):
     left = draft(name)
     if left:
         return left.startswith("[colony]") and _sent(name, left)
-    # PROVIDER: this is how the board and the monitor reach an agent, and it relies on the CLI taking typed
+    # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
     subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "colony"
 version = "0.1.0"
-description = "One page to run all your long projects with Claude Code: each project's live console, what it waits on you for, its roadmap, and a monitor agent that can hold the helm."
+description = "One page to run all your long projects with Claude Code: each project's live console, what it waits on you for, its roadmap, and a steward agent that can hold the helm."
 requires-python = ">=3.10"
 license = {text = "MIT"}
 
