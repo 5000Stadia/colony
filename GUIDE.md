@@ -7,7 +7,7 @@ These are defaults from measured runs, not rules. Where you see a better way, ta
 
 ## Day one
 - Settle the model and effort with the person. Plan at high effort, then build at medium: planning is a small share of the tokens and the most leveraged judgement in the project, since a wrong milestone costs a rebuild. Medium effort gives the best quality for the cost on real building. Low effort is enough for clear, small, well-specified steps, but loses real quality when one step is itself a large build.
-- Get the goal in the person's words: what would make them proud, the best real example, what would ruin it, what must never happen without them. Offer your best guess with each question.
+- Get the vision in the person's words: why they want it, who it's for and where it lands, what they bring, what using it should feel like, how involved they want to be along the way, the best real example, and what must never happen without them. Offer your best guess with each question.
 - Plan a first end-to-end step toward the first milestone. Where the path is unknown (research, a proof, a market), make a first pass that shows the shape of the work.
 
 ## Building

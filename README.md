@@ -44,9 +44,14 @@ conversation when you open it.
 - **The roadmap**, kept by the agent in `ROADMAP.md`: milestones fold away as they finish, the
   latest work comes first, and every item and milestone shows its time in progress. The overview reads
   `Roadmap: 16/43 · Active: 6d 15h`, where Active counts only the time its agent was actually working.
-- **The shared vision**, above the roadmap: the finished work's narrative, feel and fundamental elements.
-  Edit it on the project page or shape it with the agent in conversation. Saving tells the agent what
-  changed so it can adjust the work. Details for a few items go into those items' descriptions or specs.
+- **The shared vision**, above the roadmap: what the finished work is, and also why you want it, where it
+  lands (who uses it, how many, how they find it, on what terms), the edge you bring, and what using it should
+  feel like. It directs the work, with you as its guide: a request that drifts from it is named, and one that
+  sharpens it updates it. Edit it on the project page or shape it with the agent in conversation. Saving tells
+  the agent what changed so it can adjust the work. Details for a few items go into those items' descriptions or specs.
+- **Showcase:** each project's lab-style page of deliverables worth seeing, newest first: what it is and how to
+  see or try it, with older ones kept as its history. Rate or comment if you like; it reaches the agent, and
+  nothing waits on you. How hands-on you are is yours to set.
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
 - **The monitor**, one more session at the top of the sidebar. It tells you when a project needs you
   or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
