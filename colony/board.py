@@ -1040,7 +1040,14 @@ def close_project(root, cancel=False):
         rows.pop(str(root), None)
         _save_closing(rows)
         return "kept"
-    if console.snapshot(root, lines=1)["state"] == "off":
+    from . import lead
+    shared = lead.group(root)
+    if shared:
+        # Its seats share one roadmap and lead record: one alone coming off leaves the others' work and assignments
+        # pointing at it. Closing them together is a step of its own, not built.
+        raise ValueError(f"{root.name} shares its roadmap with " + ", ".join(Path(m).name for m in shared["members"]
+                         if Path(m) != root.resolve()) + "; colony close doesn't close one seat of a shared project")
+    if console.snapshot(root, lines=1)["state"] == "off" and at_rest(root):
         rows.pop(str(root), None)
         _save_closing(rows)
         remove_project(root)
@@ -1062,9 +1069,18 @@ def close_ready(root, state, idle_looks):
     if not row:
         return False
     note = next((n for n in notes(root) if n["id"] == row["note"]), None)
+    if not at_rest(root):
+        return False                                    # its program still runs something the screen doesn't show
     if note is None or state == "off":
         return True                                     # nothing left to hand over, or nothing running
     return bool(note["delivered_at"]) and state == "idle" and idle_looks >= CLOSE_SETTLE
+
+
+def at_rest(root):
+    """Whether the project's program runs nothing beyond what its screen shows. PROVIDER: at_rest()."""
+    from . import providers
+    prov = providers.of(root)
+    return prov.at_rest(root) if hasattr(prov, "at_rest") else True
 
 
 def show_project(root):

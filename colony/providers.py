@@ -65,6 +65,9 @@ what it assumes and what a second provider needs there. What a provider supplies
   unfreeze(root)           before a frozen console is restarted, stop what runs its turn outside the console's
                            own process if that has frozen too, which the restart would otherwise reconnect to; False
                            when it still answers and was kept, so the turn goes on. Optional.
+  at_rest(root)            whether nothing of its own runs for the project outside what its screen shows (a turn,
+                           a goal it would carry on); False when that can't be told. A project is closed only at
+                           rest (`colony close`). Optional: without it, the screen says.
 The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
@@ -1097,6 +1100,32 @@ class Codex:
             return False
         codex_remote.stop_host(root)
         return True
+
+    def at_rest(self, root):
+        """Its app host runs turns, and carries on an active goal, whatever its console shows (one that has ended
+        leaves them running): at rest only when no host is running, or every thread it has loaded is idle with no
+        active goal. Anything it can't answer counts as not at rest."""
+        from . import codex_remote
+        from .codex_rpc import Client
+        home = codex_remote.home_for(root)
+        if not codex_remote.alive(home):
+            return True
+        try:
+            with Client(codex_remote.socket_for(home)) as client:
+                if not codex_remote.idle(client):
+                    return False
+                cursor = None
+                while True:
+                    result = client.call('thread/loaded/list', dict(cursor=cursor, limit=100))
+                    for tid in result['data']:
+                        goal = client.call('thread/goal/get', {'threadId': tid}).get('goal')
+                        if goal and goal.get('status') == 'active':
+                            return False
+                    cursor = result.get('nextCursor')
+                    if not cursor:
+                        return True
+        except Exception:
+            return False
 
     def elapsed(self, screen):
         """The timer on its live working line, the one just above its `›` prompt: "• Working (5m 12s • esc to

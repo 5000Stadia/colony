@@ -1467,6 +1467,54 @@ class MonitorTest(BoardBase):
         self.assertEqual(board.close_project(self.root), "closed", "nothing running: off at once")
         self.assertNotIn(self.root, board.projects())
 
+    def test_a_project_whose_program_still_runs_something_or_that_shares_its_roadmap_is_not_closed(self):
+        from colony import lead
+        console.snapshot = lambda root, lines=6, name=None: {"state": "off", "lines": []}
+        console.type_into = hearing([])
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+        busy = {"value": True}
+        with patch.object(board, "at_rest", lambda root: not busy["value"]):
+            self.assertEqual(board.close_project(self.root), "closing", "its screen is off, but its host runs a turn")
+            [note] = [n for n in board.notes(self.root) if n.get("kind") == "close"]
+            board.append(self.root, "notes.jsonl", {"type": "delivered", "of": note["id"], "at": board.now()})
+            w = monitor.Watcher()
+            for _ in range(3):
+                w.tick()
+            self.assertIn(self.root, board.projects(), "not while its program still runs something")
+            busy["value"] = False
+            w.tick()
+            self.assertNotIn(self.root, board.projects(), "at rest: off the board")
+        board.track(self.root)
+        other = str(self.root.parent / "plants-codex")
+        with patch.object(lead, "group", lambda root: {"members": [str(self.root.resolve()), other]}):
+            with self.assertRaises(ValueError) as refused:
+                board.close_project(self.root)
+        self.assertIn("shares its roadmap with plants-codex", str(refused.exception))
+        self.assertEqual(board.closing(), {})
+
+    def test_codex_is_at_rest_only_when_its_host_has_no_turn_or_active_goal(self):
+        from colony import codex_remote
+        codex = providers.get("codex")
+        calls = {"thread/loaded/list": {"data": ["t1"]}, "thread/read": {"thread": {"status": {"type": "idle"}}},
+                 "thread/goal/get": {"goal": {"status": "active"}}}
+
+        class Client:
+            def __init__(self, *a, **k): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def call(self, method, params=None): return calls[method]
+
+        with patch.object(codex_remote, "alive", return_value=False):
+            self.assertTrue(codex.at_rest(self.root), "no host: nothing runs")
+        with patch.object(codex_remote, "alive", return_value=True), patch("colony.codex_rpc.Client", Client):
+            self.assertFalse(codex.at_rest(self.root), "an active goal carries on")
+            calls["thread/goal/get"] = {"goal": None}
+            self.assertTrue(codex.at_rest(self.root))
+            calls["thread/read"] = {"thread": {"status": {"type": "active"}}}
+            self.assertFalse(codex.at_rest(self.root), "a turn running")
+            del calls["thread/read"]
+            self.assertFalse(codex.at_rest(self.root), "what it can't answer counts as not at rest")
+
     def test_a_session_stops_working_only_when_its_screen_says_so_twice_at_the_latest(self):
         reads = iter([("working", False), ("idle", False), ("working", False), ("idle", True), ("idle", True),
                       ("working", False), ("idle", False), ("idle", False)])

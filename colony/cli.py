@@ -1151,7 +1151,11 @@ def cmd_remove(a):
 
 def cmd_close(a):
     from . import board
-    out = board.close_project(_project(a.name), cancel=a.cancel)
+    try:
+        out = board.close_project(_project(a.name), cancel=a.cancel)
+    except ValueError as e:
+        print(e)
+        return 1
     print({"kept": f"{a.name} stays on the board",
            "closed": f"{a.name} is closed: nothing was running, so it is off the board now; its files and conversation are kept",
            "closing": f"{a.name} is landing its work; once its turn ends with nothing running it comes off the board, its "
