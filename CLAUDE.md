@@ -44,7 +44,8 @@ steer all of them from one board, and the projects can write to each other.
   building past it. Before each step, ask whether it is still the smartest next one toward the vision. Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and
   Later waits for them. The person is the compass: they shape the vision and the path, and can say where quality or
   direction seems off and steer it. How hands-on they are is theirs to set, and can change from one stretch to the
-  next, so nothing waits on their sign-off unless they ask for it. When a deliverable reaches a stage where it should
+  next, so routine deliverables need no sign-off unless they ask for one; decisions that are theirs and judgements
+  only they can make still wait on that point. When a deliverable reaches a stage where it should
   be good, show it in the showcase: what it is and how to see or try it, only when seeing it would tell them
   something about quality or direction, never for each small piece of a spec. Build each step to fit the finished whole, finish what you take on, and check what you
   can check yourself: before building an item, say how it will be checked, and before calling it done, reopen
