@@ -4158,6 +4158,20 @@ class ActiveHoursTest(HoursBase):
             self.assertEqual(turbo.held(self.root, snap), "waiting on the person", "theirs now: turbo leaves it be")
 
 
+    def test_completions_wait_for_the_persons_hours(self):
+        monitor.helm(True)
+        w = monitor.Watcher()
+        with self.clock(3):
+            w.tick()
+            showcase.add(self.root, "Watering chart", "A week of the water log, drawn.")
+            w.tick()
+            self.assertEqual(self.sent, [], "only news for the person: nothing wakes the monitor at night")
+        with self.clock(8):
+            w.tick()
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn('plants showed "Watering chart"', self.sent[0], "held, not lost: it comes when their hours begin")
+
+
 class DailyPageTest(HoursBase):
     """R80: one page a day for each project, made by code from colony's records: what landed, the day's decisions by
     number with defaults that stand if skipped, the queue, and what is held for the person's hours."""

@@ -812,10 +812,13 @@ class Watcher:
             # inbox, which outlives a board restart; until then the update would still carry it.
             said = mentioned()
             done = [key[5:] for p, key, _ in self.pending if key and key.startswith("done:") and key[5:] not in said]
-            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())
-                     or key.startswith("done:") and key[5:] in done]
+            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
             if fresh:
                 queue(" | ".join(fresh) + f" ({HELM_ON_NOTE})")
+            # Completions are only for passing on: outside the person's hours they wait in the inbox for them.
+            news = [text for p, key, text in self.pending if key and key.startswith("done:") and key[5:] in done]
+            if news:
+                queue(" | ".join(news), relay=True)
             mentioned(done)
             self.pending = []
         self.tell()
