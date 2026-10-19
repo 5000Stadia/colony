@@ -96,6 +96,9 @@ steer all of them from one board, and the projects can write to each other.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
 - How long work goes well, from colony's measured runs: `/home/k/Projects/colony/GUIDE.md`. Read it at a project's start, and again
   when weighing structure (helpers, review, tests, memory).
+- Projects that share a purpose share a nest (`colony nest` shows them, `colony nest NAME` puts this one in one):
+  its shared vision, in the person's words, is the why your own vision serves. Agreed with them: `colony nest NAME
+  --vision --file PATH --words "their words" --context "your reading"`.
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
   Mail arrives by itself.
 - A delete through a variable is written `rm -rf "${OUT:?}"/*`: if the variable were ever empty, it stops
