@@ -39,10 +39,15 @@ def status():
 
 
 def serve(port):
-    """Hand this machine's private HTTPS address to the board on this machine; (ok, what tailscale said)."""
+    """Hand this machine's private HTTPS address to the board on this machine; (ok, what tailscale said).
+    Before Serve is enabled for the network, tailscale prints the link to enable it and waits: that link is what
+    the person needs, so a wait ends with what it printed."""
     try:
-        r = _run("serve", "--bg", f"http://127.0.0.1:{port}", timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as e:
+        r = _run("serve", "--bg", f"http://127.0.0.1:{port}", timeout=20)
+    except subprocess.TimeoutExpired as e:
+        said = "".join(x.decode() if isinstance(x, bytes) else x for x in (e.stdout or "", e.stderr or "")).strip()
+        return False, said or "tailscale serve didn't answer"
+    except OSError as e:
         return False, str(e)
     said = (r.stdout + r.stderr).strip()
     return r.returncode == 0, said

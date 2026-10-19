@@ -4638,7 +4638,7 @@ class RemoteTest(BoardBase):
 echo "$@" >> {log}
 case "$1" in
   status) echo '{status}' ;;
-  serve) {'echo "Available within your tailnet"; exit 0' if serve_ok else 'echo "Serve is not enabled on your tailnet. To enable, visit: https://login.tailscale.com/f/serve"; exit 1'} ;;
+  serve) {'echo "Available within your tailnet"; exit 0' if serve_ok else 'echo "Serve is not enabled on your tailnet. To enable, visit: https://login.tailscale.com/f/serve"; exec sleep 30'} ;;
 esac
 """)
         script.chmod(0o755)
@@ -4701,8 +4701,9 @@ esac
         code, out, _ = self.remote()
         self.assertEqual(code, 1)
         self.assertIn("not connected", out)
-        self.fake_tailscale(serve_ok=False)
-        code, out, restarted = self.remote()
+        self.fake_tailscale(serve_ok=False)                          # it prints the link and waits for it
+        with patch.object(tailscale, "_run", lambda *a, timeout=30: subprocess.run(["tailscale", *a], capture_output=True, text=True, timeout=2)):
+            code, out, restarted = self.remote()
         self.assertEqual(code, 1)
         self.assertIn("https://login.tailscale.com/f/serve", out)
         self.assertFalse(restarted)
