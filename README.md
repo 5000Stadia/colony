@@ -31,6 +31,25 @@ the board.
 `colony stop` ends everything. `~/colony/start` brings the board back, and each console returns to its
 conversation when you open it.
 
+### The board from anywhere, safely (Tailscale)
+
+The board has no login of its own, so never put it on the internet. [Tailscale](https://tailscale.com) (free
+for personal use) puts this machine and your phone on a private, encrypted network that only your devices
+join. The board stays on this machine; only your devices reach it, from anywhere.
+
+1. On this machine: `curl -fsSL https://tailscale.com/install.sh | sh`
+2. Then `sudo tailscale up --operator=$USER`, and log in with the account you'll use on your phone.
+   (`--operator` lets colony set up serving without sudo.)
+3. On your phone: install the Tailscale app, log in with the same account, and switch it on.
+4. Back here: `colony remote`. It prints the board's address, `https://<this machine>.<your network>.ts.net/`.
+   If Tailscale first asks you to enable Serve or HTTPS for your network, it gives a link: open it, allow
+   it, and run `colony remote` again.
+5. Open that address on your phone.
+
+Once it's on, the board stops answering the open home network too, so a guest on your wifi can't reach
+it: at home your phone reaches it through Tailscale as well. `colony remote --check` says where things
+stand; `colony remote --off` puts it back as it was.
+
 ## What you get
 
 - **Every project's live console**, in the browser and on a phone (swipe to scroll, a key row for
@@ -108,6 +127,7 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony restart           reload the board after a change; consoles and the steward keep running
     colony doctor            is everything up and wired? what to do if not
     colony urls              where the board answers
+    colony remote            the board from your own devices, anywhere, through Tailscale
     colony peek NAME [-n N]  a project's state and its last lines
     colony vision           this project's live vision; --history shows its dated changes
     colony tell NAME "…"     a note to a project, as yours

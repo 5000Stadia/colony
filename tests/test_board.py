@@ -4623,3 +4623,87 @@ class DailyPageTest(HoursBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RemoteTest(BoardBase):
+    """colony remote: the board from the person's own devices through Tailscale, and from no one else."""
+    def fake_tailscale(self, running=True, serve_ok=True):
+        bindir = Path(self.tmp.name) / "bin"
+        bindir.mkdir(exist_ok=True)
+        log = Path(self.tmp.name) / "tailscale.log"
+        status = json.dumps({"BackendState": "Running" if running else "NeedsLogin",
+                             "Self": {"DNSName": "desk.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.7"]}})
+        script = bindir / "tailscale"
+        script.write_text(f"""#!/bin/sh
+echo "$@" >> {log}
+case "$1" in
+  status) echo '{status}' ;;
+  serve) {'echo "Available within your tailnet"; exit 0' if serve_ok else 'echo "Serve is not enabled on your tailnet. To enable, visit: https://login.tailscale.com/f/serve"; exit 1'} ;;
+esac
+""")
+        script.chmod(0o755)
+        self.addCleanup(lambda old=os.environ["PATH"]: os.environ.__setitem__("PATH", old))
+        os.environ["PATH"] = f"{bindir}:{os.environ['PATH']}"
+        return log
+
+    def remote(self, *args):
+        import io, contextlib
+        from colony import cli
+        from unittest.mock import patch
+        out = io.StringIO()
+        with patch.object(cli, "_restart_board", return_value=subprocess.CompletedProcess([], 0, "", "")) as restart, \
+                contextlib.redirect_stdout(out):
+            code = cli.main(["remote", *args])
+        return code, out.getvalue(), restart.called
+
+    def test_remote_serves_the_board_to_the_persons_devices_only_and_off_puts_it_back(self):
+        board.set_setting("lan", "on")
+        (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--lan"]))
+        log = self.fake_tailscale()
+        code, out, restarted = self.remote()
+        self.assertEqual(code, 0, out)
+        self.assertIn("https://desk.tail1234.ts.net/", out)
+        self.assertTrue(restarted)
+        self.assertIn("serve --bg http://127.0.0.1:8791", log.read_text())
+        settings = board.registry()["settings"]
+        self.assertEqual(settings["tailscale"], "desk.tail1234.ts.net")
+        self.assertFalse(settings["lan"])                                   # the open home network no longer reaches it
+        self.assertIn("--local", json.loads((board.home() / "server.json").read_text()))
+        r = subprocess.run([sys.executable, "-m", "colony", "urls"], cwd=self.root, capture_output=True, text=True,
+                           env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertIn("From anywhere:        https://desk.tail1234.ts.net/", r.stdout)
+        handler = board.Handler.__new__(board.Handler)                     # the board takes that address as its own page
+        handler.server = type("S", (), {"server_address": ("127.0.0.1", 8791), "lan": False})()
+        for host, origin, ok in (("desk.tail1234.ts.net", "https://desk.tail1234.ts.net", True),
+                                 ("127.0.0.1:8791", "https://desk.tail1234.ts.net", True),
+                                 ("evil.example", "https://evil.example", False),
+                                 ("desk.tail1234.ts.net", "https://evil.example", False)):
+            handler.headers = {"Host": host, "Origin": origin}
+            self.assertEqual(handler._from_this_page(), ok, (host, origin))
+        code, out, _ = self.remote("--off")
+        self.assertEqual(code, 0, out)
+        self.assertIn("serve --https=443 off", log.read_text())
+        settings = board.registry()["settings"]
+        self.assertEqual(settings["tailscale"], "")
+        self.assertTrue(settings["lan"])                                    # back as it was before
+        self.assertIn("--lan", json.loads((board.home() / "server.json").read_text()))
+
+    def test_remote_says_how_to_install_or_connect_and_relays_what_tailscale_needs(self):
+        from unittest.mock import patch
+        from colony import tailscale
+        with patch.object(tailscale.shutil, "which", return_value=None):
+            code, out, restarted = self.remote()
+        self.assertEqual(code, 1)
+        self.assertIn("curl -fsSL https://tailscale.com/install.sh | sh", out)
+        self.assertIn("sudo tailscale up --operator=$USER", out)
+        self.assertFalse(restarted)
+        self.fake_tailscale(running=False)
+        code, out, _ = self.remote()
+        self.assertEqual(code, 1)
+        self.assertIn("not connected", out)
+        self.fake_tailscale(serve_ok=False)
+        code, out, restarted = self.remote()
+        self.assertEqual(code, 1)
+        self.assertIn("https://login.tailscale.com/f/serve", out)
+        self.assertFalse(restarted)
+        self.assertEqual(board.registry()["settings"]["tailscale"], "")

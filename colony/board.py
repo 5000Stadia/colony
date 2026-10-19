@@ -187,7 +187,8 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "all", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
-                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60}
+                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60,
+                    "tailscale": "", "tailscale_lan_before": None}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -248,7 +249,7 @@ def set_setting(key, value):
             reg["roots"].append(reg["new_root"])
     elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
-    elif key in ("model", "effort"):
+    elif key in ("model", "effort", "tailscale"):
         reg["settings"][key] = str(value).strip()
     elif key in ("safe_pause", "safe_pause_session"):
         v = str(value).strip().rstrip("%").lower()
@@ -3552,10 +3553,12 @@ class Handler(BaseHTTPRequestHandler):
         Localhost-only unless the board was started with --lan."""
         host = self.headers.get("Host", "")
         port = self.server.server_address[1]
-        if not getattr(self.server, "lan", False) and host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
+        private = registry()["settings"].get("tailscale") or ""     # the person's own devices, through Tailscale
+        mine = {f"127.0.0.1:{port}", f"localhost:{port}"} | ({private, f"{private}:443"} if private else set())
+        if not getattr(self.server, "lan", False) and host not in mine:
             return False
         origin = self.headers.get("Origin")
-        return origin is None or origin == f"http://{host}"
+        return origin is None or origin == f"http://{host}" or bool(private) and origin == f"https://{private}"
 
     def _console(self, root, token, name=None, label=None):
         """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a
