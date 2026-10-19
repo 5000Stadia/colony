@@ -194,7 +194,7 @@ class TurboTest(TurboBase):
                       "If there's nothing worth doing, run `colony turbo --nothing` and stop."):
             self.assertIn(words, n["text"])
         self.assertEqual(self.keys, [turbo.NUDGE], "turbo wakes it, there and then")
-        monitor.Watcher(quiet=0).mail()
+        monitor.Watcher().mail()
         self.assertEqual(self.keys, [turbo.NUDGE], "and nothing types it in later")
         self.read_at(self.now + 2 * HOUR)
         turbo.tick(self.now + 2 * HOUR)
@@ -249,7 +249,7 @@ class TurboTest(TurboBase):
             turbo.tick(self.now)
         [n] = self.turbo_notes()
         board.record_ask(self.root, "turn-2", "Shall I start on reminders?")   # its turn ends asking the person
-        monitor.Watcher(quiet=0).mail()
+        monitor.Watcher().mail()
         self.assertEqual(self.keys, [], "a quiet note: nothing types it in over their question")
         self.read_at(self.now + 60)
         turbo.tick(self.now + 60)
@@ -263,7 +263,7 @@ class TurboTest(TurboBase):
         self.read_at(self.now + 180)
         turbo.tick(self.now + 180)
         self.assertTrue(next(x for x in board.notes(self.root) if x["id"] == m["id"])["addressed_at"])
-        monitor.Watcher(quiet=0).mail()
+        monitor.Watcher().mail()
         self.assertEqual(started, [], "a stopped console stays stopped")
 
     def test_a_waking_that_met_a_draft_is_tried_again_once_the_box_is_clear_and_only_once(self):
@@ -326,7 +326,7 @@ class TurboTest(TurboBase):
                     patch.object(console, "screen", lambda name: ""), redirect_stdout(io.StringIO()):
                 turbo.tick(self.now)
                 cli.main(["suggest", "plants", f"an idea, while {why}"])          # the monitor's suggestion waits too
-                monitor.Watcher(quiet=0).mail()
+                monitor.Watcher().mail()
             self.assertEqual(self.turbo_notes(), [], why)
             self.assertEqual(self.keys, [], why)
         self.assertEqual(started, [], "nothing was started for turbo or its suggestions")
@@ -351,7 +351,7 @@ class TurboTest(TurboBase):
             self.assertEqual(self.consulted, [], f"{why}: nor research advice")
             with redirect_stdout(io.StringIO()):
                 cli.main(["suggest", "plants", f"an idea, while {why}"])         # nor does the monitor's suggestion
-            monitor.Watcher(quiet=0).mail()
+            monitor.Watcher().mail()
             self.assertEqual(self.keys, [], why)
         gate = board.add_gate(self.root, "Which reminders first?")
         nothing("an open gate")
@@ -391,7 +391,7 @@ class TurboTest(TurboBase):
             self.assertEqual(turbo.tick(self.now), [], why)
         self.assertEqual(self.turbo_notes(), [])
         self.assertIn("turbo off (no usage reading in the last 12 hours)", turbo.line("claude", self.now))
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.usage_checked = 0
         with patch.object(turbo, "tick", side_effect=RuntimeError("a surprise")):
             w.usage()                                                           # turbo's trouble stops nothing else
@@ -429,7 +429,7 @@ class TurboTest(TurboBase):
                            (lambda: (self.read_at(self.now), board.set_setting("turbo_by", "claude=off")), "off in Settings")):
             setup()
             turbo.tick(self.now)
-            monitor.Watcher(quiet=0).mail()
+            monitor.Watcher().mail()
             self.assertEqual(everything(), before, why)
             self.assertEqual(self.keys, [], why)
             self.assertEqual(self.asked(), [], why)
@@ -550,7 +550,7 @@ class AdviceTest(TurboBase):
         self.assertIn("from this project's agent while Claude Code had spare weekly capacity", report)
         self.assertTrue(report.rstrip().endswith(supports.NOTICE), "it ends with the safety line")
         self.assertIn("?? research/", self.git("status", "--porcelain"), "left to the agent: nothing is committed")
-        monitor.Watcher(quiet=0).mail()
+        monitor.Watcher().mail()
         self.assertEqual(self.keys, [], "nothing is typed into its console")
         self.assertEqual(self.asked(), ["a word from the person's board"], "and the monitor is asked nothing")
         self.read_at(self.now + DAY)
@@ -763,7 +763,7 @@ class StrongerModelsTest(TurboBase):
         turbo.tick(self.now)
         up = self.seats()
         console._started(self.name, console.fingerprint(self.root))
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         with patch.object(turbo, "tick", side_effect=RuntimeError("a surprise")):
             w.usage_checked = 0
             w.usage()
@@ -808,7 +808,7 @@ class StrongerModelsTest(TurboBase):
         self.patch(console, "snapshot", lambda root, lines=1, name=None: screen)
         self.patch(console, "drafting", lambda name: False)
         self.patch(console, "attached", lambda name: False)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
 
         def minute(**after):
             w.current_checked = 0

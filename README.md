@@ -57,7 +57,8 @@ conversation when you open it.
   or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
   routine questions within the direction you set for each project, and brings back anything about scope,
   cost or that can't be undone. It never polls: a watcher reads every screen every few seconds for
-  free and wakes it only when there is something to hear. Colony's own words reach it through an inbox
+  free and wakes it only when something waits on you or work was completed (a roadmap item done, a showcase
+  entry), never just because a turn ended, and it stays silent when there's nothing new for you. Colony's own words reach it through an inbox
   its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
   hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
   you, and what's new, closing with `(Monitor: On | Helm Control: Off)`; say mute to mute it.

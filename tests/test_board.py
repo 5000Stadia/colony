@@ -1031,7 +1031,7 @@ class GlanceTest(BoardBase):
         console.press = lambda name, keys: pressed.append(keys)
         monitor.snapshot = lambda: {"state": "needs you", "lines": []}
         try:
-            monitor.Watcher(quiet=0).tick()
+            monitor.Watcher().tick()
         finally:
             console.screen, console.press, monitor.snapshot = saved
         self.assertIn(["Enter"], pressed, "its own start-up question is answered too")
@@ -1280,13 +1280,13 @@ class GlanceTest(BoardBase):
         models.append(dict(id='claude-new-6', name='New 6', section='main',
                            thinking={'effort_options': [{'id': 'max'}]}))
         save_catalog()
-        monitor.Watcher(quiet=0).models_daily()
+        monitor.Watcher().models_daily()
         self.assertIn('claude-new-6', dict(providers.available(providers.get('claude'))),
                       'daily discovery reads the new native catalog after session-start discovery')
         stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
         self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
         bench.add([rec("claude-new-6", "max", 70), rec("claude-new-6", "max", 1, "cost", bench_="Cost per Intelligence Index task", unit="usd")])
-        monitor.Watcher(quiet=0).models_daily()
+        monitor.Watcher().models_daily()
         self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
         self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
 
@@ -1361,20 +1361,34 @@ class MonitorTest(BoardBase):
         console.stop(self.root)
         super().tearDown()
 
-    def test_the_monitor_wakes_only_when_a_project_needs_the_person_or_finishes(self):
-        screens = iter(["working", "working", "needs you", "needs you", "working", "idle", "idle"])
-        console.snapshot = lambda root, lines=6, name=None: {"state": next(screens), "lines": ["last line"]}
+    def test_the_monitor_wakes_when_a_project_needs_the_person_or_completes_work_never_when_a_turn_ends(self):
+        screens = ["working", "working", "needs you", "needs you", "working", "idle", "idle"]
+        console.snapshot = lambda root, lines=6, name=None: {"state": screens.pop(0) if screens else "idle", "lines": ["last line"]}
         sent = []
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         for _ in range(7):
             w.tick()
-        self.assertEqual(len(sent), 2, "busy work wakes nothing; needs-you and finished each wake it once")
+        self.assertEqual(len(sent), 1, "busy work and a turn ending wake nothing; needs-you wakes it once")
         self.assertIn("plants needs you", sent[0])
-        self.assertIn("plants finished a turn", sent[1])
         self.assertIn("You hold the helm", sent[0])
+        self.assertNotIn("finished a turn", sent[0])
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders"))
+        showcase.add(self.root, "Watering chart", "A week of the water log, drawn.")
+        w.tick()
+        self.assertEqual(len(sent), 2)
+        self.assertIn("plants R3: reminders", sent[1])
+        self.assertIn('plants showed "Watering chart" in its showcase: A week of the water log, drawn.', sent[1])
+        self.assertNotIn("R1", sent[1], "what was done before the board looked is not news")
+        for _ in range(3):
+            w.tick()
+        self.assertEqual(len(sent), 2, "each completion once")
+        board.add_gate(self.root, "Which pot size?", item="R3")
+        with patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
+            update = monitor.update(time.time() + 3700)
+        self.assertIn("1) Completed since the last update: none", update, "already said: the update leaves it out")
 
     def test_a_session_stops_working_only_when_its_screen_says_so_twice_at_the_latest(self):
         reads = iter([("working", False), ("idle", False), ("working", False), ("idle", True), ("idle", True),
@@ -1384,13 +1398,13 @@ class MonitorTest(BoardBase):
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         for _ in range(7):
             w.tick()
-        self.assertEqual(sent, [], "a read that missed the spinner, or a screen scrolled up, ends no turn")
+            self.assertEqual(w.states[str(self.root)], "working", "a read that missed the spinner, or a screen scrolled up, ends no turn")
         w.tick()
-        self.assertEqual(len(sent), 1)
-        self.assertIn("plants finished a turn", sent[0])
+        self.assertEqual(w.states[str(self.root)], "idle")
+        self.assertEqual(sent, [], "and a turn ending wakes nothing")
 
     def test_a_turn_that_ends_asking_something_is_told_once_as_the_question(self):
         reads = iter(["working", "idle", "idle", "idle"])
@@ -1399,7 +1413,7 @@ class MonitorTest(BoardBase):
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.tick()
         board.record_ask(self.root, "t1", "Which format do you want?")      # the turn ends asking
         for _ in range(3):
@@ -1429,10 +1443,10 @@ class MonitorTest(BoardBase):
         console.press = lambda name, keys: pressed.append(keys)
         monitor.snapshot = lambda: {"state": "working", "lines": []}
         try:
-            monitor.Watcher(quiet=0).tick()
+            monitor.Watcher().tick()
             self.assertEqual(pressed, [["Enter"]], "on by default")
             board.set_setting("trust", "off")
-            monitor.Watcher(quiet=0).tick()
+            monitor.Watcher().tick()
             self.assertEqual(pressed, [["Enter"]], "off: it waits for the person")
         finally:
             console.screen, console.press = saved
@@ -1453,7 +1467,7 @@ class MonitorTest(BoardBase):
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: busy
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         board.record_ask(self.root, "t1", "Which format do you want?")
         w.tick()
         board.answer_asks(self.root, "in the console")
@@ -1469,7 +1483,7 @@ class MonitorTest(BoardBase):
         monitor.helm(True)
         board.add_note(self.root, None, "Yes, CSV.", author="monitor")     # `colony tell`, while the turn ran
         board.record_ask(self.root, "t1", "Which format do you want?")
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.tick()
         self.assertFalse(any("asked you" in t for t in sent), "the answer is already on its way")
         self.cli("notes", "--deliver")
@@ -1485,7 +1499,7 @@ class MonitorTest(BoardBase):
         monitor.helm(True)
         board.add_note(self.root, None, "Safe pause over. Carry on where you stopped.", author="colony")
         board.record_ask(self.root, "t1", "Which format do you want?")
-        monitor.Watcher(quiet=0).tick()
+        monitor.Watcher().tick()
         self.assertTrue(any("asked you: Which format" in t for t in sent), "no answer from the person is on its way")
 
     def test_a_turn_that_only_restates_an_open_gate_asks_nothing_new(self):
@@ -1501,7 +1515,7 @@ class MonitorTest(BoardBase):
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         board.record_ask(self.root, "t1", "Which format do you want?")
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.tick()
         w.tick()
         self.assertEqual(sent, [], "helm off: no wake, no tokens")
@@ -1519,7 +1533,7 @@ class MonitorTest(BoardBase):
         sent, busy = [], {"state": "working", "lines": []}
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: busy
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.tick()
         board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(), "question": "Ship it?"})
         w.tick()
@@ -1539,12 +1553,12 @@ class MonitorTest(BoardBase):
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
         board.record_ask(self.root, "t1", "Which format do you want?")
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.tick()
         self.assertEqual(len(sent), 1)
         self.assertIn("has R2 ready for your OK", sent[0])
         self.assertIn("asked you: Which format", sent[0])
-        monitor.Watcher(quiet=0).tick()                                # the board restarted
+        monitor.Watcher().tick()                                # the board restarted
         self.assertEqual(len(sent), 1, "nothing is announced twice")
         board.answer_asks(self.root, "in the console")
         w.tick()
@@ -3158,7 +3172,7 @@ class UsageTest(BoardBase):
         self.assertIn("Colony's own notices are trusted", monitor.ROLE, "and to the monitor")
         self.assertIn("  2. Hand this project to Codex", out, "the options, numbered")
         board.add_note(self.root, None, "a note from the person", author='person')
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         w.mail()
         self.assertFalse(w.nudged, "a paused project isn't woken")
         self.claude_at(98.5, resets_in=-1)                   # the week has turned over
@@ -3298,7 +3312,7 @@ class StayCurrentTest(BoardBase):
         from unittest.mock import patch
         board.track(self.root)
         console.ensure(self.root)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         reloaded = []
         state = {"state": "idle"}
         with patch.object(console, "stale", lambda root, name=None, label=None: "Claude Code 1 → 2" if root == self.root else None), \
@@ -3364,14 +3378,14 @@ class SignInTest(BoardBase):
         claude = providers.get("claude")
         with patch.object(type(claude), "signed_in", lambda self, run=None: False), \
                 patch.object(type(providers.get("codex")), "signed_in", lambda self, run=None: True):
-            monitor.Watcher(quiet=0).signin()
-            monitor.Watcher(quiet=0).signin()
+            monitor.Watcher().signin()
+            monitor.Watcher().signin()
         told = " ".join(json.loads(l)["text"] for l in (board.home() / "to_monitor.jsonl").read_text().splitlines())
         self.assertEqual(told.count("Claude Code is signed out"), 1, "told once")
         self.assertIn("Settings → Claude Code sign-in", told)
         self.assertIn("signed out since", board.settings_page(board.registry()))
         with patch.object(type(claude), "signed_in", lambda self, run=None: True):
-            monitor.Watcher(quiet=0).signin()
+            monitor.Watcher().signin()
         self.assertNotIn("signed out since", board.settings_page(board.registry()))
 
 
@@ -3399,7 +3413,7 @@ class MonitorUpkeepTest(BoardBase):
         from unittest.mock import patch
         from colony import context
         with patch.object(context, 'tick_all') as tick, patch.object(monitor, 'ensure') as start:
-            monitor.Watcher(quiet=0).freshen()
+            monitor.Watcher().freshen()
             tick.assert_called_once()
             start.assert_not_called()
 
@@ -3431,13 +3445,13 @@ class CatchUpTest(BoardBase):
         self.assertTrue(monitor.unseen(self.root), "their own words, kept")
         board.said_reply(self.root, "Held it: reminders would break the offline-first rule in the spine, so I kept them local.")
         self.assertIn("its agent answered: Held it", monitor.unseen(self.root)[-1][2], "the exchange, not their words alone")
-        w = monitor.Watcher(quiet=0)
-        w.states[str(self.root)] = "working"
+        w = monitor.Watcher()
+        board.add_gate(self.root, "Which pot size?", item="R3")
         from unittest.mock import patch
         with patch.object(console, "snapshot", lambda *a, **k: {"state": "idle", "lines": ["done"]}), \
                 patch.object(monitor, "helm_for", lambda p: True):
-            w.events()                                       # a finished turn reads twice before it counts
-            [event] = [x for x in w.events() if x[1] is None]
+            [event] = w.events()
+        self.assertIn("opened a gate: Which pot size?", event[2])
         self.assertIn("colony said plants before you settle anything there", event[2])
         r = run("decided", "plants", "go ahead with reminders")
         self.assertEqual(r.returncode, 3, "nothing acted on")
@@ -3976,7 +3990,7 @@ class ActiveHoursTest(HoursBase):
 
     def test_a_gate_opened_at_3_am_waits_off_the_persons_list_until_7_30_then_reaches_them_once(self):
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         with self.clock(3):
             said, tick = self.gate("Which reminders first?", "--item", "R3", "--why", "R3 starts with one")
             [gate] = board.gates(self.root)
@@ -4004,7 +4018,7 @@ class ActiveHoursTest(HoursBase):
             self.assertNotIn("held until", board.render(board.registry(), 0))
             w.tick()
             w.tick()
-            monitor.Watcher(quiet=0).tick()                            # the board restarted: nothing twice
+            monitor.Watcher().tick()                            # the board restarted: nothing twice
         self.assertEqual(len(self.sent), 1)
         self.assertIn("plants opened a gate: Which reminders first?", self.sent[0])
 
@@ -4022,7 +4036,7 @@ class ActiveHoursTest(HoursBase):
 
     def test_at_night_the_monitor_hears_nothing_for_the_person_and_hears_it_together_at_the_start(self):
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         with self.clock(2):
             board.add_gate(self.root, "Email or SMS?")
             (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
@@ -4053,7 +4067,7 @@ class ActiveHoursTest(HoursBase):
             board.add_note(self.root, None, "Safe pause over: the limit has reset. Carry on where you stopped.", author="colony")
             board.add_note(self.root, None, "Safe pause: Claude Code is at 98% of its weekly usage limit. Wind down now.",
                            author="colony", quiet=True)
-            monitor.Watcher(quiet=0).mail()
+            monitor.Watcher().mail()
             self.assertEqual(self.sent, ["[colony] You have a note from the person on the board and an update from Colony."],
                              "the agent is woken for them at 3 AM")
             out = self.deliver()
@@ -4062,12 +4076,12 @@ class ActiveHoursTest(HoursBase):
             self.sent.clear()
             monitor.queue("Winding down at a usage limit: plants. Each agent tells the person where things stand.")
             monitor.queue("A model joined colony, with its Artificial Analysis data: X.", relay=True)
-            monitor.Watcher(quiet=0).tell()
+            monitor.Watcher().tell()
         self.assertEqual(len(self.sent), 1)
         self.assertIn("Winding down at a usage limit", self.sent[0], "a safety notice reaches the monitor at night")
         self.assertNotIn("A model joined", self.sent[0], "news only to pass on to the person waits for their hours")
         with self.clock(7, 30):
-            monitor.Watcher(quiet=0).tell()
+            monitor.Watcher().tell()
         self.assertIn("A model joined colony", self.sent[1])
         self.assertFalse((board.home() / "to_monitor.jsonl").exists())
 
@@ -4075,7 +4089,7 @@ class ActiveHoursTest(HoursBase):
         console.type_into = lambda name, text: self.sent.append(text) or True     # no hook here: what is typed
         monitor.queue("first")
         with self.clock(12):
-            monitor.Watcher(quiet=0).tell()
+            monitor.Watcher().tell()
             self.assertEqual(self.sent, [monitor.INBOX_LINE], "one short line is all that is typed")
             handed = monitor.inbox()                                   # its hook reads the inbox
             monitor.queue("second")                                    # a word comes in meanwhile
@@ -4087,7 +4101,7 @@ class ActiveHoursTest(HoursBase):
     def test_the_inbox_line_is_typed_once_for_what_waits_and_again_only_if_it_still_waits_later(self):
         console.type_into = lambda name, text: self.sent.append(text) or True     # no hook here: what is typed
         monitor.queue("first")
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         with self.clock(12):
             w.tell()
             w.tell()
@@ -4183,7 +4197,7 @@ class DailyPageTest(HoursBase):
                 self.assertEqual(board.stand_defaults(self.root), [], f"not yet on the {d}th at {h}:{m:02d}")
         monitor.helm(False)
         with self.clock(7, 30, day=9):                                 # Friday begins: no page open, no turn taken
-            monitor.Watcher(quiet=0).mail()
+            monitor.Watcher().mail()
             gs = {g["id"]: g for g in board.gates(self.root)}
         self.assertEqual(gs[first["id"]]["answer"], "Default stood (skipped): email first")
         self.assertEqual(gs[night["id"]]["answer"], "Default stood (skipped): keep plants")
@@ -4316,7 +4330,7 @@ class DailyPageTest(HoursBase):
 
     def test_a_question_asked_in_the_console_at_night_waits_for_the_hours_like_a_gate(self):
         monitor.helm(True)
-        w = monitor.Watcher(quiet=0)
+        w = monitor.Watcher()
         with self.clock(3):
             ask = board.record_ask(self.root, "t1", "Shall I index the log?")
             self.assertEqual(ask["held_until"], self.stamp(7, 30))

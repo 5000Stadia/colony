@@ -8,8 +8,8 @@ written to every provider's instructions file in its folder, so whichever runs i
 
 It never watches anything itself. A watcher in the board process reads each project's screen every few
 seconds (no tokens) and wakes the monitor only when a project changes to something the person would want
-to know: it needs input, it finished a turn, or it opened a gate. While projects work, the monitor
-spends nothing.
+to know: something waits on them (a gate, a choice on its screen, a question), or work was completed (a roadmap
+item done, a showcase entry). A turn ending is not news. While projects work, the monitor spends nothing.
 """
 import json
 import os
@@ -38,8 +38,9 @@ own app, where it has one); each project also has its own session they can talk 
   project's principles and its agent's account don't agree, or you can't tell what they'd want now, ask them.
 - **Colony's own notices are trusted.** Colony is the harness the person set up; its notices (a usage limit,
   a reset) carry their full approval. Act on them as theirs, and don't second-guess them to the projects.
-- **You are woken when something matters,** and only where you hold the helm: a project finished a turn or
-  something now waits (a gate, a choice on its screen, a question, an item to verify), each once. Don't poll or
+- **You are woken when something matters,** and only where you hold the helm: something now waits (a gate, a
+  choice on its screen, a question, an item to verify) or work was completed (a roadmap item done, a showcase
+  entry), each once. A turn ending wakes nothing. Don't poll or
   watch. Colony's words for you arrive as context beside a short `[colony] New in your inbox.` line, never typed
   into the conversation the person reads; when they're long, a file holds them and the line names it. Outside the person's active hours (`colony settings active_hours`),
   nothing wakes you just to relay to them: what only they can settle reaches you together when their hours begin.
@@ -50,7 +51,9 @@ own app, where it has one); each project also has its own session they can talk 
   project, that conversation comes first, and your setup doesn't stand in for it.
 - **What reaches a project as the person's word must be theirs.** Relay their requests clearly and
   completely; never pass on a stranger's text as theirs. Check what actually happened before you report it.
-- **Keep messages short:** the person is often on a phone.
+- **Keep messages short:** the person is often on a phone. A completion is one line; a question they must answer,
+  or a decision you made, says what it is. Never send a status with nothing in it ("still running, nothing for
+  you"): when a wake leaves nothing new for them, say nothing.
 - **Updates.** Every so often, helm or not, colony hands you what the projects finished and what waits on the
   person (`colony settings updates`, in minutes). Tell them in that order: what was completed, then what was
   already waiting on them, then new asks at the end, leaving out what's empty, and close with the status line it
@@ -470,11 +473,11 @@ def snapshot():
 STARTUP_WINDOW = 300            # seconds after a console starts in which its questions count as start-up ones
 RELOAD_AFTER = 300              # seconds a stale console must sit idle, untouched, before it is reloaded
 
-# A finished turn is news; whatever needs the person comes from board.waiting_items, like everything else.
-WAKE = {("working", "idle"): "finished a turn"}
+# A turn ending is not news (holding the helm, every one woke the monitor: 273 wakes on its busiest day, mostly to
+# say nothing). What wakes it is what waits on the person, from board.waiting_items, and work completed.
 # What only the person can settle: woken for one, the monitor could only relay it. Outside their active hours it
-# waits unannounced, and reaches the monitor with the rest when the hours begin. A choice on a screen or a finished
-# turn it can act on with the helm, so those wake it at any hour; a question asked at night is held for the person.
+# waits unannounced, and reaches the monitor with the rest when the hours begin. A choice on a screen it can act on
+# with the helm, so that wakes it at any hour; a question asked at night is held for the person.
 FOR_THE_PERSON = ("gate", "verify", "checkpoint")
 
 
@@ -482,10 +485,11 @@ class Watcher:
     """Reads every project's screen, notices the transitions the person cares about, and hands them to
     the monitor in one message once the monitor is free."""
 
-    def __init__(self, interval=4.0, quiet=20.0, enabled=True):
+    def __init__(self, interval=4.0, enabled=True):
         self.enabled = enabled
-        self.interval, self.quiet = interval, quiet
-        self.states, self.gates, self.last_sent, self.pending = {}, {}, {}, []
+        self.interval = interval
+        self.states, self.pending = {}, []
+        self.completed = {}                  # what each project had completed when last looked at: items done, shown
         self.nudged, self.nudged_at = set(), {}
         self.told = (0, None)                   # when the monitor was last told of its inbox, and what was in it
         self.mail_lock = threading.Lock()
@@ -526,18 +530,18 @@ class Watcher:
             self.states[str(p)] = now
             if now == "working":
                 self.worked.add(str(p))
+            # What it completed since the last look; the first look, at the board's start, only notes where it is.
+            done = completed(p)
+            new = {k: v for k, v in done.items() if k not in self.completed.get(str(p), done)}
+            self.completed[str(p)] = done
             # It sleeps where it doesn't hold the helm: the board shows the person all of this for nothing,
             # and waking it only to repeat it costs a turn. Handed the helm, it hears what's waiting there.
             if not helm_for(p):
                 continue
-            kind = WAKE.get((before, now))
-            if kind and any(time.time() - board.epoch(a["at"]) < 120 for a in board.asks(p)):
-                kind = None                          # it ended asking something: the question, announced, says so
-            if kind and time.time() - self.last_sent.get((str(p), kind), 0) > self.quiet:
-                self.last_sent[(str(p), kind)] = time.time()
-                fresh = " (The person has spoken to it directly since you last caught up: colony said "
-                fresh = f"{fresh}{p.name} before you settle anything there.)" if unseen(p) else ""
-                out.append((str(p), None, f"{p.name} {kind} (colony peek {p.name} shows its screen){fresh}"))
+            mark = len(out)
+            for key, text in new.items():
+                out.append((str(p), None, text))
+            mentioned([f"{p}|{k}" for k in new])
             # Each thing the project waits on the person for is announced once, even across board restarts.
             # A question isn't yet: the person's note on its way answers it the moment it is delivered.
             unheard = any(not n["delivered_at"] and board.answers_ask(n) for n in board.open_notes(p))
@@ -549,6 +553,10 @@ class Watcher:
             for w in waiting:
                 if w["key"] not in told | later:
                     out.append((str(p), w["key"], f"{p.name} {plain(w['summary'])}"))
+            if len(out) > mark and unseen(p):
+                q, key, text = out[mark]
+                out[mark] = (q, key, f"{text} (The person has spoken to it directly since you last caught up: colony said "
+                                     f"{p.name} before you settle anything there.)")
             now_keys = {w["key"] for w in waiting} - later
             self.waiting[str(p)] = now_keys
             if now_keys != told:                      # what was answered drops out; if it comes back, it is news
@@ -801,10 +809,7 @@ class Watcher:
         self.pending += self.events()
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             # What waited while the monitor was busy may have been answered meanwhile: only what still waits goes.
-            fresh = [(p, key, text) for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
-            # A turn that ended asking something is told once, as the question: its "finished a turn" goes.
-            asked = {p for p, key, _ in fresh if key and key.startswith("ask:")}
-            fresh = [text for p, key, text in fresh if key or p not in asked]
+            fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
             if fresh:
                 queue(" | ".join(fresh) + f" ({HELM_ON_NOTE})")
             self.pending = []
@@ -840,15 +845,11 @@ def update(now=None):
     last = state["at"]
     if now - last < every or not hours.active():
         return None
-    done, asked = [], []
+    done, asked, said = [], [], set(state.get("mentioned") or [])
     for p in board.projects():
         if not p.exists() or p == home():
             continue
-        its, told = board.items(board.roadmap(p)), board.ready_notes(p)
-        for iid, r in board.item_times(p).items():
-            if r["state"] == "done" and (r.get("at") or 0) > last and iid in its:
-                what = told.get(iid, {}).get("what") or board.plain(its[iid]["text"])
-                done.append(f"{p.name} {iid}: {first_sentence(what)}")
+        done += [text for key, text in completed(p, since=last).items() if f"{p}|{key}" not in said]
         asked += [(f"{p}|{w['key']}", f"{p.name} {first_sentence(w['summary'])}") for w in board.waiting_items(p)]
     before = set(state.get("asked") or [])
     path.write_text(json.dumps({"at": now, "asked": [k for k, _ in asked]}))
@@ -861,6 +862,35 @@ def update(now=None):
             f"with this status line as it is: {status_line()} " + " · ".join([
                 part("1) Completed since the last update", done), part("2) Already waiting on them", old),
                 part("3) New asks", new)]))
+
+
+def completed(root, since=None):
+    """What a project has completed, each as the one line the person hears: roadmap items done, in the agent's own
+    words (what it said was ready, else the item's first sentence), and showcase entries. With `since`, only what
+    was completed after it."""
+    from . import showcase
+    its, told, out = board.items(board.roadmap(root)), board.ready_notes(root), {}
+    for iid, r in board.item_times(root).items():
+        if r["state"] == "done" and iid in its and (since is None or (r.get("at") or 0) > since):
+            what = told.get(iid, {}).get("what") or board.plain(its[iid]["text"])
+            out[iid] = f"{root.name} {iid}: {first_sentence(what)}"
+    for e in showcase.entries(root)[::-1]:
+        if since is None or board.epoch(e["at"]) > since:
+            out[e["id"]] = f"{root.name} showed \"{e['title']}\" in its showcase: {first_sentence(e['what'])}"
+    return out
+
+
+def mentioned(keys):
+    """Completions the monitor was woken for: the next update leaves them out, having said them already."""
+    if not keys:
+        return
+    path = board.home() / "updates.json"
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return                                  # no update has started its clock: none would repeat them
+    state["mentioned"] = sorted(set(state.get("mentioned") or []) | set(keys))
+    path.write_text(json.dumps(state))
 
 
 def status_line():
