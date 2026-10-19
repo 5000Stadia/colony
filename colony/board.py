@@ -3548,17 +3548,26 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def parse_request(self):
+        """With remote access on (colony remote), only this machine and the person's own devices on Tailscale are
+        answered; the open home network and everything else are refused before anything is read."""
+        if not super().parse_request():
+            return False
+        from . import tailscale
+        if registry()["settings"].get("tailscale") and not tailscale.own_device(self.client_address[0]):
+            self.send_error(403, "This board answers only this machine and your own devices on Tailscale")
+            return False
+        return True
+
     def _from_this_page(self):
         """Same-origin: a request posted from another website carries that site's Origin and is refused.
         Localhost-only unless the board was started with --lan."""
         host = self.headers.get("Host", "")
         port = self.server.server_address[1]
-        private = registry()["settings"].get("tailscale") or ""     # the person's own devices, through Tailscale
-        mine = {f"127.0.0.1:{port}", f"localhost:{port}"} | ({private, f"{private}:443"} if private else set())
-        if not getattr(self.server, "lan", False) and host not in mine:
+        if not getattr(self.server, "lan", False) and host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
             return False
         origin = self.headers.get("Origin")
-        return origin is None or origin == f"http://{host}" or bool(private) and origin == f"https://{private}"
+        return origin is None or origin == f"http://{host}"
 
     def _console(self, root, token, name=None, label=None):
         """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a

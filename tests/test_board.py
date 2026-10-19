@@ -4627,68 +4627,65 @@ if __name__ == "__main__":
 
 class RemoteTest(BoardBase):
     """colony remote: the board from the person's own devices through Tailscale, and from no one else."""
-    def fake_tailscale(self, running=True, serve_ok=True):
+    def fake_tailscale(self, running=True):
         bindir = Path(self.tmp.name) / "bin"
         bindir.mkdir(exist_ok=True)
-        log = Path(self.tmp.name) / "tailscale.log"
         status = json.dumps({"BackendState": "Running" if running else "NeedsLogin",
-                             "Self": {"DNSName": "desk.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.7"]}})
+                             "Self": {"DNSName": "colony.tail1234.ts.net.", "TailscaleIPs": ["100.118.165.88"]}})
         script = bindir / "tailscale"
-        script.write_text(f"""#!/bin/sh
-echo "$@" >> {log}
-case "$1" in
-  status) echo '{status}' ;;
-  serve) {'echo "Available within your tailnet"; exit 0' if serve_ok else 'echo "Serve is not enabled on your tailnet. To enable, visit: https://login.tailscale.com/f/serve"; exec sleep 30'} ;;
-esac
-""")
+        script.write_text(f"#!/bin/sh\ncase \"$1\" in status) echo '{status}' ;; esac\n")
         script.chmod(0o755)
         self.addCleanup(lambda old=os.environ["PATH"]: os.environ.__setitem__("PATH", old))
         os.environ["PATH"] = f"{bindir}:{os.environ['PATH']}"
-        return log
 
     def remote(self, *args):
         import io, contextlib
-        from colony import cli
         from unittest.mock import patch
+        from colony import cli
         out = io.StringIO()
         with patch.object(cli, "_restart_board", return_value=subprocess.CompletedProcess([], 0, "", "")) as restart, \
                 contextlib.redirect_stdout(out):
             code = cli.main(["remote", *args])
         return code, out.getvalue(), restart.called
 
-    def test_remote_serves_the_board_to_the_persons_devices_only_and_off_puts_it_back(self):
-        board.set_setting("lan", "on")
-        (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--lan"]))
-        log = self.fake_tailscale()
+    def answered(self, ip):
+        """Whether the board answers a request from this address (the check runs before anything is read)."""
+        from unittest.mock import patch
+        handler = board.Handler.__new__(board.Handler)
+        handler.client_address = (ip, 50000)
+        with patch.object(board.BaseHTTPRequestHandler, "parse_request", return_value=True), \
+                patch.object(board.Handler, "send_error") as refused:
+            ok = handler.parse_request()
+        return ok and not refused.called
+
+    def test_remote_answers_only_the_persons_devices_and_off_puts_it_back(self):
+        board.set_setting("lan", "off")
+        (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--local"]))
+        self.assertTrue(self.answered("192.168.68.40"))                    # before: as the person had it
+        self.fake_tailscale()
         code, out, restarted = self.remote()
         self.assertEqual(code, 0, out)
-        self.assertIn("https://desk.tail1234.ts.net/", out)
+        self.assertIn("http://colony.tail1234.ts.net:8791/", out)
+        self.assertIn("http://100.118.165.88:8791/", out)
         self.assertTrue(restarted)
-        self.assertIn("serve --bg http://127.0.0.1:8791", log.read_text())
-        settings = board.registry()["settings"]
-        self.assertEqual(settings["tailscale"], "desk.tail1234.ts.net")
-        self.assertFalse(settings["lan"])                                   # the open home network no longer reaches it
-        self.assertIn("--local", json.loads((board.home() / "server.json").read_text()))
+        self.assertEqual(board.registry()["settings"]["tailscale"], "colony.tail1234.ts.net")
+        self.assertIn("--lan", json.loads((board.home() / "server.json").read_text()))
+        for ip, ok in (("127.0.0.1", True), ("100.69.133.56", True), ("fd7a:115c:a1e0::5", True),
+                       ("192.168.68.40", False), ("8.8.8.8", False), ("::ffff:192.168.68.40", False)):
+            self.assertEqual(self.answered(ip), ok, ip)
         r = subprocess.run([sys.executable, "-m", "colony", "urls"], cwd=self.root, capture_output=True, text=True,
                            env=dict(os.environ, PYTHONPATH=str(ROOT)))
-        self.assertIn("From anywhere:        https://desk.tail1234.ts.net/", r.stdout)
-        handler = board.Handler.__new__(board.Handler)                     # the board takes that address as its own page
-        handler.server = type("S", (), {"server_address": ("127.0.0.1", 8791), "lan": False})()
-        for host, origin, ok in (("desk.tail1234.ts.net", "https://desk.tail1234.ts.net", True),
-                                 ("127.0.0.1:8791", "https://desk.tail1234.ts.net", True),
-                                 ("evil.example", "https://evil.example", False),
-                                 ("desk.tail1234.ts.net", "https://evil.example", False)):
-            handler.headers = {"Host": host, "Origin": origin}
-            self.assertEqual(handler._from_this_page(), ok, (host, origin))
+        self.assertIn("From anywhere:        http://colony.tail1234.ts.net:8791/", r.stdout)
+        self.assertIn("refused while remote access is on", r.stdout)
+        self.assertNotIn("192.168", r.stdout)
         code, out, _ = self.remote("--off")
         self.assertEqual(code, 0, out)
-        self.assertIn("serve --https=443 off", log.read_text())
-        settings = board.registry()["settings"]
-        self.assertEqual(settings["tailscale"], "")
-        self.assertTrue(settings["lan"])                                    # back as it was before
-        self.assertIn("--lan", json.loads((board.home() / "server.json").read_text()))
+        self.assertEqual(board.registry()["settings"]["tailscale"], "")
+        self.assertFalse(board.registry()["settings"]["lan"])                # back as it was before
+        self.assertIn("--local", json.loads((board.home() / "server.json").read_text()))
+        self.assertTrue(self.answered("192.168.68.40"))
 
-    def test_remote_says_how_to_install_or_connect_and_relays_what_tailscale_needs(self):
+    def test_remote_says_how_to_install_or_connect(self):
         from unittest.mock import patch
         from colony import tailscale
         with patch.object(tailscale.shutil, "which", return_value=None):
@@ -4701,10 +4698,4 @@ esac
         code, out, _ = self.remote()
         self.assertEqual(code, 1)
         self.assertIn("not connected", out)
-        self.fake_tailscale(serve_ok=False)                          # it prints the link and waits for it
-        with patch.object(tailscale, "_run", lambda *a, timeout=30: subprocess.run(["tailscale", *a], capture_output=True, text=True, timeout=2)):
-            code, out, restarted = self.remote()
-        self.assertEqual(code, 1)
-        self.assertIn("https://login.tailscale.com/f/serve", out)
-        self.assertFalse(restarted)
         self.assertEqual(board.registry()["settings"]["tailscale"], "")

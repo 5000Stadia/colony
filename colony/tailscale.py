@@ -1,9 +1,9 @@
 """Remote access through Tailscale: the board reached from the person's own devices, anywhere, and from no one else.
 
 Tailscale puts this machine and the person's phone on a private encrypted network only their devices join.
-`tailscale serve` hands that network's HTTPS address for this machine to the board on 127.0.0.1, so the board
-itself answers nothing but this machine: nothing is made public, no port is opened, and the open home network
-no longer reaches it. The board accepts that one address (settings `tailscale`) as its own page.
+Its addresses are private: no one outside the person's own logged-in devices can reach them. While it's on
+(settings `tailscale`, this machine's name there), the board answers only this machine and those devices, and
+refuses everything else, the open home network included. Nothing is made public and no port is opened.
 """
 import json
 import shutil
@@ -38,24 +38,16 @@ def status():
             "name": (me.get("DNSName") or "").rstrip("."), "ip": (me.get("TailscaleIPs") or [""])[0]}
 
 
-def serve(port):
-    """Hand this machine's private HTTPS address to the board on this machine; (ok, what tailscale said).
-    Before Serve is enabled for the network, tailscale prints the link to enable it and waits: that link is what
-    the person needs, so a wait ends with what it printed."""
-    try:
-        r = _run("serve", "--bg", f"http://127.0.0.1:{port}", timeout=20)
-    except subprocess.TimeoutExpired as e:
-        said = "".join(x.decode() if isinstance(x, bytes) else x for x in (e.stdout or "", e.stderr or "")).strip()
-        return False, said or "tailscale serve didn't answer"
-    except OSError as e:
-        return False, str(e)
-    said = (r.stdout + r.stderr).strip()
-    return r.returncode == 0, said
+# The addresses Tailscale gives the person's devices (its shared address range, and its IPv6 prefix).
+RANGES = ("100.64.0.0/10", "fd7a:115c:a1e0::/48")
 
 
-def unserve():
+def own_device(ip):
+    """Whether a request comes from this machine or one of the person's devices on their Tailscale network. A device
+    on the open home network (or anywhere else) is neither."""
+    import ipaddress
     try:
-        r = _run("serve", "--https=443", "off")
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, str(e)
-    return r.returncode == 0, (r.stdout + r.stderr).strip()
+        addr = ipaddress.ip_address(ip.removeprefix("::ffff:"))
+    except ValueError:
+        return False
+    return addr.is_loopback or any(addr in ipaddress.ip_network(r) for r in RANGES)

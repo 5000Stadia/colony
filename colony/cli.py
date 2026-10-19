@@ -192,14 +192,16 @@ def cmd_urls(a):
     args = json.loads(saved.read_text()) if saved.exists() else []
     port = int(args[args.index("--port") + 1]) if "--port" in args else a.port
     lan = "--lan" in args or (not args and board.registry()["settings"]["lan"])
-    print(f"On this machine:      http://127.0.0.1:{port}/")
-    for u in (board.urls(port)[1:] if lan else []):
-        print(f"From your network:    {u}")
-    if not lan:
-        print("From your network:    off (colony settings lan on, then colony restart)")
     private = board.registry()["settings"].get("tailscale")
+    print(f"On this machine:      http://127.0.0.1:{port}/")
+    for u in (board.urls(port)[1:] if lan and not private else []):
+        print(f"From your network:    {u}")
     if private:
-        print(f"From anywhere:        https://{private}/   (your devices on Tailscale, and no one else)")
+        print("From your network:    refused while remote access is on: your devices reach it through Tailscale")
+    elif not lan:
+        print("From your network:    off (colony settings lan on, then colony restart)")
+    if private:
+        print(f"From anywhere:        http://{private}:{port}/   (your devices on Tailscale, and no one else)")
     else:
         print("From anywhere:        off (colony remote sets it up through Tailscale: your devices only)")
     from . import providers
@@ -213,21 +215,18 @@ def cmd_remote(a):
     """The board from the person's own devices, anywhere, through Tailscale; --off undoes it; --check says where it stands."""
     from . import board, tailscale
     st, settings = tailscale.status(), board.registry()["settings"]
+    port = _running_port(a.port)
     if a.check:
         print(f"Tailscale: {'not installed' if not st['installed'] else 'connected as ' + st['name'] if st['running'] else 'not connected'}")
-        print(f"The board through it: {'https://' + settings['tailscale'] + '/' if settings.get('tailscale') else 'off'}")
+        private = settings.get("tailscale")
+        print("The board through it: " + (f"http://{private}:{port}/" if private else "off"))
         return 0
     if a.off:
-        if settings.get("tailscale") and st["installed"]:
-            ok, said = tailscale.unserve()
-            if not ok:
-                print(f"Tailscale didn't stop serving the board: {said}")
-                return 1
         board.set_setting("tailscale", "")
         if settings.get("tailscale_lan_before") is not None:
             board.set_setting("lan", "on" if settings["tailscale_lan_before"] else "off")
             _saved_reach(settings["tailscale_lan_before"])
-        print("The board is no longer reachable through Tailscale; restarting it as it was before.")
+        print("Remote access is off; restarting the board as it was before.")
         return _restart_board().returncode
     if not st["installed"]:
         print(tailscale.INSTALL)
@@ -235,23 +234,17 @@ def cmd_remote(a):
     if not (st["running"] and st["name"]):
         print(tailscale.LOGIN)
         return 1
-    port = _running_port(a.port)
-    ok, said = tailscale.serve(port)
-    if not ok:
-        print("Tailscale wouldn't serve the board yet. What it said:\n" + said + "\nIf it gives a link to enable "
-              "Serve or HTTPS for your network, open it, allow it, then run colony remote again.")
-        return 1
     if settings.get("tailscale_lan_before") is None:
         reg = board.registry()
         reg["settings"]["tailscale_lan_before"] = bool(settings["lan"])
         board.save_registry(reg)
     board.set_setting("tailscale", st["name"])
-    board.set_setting("lan", "off")             # the open home network no longer reaches it; your devices do, through Tailscale
-    _saved_reach(False)
+    board.set_setting("lan", "on")              # it listens beyond this machine, and answers only your devices
+    _saved_reach(True)
     restarted = _restart_board()
-    print(f"The board is reachable from your own devices, anywhere: https://{st['name']}/\n"
-          "Open it on your phone with the Tailscale app connected. Nothing is public: only devices logged in to "
-          "your Tailscale account reach it, and the open home network no longer does.")
+    print(f"The board is reachable from your own devices, anywhere: http://{st['name']}:{port}/ "
+          f"(or http://{st['ip']}:{port}/)\nOpen it with the Tailscale app connected. Nothing is public: only devices "
+          "logged in to your Tailscale account reach it, and the open home network no longer does.")
     if restarted.returncode:
         print("The board didn't restart cleanly: " + (restarted.stdout + restarted.stderr).strip()[-400:])
     return restarted.returncode
