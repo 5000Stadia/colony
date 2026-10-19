@@ -1,5 +1,6 @@
 """Shared vision: live text, scoped migration, and delivery without approval state."""
 import concurrent.futures
+import re
 import html
 from pathlib import Path
 import threading
@@ -467,3 +468,29 @@ class NestTest(BoardBase):
         self.cli("nest", "holodeck", "--drop", "1")
         self.assertEqual([r["words"] for r in nest.nests()["holodeck"]["standards"]], ["fixes go to the workflow, never one asset"])
         self.assertNotEqual(self.cli("nest", "holodeck", "--drop", "5").returncode, 0)
+
+
+class PageTest(BoardBase):
+    def test_the_vision_starts_folded_to_its_first_sentence_and_flows_without_the_files_line_breaks(self):
+        board.track(self.root)
+        text = ("**holo-emitter: walk into any place, and it's there.** The north star is the\nholodeck, on a phone first.\n\n"
+                "Three projects make it:\n- construct is the narrator, built on the\n  roots of storytelling\n- pattern-buffer holds the world")
+        vision.save(self.root, text, how='conversation', words='Yes.', context='Agreed.')
+        box = board.vision_box(self.root, 0)
+        self.assertTrue(box.startswith("<details class='vision'><summary><b>Vision</b> · holo-emitter: walk into any place, and it&#x27;s there.</summary>"))
+        self.assertIn("<p><strong>holo-emitter: walk into any place, and it&#x27;s there.</strong> The north star is the holodeck, on a phone first.</p>", box)
+        self.assertIn("<li>construct is the narrator, built on the roots of storytelling</li><li>pattern-buffer holds the world</li>", box)
+
+    def test_the_status_leads_a_projects_page_and_the_last_project_to_start_working_comes_first(self):
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        page = board.render(board.registry(), 0)
+        self.assertLess(page.index("class='status'"), page.index("class='vision'"))
+        names = lambda: [n for n in re.findall(r"</span>([\w-]+)<span class='badge", board.sidebar(board.registry(), 0))]
+        board.woke(other)
+        self.assertEqual(names()[0], "photonic")
+        board.woke(self.root)
+        self.assertEqual(names()[0], "plants")

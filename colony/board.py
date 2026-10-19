@@ -1596,6 +1596,27 @@ def thread(ns, road_items=None):
     return out
 
 
+def woke(root):
+    """A project just went from idle to working: it comes to the front of the board's list."""
+    path = home() / "woke.json"
+    try:
+        rows = json.loads(path.read_text())
+    except (OSError, ValueError):
+        rows = {}
+    rows[str(Path(root).resolve())] = now()
+    home().mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rows))
+    tmp.replace(path)
+
+
+def woken():
+    try:
+        return json.loads((home() / "woke.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def sidebar(reg, pid):
     from . import monitor
     plist = projects(reg)
@@ -1606,10 +1627,15 @@ def sidebar(reg, pid):
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
     from . import nest
     homes = {p: n for n, v in nest.nests().items() for p in v.get("members", [])}
-    order = list(dict.fromkeys(homes.values()))     # nests in the order they were made, then projects in none
+    # The project that last went from idle to working comes first, and its nest with it; then the rest, by the same.
+    rec, grp = woken(), (lambda p: homes.get(str(p.resolve()), ""))
+    best = {}
+    for p in plist:
+        best[grp(p)] = max(best.get(grp(p), ""), rec.get(str(p.resolve()), ""))
     heading = None
-    for i, p in sorted(enumerate(plist), key=lambda ip: (order.index(homes[str(ip[1].resolve())]) if str(ip[1].resolve()) in homes else len(order), ip[0])):
-        here = homes.get(str(p.resolve()), "" if order else None)
+    for i, p in sorted(enumerate(plist), reverse=True,
+                       key=lambda ip: (best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0])):
+        here = grp(p) if homes else None
         if here != heading and here is not None:
             label = e(here + ' nest' if here else 'other projects')
             side.append(f"<div class='sline nesthead' style='padding:8px 10px 2px;text-transform:uppercase;letter-spacing:.06em'>"
@@ -1751,13 +1777,14 @@ def vision_box(root, pid):
     from . import vision
     road = roadmap(root)
     changes = [r for r in vision.history(root) if r['how'] != 'baseline']
-    current = (f"<div class='pre'>{e(road['vision'])}</div>" if road['vision'] else
+    current = (prose(road['vision']) if road['vision'] else
                f"<p class='muted'>{e(road['goal']) or 'Shape the vision with your project agent.'}</p>")
     rows = ''.join(f"<li><span class='who'>{e(r['at'])} · {e(r['how'])}</span>"
-                   f"<div class='pre'>{e(r['text']) or '(vision cleared)'}</div>"
+                   f"<div>{prose(r['text']) or '(vision cleared)'}</div>"
                    + (f"<p>{e(r['words'])}</p>" if r.get('words') else '')
                    + (f"<p class='muted'>Reading: {e(r['context'])}</p>" if r.get('context') else '') + '</li>' for r in reversed(changes))
-    return (f"<section class='vision'><h2>Vision</h2>{current}"
+    summary = first_sentence_of(road['vision'] or road['goal'])
+    return (f"<details class='vision'><summary><b>Vision</b>{' · ' + e(summary) if summary else ''}</summary>{current}"
             f"<details><summary>Edit vision</summary><form class='options' method='post' action='/vision'>"
             f"<input type='hidden' name='p' value='{pid}'>"
             f"<textarea name='before' hidden>{e(road['vision'])}</textarea>"
@@ -1766,7 +1793,60 @@ def vision_box(root, pid):
             "<button>Save vision</button><p class='muted'>Saving updates the vision and tells your project agent "
             "to consider its effect on the work at hand.</p></form></details>"
             + (f"<details><summary>Vision history ({len(changes)})</summary><ul>{rows}</ul></details>" if changes else '')
-            + '</section>')
+            + '</details>')
+
+
+def _inline(text):
+    """Escaped text with **bold** and *emphasis* and `code` shown as such."""
+    text = e(text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+
+
+def prose(text):
+    """Markdown written in a file, as a page shows it: paragraphs flow (a line wrapped in the file isn't a break on
+    the page), lists stay lists, headings stay headings."""
+    out, para, items = [], [], []
+
+    def flush():
+        if para:
+            out.append(f"<p>{_inline(' '.join(para))}</p>")
+            para.clear()
+        if items:
+            out.append("<ul>" + "".join(f"<li>{_inline(' '.join(i))}</li>" for i in items) + "</ul>")
+            items.clear()
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        bullet = re.match(r"^(?:[-*+]|\d+[.)])\s+(.*)", line)
+        if not line:
+            flush()
+        elif line.startswith("#"):
+            flush()
+            out.append(f"<h3>{_inline(line.lstrip('#').strip())}</h3>")
+        elif bullet:
+            if para:
+                flush()
+            items.append([bullet.group(1)])
+        elif items and raw[:1] in (" ", "\t"):
+            items[-1].append(line)                       # a list item wrapped onto the next line
+        else:
+            if items:
+                flush()
+            para.append(line)
+    flush()
+    return "".join(out)
+
+
+def first_sentence_of(text):
+    """The vision's opening sentence, plain, for its collapsed heading."""
+    for block in re.split(r"\n\s*\n", text or ""):
+        plain = re.sub(r"[*_`#>]", "", " ".join(block.split())).strip(" -")
+        if plain:
+            m = re.match(r"(.+?[.!?])(\s|$)", plain)
+            s = (m.group(1) if m else plain)
+            return s if len(s) <= 180 else s[:177].rsplit(" ", 1)[0] + "…"
+    return ""
 
 
 def lead_is_shared(root):
@@ -1847,8 +1927,9 @@ def render(reg, pid, view="overview"):
     secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     # the day's page opens on the day itself: the vision and the project's state are a tab away
+    lead_status = status_card(pid, console.snapshot(root)) if view not in ("today", "showcase", "roadmap") else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
-               + ("" if view == "today" else
+               + lead_status + ("" if view == "today" else
                   f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>{remote_line(root)}") + "</header>")
     out.append(progress_panel(root, pid))
     if view == "today":
@@ -1953,8 +2034,7 @@ def render(reg, pid, view="overview"):
                             f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>")
             out.append("</div><h2>Mail with other projects</h2><div class='card'>" + "".join(rows))
         out.append("</div>")
-    else:                                 # what needs the person now, and what changed
-        out.append(status_card(pid, console.snapshot(root)))
+    else:                                 # what needs the person now, and what changed (its status leads the page)
         out.append(pinned_section(pid, root))
         # waiting on you: the same as this project's part of Needs you
         # kept current like Needs you: what the agent settles meanwhile drops out, except while being typed in
@@ -2665,8 +2745,7 @@ def nest_page(reg, name):
     members = [(at[m], plist[at[m]]) for m in n.get("members", []) if m in at]
     vision = n.get("vision", "").strip()
     out = [f"<h1>{e(name)} nest</h1>",
-           "<h2>Shared vision</h2><div class='card'>" + ("".join(f"<p>{e(para)}</p>" for para in vision.split("\n\n"))
-           if vision else "<p class='muted'>No shared vision yet: the why these projects build toward together. Agree it "
+           "<h2>Shared vision</h2><div class='card'>" + (prose(vision) if vision else "<p class='muted'>No shared vision yet: the why these projects build toward together. Agree it "
            "with any member's agent; it records your words and every member hears it.</p>") + "</div>",
            *([f"<h2>Standards</h2><div class='card'>" + "".join(
                f"<div class='note'>“{e(r['words'])}”<span class='who'>{' · said in ' + e(r['from']) if r.get('from') else ''}"
@@ -4358,6 +4437,7 @@ form.options input[type=text], form.options input:not([type]) { font:inherit; pa
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
 form.options textarea.short { min-height:44px }
 .vision { margin:18px 0; max-width:900px } .vision details { margin:12px 0 }
+.vision > summary { cursor:pointer; overflow:hidden; text-overflow:ellipsis } .vision[open] > summary { margin-bottom:8px }
 .vision textarea:not([hidden]) { width:100%; box-sizing:border-box; font:inherit; padding:10px; resize:vertical;
   border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink) }
 textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; line-height:1.45; padding:10px; border-radius:8px;

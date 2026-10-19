@@ -542,6 +542,8 @@ class Watcher:
             else:
                 self.settling.pop(str(p), None)
             self.states[str(p)] = now
+            if now == "working" and before != "working":
+                board.woke(p)                 # it comes to the front of the board's list
             if now == "working":
                 self.worked.add(str(p))
             # What it completed since the last look; the first look, at the board's start, only notes where it is.
