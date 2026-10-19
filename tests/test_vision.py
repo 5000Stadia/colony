@@ -378,3 +378,92 @@ class VisionTest(BoardBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class NestTest(BoardBase):
+    """Projects that share a purpose share a nest: each knows its nestmates and the shared vision; others see none."""
+    def project(self, name):
+        root = Path(self.tmp.name) / name
+        root.mkdir()
+        (root / "ROADMAP.md").write_text(ROADMAP)
+        board.track(root)
+        return root
+
+    def test_nestmates_know_each_other_and_the_shared_vision_while_a_project_outside_sees_none(self):
+        from colony import nest
+        board.track(self.root)
+        photonic, outside = self.project("photonic"), self.project("dnd")
+        self.assertEqual(self.cli("nest", "holodeck").returncode, 0)                     # this project, by default
+        self.assertIn("photonic is in the holodeck nest", self.cli("nest", "holodeck", "photonic").stdout)
+        self.assertEqual(nest.nest_of(photonic), "holodeck")
+        self.assertEqual([p.name for p in nest.nestmates(self.root)], ["photonic"])
+        self.assertIsNone(nest.nest_of(outside))
+        shared = Path(self.tmp.name) / "shared.md"
+        shared.write_text("Walk into any story and live it.")
+        r = self.cli("nest", "holodeck", "--vision", "--file", str(shared), "--words", "Yes, that's it.", "--context", "Agreed.")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for member in (self.root, photonic):                  # every member hears the change, before and after
+            heard = [n["text"] for n in board.notes(member) if "shared vision" in n["text"] and "After:" in n["text"]]
+            self.assertTrue(heard and "Walk into any story" in heard[-1])
+        self.assertFalse([n for n in board.notes(outside) if "nest" in n["text"]])
+        start = self.cli("notes", "--deliver", "--session").stdout
+        self.assertIn("in the holodeck nest", start)
+        self.assertIn("photonic", start)
+        self.assertIn("Walk into any story", start)
+        self.assertEqual(nest.nests()["holodeck"]["history"][-1]["words"], "Yes, that's it.")
+        listing = self.cli("nest").stdout
+        self.assertIn("holodeck: plants, photonic", listing)
+        from colony import pins, showcase
+        showcase.add(photonic, "A ballroom of people", "Forty generated guests.", link="https://example.com/ballroom")
+        pins.add(self.root, "https://example.com/emitter", title="Emitter demo")
+        showcase.add(outside, "Session zero map", "The campaign map.")
+        page = board.nest_page(board.registry(), "holodeck")          # the nest's own page gathers its members' work
+        for shown in ("Walk into any story", "A ballroom of people", "Emitter demo", ">photonic<", ">plants<"):
+            self.assertIn(shown, page)
+        self.assertNotIn("Session zero map", page)
+        self.assertIn("No nest named", board.nest_page(board.registry(), "nowhere"))
+        side = board.sidebar(board.registry(), 0)                     # the board groups its projects by nest
+        self.assertIn("/nest?n=holodeck", side)
+        self.assertLess(side.index("holodeck nest"), side.index(">photonic<"))
+        self.assertLess(side.index(">photonic<"), side.index("other projects"))
+        self.assertLess(side.index("other projects"), side.index(">dnd<"))
+
+    def test_a_project_is_in_one_nest_and_keeps_it_when_closed_and_reopened(self):
+        from colony import nest
+        board.track(self.root)
+        nest.join(self.root, "holodeck")
+        nest.join(self.root, "family")
+        self.assertEqual(nest.nest_of(self.root), "family")
+        self.assertNotIn("holodeck", nest.nests())                     # an empty nest with no vision is gone
+        board.remove_project(self.root)
+        board.track(self.root)
+        self.assertEqual(nest.nest_of(self.root), "family")
+        self.assertIn("left the family nest", self.cli("nest", "--leave").stdout)
+        self.assertIsNone(nest.nest_of(self.root))
+        self.assertIn("No nests yet", self.cli("nest").stdout)
+        self.assertNotEqual(self.cli("nest", "nowhere", "--vision", "--file", "x").returncode, 0)
+
+    def test_the_steward_keeps_a_nests_standards_in_the_persons_words_and_a_newer_one_replaces_an_older(self):
+        from colony import nest
+        board.track(self.root)
+        nest.join(self.root, "holodeck")
+        self.assertEqual(self.cli("nest", "holodeck", "--standard", "no break-fixing", "--from", "holo-emitter").returncode, 0)
+        self.cli("nest", "holodeck", "--standard", "generation needs no human sign-off", "--from", "holo-emitter")
+        self.cli("nest", "holodeck", "--standard", "fixes go to the workflow, never one asset", "--replaces", "1")
+        listing = self.cli("nest").stdout
+        self.assertNotIn("no break-fixing", listing)
+        self.assertIn('standard 2: "fixes go to the workflow, never one asset"', listing)
+        self.assertIn("said in holo-emitter", listing)
+        self.assertIn("generation needs no human sign-off", board.nest_page(board.registry(), "holodeck"))
+        self.assertFalse([n for n in board.notes(self.root) if "sign-off" in n["text"]])   # held, not pushed into context
+        told = self.cli("nest", "holodeck", "--tell", "2", "--to", "plants")
+        self.assertIn("is told, once", told.stdout)
+        again = self.cli("nest", "holodeck", "--tell", "2", "--to", "plants")              # never badgers
+        self.assertIn("isn't told twice", again.stdout)
+        heard = [n for n in board.notes(self.root) if "workflow, never one asset" in n["text"]]
+        self.assertEqual(len(heard), 1)
+        self.assertEqual(heard[0]["author"], "monitor")
+        self.assertNotEqual(self.cli("nest", "holodeck", "--tell", "2", "--to", "nobody").returncode, 0)
+        self.cli("nest", "holodeck", "--drop", "1")
+        self.assertEqual([r["words"] for r in nest.nests()["holodeck"]["standards"]], ["fixes go to the workflow, never one asset"])
+        self.assertNotEqual(self.cli("nest", "holodeck", "--drop", "5").returncode, 0)

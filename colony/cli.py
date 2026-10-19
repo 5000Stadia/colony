@@ -20,6 +20,8 @@ waits on them for, its roadmap, and a monitor that can act for them.
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
     colony close NAME [--cancel]    close a project safely: it lands its work, then comes off the board (files and
                                     conversation kept; colony track reopens it where it stopped)
+    colony nest [NAME [PROJECT...]] [--leave] [--vision --file PATH --words W --context C]
+                                    nests: projects that share a purpose; a nest's shared vision is the why they serve
     colony consult R4 "QUESTION" --digest FILE   two fresh views at a decision costly to change
     colony scout "BRIEF"            (monitor) a fresh scout that can only search and read the web; its report
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
@@ -683,7 +685,7 @@ def cmd_notes(a):
             from . import codex_remote
             if not codex_remote.accepts_hook(root, payload):
                 return 0
-        from . import vision, context, lead
+        from . import vision, context, lead, nest
         payload.setdefault("hook_event_name", "SessionStart" if a.session else "UserPromptSubmit")
         context.register(root, a.console or providers.key(context.program(root)), payload)
         if a.session and payload.get('source') != 'compact':
@@ -724,6 +726,7 @@ def cmd_notes(a):
             _monitor.render_inbox(handed),
             board.open_gates_line(root) if spoke and not own_monitor else "",
             lead.role_text(root) if a.session else '',
+            nest.session_text(root) if a.session and not own_monitor else '',
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's monitor, acting for them, left notes for you:"),
@@ -1163,6 +1166,61 @@ def cmd_close(a):
     return 0
 
 
+def cmd_nest(a):
+    from . import board, nest
+    if a.vision:
+        if not (a.name and a.file):
+            raise SystemExit("colony nest NAME --vision --file PATH --words \"the person's words\" --context \"your reading\"")
+        try:
+            changed = nest.set_vision(a.name, Path(a.file).read_text(), a.words or "", a.context or "")
+        except (ValueError, OSError) as e:
+            print(e)
+            return 1
+        print(f"The {a.name} nest's shared vision is {'saved; every member hears the change' if changed else 'unchanged'}")
+        return 0
+    if a.tell:
+        if not (a.name and a.to):
+            raise SystemExit("colony nest NAME --tell N --to PROJECT")
+        try:
+            before = nest.tell(a.name, a.tell, _project(a.to))
+        except ValueError as e:
+            print(e)
+            return 1
+        print(f"{a.to} already heard it on {before[:10]} and keeps it as a note: it isn't told twice" if before
+              else f"{a.to} is told, once")
+        return 0
+    if a.standard is not None or a.drop:
+        if not a.name:
+            raise SystemExit('colony nest NAME --standard "the person\'s words" --from PROJECT [--replaces N]')
+        try:
+            nest.standard(a.name, a.standard or "", a.source or "", a.drop or a.replaces)
+        except ValueError as e:
+            print(e)
+            return 1
+        print(f"The {a.name} nest's standards are saved")
+        return 0
+    roots = [_project(n) for n in a.projects] or ([board.root_of()] if a.name or a.leave else [])
+    if a.leave:
+        for r in roots:
+            left = nest.leave(r)
+            print(f"{r.name} left the {left} nest" if left else f"{r.name} is in no nest")
+        return 0
+    if a.name:
+        for r in roots:
+            print(f"{r.name} is in the {a.name} nest" + ("" if nest.join(r, a.name) else " already"))
+        return 0
+    data = nest.nests()
+    if not data:
+        print("No nests yet. colony nest NAME PROJECT... puts projects that share a purpose in one.")
+    for name, n in data.items():
+        first = (n.get("vision") or "").strip().splitlines()
+        print(f"{name}: {', '.join(Path(p).name for p in n.get('members', [])) or '(no projects)'}"
+              + (f"\n  shared vision: {first[0][:100]}" if first else ""))
+        for k, row in enumerate(n.get("standards", []), 1):
+            print(f"  standard {k}: \"{row['words']}\"" + (f" (said in {row['from']})" if row.get("from") else ""))
+    return 0
+
+
 def cmd_delete(a):
     from . import board
     dest = board.delete_project(_project(a.name))
@@ -1386,6 +1444,18 @@ def main(argv=None):
     p = sub.add_parser("close", help="close a project safely: it lands its work, then comes off the board (files and conversation kept)")
     p.add_argument("name"); p.add_argument("--cancel", action="store_true", help="keep it on the board after all")
     p.set_defaults(fn=cmd_close)
+    p = sub.add_parser("nest", help="nests: projects that share a purpose, and the shared vision they serve")
+    p.add_argument("name", nargs="?"); p.add_argument("projects", nargs="*", help="projects to put in it (default: this one)")
+    p.add_argument("--leave", action="store_true", help="take the projects (default: this one) out of their nest")
+    p.add_argument("--vision", action="store_true", help="set the nest's shared vision, agreed with the person")
+    p.add_argument("--file"); p.add_argument("--words"); p.add_argument("--context")
+    p.add_argument("--standard", help="(steward) a standard the person stated, in their words, for this nest")
+    p.add_argument("--from", dest="source", help="the project they said it in")
+    p.add_argument("--replaces", type=int, help="the number of the older standard it replaces")
+    p.add_argument("--drop", type=int, help="remove a standard by its number")
+    p.add_argument("--tell", type=int, help="(steward) carry standard N to a nestmate where its work meets it: once")
+    p.add_argument("--to", help="the project to tell")
+    p.set_defaults(fn=cmd_nest)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
     p.add_argument("action", nargs="?", choices=("add", "set", "ask", "approve", "suggest", "check", "sources", "source", "block")); p.add_argument("name", nargs="?", help="add: its name; set: its id")

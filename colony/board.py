@@ -106,6 +106,9 @@ steer all of them from one board, and the projects can write to each other.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
 - How long work goes well, from colony's measured runs: `GUIDE_PATH`. Read it at a project's start, and again
   when weighing structure (helpers, review, tests, memory).
+- Projects that share a purpose share a nest (`colony nest` shows them, `colony nest NAME` puts this one in one):
+  its shared vision, in the person's words, is the why your own vision serves. Agreed with them: `colony nest NAME
+  --vision --file PATH --words "their words" --context "your reading"`.
 - Other projects: `colony projects`; ask with `colony send NAME --ask "..."`, answer with `colony reply ID "..."`.
   Mail arrives by itself.
 - A delete through a variable is written `rm -rf "${OUT:?}"/*`: if the variable were ever empty, it stops
@@ -1593,7 +1596,17 @@ def sidebar(reg, pid):
     side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/monitor'><span class='pname'>"
             f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>monitor</span>"
             f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
-    for i, p in enumerate(plist):
+    from . import nest
+    homes = {p: n for n, v in nest.nests().items() for p in v.get("members", [])}
+    order = list(dict.fromkeys(homes.values()))     # nests in the order they were made, then projects in none
+    heading = None
+    for i, p in sorted(enumerate(plist), key=lambda ip: (order.index(homes[str(ip[1].resolve())]) if str(ip[1].resolve()) in homes else len(order), ip[0])):
+        here = homes.get(str(p.resolve()), "" if order else None)
+        if here != heading and here is not None:
+            label = e(here + ' nest' if here else 'other projects')
+            side.append(f"<div class='sline nesthead' style='padding:8px 10px 2px;text-transform:uppercase;letter-spacing:.06em'>"
+                        + (f"<a href='/nest?n={urllib.parse.quote(here)}'>{label}</a>" if here else label) + "</div>")
+        heading = here
         waiting = len(moments(p))
         new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
         badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>" + \
@@ -2632,6 +2645,54 @@ def showcase_html(pid, root):
                + "".join(card(x) for x in earlier) + "</details>" if earlier else ""))
 
 
+def nest_page(reg, name):
+    """A nest's own page: the shared vision its projects build toward, its projects, and every member's links and
+    demos gathered in one place, each marked with the project it came from (open, rate and comment there)."""
+    from . import nest
+    plist = projects(reg)
+    n = nest.nests().get(name)
+    if n is None:
+        return shell(reg, -2, f"<h1>No nest named {e(name)}</h1><p class='muted'>colony nest NAME PROJECT... makes one.</p>")
+    at = {str(p.resolve()): i for i, p in enumerate(plist)}
+    members = [(at[m], plist[at[m]]) for m in n.get("members", []) if m in at]
+    vision = n.get("vision", "").strip()
+    out = [f"<h1>{e(name)} nest</h1>",
+           "<h2>Shared vision</h2><div class='card'>" + ("".join(f"<p>{e(para)}</p>" for para in vision.split("\n\n"))
+           if vision else "<p class='muted'>No shared vision yet: the why these projects build toward together. Agree it "
+           "with any member's agent; it records your words and every member hears it.</p>") + "</div>",
+           *([f"<h2>Standards</h2><div class='card'>" + "".join(
+               f"<div class='note'>“{e(r['words'])}”<span class='who'>{' · said in ' + e(r['from']) if r.get('from') else ''}"
+               f" · {e(r['at'][:10])}</span></div>" for r in n["standards"]) + "</div>"] if n.get("standards") else []),
+           "<h2>Projects</h2><div class='card'>"]
+    for i, p in members:
+        snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
+        waiting = len(moments(p)) if p.exists() else 0
+        goal = " ".join(roadmap(p)["goal"].split())[:140] if p.exists() else ""
+        out.append(f"<div class='note'><a href='/?p={i}'><b>{e(p.name)}</b></a> <span class='who'>{e(snap['state'])}"
+                   f"{' · ' + str(waiting) + ' waiting on you' if waiting else ''}</span><div class='muted'>{e(goal)}</div></div>")
+    out.append("</div>")
+    links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
+    new_tab, icons = " target='_blank' rel='noopener'", {"url": "🔗", "upload": "📎"}
+    out.append(f"<h2>Links ({len(links)})</h2><div class='card'>" + ("".join(
+        f"<div class='pin'><a class='pintitle' href='/pin/open?p={i}&id={e(x['id'])}'{'' if pins.is_text(x) else new_tab}>"
+        f"{icons.get(x['kind'], '📄')} {e(x['title'])}</a> <span class='who'>{e(p.name)}</span></div>"
+        for i, p, x in links) or "<p class='muted'>Nothing pinned in these projects yet.</p>") + "</div>")
+    demos = sorted(((i, p, x) for i, p in members if p.exists() for x in showcase.entries(p)),
+                   key=lambda r: r[2]["at"], reverse=True)
+    out.append(f"<h2>Demos ({len(demos)})</h2>")
+    for i, p, x in demos:
+        open_it = (f"<a class='open' href='/showcase/open?p={i}&id={e(x['id'])}' target='_blank' rel='noopener'>Open →</a>"
+                   if x.get("link") else "")
+        stars = f" · {'★' * x['stars']}" if x.get("stars") else ""
+        out.append(f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b><span class='who'>{e(p.name)} · "
+                   f"{e(x['at'][:10])}{stars}</span></div><div>{e(x['what'])}</div>"
+                   + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "") + open_it
+                   + f" <a class='muted' href='/?p={i}&view=showcase'>rate or comment in {e(p.name)}</a></div>")
+    if not demos:
+        out.append("<p class='muted'>Nothing shown yet in these projects.</p>")
+    return shell(reg, -2, "".join(out))
+
+
 def pinned_section(pid, root):
     """What the person and the agent show each other: tap to open (a text file opens to edit), comment to the
     agent about it, or unpin it."""
@@ -3663,6 +3724,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return self.wfile.write(body)
+        if url.path == "/nest":
+            return self._send(200, nest_page(reg, (q.get("n") or [""])[0]).encode())
         if url.path == "/needs":
             if "p" in q:                                   # one project's Waiting on you
                 return self._send(200, waiting_html(pid, plist[pid]).encode())
