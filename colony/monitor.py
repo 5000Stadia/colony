@@ -805,21 +805,21 @@ class Watcher:
             return
         self.updates()
         self.scout()
-        self.pending += self.events()
+        events = self.events()
+        # Completions are only for passing on: each goes to the inbox as soon as it is seen, which outlives a board
+        # restart and, outside the person's hours, holds it for them; once there it counts as said, and the person's
+        # update, which records what it said too, leaves it out.
+        said = mentioned()
+        news = [(key[5:], text) for p, key, text in events if key and key.startswith("done:") and key[5:] not in said]
+        if news:
+            queue(" | ".join(text for _, text in news), relay=True)
+            mentioned([key for key, _ in news])
+        self.pending += [e for e in events if not (e[1] and e[1].startswith("done:"))]
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             # What waited while the monitor was busy may have been answered meanwhile: only what still waits goes.
-            # A completion goes once: unless the person's update already said it. It counts as said once it is in the
-            # inbox, which outlives a board restart; until then the update would still carry it.
-            said = mentioned()
-            done = [key[5:] for p, key, _ in self.pending if key and key.startswith("done:") and key[5:] not in said]
             fresh = [text for p, key, text in self.pending if key is None or key in self.waiting.get(p, ())]
             if fresh:
                 queue(" | ".join(fresh) + f" ({HELM_ON_NOTE})")
-            # Completions are only for passing on: outside the person's hours they wait in the inbox for them.
-            news = [text for p, key, text in self.pending if key and key.startswith("done:") and key[5:] in done]
-            if news:
-                queue(" | ".join(news), relay=True)
-            mentioned(done)
             self.pending = []
         self.tell()
 
@@ -848,7 +848,7 @@ def update(now=None):
         return None
     board.home().mkdir(parents=True, exist_ok=True)
     if "at" not in state:                       # the first look starts the clock: the first update comes a period on
-        path.write_text(json.dumps({"at": now, "asked": None}))
+        path.write_text(json.dumps({"at": now, "asked": None, "mentioned": state.get("mentioned") or []}))
         return None
     last = state["at"]
     if now - last < every or not hours.active():
@@ -900,10 +900,11 @@ def mentioned(keys=None):
     try:
         state = json.loads(path.read_text())
     except (OSError, ValueError):
-        state = None
-    said = set((state or {}).get("mentioned") or [])
-    if keys and state is not None:              # no update has started its clock: none would repeat them
+        state = {}
+    said = set(state.get("mentioned") or [])
+    if keys:
         state["mentioned"] = sorted(said | set(keys))
+        board.home().mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state))
     return said | set(keys or [])
 

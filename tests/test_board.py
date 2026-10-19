@@ -1398,21 +1398,31 @@ class MonitorTest(BoardBase):
         monitor.helm(True)
         clock = board.home() / "updates.json"
         said = lambda: " ".join(sent).count("plants R3: reminders")
+        board.set_setting("updates", "off")                              # no update to rescue it
         w = monitor.Watcher()
-        w.tick()                                                        # the first look starts the update's clock
+        w.tick()
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders"))
-        w.tick()                                                        # the monitor is busy: it waits in memory
+        w.tick()                                                        # the monitor is busy
         w = monitor.Watcher()                                           # and the board restarts
         me["state"] = "idle"
         w.tick()
-        self.assertEqual(said(), 0, "the new watcher only notes where things are")
-        clock.write_text(json.dumps(dict(json.loads(clock.read_text()), at=time.time() - 4000)))
+        self.assertEqual(said(), 1, "not lost: it waited in the inbox, which outlives the board")
+        me["state"] = "working"
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders\n- [x] R4 pots"))
         w.tick()
-        self.assertEqual(said(), 1, "not lost: the update carries it")
-        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [ ] R3 reminders\n- [x] R4 pots"))
+        self.assertIn("plants R4: pots", " ".join(r["text"] for r in monitor.inbox()), "in the inbox the moment it is seen")
+        self.assertEqual(w.pending, [], "nothing of it left in memory for a later update to race")
+        me["state"] = "idle"
+        w.tick()
+        board.set_setting("updates", "60")
+        w.tick()                                                        # the first look starts the update's clock
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders\n- [x] R4 pots\n- [x] R5 soil"))
         clock.write_text(json.dumps(dict(json.loads(clock.read_text()), at=time.time() - 4000)))
         w.tick()                                                        # due in the same tick as the wake
-        self.assertEqual(" ".join(sent).count("plants R4: pots"), 1, "once, not by both")
+        for line in ("plants R3: reminders", "plants R4: pots", "plants R5: soil"):
+            self.assertEqual(" ".join(sent).count(line), 1, f"{line}: once, not by both")
+        (self.root / "ROADMAP.md").write_text(ROADMAP)
+        w.tick()
         time.sleep(1.1)                                                 # done again, a second on
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders"))
         w.tick()
