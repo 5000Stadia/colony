@@ -72,6 +72,10 @@ own app, where it has one); each project also has its own session they can talk 
 - The helm: `colony posture` (each project's helm, vision, direction and focus); `colony helm on|off`
   (`--project X` for one); a direction: `colony posture X --direction "..."`; a routine decision you made:
   `colony decided X "what and why"`.
+- Closing a project when the person asks: `colony close NAME`. Its agent is told to land its work, and once that turn
+  ends with nothing running, colony takes it off the board, its files and conversation kept; `colony track PATH`
+  reopens it where it stopped, and `colony close NAME --cancel` keeps it. Delete (`colony delete`) only when they
+  say delete.
 - New projects: `colony new NAME` when the person asks (ask where it should live if they haven't said; add
   `--model`, `--effort`, `--permissions` or `--provider` when they name one), then start its conversation the
   way the person would.
@@ -490,6 +494,7 @@ class Watcher:
         self.interval = interval
         self.states, self.pending = {}, []
         self.completed = {}                  # what each project had completed when last looked at: items done, shown
+        self.close_idle = {}                 # a closing project's looks in a row at idle, its note handed over
         self.nudged, self.nudged_at = set(), {}
         self.told = (0, None)                   # when the monitor was last told of its inbox, and what was in it
         self.mail_lock = threading.Lock()
@@ -610,6 +615,24 @@ class Watcher:
                 if console.type_into(console.session_name(p), f"[colony] You have {what}."):
                     self.nudged |= waiting          # else someone is typing there: tried again next time
                     self.nudged_at.update((i, time.time()) for i in resume)
+
+    def close(self):
+        """Each project being closed (`colony close`) comes off the board once the turn its note started has ended with
+        nothing running; the person hears of it with the monitor's next news."""
+        for path, row in board.closing().items():
+            p = Path(path)
+            if p not in board.projects() or not p.exists():
+                board.close_project(p, cancel=True)
+                continue
+            delivered = any(n["id"] == row["note"] and n["delivered_at"] for n in board.notes(p))
+            state = console.snapshot(p, lines=1)["state"]
+            self.close_idle[path] = self.close_idle.get(path, 0) + 1 if delivered and state == "idle" else 0
+            if board.close_ready(p, state, self.close_idle[path]):
+                board.close_project(p, cancel=True)
+                board.remove_project(p)
+                self.close_idle.pop(path, None)
+                queue(f"{p.name} is closed, as the person asked: it landed its work and is off the board; its files and "
+                      f"conversation are kept, and colony track {p} reopens it where it stopped.", relay=True)
 
     def scout(self):
         """Each project, every so many hours (its "scout" posture; 0 never): if it was worked on since its last
@@ -785,6 +808,7 @@ class Watcher:
         vision.observe_all()
         continuation.tick_all()
         self.freshen()
+        self.close()                                # a project being closed comes off once it has landed its work
         if not self.enabled:
             self.usage()  # so are the safe pause and its waking at the reset
             self.mail()  # project delivery is independent of the monitor agent

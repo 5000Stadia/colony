@@ -1428,6 +1428,45 @@ class MonitorTest(BoardBase):
         w.tick()
         self.assertEqual(said(), 2, "undone and done again is news again")
 
+    def test_a_project_closes_safely_only_once_it_has_landed_its_work_and_reopens_where_it_stopped(self):
+        transcript = self.root / "conversation.jsonl"
+        transcript.write_text("{}\n")
+        console.remember(self.root, "conv-1", str(transcript))
+        state = {"state": "working"}
+        console.snapshot = lambda root, lines=6, name=None: {"state": state["state"], "lines": []}
+        console.type_into = hearing([])
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+        self.assertEqual(board.close_project(self.root), "closing")
+        self.assertEqual(board.close_project(self.root), "closing", "asked twice, told once")
+        [note] = [n for n in board.notes(self.root) if n.get("kind") == "close"]
+        self.assertIn("Land your work now", note["text"])
+        w = monitor.Watcher()
+        state["state"] = "idle"
+        for _ in range(3):
+            w.tick()
+        self.assertIn(self.root, board.projects(), "not before its note is handed over")
+        board.append(self.root, "notes.jsonl", {"type": "delivered", "of": note["id"], "at": board.now()})
+        state["state"] = "working"
+        w.tick()
+        self.assertIn(self.root, board.projects(), "still landing its work")
+        state["state"] = "idle"
+        w.tick()
+        self.assertIn(self.root, board.projects(), "one idle look may be a misread")
+        w.tick()
+        self.assertNotIn(self.root, board.projects(), "landed: off the board")
+        self.assertTrue((self.root / "ROADMAP.md").exists(), "its files stay")
+        self.assertEqual(board.closing(), {})
+        self.assertIn("plants is closed", " ".join(r["text"] for r in monitor._rows()))
+        board.track(self.root)
+        self.assertEqual(console.last_conversation(self.root), "conv-1", "reopened, it resumes its conversation")
+        self.assertEqual(board.close_project(self.root), "closing")
+        self.assertEqual(board.close_project(self.root, cancel=True), "kept")
+        state["state"] = "off"
+        w.tick()
+        self.assertIn(self.root, board.projects(), "cancelled: it stays")
+        self.assertEqual(board.close_project(self.root), "closed", "nothing running: off at once")
+        self.assertNotIn(self.root, board.projects())
+
     def test_a_session_stops_working_only_when_its_screen_says_so_twice_at_the_latest(self):
         reads = iter([("working", False), ("idle", False), ("working", False), ("idle", True), ("idle", True),
                       ("working", False), ("idle", False), ("idle", False)])

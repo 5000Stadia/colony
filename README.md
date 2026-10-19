@@ -111,6 +111,8 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony peek NAME [-n N]  a project's state and its last lines
     colony vision           this project's live vision; --history shows its dated changes
     colony tell NAME "…"     a note to a project, as yours
+    colony close NAME        close a project safely: it lands its work (finishes what's running, commits), then
+                             comes off the board; its files and conversation stay, and `colony track` reopens it
     colony settings          global settings; a project's own with `colony settings --project NAME`
 
 **Settings.** Each project can have its own model, effort, permissions and Remote Control; blank keeps

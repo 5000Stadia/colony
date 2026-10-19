@@ -18,6 +18,8 @@ waits on them for, its roadmap, and a monitor that can act for them.
     colony tell NAME "TEXT"         send a message into a project's console, as the person would
     colony choose NAME "OPTION"     pick an option a project is showing (trust question, permission prompt)
     colony new NAME [--in DIR]      create a project, put it on the board, start its console
+    colony close NAME [--cancel]    close a project safely: it lands its work, then comes off the board (files and
+                                    conversation kept; colony track reopens it where it stopped)
     colony consult R4 "QUESTION" --digest FILE   two fresh views at a decision costly to change
     colony scout "BRIEF"            (monitor) a fresh scout that can only search and read the web; its report
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
@@ -1147,6 +1149,16 @@ def cmd_remove(a):
     return 0
 
 
+def cmd_close(a):
+    from . import board
+    out = board.close_project(_project(a.name), cancel=a.cancel)
+    print({"kept": f"{a.name} stays on the board",
+           "closed": f"{a.name} is closed: nothing was running, so it is off the board now; its files and conversation are kept",
+           "closing": f"{a.name} is landing its work; once its turn ends with nothing running it comes off the board, its "
+                      "files and conversation kept (colony track reopens it)"}[out])
+    return 0
+
+
 def cmd_delete(a):
     from . import board
     dest = board.delete_project(_project(a.name))
@@ -1367,6 +1379,9 @@ def main(argv=None):
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
+    p = sub.add_parser("close", help="close a project safely: it lands its work, then comes off the board (files and conversation kept)")
+    p.add_argument("name"); p.add_argument("--cancel", action="store_true", help="keep it on the board after all")
+    p.set_defaults(fn=cmd_close)
     p = sub.add_parser("delete", help="delete a project: its folder moves to colony's trash"); p.add_argument("name"); p.set_defaults(fn=cmd_delete)
     p = sub.add_parser("supports", help="(monitor) tools offered to projects when their work calls for one, and how far each is trusted")
     p.add_argument("action", nargs="?", choices=("add", "set", "ask", "approve", "suggest", "check", "sources", "source", "block")); p.add_argument("name", nargs="?", help="add: its name; set: its id")

@@ -1004,6 +1004,69 @@ def remove_project(root):
     monitor.rebrief()
 
 
+CLOSE_NOTE = ("The person is closing this project. Land your work now: let what is running finish, helpers included "
+              "(don't cancel them), and take in what they hand back; commit what works (a clean point: an unfinished item "
+              "stays in progress, so the roadmap says where it stopped); start nothing new. Then end your turn with a short "
+              "word on where things stand (done, half-done, next). Once your turn ends with nothing running, colony takes "
+              "the project off the board; its files and this conversation stay, and putting the folder back on the board "
+              "(colony track) reopens it here.")
+
+
+def _closing_path():
+    return home() / "closing.json"
+
+
+def closing():
+    """The projects being closed, each with the note that told it to land its work."""
+    try:
+        return json.loads(_closing_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_closing(rows):
+    home().mkdir(parents=True, exist_ok=True)
+    tmp = _closing_path().with_suffix(".tmp")
+    tmp.write_text(json.dumps(rows))
+    tmp.replace(_closing_path())
+
+
+def close_project(root, cancel=False):
+    """Close a project safely: its agent is told to land its work, and once that turn has ended with nothing running,
+    the project comes off the board (remove_project), its files and conversation kept. One whose console isn't
+    running has nothing in flight, so it comes off at once. Returns "closing", "closed" or "kept" (cancelled)."""
+    root, rows = Path(root), closing()
+    if cancel:
+        rows.pop(str(root), None)
+        _save_closing(rows)
+        return "kept"
+    if console.snapshot(root, lines=1)["state"] == "off":
+        rows.pop(str(root), None)
+        _save_closing(rows)
+        remove_project(root)
+        return "closed"
+    if str(root) not in rows:
+        note = add_note(root, None, CLOSE_NOTE, author="colony", kind="close")
+        rows[str(root)] = {"at": now(), "note": note["id"]}
+        _save_closing(rows)
+    return "closing"
+
+
+CLOSE_SETTLE = 2                    # looks in a row a closing console must read idle, its note handed over, to close
+
+
+def close_ready(root, state, idle_looks):
+    """Whether a closing project has landed its work: its note was handed over and the turn it started has ended,
+    nothing running (a console waiting on background helpers reads as working)."""
+    row = closing().get(str(root))
+    if not row:
+        return False
+    note = next((n for n in notes(root) if n["id"] == row["note"]), None)
+    if note is None or state == "off":
+        return True                                     # nothing left to hand over, or nothing running
+    return bool(note["delivered_at"]) and state == "idle" and idle_looks >= CLOSE_SETTLE
+
+
 def show_project(root):
     reg = registry()
     if str(root) in reg["hidden"]:
