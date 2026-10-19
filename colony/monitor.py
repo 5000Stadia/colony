@@ -584,9 +584,13 @@ class Watcher:
         a project whatever its screen seems to say (a misread one stayed asleep all evening), short of a choice on
         it, which typing would answer; a nudge that doesn't hand it over is tried again."""
         from . import mail, usage, vision
+        closing = board.closing()
         for p in board.projects():
             if not p.exists():
                 continue
+            row = closing.get(str(p))
+            if row and any(n["id"] == row["note"] and n["delivered_at"] for n in board.notes(p)):
+                continue                            # landing its work to close: what's new waits until it reopens
             letters = [m for m in mail.inbox(p) if not m["delivered_at"]]
             notes = [n for n in board.open_notes(p) if not n["delivered_at"] and not n.get("quiet")
                      and not vision.is_update(n)]

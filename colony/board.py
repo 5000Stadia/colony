@@ -970,6 +970,8 @@ def track(path, register=True):
     if register and not inside_a_root and str(root) not in reg["projects"]:
         reg["projects"].append(str(root))
         save_registry(reg)
+    if register and str(root) in reg["hidden"]:      # taken off (closed, removed) inside a projects folder: back on
+        show_project(root)
     from . import monitor
     monitor.rebrief()                                 # colony's own source joining the board changes the monitor's part
     return root
@@ -1037,8 +1039,14 @@ def close_project(root, cancel=False):
     running has nothing in flight, so it comes off at once. Returns "closing", "closed" or "kept" (cancelled)."""
     root, rows = Path(root), closing()
     if cancel:
-        rows.pop(str(root), None)
+        row = rows.pop(str(root), None)
         _save_closing(rows)
+        note = row and next((n for n in notes(root) if n["id"] == row["note"]), None)
+        if note and not note["delivered_at"]:       # not yet heard: withdrawn, so it never arrives
+            append(root, "notes.jsonl", {"type": "addressed", "of": note["id"], "at": now(), "text": "closing cancelled"})
+        elif note:
+            add_note(root, None, "The person kept this project open after all: closing is cancelled, so carry on as "
+                     "before.", author="colony")
         return "kept"
     from . import lead
     shared = lead.group(root)

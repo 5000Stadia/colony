@@ -1492,6 +1492,34 @@ class MonitorTest(BoardBase):
         self.assertIn("shares its roadmap with plants-codex", str(refused.exception))
         self.assertEqual(board.closing(), {})
 
+    def test_a_cancelled_close_is_withdrawn_and_a_closing_project_takes_no_new_work_and_reopens_from_a_projects_folder(self):
+        state = {"state": "working"}
+        console.snapshot = lambda root, lines=6, name=None: {"state": state["state"], "lines": []}
+        typed = []
+        console.type_into = lambda name, text: typed.append(text) or True
+        board.close_project(self.root)
+        board.close_project(self.root, cancel=True)
+        self.assertFalse(any(n.get("kind") == "close" for n in board.open_notes(self.root)), "withdrawn before it was heard")
+        board.close_project(self.root)
+        [note] = [n for n in board.open_notes(self.root) if n.get("kind") == "close"]
+        board.append(self.root, "notes.jsonl", {"type": "delivered", "of": note["id"], "at": board.now()})
+        board.add_note(self.root, None, "Start on the reminders", author="person")
+        state["state"] = "idle"
+        monitor.Watcher(enabled=False).mail()
+        self.assertEqual(typed, [], "landing its work: new work waits until it reopens")
+        board.close_project(self.root, cancel=True)
+        self.assertTrue(any("closing is cancelled" in n["text"] for n in board.open_notes(self.root)), "heard, so told")
+        monitor.Watcher(enabled=False).mail()
+        self.assertEqual(len(typed), 1, "kept open: what waited goes")
+        reg = board.registry()
+        reg["roots"], reg["projects"] = [str(self.root.parent)], []
+        board.save_registry(reg)
+        state["state"] = "off"
+        self.assertEqual(board.close_project(self.root), "closed")
+        self.assertNotIn(self.root, board.projects())
+        board.track(self.root)
+        self.assertIn(self.root, board.projects(), "reopened from its projects folder")
+
     def test_codex_is_at_rest_only_when_its_host_has_no_turn_or_active_goal(self):
         from colony import codex_remote
         codex = providers.get("codex")
