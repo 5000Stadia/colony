@@ -1734,10 +1734,12 @@ def project_list(plist, sub=None, fold="list"):
         if here != heading and here is not None:
             if heading is not None:
                 out.append("</div></div>")
-            name = (f"<a href='/nest?n={urllib.parse.quote(here)}'>{e(here)} nest</a>" if here else "Other projects")
+            # the whole heading folds the group; the arrow at its right opens the nest's page
+            page = (f"<a class='nestgo' href='/nest?n={urllib.parse.quote(here)}' onclick='event.stopPropagation()' "
+                    f"aria-label='The {e(here)} nest page'>→</a>" if here else "")
             out.append(f"<div class='nestgroup' data-fold='{e(fold)}:{e(here or '-')}' data-open='1'>"
-                       f"<h3 class='listhead'><button type='button' class='foldbtn' onclick='toggleFold(this.closest(\".nestgroup\"))' "
-                       f"aria-label='Fold'></button>{name}</h3><div class='members'>")
+                       f"<h3 class='listhead' onclick='toggleFold(this.closest(\".nestgroup\"))'><span class='foldbtn' aria-hidden='true'>"
+                       f"</span><span class='nestname'>{e(here + ' nest' if here else 'Other projects')}</span>{page}</h3><div class='members'>")
         heading = here
         out.append(project_row(i, p, sub(p) if sub and p.exists() else ""))
     if heading is not None:
@@ -1828,8 +1830,8 @@ def sidebar(reg, pid):
                     f"<a class='proj nestchip' href='/nest?n={q}' onclick='return toggleFold(this.parentNode)'>"
                     f"<span class='pname'><span class='sdot {state.replace(' ', '-')}'></span>{e(here)} <span class='nestcount'>"
                     f"{len(members)}</span><span class='badge gate'{'' if waits else ' hidden'}>{waits}</span></span>"
-                    f"<span class='sline'>nest · <span class='nestopen' onclick=\"event.stopPropagation(); location.href='/nest?n={q}'\">"
-                    f"its page</span></span></a><span class='members'>{''.join(chips)}</span></span>")
+                    f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); location.href='/nest?n={q}'\">"
+                    f"→</span></span></a><span class='members'>{''.join(chips)}</span></span>")
     # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
@@ -4829,9 +4831,13 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
 .prowline { display:flex; align-items:center; gap:8px; min-width:0 } .prowline b { flex:none; max-width:62%; color:var(--accent);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .prowline .sdot { flex:none }
 span.nestgroup, span.nestgroup > .members { display:contents } .nestgroup[data-open='0'] > .members { display:none }
-.listhead { display:flex; align-items:center; gap:6px } .foldbtn { min-height:0 !important; padding:0 4px; background:none;
-  border:0; color:var(--muted); cursor:pointer } .foldbtn::before { content:'▾' } .nestgroup[data-open='0'] .foldbtn::before { content:'▸' }
-.nestchip .nestcount { color:var(--muted); font-weight:400 } .nestopen { text-decoration:underline; cursor:pointer }
+.listhead { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; min-height:44px; margin:6px 0 2px }
+.listhead .nestname { flex:1 } .foldbtn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px;
+  border-radius:6px; background:var(--sunk); color:var(--ink); font-size:16px; flex:none }
+.foldbtn::before { content:'▾' } .nestgroup[data-open='0'] .foldbtn::before { content:'▸' }
+.nestgo { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; font-size:20px;
+  text-decoration:none; color:var(--accent) }
+.nestchip .nestcount { color:var(--muted); font-weight:400 } .nestopen { cursor:pointer; padding:0 6px; font-size:16px; color:var(--accent) }
 .saidlast { display:block; margin:12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--card);
   color:var(--ink); text-decoration:none } .saidlast .said { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
   overflow:hidden } a.prow.out { opacity:.55 }
