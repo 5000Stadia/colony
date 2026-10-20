@@ -42,11 +42,24 @@ def _step(name, arg):
 
 def claude_events(path):
     """PROVIDER: Claude Code's transcript: the person's messages, the agent's prose, one step per tool it ran."""
-    out = []
+    out, queued = [], []
     for e in _tail(path):
         if e.get("isMeta") or e.get("isSidechain"):
             continue
         at, content = e.get("timestamp", ""), (e.get("message") or {}).get("content")
+        # sent mid-turn: queued at once, then taken up within the turn (or as the next one, a user entry then)
+        if e.get("type") == "queue-operation":
+            if e.get("operation") == "enqueue" and isinstance(e.get("content"), str) and not e["content"].lstrip().startswith("<"):
+                queued.append(e["content"])
+            elif e.get("operation") == "remove" and e.get("content") in queued:
+                queued.remove(e["content"])
+            continue
+        if e.get("type") == "attachment":
+            a = e.get("attachment") or {}
+            if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str) and a["prompt"].strip() \
+                    and not a["prompt"].lstrip().startswith("<"):
+                out.append((_who(a["prompt"]), a["prompt"].strip(), at))
+            continue
         if e.get("isCompactSummary"):
             out.append(("compact", "", at))
             continue
@@ -67,7 +80,7 @@ def claude_events(path):
                     arg = inp.get("description") or inp.get("command") or inp.get("file_path") or inp.get("pattern") \
                         or inp.get("prompt") or next((v for v in inp.values() if isinstance(v, str)), "")
                     out.append(("step", _step(c.get("name", "tool"), arg), at))
-    return out
+    return out + [("queued", q.strip(), "") for q in queued if q.strip()]
 
 
 def codex_events(path):
@@ -112,8 +125,8 @@ def turns(evs):
     agent did, in order: its prose, and its steps between."""
     out = []
     for kind, text, at in evs:
-        if kind in ("you", "colony", "compact"):
-            out.append({"from": kind, "text": text, "at": at, "items": []})
+        if kind in ("you", "colony", "compact", "queued"):
+            out.append({"from": kind, "text": text, "at": at or f"q{len(out)}", "items": []})
         else:
             if not out:
                 out.append({"from": None, "text": "", "at": at, "items": []})

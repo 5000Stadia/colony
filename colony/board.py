@@ -1854,10 +1854,11 @@ def sidebar(reg, pid):
     for here, members in groups:
         chips, states, waits = [], [], 0
         for i, p in members:
-            waiting = len(moments(p))
+            # its screen read once: its dot, and what waits on the person
+            snap = console.snapshot(p, lines=4) if p.exists() else {"state": "off", "lines": []}
+            waiting = len(moments(p, snap)) if p.exists() else 0
             total, waits = total + waiting, waits + waiting
             badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
-            snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off", "lines": []}
             states.append(snap["state"])
             # its line says what it is at, from its roadmap: never its console's footer or spinner words
             work = at_work(p) if p.exists() else ""
@@ -2056,6 +2057,8 @@ def chat_feed(key, root, shown=40):
         k = f"{e(t['at'])}"
         if t["from"] == "you":
             out.append(f"<div class='msg you'>{e(t['text'])}</div>")
+        elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
+            out.append(f"<div class='msg you pending' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
         elif t["from"] == "colony":
             head, _, rest = t["text"].removeprefix("[colony]").strip().partition("\n")
             out.append(f"<details class='msg colony' data-k='c{k}'><summary>{e(short(head, 90))}</summary>"
@@ -2072,7 +2075,9 @@ def chat_feed(key, root, shown=40):
                            f"<ul>{''.join(f'<li>{e(x)}</li>' for x in run)}</ul></details>")
                 run = []
             if kind == "say":
-                out.append(f"<div class='say'>{chat_prose(text)}</div>")
+                out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text)}</div>")
+        if any(kind == "say" for kind, _ in t["items"]):
+            out.append(f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>▶ Listen</button>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
@@ -2097,6 +2102,7 @@ def chat_page(key, root):
     return (f"<div class='chat' id='chat' data-key='{e(key)}'>{chat_feed(key, root)}</div>"
             f"<form class='composer' id='composer'><textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
             "<button aria-label='Send'>↑</button></form><div class='chatheld muted' id='chatheld' hidden></div>"
+            "<label class='aloud'><input type='checkbox' id='aloud'> Read replies aloud</label>"
             f"<script>{CHAT}</script>")
 
 
@@ -2107,13 +2113,17 @@ CHAT = """
   const atEnd = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
   const toEnd = () => window.scrollTo(0, document.body.scrollHeight);
   toEnd();
-  let last = box.innerHTML;
+  let last = box.innerHTML, pending = [];
+  // what was just sent shows at once, faded, until the conversation has it (a busy agent takes it up mid-turn)
+  const seen = (t) => [...box.querySelectorAll('.msg.you')].some((m) => !m.classList.contains('mine') && m.textContent.trim() === t);
+  const keep = () => { pending = pending.filter((t) => !seen(t));
+    pending.forEach((t) => { const d = document.createElement('div'); d.className = 'msg you pending mine'; d.textContent = t; box.appendChild(d); }); };
   async function refresh() {
     try {
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
       const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = atEnd();
-      box.innerHTML = last = html;
+      box.innerHTML = last = html; keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       if (end) toEnd();
     } catch (e) {}
@@ -2127,9 +2137,49 @@ CHAT = """
     const r = await fetch('/chat/send', {method: 'POST', body: new URLSearchParams({p: key, text})}).catch(() => null);
     held.hidden = !!(r && r.ok);
     if (!r || !r.ok) { held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.'; return; }
-    ta.value = ''; grow(); setTimeout(refresh, 600); setTimeout(toEnd, 700);
+    ta.value = ''; grow(); pending.push(text); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
+    setTimeout(refresh, 600);
   });
+  // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
+  const talk = window.speechSynthesis, aloud = document.getElementById('aloud');
+  let voice = null, playing = null;
+  const pick = () => {
+    const vs = talk ? talk.getVoices().filter((v) => /^en/i.test(v.lang)) : [];
+    const rank = (v) => (/premium/i.test(v.name) ? 4 : /enhanced|neural|natural/i.test(v.name) ? 3 : 0) + (v.localService ? 1 : 0) + (v.default ? .5 : 0);
+    voice = vs.sort((a, b) => rank(b) - rank(a))[0] || null;
+  };
+  if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
+  const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
+    return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
+  const chunks = (text) => text.match(/[^.!?\\n]+[.!?]*[\\s]*|\\n+/g)?.reduce((out, s) => {
+    if (out.length && (out[out.length - 1] + s).length < 220) out[out.length - 1] += s; else out.push(s); return out; }, []) || [];
+  const mark = () => box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■ Stop' : '▶ Listen'; });
+  const say = (t, text) => {
+    if (!talk) return;
+    talk.cancel(); playing = t; mark();
+    const parts = chunks(text).filter((p) => p.trim());
+    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice;
+      if (i === parts.length - 1) u.onend = () => { if (playing === t) { playing = null; mark(); } };
+      talk.speak(u); });
+  };
+  const turn = (t) => plain([...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)]);
+  const heard = new Set([...box.querySelectorAll('.say')].map((x) => x.dataset.k));
+  try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
+  aloud.addEventListener('change', () => {
+    try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
+    if (talk && aloud.checked) talk.speak(new SpeechSynthesisUtterance(''));   // a tap lets the phone speak later
+    if (talk && !aloud.checked) { talk.cancel(); playing = null; mark(); }
+  });
+  const fresh = () => {                  // a turn just ended: its new prose, aloud
+    if (!aloud.checked || box.querySelector('.chatlive')) return;
+    const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
+    news.forEach((x) => heard.add(x.dataset.k));
+    if (news.length) say(news[news.length - 1].dataset.t, plain(news));
+  };
+  new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   box.addEventListener('click', async (ev) => {
+    const l = ev.target.closest('button.listen');
+    if (l) { if (playing === l.dataset.t) { talk.cancel(); playing = null; mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
     await fetch('/choose', {method: 'POST', body: new URLSearchParams({p: key, option: b.dataset.option})}).catch(() => {});
     setTimeout(refresh, 600);
@@ -5108,6 +5158,10 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.ran[open] > summary::after { content:' ⌄' } .chat details.ran > summary::-webkit-details-marker { display:none }
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
+.chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
+.chat button.listen { align-self:flex-start; min-height:32px; padding:2px 10px; border:0; border-radius:999px; background:transparent;
+  color:var(--muted); font-size:13px; cursor:pointer } .chat button.listen:hover { color:var(--accent) }
+.aloud { display:flex; align-items:center; gap:6px; max-width:760px; margin:6px auto 0; color:var(--muted); font-size:13px }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
 .chatask { padding:10px 12px; border:1px solid var(--flag); border-radius:12px; background:var(--flag-bg) }
 .chatask .choices { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }

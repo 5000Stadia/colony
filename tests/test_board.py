@@ -742,6 +742,21 @@ class ChatTest(BoardBase):
         self.assertEqual([k for k, _ in turns[0]["items"]], ["say", "step", "step", "say"], "hooks' context and tool results stay out")
         self.assertEqual(chat.worked(["Bash(Find the tab rules)", "Edit(/x/board.py)"]), "Ran 1 command, edited 1 file")
 
+    def test_a_message_sent_mid_turn_shows_at_once_as_queued_then_where_the_agent_took_it_up(self):
+        from colony import chat
+        q = lambda op, text: {"type": "queue-operation", "operation": op, "timestamp": "2026-10-20T05:49:45Z", "content": text}
+        lines = [{"type": "user", "message": {"content": "Build chat"}, "timestamp": "2026-10-20T05:40:00Z"},
+                 q("enqueue", "Also it's slow"), q("enqueue", "<task-notification>x</task-notification>"), q("enqueue", "And one more")]
+        path = Path(self.tmp.name) / "t.jsonl"
+        path.write_text("\n".join(json.dumps(l) for l in lines))
+        self.assertEqual([(t["from"], t["text"]) for t in chat.turns(chat.events("claude", path))][1:],
+                         [("queued", "Also it's slow"), ("queued", "And one more")], "the person's, at once; a notice isn't theirs")
+        lines += [q("remove", "Also it's slow"), {"type": "attachment", "timestamp": "2026-10-20T05:49:50Z", "attachment": {
+            "type": "queued_command", "prompt": "Also it's slow", "origin": {"kind": "human"}}}]
+        path.write_text("\n".join(json.dumps(l) for l in lines))
+        self.assertEqual([(t["from"], t["text"]) for t in chat.turns(chat.events("claude", path))][1:],
+                         [("you", "Also it's slow"), ("queued", "And one more")], "taken up within the turn: where it landed")
+
     def test_a_codex_rollout_reads_the_same_way(self):
         from colony import chat
         item = lambda p: {"type": "response_item", "timestamp": "2026-10-19T10:00:00Z", "payload": p}

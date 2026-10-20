@@ -32,7 +32,20 @@ def record_claude(payload):
 
 
 def codex_live():
-    """Codex's limits asked of a running Codex server (no tokens), when one is up: fresh even while every console idles."""
+    """Codex's limits asked of a running Codex server (no tokens), when one is up: fresh even while every console idles.
+    Asked at most every half minute: every page shows them, and asking takes a moment."""
+    key, t = str(board.home()), time.time()
+    if key in _live and t - _live[key][0] < 30:
+        return _live[key][1]
+    got = _codex_live()
+    _live[key] = (t, got)
+    return got
+
+
+_live = {}
+
+
+def _codex_live():
     from . import codex_remote
     from .codex_rpc import Client, RPCError
     for home in sorted((h for h in (board.home() / "codex-remote").glob("*") if h.is_dir()),

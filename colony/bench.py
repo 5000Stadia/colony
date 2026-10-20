@@ -66,10 +66,21 @@ def snapshot():
 def api_records():
     """The latest Artificial Analysis reply, read as records for today's lineup: derived each time from what came,
     so a better reading of names applies to it at once."""
+    snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
+    ids = [mid for _, mid, _, _ in lineup()]
+    # the same snapshot read for the same lineup gives the same records: read again only when either changes
+    key = (str(snaps[-1]), snaps[-1].stat().st_mtime, tuple(ids)) if snaps else None
+    if key and _api.get("key") == key:
+        return list(_api["rows"])
     data, date = snapshot()
     if not data:
         return []
-    return records_from(data, [mid for _, mid, _, _ in lineup()], date)[0]
+    rows = records_from(data, ids, date)[0]
+    _api.update(key=key, rows=rows)
+    return list(rows)
+
+
+_api = {}
 
 
 def token_price(model):
