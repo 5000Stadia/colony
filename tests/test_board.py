@@ -882,6 +882,26 @@ class ChatTest(BoardBase):
         self.assertTrue(sent.endswith("\n\nsee this"))
         self.assertEqual((self.root / ".board" / "uploads" / "shot.png").read_bytes(), b"PNGDATA")
         self.assertEqual(chat.running(["  ⏵⏵ bypass permissions on · 1 shell · ← for agents"]), "1 shell running")
+        # a decision's own box takes them too, and they come back with the question when it is asked again
+        from colony import hours
+        with patch.object(hours, "held_until", return_value=None):
+            g = board.add_gate(self.root, "Which pot?")
+        body = (b"--B\r\nContent-Disposition: form-data; name=\"p\"\r\n\r\n0\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"gate\"\r\n\r\n" + g["id"].encode() + b"\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"reply\"\r\n\r\n1\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"back\"\r\n\r\n/\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\nthis one?\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"pot.png\"\r\nContent-Type: image/png\r\n\r\nPNG\r\n--B--\r\n")
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"http://{host}/answer", data=body, headers={
+                "Host": host, "Origin": f"http://{host}", "Content-Type": "multipart/form-data; boundary=B"}))
+        except urllib.error.HTTPError:
+            pass                                          # its redirect back to the page
+        asked = next(n["anchor"]["asked"] for n in board.notes(self.root) if (n.get("anchor") or {}).get("asked"))
+        self.assertEqual(asked, f"Attached: {self.root}/.board/uploads/pot.png\n\nthis one?")
+        again = board.add_gate(self.root, "Which pot, this one?", reframes=g["id"], told="Yes, that one")
+        shown = board.gate_body(self.root, 0, dict(again, answer=None, answered_at=None), "/")
+        self.assertIn("You asked:</span> this one?</p><a class='shot'", shown, "the picture with the question")
 
     def test_replies_are_read_in_kokoros_voice_where_it_is_installed_and_the_phones_otherwise(self):
         from colony import voice

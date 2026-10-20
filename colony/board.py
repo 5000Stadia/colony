@@ -2712,7 +2712,8 @@ CHAT = """
     const s = ev.target.closest('details.needs > summary'); if (!s || s.parentElement.open) return;
     requestAnimationFrame(() => { const d = s.parentElement, bar = document.querySelector('nav');
       const under = bar && getComputedStyle(bar).position === 'sticky' ? bar.getBoundingClientRect().bottom : 0;
-      window.scrollBy(0, d.getBoundingClientRect().top - under - 8); stick = false; });
+      const at = d.querySelector('.round.now') || d;            // asked again: the latest round, where it stands now
+      window.scrollBy(0, at.getBoundingClientRect().top - under - 12); stick = false; });
   });
   // Dictating into the box: the voice would be heard by the phone too, so reading pauses as soon as dictated words
   // arrive (as underlined words, or a run of them with no key pressed), and goes on once they have stopped coming
@@ -2757,9 +2758,9 @@ CHAT = """
     const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
     ev.preventDefault();
     const d = new FormData(f); if (ev.submitter && ev.submitter.name) d.append(ev.submitter.name, ev.submitter.value);
-    const r = await fetch('/answer', {method: 'POST', body: new URLSearchParams(d)}).catch(() => null);
+    const r = await fetch('/answer', {method: 'POST', body: f.enctype === 'multipart/form-data' ? d : new URLSearchParams(d)}).catch(() => null);
     if (!r || !r.ok) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: try again.'; f.appendChild(p); return; }
-    f.querySelectorAll('textarea').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
+    f.querySelectorAll('textarea, input[type=file]').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
     refresh();
   });
   box.addEventListener('click', async (ev) => {
@@ -3371,7 +3372,11 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
     goes with its own answer, folded with it."""
     first, rounds = gate_rounds(root, gate)
     # the way here, folded, and the latest exchange open: what is open is what matters now
-    exchange = lambda a, t: ((f"<p><span class='muted'>You asked:</span> {e(a)}</p>" if a else "")
+    shots = lambda a: "".join(f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
+                              for x in re.findall(r"^Attached: (.+)$", a or "", flags=re.M)
+                              if x.strip().lower().endswith(IMAGES) and (u := chat_file(pid, root, e(x.strip()))))
+    said = lambda a: re.sub(r"^Attached: .+\n*", "", a or "", flags=re.M).strip()
+    exchange = lambda a, t: ((f"<p><span class='muted'>You asked:</span> {e(said(a))}</p>{shots(a)}" if a else "")
                              + (f"<p><span class='muted'>Answer:</span> {e(t)}</p>" if t else ""))
     body = ((f"<details class='round'><summary>First asked: {e(short(first, 90))}</summary><p>{e(first)}</p></details>"
              + "".join(f"<details class='round'><summary>You asked: {e(short(a or '…', 90))}</summary>{exchange(a, t)}</details>"
@@ -3410,12 +3415,14 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
                 else "Your answer, or a question…")
         css = "add consultant-gate" if points else "add"
         button = "Save decisions" if points else "Send"
-        return (f"<form class='{css}' method='post' action='/answer'>"
+        return (f"<form class='{css}' method='post' action='/answer'{'' if points else " enctype='multipart/form-data'"}>"
                 f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(gate['id'])}'>"
                 f"<input type='hidden' name='back' value='{e(back)}'>" + content
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
                 + ("" if points else "<input type='hidden' name='reply' value='1'>")
-                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
+                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea>"
+                + ("" if points else "<label class='attach' aria-label='Attach photos or files'>+<input type='file' name='file' multiple hidden></label>")
+                + f"<button>{button}</button></form>")
     if gate["answer"]:
         answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
                        if gate.get("answered_by") in ("colony", "agent") else f"Your answer: {e(gate['answer'])}")
@@ -5754,11 +5761,16 @@ class Handler(BaseHTTPRequestHandler):
             from . import lead
             recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
             add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text, author='person')
-        elif path == "/answer" and form.get("reply") and text:
+        elif path == "/answer" and form.get("reply") and (text or self._uploads):
             # typed in a decision's own box: an answer or a question, the agent judges which; it stays open meanwhile
             g = next((g for g in gates(root) if g["id"] == form.get("gate")), None)
             if not g:
                 return self._send(404, b"No such gate in this project.")
+            if self._uploads:                              # what they attached, kept in the project, its paths in the reply
+                try:
+                    text = "\n".join(f"Attached: {Path(root) / pins.save_upload(root, *u)}" for u in self._uploads) + (f"\n\n{text}" if text else "")
+                except ValueError:
+                    return self._send(413, b"that file is too large (25 MB at most)")
             add_note(root, {"gate": g["id"], "item": g.get("item"), "asked": text},
                      f"The person replied on \"{g['question']}\" (still open): {text}\n"
                      f"If this answers it, record it: colony gate --answered {g['id']} \"their words\" --context \"your reading\". "
@@ -5956,6 +5968,8 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
 .round { margin:0 0 8px; padding:6px 10px; border-left:3px solid var(--line); color:var(--muted) } .round p { margin:4px 0 }
 .round > summary { cursor:pointer } .round.now { border-left-color:var(--accent); color:var(--ink) }
+.chat details.need form .attach { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; margin-right:6px;
+  border-radius:50%; background:var(--sunk); cursor:pointer; font-size:20px }
 .gatechoices { display:flex; flex-direction:column; gap:6px; margin:8px 0 } .gatechoices form { margin:0 }
 .gatechoices button.choice, .chat details.need .gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
   border:1px solid var(--line); background:var(--sunk); color:var(--ink); font:inherit; cursor:pointer }
