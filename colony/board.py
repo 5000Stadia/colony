@@ -1293,13 +1293,14 @@ def gate_lock(root):
 
 
 def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None, options=(),
-             recommended=None):
+             recommended=None, reframes=None, told=""):
     with gate_lock(root):
         return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default,
-                         options=options, recommended=recommended)
+                         options=options, recommended=recommended, reframes=reframes, told=told)
 
 
-def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None, options=(), recommended=None):
+def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None, options=(), recommended=None,
+              reframes=None, told=""):
     """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
     (stand_defaults); one with consultant points never does, since each point needs their decision."""
     default = (default or "").strip()
@@ -1317,6 +1318,10 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
         raise ValueError("The recommended answer is one of the options.")
     if options:
         gate["options"] = options
+    if reframes:                                     # asked again whole: the round before, and what the agent told them
+        gate["reframes"] = reframes
+        if (told or "").strip():
+            gate["told"] = told.strip()
     if recommended:
         gate["recommended"] = recommended
     until = hours.held_until(epoch(gate["at"]))     # outside the person's active hours: theirs when those begin
@@ -3329,11 +3334,37 @@ def gate_choices(pid, gate, back):
     return "<div class='gatechoices'>" + "".join(one(o) for o in opts) + "</div>"
 
 
+def gate_rounds(root, gate):
+    """A decision asked again after the person's questions: (the first question, [(what they asked, what they were
+    told)]), earliest first; the first question is None for one asked once."""
+    every = {g["id"]: g for g in gates(root)} if gate.get("reframes") else {}
+    asked = {}
+    if every:
+        for n in notes(root):
+            a = n.get("anchor") or {}
+            if a.get("asked") and n.get("author") == "person":
+                asked[a["gate"]] = a["asked"]              # the last they asked on each
+    rounds, g, first = [], gate, None
+    while g.get("reframes") in every:
+        before = every[g["reframes"]]
+        rounds.insert(0, (asked.get(before["id"], ""), g.get("told", "")))
+        first, g = before["question"], before
+    return first, rounds
+
+
 def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
     """The same point decisions in Needs you, Waiting on you and the item's record. With its number on the day's page;
     folded, its own answer box tucks away beside the page's box for answering by number. A tail (clearing it unanswered)
     goes with its own answer, folded with it."""
-    body = (f"<span class='num'>{e(number)}</span> " if number else "") + f"<b>{e(gate['question'])}</b>"
+    first, rounds = gate_rounds(root, gate)
+    # the way here, folded, and the latest exchange open: what is open is what matters now
+    exchange = lambda a, t: ((f"<p><span class='muted'>You asked:</span> {e(a)}</p>" if a else "")
+                             + (f"<p><span class='muted'>Answer:</span> {e(t)}</p>" if t else ""))
+    body = ((f"<details class='round'><summary>First asked: {e(short(first, 90))}</summary><p>{e(first)}</p></details>"
+             + "".join(f"<details class='round'><summary>You asked: {e(short(a or '…', 90))}</summary>{exchange(a, t)}</details>"
+                       for a, t in rounds[:-1])
+             + f"<div class='round now'>{exchange(*rounds[-1])}</div>") if first else "")
+    body += (f"<span class='num'>{e(number)}</span> " if number else "") + f"<b>{e(gate['question'])}</b>"
     if gate.get("why"):
         body += f"<p class='muted'>{e(gate['why'])}</p>"
     if gate.get("default") and not gate["answer"]:
@@ -5697,12 +5728,12 @@ class Handler(BaseHTTPRequestHandler):
             g = next((g for g in gates(root) if g["id"] == form.get("gate")), None)
             if not g:
                 return self._send(404, b"No such gate in this project.")
-            add_note(root, {"gate": g["id"], "item": g.get("item")},
+            add_note(root, {"gate": g["id"], "item": g.get("item"), "asked": text},
                      f"The person replied on \"{g['question']}\" (still open): {text}\n"
                      f"If this answers it, record it: colony gate --answered {g['id']} \"their words\" --context \"your reading\". "
                      f"If it asks something or leaves it unclear, answer them, then ask the decision again with what it was "
-                     f"missing: colony gate \"the question\" --reframes {g['id']} (with --why, --option, --recommended, --default as fit).",
-                     author="person")
+                     f"missing: colony gate \"the question\" --reframes {g['id']} --told \"your answer to them\" (with --why, "
+                     f"--option, --recommended, --default as fit).", author="person")
         elif path == "/answer":
             try:
                 decisions = {k.removeprefix("point_"): v for k, v in form.items() if k.startswith("point_")}
@@ -5892,6 +5923,8 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .chat details.need textarea { width:100%; min-height:64px; margin:6px 0; font:inherit; padding:8px; border-radius:10px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
 .chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
+.round { margin:0 0 8px; padding:6px 10px; border-left:3px solid var(--line); color:var(--muted) } .round p { margin:4px 0 }
+.round > summary { cursor:pointer } .round.now { border-left-color:var(--accent); color:var(--ink) }
 .gatechoices { display:flex; flex-direction:column; gap:6px; margin:8px 0 } .gatechoices form { margin:0 }
 .gatechoices button.choice, .chat details.need .gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
   border:1px solid var(--line); background:var(--sunk); color:var(--ink); font:inherit; cursor:pointer }

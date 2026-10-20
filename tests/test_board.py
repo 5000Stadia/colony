@@ -4441,6 +4441,18 @@ class ActiveHoursTest(HoursBase):
         self.gate("Which pot: clay breathes, plastic holds water?", "--reframes", first["id"], "--option", "clay", "--option", "plastic")
         self.assertEqual([g["question"] for g in board.gates(self.root) if not g["answer"]],
                          ["Which pot: clay breathes, plastic holds water?"], "the old question comes off the list")
+        # asked about twice, it comes back each time with the way here folded and the latest exchange open
+        board.add_note(self.root, {"gate": first["id"], "asked": "What's the difference?"}, "…", author="person")
+        second = next(g for g in board.gates(self.root) if not g["answer"])
+        board.add_note(self.root, {"gate": second["id"], "asked": "Which dries faster?"}, "…", author="person")
+        self.gate("Which pot, given clay dries faster?", "--reframes", second["id"], "--told", "Clay, by about a day")
+        third = next(g for g in board.gates(self.root) if not g["answer"])
+        body = board.gate_body(self.root, 0, third, "/")
+        self.assertIn("<details class='round'><summary>First asked: Which pot?</summary>", body)
+        self.assertIn("<details class='round'><summary>You asked: What&#x27;s the difference?</summary>", body)
+        self.assertIn("<div class='round now'><p><span class='muted'>You asked:</span> Which dries faster?</p>"
+                      "<p><span class='muted'>Answer:</span> Clay, by about a day</p></div>", body)
+        self.assertLess(body.index("round now"), body.index("<b>Which pot, given clay dries faster?</b>"))
 
     def test_the_setting_reads_a_range_even_across_midnight_or_off_and_refuses_anything_else(self):
         self.assertEqual(board.DEFAULT_SETTINGS["active_hours"], "07:30-23:45", "the person's own hours, by default")
