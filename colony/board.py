@@ -2617,10 +2617,14 @@ CHAT = """
       // the next one, made while this one plays: this reply's next paragraph, or the first of the reply waiting after it
       if (parts[i + 1]) make(parts[i + 1]); else if (waiting[0]) make(chunks(waiting[0].text)[0] || '');
       i += 1;
-      player.play().catch(() => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });   // refused: the phone's voice
+      // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again
+      player.play().catch((err) => { if (err && err.name === 'AbortError') return;
+        if (playing === t && now && now.at === i - 1) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });
     };
     player.onended = next;
-    player.onerror = () => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } };   // the phone's voice then
+    player.onerror = () => { const err = player.error;                  // the phone's voice then, for a clip that failed
+      if (!err || err.code === 1 || playing !== t) return;               // 1: stopped on purpose, nothing failed
+      hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); };
     next();
   };
   const sayPhone = (t, parts) => {
