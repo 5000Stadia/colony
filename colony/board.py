@@ -2207,10 +2207,10 @@ def chat_feed(key, root, shown=40):
                 out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text, key, root)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
+                       "<button class='vset' aria-label='Voice: auto-speak, speed, voice'>Voice</button>"
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
                        f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
-                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button>"
-                       "<button class='vset' aria-label='Voice: auto-speak, speed, voice'>Voice</button></div>")
+                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button></div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
