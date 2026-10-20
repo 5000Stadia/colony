@@ -2228,13 +2228,21 @@ CHAT = """
   const ride = () => { if (!document.body.classList.contains('typing')) return; onKeys(); follow = requestAnimationFrame(ride); };
   ta.addEventListener('focus', () => { if (!matchMedia('(max-width: 700px)').matches) return;
     document.body.classList.add('typing'); cancelAnimationFrame(follow); ride(); setTimeout(toEnd, 350);
-    // where the keyboard and the box ended up, once each page load, for the board's log: a gap is fixed from numbers
-    if (!window.__kbSent) { window.__kbSent = true; setTimeout(() => { const r = form.getBoundingClientRect(), v = window.visualViewport;
-      const m = {inner: innerHeight, vvh: v && v.height, vvtop: v && v.offsetTop, scroll: scrollY, boxTop: Math.round(r.top),
-        boxBottom: Math.round(r.bottom), kbtop: getComputedStyle(document.documentElement).getPropertyValue('--kbtop'),
-        typing: document.body.classList.contains('typing'), tabs: getComputedStyle(document.querySelector('.tabs') || document.body).display};
-      fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {}); }, 1200); }
+    if (!window.__kbSent) { window.__kbSent = true; setTimeout(() => measure('focus'), 1200); }
   });
+  // Where the keyboard and the box are, for the board's log, so a gap is fixed from the phone's own numbers: once after
+  // the keyboard comes up, and when a scroll settles while typing (a few times a page).
+  let measured = 0, settle = 0;
+  function measure(when) {
+    if (measured++ > 4) return;
+    const r = form.getBoundingClientRect(), v = window.visualViewport;
+    const m = {when, inner: innerHeight, vvh: v && v.height, vvtop: v && v.offsetTop, scroll: scrollY, page: document.body.scrollHeight,
+      boxTop: Math.round(r.top), boxBottom: Math.round(r.bottom), kbtop: getComputedStyle(document.documentElement).getPropertyValue('--kbtop'),
+      typing: document.body.classList.contains('typing')};
+    fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {});
+  }
+  window.addEventListener('scroll', () => { if (!document.body.classList.contains('typing')) return;
+    clearTimeout(settle); settle = setTimeout(() => measure('scroll'), 500); }, {passive: true});
   ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kbtop'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
   // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
