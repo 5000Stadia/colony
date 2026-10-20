@@ -2363,7 +2363,7 @@ def voice_bench(reg):
     if not voice.ready():
         return shell(reg, -2, "<h1>Reading aloud, timed</h1><p class='muted'>Kokoro isn't set up here (colony voice --setup).</p>")
     return shell(reg, -2, "<h1>Reading aloud, timed</h1><p class='muted'>Each way reads the same text, made fresh, at your "
-                 "speed. Tap one, or all (about five minutes), and keep the page open; the phone sends its numbers to the "
+                 "speed. Tap one, or all (about six minutes), and keep the page open; the phone sends its numbers to the "
                  f"board.</p><div id='bench' data-voice='{e(_voices()['voice'])}' data-text='{e(BENCH_TEXT)}'>"
                  "<div class='benchbtns'></div><table class='benchres'><tr><th>Way</th><th>Clips</th><th>Voice began</th>"
                  "<th>Pauses, all</th><th>Longest</th></tr></table><p class='muted' id='benchnow'></p></div>"
@@ -2388,23 +2388,37 @@ BENCH = """
     {name: 'Bolder growth', chunks: growing(0.7), ahead: 3, keep: true},
     {name: 'Whole paragraphs', chunks: paras, ahead: 1, keep: true},
     {name: 'Sentence by sentence', chunks: (t) => paras(t).flatMap(sentences), ahead: 3, keep: true},
-    {name: 'Now, over the network', chunks: growing(0.85), ahead: 3, keep: false}];
+    {name: 'Now, over the network', chunks: growing(0.85), ahead: 3, keep: false},
+    {name: 'Live: sized to what is buffered', live: true, ahead: 3, keep: true}];
+  // live: each clip is decided when it is asked for, as many sentences as can be made before what is already made
+  // runs out (seconds left to hear, times how fast clips are being made, measured as they come), within a paragraph
+  const live = () => { const items = paras(TEXT).flatMap((p, pi) => sentences(p).map((s) => ({s, pi}))); let c = 0;
+    return {more: () => c < items.length, next: (budget) => { const pi = items[c].pi; let cur = items[c++].s;
+      while (c < items.length && items[c].pi === pi && (cur + ' ' + items[c].s).length <= budget) cur += ' ' + items[c++].s;
+      return cur; }}; };
   const player = new Audio(), table = B.querySelector('.benchres'), status = document.getElementById('benchnow');
   let stop = false;
   const run = (w) => new Promise((done) => {
-    const nonce = Math.random().toString(36).slice(2, 12), parts = w.chunks(TEXT), kept = {};
+    const nonce = Math.random().toString(36).slice(2, 12), src = w.live && live(), parts = src ? [src.next(0)] : w.chunks(TEXT), kept = {};
     const url = (p) => '/voice?v=' + encodeURIComponent(VOICE) + '&fresh=' + nonce + '&t=' + encodeURIComponent(p);
     let k = 1, at = 0, first = null, ended = null, started = false; const gaps = [], t0 = performance.now();
-    const pump = () => { if (k >= parts.length || k - at > w.ahead) { if (k < parts.length) setTimeout(pump, 300); return; }
-      const i = k++; fetch(url(parts[i])).then((r) => r.blob()).then((b) => { if (w.keep) kept[i] = URL.createObjectURL(b); pump(); }).catch(pump); };
+    let rate = 0, perChar = 0;           // characters made per second, and seconds of speech per character at 1x, as measured
+    const more = () => k < parts.length || (src && src.more());
+    const left = () => (Math.max(0, (player.duration || 0) - player.currentTime) + parts.slice(at + 1).reduce((a, p) => a + p.length, 0) * perChar) / pace;
+    const pump = () => { if (!more()) return; if (k - at > w.ahead) { setTimeout(pump, 300); return; }
+      if (k >= parts.length) parts.push(src.next(Math.min(600, Math.max(0, left() - 0.4) * rate * 0.8)));
+      const i = k++, s = performance.now();
+      fetch(url(parts[i])).then((r) => r.blob()).then((b) => { const x = parts[i].length * 1000 / (performance.now() - s);
+        rate = rate ? (rate + x) / 2 : x; if (w.keep) kept[i] = URL.createObjectURL(b); pump(); }).catch(pump); };
     const play = (i) => { at = i; player.src = (w.keep && kept[i]) || url(parts[i]);
       player.playbackRate = pace; player.defaultPlaybackRate = pace; player.play().catch(() => {}); };
-    player.onloadeddata = () => { if (!started) { started = true; pump(); } };
+    player.onloadeddata = () => { if (isFinite(player.duration) && player.duration) { const x = player.duration / parts[at].length; perChar = perChar ? (perChar + x) / 2 : x; }
+      if (!started) { started = true; rate = parts[0].length * 1000 / (performance.now() - t0); pump(); } };
     player.onplaying = () => { const n = performance.now(); if (first === null) first = n - t0; else if (ended !== null) gaps.push(n - ended); ended = null; };
     player.onended = () => { ended = performance.now();
       if (!stop && at + 1 < parts.length) return play(at + 1);
       const r = {way: w.name, clips: parts.length, began: Math.round(first), pauses: Math.round(gaps.reduce((a, b) => a + b, 0)),
-        longest: Math.round(Math.max(0, ...gaps)), each: gaps.map(Math.round)};
+        longest: Math.round(Math.max(0, ...gaps)), each: gaps.map(Math.round), sizes: parts.map((p) => p.length)};
       Object.values(kept).forEach(URL.revokeObjectURL); done(r); };
     status.textContent = 'Reading: ' + w.name + '…'; play(0); });
   const show = (r) => { const tr = document.createElement('tr');
