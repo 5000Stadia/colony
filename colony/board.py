@@ -5788,9 +5788,9 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
 .chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
 .gatechoices { display:flex; flex-direction:column; gap:6px; margin:8px 0 } .gatechoices form { margin:0 }
-.gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
+.gatechoices button.choice, .chat details.need .gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
   border:1px solid var(--line); background:var(--sunk); color:var(--ink); font:inherit; cursor:pointer }
-.gatechoices button.choice.rec { border:1.5px solid var(--accent); background:var(--card) }
+.gatechoices button.choice.rec, .chat details.need .gatechoices button.choice.rec { border:1.5px solid var(--accent); background:var(--card) }
 .gatechoices .tag { display:block; font-size:12px; font-weight:600; color:var(--accent); letter-spacing:.02em }
 .chat a.shot { display:block; margin-top:8px } .chat a.shot img { display:block; max-width:100%; max-height:420px; border-radius:12px;
   border:1px solid var(--line) } .chat a.file { display:inline-block; padding:2px 10px; border-radius:999px; background:var(--sunk) }
