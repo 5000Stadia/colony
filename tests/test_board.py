@@ -742,6 +742,18 @@ class ChatTest(BoardBase):
         self.assertEqual([k for k, _ in turns[0]["items"]], ["say", "step", "step", "say"], "hooks' context and tool results stay out")
         self.assertEqual(chat.worked(["Bash(Find the tab rules)", "Edit(/x/board.py)"]), "Ran 1 command, edited 1 file")
 
+    def test_a_mail_notice_opens_to_the_letters_it_brought(self):
+        from colony import mail
+        turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},
+                 {"from": "you", "text": "thanks", "at": "2026-10-20T15:40:00Z", "items": []}]
+        letters = [{"id": "m1", "from": "plants", "ask": True, "text": "Which pot?", "delivered_at": "2026-10-20T15:27:31Z"},
+                   {"id": "m2", "from": "plants", "ask": False, "text": "Later news", "delivered_at": "2026-10-20T15:41:00Z"},
+                   {"id": "m3", "from": "plants", "ask": False, "text": "Not yet handed over", "delivered_at": None}]
+        with patch.object(mail, "inbox", return_value=letters):
+            self.assertEqual(board.mail_by_turn(self.root, turns), {0: "plants asks:\nWhich pot?"},
+                             "only what this notice brought: not a later letter, nor one still waiting")
+        self.assertIn("const body = new FormData(form)", board.CHAT, "sent at once: the box clears before the board answers")
+
     def test_a_message_sent_mid_turn_shows_at_once_as_queued_then_where_the_agent_took_it_up(self):
         from colony import chat
         q = lambda op, text: {"type": "queue-operation", "operation": op, "timestamp": "2026-10-20T05:49:45Z", "content": text}

@@ -2047,14 +2047,38 @@ def chat_prose(text):
     return re.sub(r"\[([^\]]+)\]\(((?:https?://|/)[^)\s]+)\)", r"<a href='\2' target='_blank' rel='noopener'>\1</a>", html)
 
 
+def mail_by_turn(root, turns):
+    """The letters behind each "[colony] You have mail" notice: those handed over from just before it until the next
+    turn began, from the project's own mail, as they were delivered."""
+    from . import mail
+    def at(t):
+        try:
+            return epoch(t["at"][:19] + "Z")
+        except (ValueError, TypeError):
+            return None
+    got = [(epoch(m["delivered_at"]), m) for m in mail.inbox(root) if m.get("delivered_at")]
+    out = {}
+    for i, t in enumerate(turns):
+        start = at(t) if t["from"] == "colony" and "mail" in t["text"].split("\n")[0] else None
+        if start is None:
+            continue
+        end = next((x for x in map(at, turns[i + 1:]) if x is not None), float("inf"))
+        ms = [m for when, m in got if start - 30 <= when < end]
+        if ms:
+            out[i] = "\n\n".join(f"{mail.shown(m['from'])} {'asks' if m['ask'] else 'writes'}:\n{m['text']}" for m in ms)
+    return out
+
+
 def chat_feed(key, root, shown=40):
     """The conversation, as the app shows one: the person's messages, the agent's prose in full, each run of work
     between folded to a line (Ran 6 commands), colony's own notices small; then what it is doing now."""
     from . import chat, context, monitor
     s = context.session(root)
     turns = chat.turns(chat.events(s["provider"], s["path"])) if s else []
+    turns = turns[-shown:]
+    letters = mail_by_turn(root, turns)
     out = []
-    for i, t in enumerate(turns[-shown:]):
+    for i, t in enumerate(turns):
         k = f"{e(t['at'])}"
         if t["from"] == "you":
             out.append(f"<div class='msg you'>{e(t['text'])}</div>")
@@ -2062,8 +2086,9 @@ def chat_feed(key, root, shown=40):
             out.append(f"<div class='msg you pending' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
         elif t["from"] == "colony":
             head, _, rest = t["text"].removeprefix("[colony]").strip().partition("\n")
+            body = "\n\n".join(filter(None, [rest.strip(), letters.get(i, "")]))
             out.append(f"<details class='msg colony' data-k='c{k}'><summary>{e(short(head, 90))}</summary>"
-                       f"<div>{e(rest.strip()) if rest.strip() else ''}</div></details>")
+                       f"<div>{e(body)}</div></details>")
         elif t["from"] == "compact":
             out.append("<div class='msg colony'>The conversation was compacted here</div>")
         run = []
@@ -2216,7 +2241,7 @@ CHAT = """
   }
   setInterval(refresh, 3000);
   const sendBtn = form.querySelector('button.send');
-  const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files[0];
+  const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files.length;
     sendBtn.textContent = b && empty ? '■' : '↑'; sendBtn.setAttribute('aria-label', b && empty ? 'Stop' : 'Send');
     ta.placeholder = b ? 'Queue for after this turn…' : ta.dataset.idle; };
   ta.dataset.idle = ta.placeholder; busy();
@@ -2259,18 +2284,26 @@ CHAT = """
   ta.addEventListener('input', grow);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const text = ta.value.trim(), f = file.files[0];
-    if (!text && !f) {
+    const text = ta.value.trim(), fs = [...file.files];
+    if (!text && !fs.length) {
       if (box.querySelector('.chatlive.busy')) { await fetch('/chat/stop', {method: 'POST', body: new URLSearchParams({p: key})}).catch(() => {});
         setTimeout(refresh, 800); }
       return;
     }
-    const r = await fetch('/chat/send', {method: 'POST', body: new FormData(form)}).catch(() => null);
-    held.hidden = !!(r && r.ok);
-    if (!r || !r.ok) { held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.'; return; }
-    ta.value = ''; grow(); file.value = ''; chosen();
-    pending.push({show: (f ? '📎 ' + f.name + (text ? '\\n' : '') : '') + text, match: text || f.name.replace(/\\.[^.]*$/, '')}); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
-    setTimeout(refresh, 600);
+    // it goes out at once: the box clears and the message shows while the board hands it over, however long that takes
+    const body = new FormData(form), mine = {show: (fs.length ? '📎 ' + fs.map((x) => x.name).join(', ') + (text ? '\\n' : '') : '') + text,
+      match: text || fs[0].name.replace(/\\.[^.]*$/, '')};
+    ta.value = ''; grow(); file.value = ''; chosen(); busy(); held.hidden = true;
+    pending.push(mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
+    const r = await fetch('/chat/send', {method: 'POST', body}).catch(() => null);
+    if (r && r.ok) return setTimeout(refresh, 600);
+    // not sent: it comes back to the box, ahead of anything typed since, its files with it
+    pending = pending.filter((p) => p !== mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep();
+    if (text) ta.value = text + (ta.value.trim() ? '\\n\\n' + ta.value : '');
+    if (fs.length && !file.files.length) { try { const dt = new DataTransfer(); fs.forEach((x) => dt.items.add(x)); file.files = dt.files; } catch (e) {} }
+    grow(); chosen(); busy();
+    held.hidden = false;
+    held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.';
   });
   // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
   const talk = window.speechSynthesis, aloud = document.getElementById('aloud');
