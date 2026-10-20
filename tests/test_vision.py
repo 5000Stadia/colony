@@ -338,7 +338,7 @@ class VisionTest(BoardBase):
         self.assertEqual(board.open_notes(joined), [])
 
     def test_protocol_preserves_revision_prompt_and_scopes_local_details(self):
-        self.assertIn("When the work shows the vision differently, propose a revision", " ".join(board.PROTOCOL.split()))
+        self.assertIn("or the work shows the vision differently, propose a revision", " ".join(board.PROTOCOL.split()))
         for text in (board.PROTOCOL, vision.MIGRATION, monitor.ROLE):
             self.assertIn('brainstorming', text)
         for text in (vision.MIGRATION, monitor.ROLE):

@@ -65,8 +65,14 @@ where things stand; `colony remote --off` puts it back as it was.
 - **The shared vision**, above the roadmap: what the finished work is, and also why you want it, where it
   lands (who uses it, how many, how they find it, on what terms), the edge you bring, and what using it should
   feel like. It directs the work, with you as its guide: a request that drifts from it is named, and one that
-  sharpens it updates it. Edit it on the project page or shape it with the agent in conversation. Saving tells
-  the agent what changed so it can adjust the work. Details for a few items go into those items' descriptions or specs.
+  sharpens it updates it. Its depth fits the project: the agent first asks whether it's a one-off or part of
+  something bigger, so a quick report gets a few questions and a long venture the whole conversation, and every
+  vision ends in acceptance criteria that test what the work is for. Edit it on the project page or shape it with
+  the agent in conversation. Saving tells the agent what changed so it can adjust the work. Details for a few
+  items go into those items' descriptions or specs.
+- **Nests:** projects that share a purpose share a nest (a business and its departments, a holodeck and its
+  parts, D&D and its campaigns). A nest has its own page (its shared vision, projects, links and demos) and
+  the steward carries your standards between nestmates, once each; nothing crosses into another nest.
 - **Showcase:** each project's lab-style page of deliverables worth seeing, newest first: what it is and how to
   see or try it, with older ones kept as its history. Rate or comment if you like; it reaches the agent, and
   nothing waits on you. How hands-on you are is yours to set.
