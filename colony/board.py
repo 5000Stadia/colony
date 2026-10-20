@@ -2081,7 +2081,7 @@ def chat_feed(key, root, shown=40):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
                        f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button>"
-                       "<button class='vset' aria-label='Reading aloud: auto-speak, speed, voice'>⋯</button></div>")
+                       "<button class='vset' aria-label='Voice: auto-speak, speed, voice'>Voice</button></div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
@@ -2281,8 +2281,7 @@ CHAT = """
       if (b.dataset.on !== String(on)) { b.dataset.on = on; b.innerHTML = on ? ICON.stop : ICON.play; } });
     box.querySelectorAll('button.skip').forEach((b) => { b.hidden = b.dataset.t !== playing; });
     const sets = [...box.querySelectorAll('button.vset')];
-    sets.forEach((b, i) => { const on = i === sets.length - 1 && aloud && aloud.checked; b.textContent = on ? 'Auto' : '⋯';
-      b.classList.toggle('on', on); }); };
+    sets.forEach((b) => { b.classList.toggle('on', !!(aloud && aloud.checked)); }); };
   sheet.querySelector('.shut').addEventListener('click', () => { sheet.hidden = true; });
   document.addEventListener('click', (ev) => { if (!sheet.hidden && !ev.target.closest('#voicesheet, button.vset')) sheet.hidden = true; });
   // its speed, remembered on this device: a tap steps through them
@@ -5425,8 +5424,8 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
-.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts .vset { width:auto; min-width:36px; font-size:16px; padding:0 8px }
-.chat .turnacts .vset.on { color:var(--accent); font-size:12px; font-weight:600 }
+.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts .vset { width:auto; min-width:36px; font-size:13px; padding:0 10px }
+.chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
   display:flex; align-items:center; gap:10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
   box-shadow:0 2px 12px rgba(0,0,0,.12); font-size:14px } .voicesheet[hidden] { display:none } .voicesheet .gap { flex:1 }
