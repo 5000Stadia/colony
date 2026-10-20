@@ -2364,7 +2364,13 @@ CHAT = """
       // what the reader is looking at stays where it is, though the oldest turns above drop away as new ones come
       const seen = [...box.querySelectorAll('[data-k]')].find((x) => x.getBoundingClientRect().bottom > 0);
       const mark0 = seen && [seen.dataset.k, seen.getBoundingClientRect().top];
-      box.innerHTML = last = html; keep();
+      // only what changed is redrawn: a part already there stays as it is (a picture is not loaded again, so nothing
+      // blinks or shifts), the rest comes in new
+      const t = document.createElement('template'); t.innerHTML = last = html;
+      const have = new Map();
+      [...box.children].forEach((c) => { if (!c.classList.contains('mine')) { const k = c.outerHTML; have.set(k, (have.get(k) || []).concat([c])); } });
+      box.replaceChildren(...[...t.content.children].map((n) => { const same = have.get(n.outerHTML); return same && same.length ? same.shift() : n; }));
+      keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       shut.forEach((k) => { const d = k && box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = false; });
       const again = mark0 && !end && box.querySelector(`[data-k="${CSS.escape(mark0[0])}"]`);
@@ -2413,7 +2419,7 @@ CHAT = """
     clearTimeout(settle); settle = setTimeout(() => measure('scroll'), 500); }, {passive: true});
   ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kbtop'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
-  // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
+  // ↑ keeps the box in focus until it sends: the box doesn't move under the tap (then the keyboard goes down)
   form.querySelector('button.send').addEventListener('pointerdown', (ev) => ev.preventDefault());
   // A phone still takes the focus away as the finger lifts: the keyboard drops, the box moves down, and the tap lands
   // where the button was, sending nothing. It sends on the lift instead, before anything moves.
@@ -2432,6 +2438,7 @@ CHAT = """
       match: text || fs[0].name.replace(/\\.[^.]*$/, '')};
     mine.before = times(mine.match);
     ta.value = ''; grow(); file.value = ''; chosen(); busy(); held.hidden = true;
+    ta.blur();                                       // sent: the keyboard goes down, the conversation in view
     pending.push(mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
     const r = await fetch('/chat/send', {method: 'POST', body}).catch(() => null);
     if (r && r.ok) return setTimeout(refresh, 600);
