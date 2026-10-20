@@ -4920,7 +4920,11 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
   border-radius:7px; color:var(--ink); text-decoration:none } .plist > .prow:first-child { margin-top:0 }
 .prowline { display:flex; align-items:center; gap:8px; min-width:0 } .prowline b { flex:none; max-width:62%; color:var(--accent);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .prowline .sdot { flex:none }
-span.nestgroup, span.nestgroup > .members { display:contents } .nestgroup[data-open='0'] > .members { display:none }
+span.nestgroup, span.nestgroup > .members { display:contents }
+/* a nest in the menu is one tinted capsule: its chip, and, open, its projects inside on slimmer chips */
+nav span.nestgroup { display:block; margin:3px 0; padding:3px; border-radius:10px; background:color-mix(in srgb, var(--accent) 15%, var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 28%, var(--card)) } nav span.nestgroup .members .proj { padding-top:3px; padding-bottom:3px }
+nav span.nestgroup .members .proj:not(.on) { background:var(--card) } .nestgroup[data-open='0'] > .members { display:none }
 .listhead { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; min-height:44px; margin:6px 0 2px }
 .listhead .nestname { flex:none; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .listhead .headgap { flex:1 }
 .listhead .nestgo { margin-left:-6px; line-height:1; padding-bottom:3px } .grip { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
@@ -5130,6 +5134,9 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 @media (max-width: 700px) { body { display:block }
   nav { width:auto; border-right:0; border-bottom:1px solid var(--line); padding:0; white-space:nowrap }
   nav .navrow { display:flex; align-items:center; gap:6px; padding:8px 10px; overflow-x:auto }
+  nav span.nestgroup { display:inline-flex; flex:none; align-items:center; gap:4px; margin:0; padding:3px; border-radius:999px }
+  nav span.nestgroup .nestchip { background:transparent; font-weight:600 }
+  nav span.nestgroup .members .proj { min-height:32px; padding:2px 10px; font-size:14px }
   nav .proj { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
     border-radius:999px; background:var(--sunk) }
   nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working { border-top-color:transparent }
