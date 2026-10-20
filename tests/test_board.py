@@ -437,19 +437,27 @@ class BoardTest(BoardBase):
         board.track(fresh)
         self.assertEqual(len(board.notes(fresh)), 1)
 
-    def test_what_waits_on_the_person_comes_first_and_caught_up_rides_a_newest_first_list(self):
+    def looked(self, at=None, head=None):
+        """The person's last look at the project, on an earlier day: where what changed starts."""
+        last = {"at": at or board.now(), "head": head or self.git("rev-parse", "HEAD").strip()}
+        (board.home() / "today.json").write_text(json.dumps({str(self.root): {"day": "2000-01-01T00:00:00Z", "last": last}}))
+        return last
+
+    def test_what_waits_on_the_person_comes_first_and_what_changed_needs_no_clearing(self):
         board.track(self.root)
+        self.looked()
         time.sleep(1.1)
         self.commit("second")
+        time.sleep(1.1)
+        board.add_gate(self.root, "Ship it?")
         page = board.render(board.registry(), 0, "")
         self.assertLess(page.index("Waiting on you"), page.index("Since you were last here"))
-        self.assertEqual(page.count("nothing new until something changes"), 1, "one button, riding down the list")
+        self.assertNotIn("action='/seen'", page, "nothing to clear: it starts from the person's last look by itself")
         since = page[page.index("Since you were last here"):]
-        self.assertLess(since.index("second"), since.index("start"), "newest first")
-        board.save_registry(dict(board.registry(), seen={str(self.root): {"at": board.now(), "head": self.git("rev-parse", "HEAD").strip()}}))
+        self.assertLess(since.index("gate opened: Ship it?"), since.index("second"), "newest first")
+        self.looked()
         page = board.render(board.registry(), 0, "")
-        self.assertIn("Nothing has changed.", page)
-        self.assertNotIn("nothing new until something changes", page, "no list, no button")
+        self.assertNotIn("Since you were last here", page, "nothing new since their last look: no section at all")
 
     def test_notes_reach_the_agent_when_they_are_relevant(self):
         board.track(self.root)
@@ -513,16 +521,15 @@ class BoardTest(BoardBase):
     def test_since_you_were_last_here(self):
         board.track(self.root)
         self.commit("tracked")
-        reg = board.registry()
-        reg["seen"][str(self.root)] = {"at": board.now(), "head": self.git("rev-parse", "HEAD").strip()}
-        board.save_registry(reg)
+        last = self.looked()
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2", "- [x] R2"))
         self.commit("water log done")
-        s = board.since(self.root, board.registry()["seen"][str(self.root)])
+        s = board.since(self.root, last)
         self.assertEqual([c[2] for c in s["commits"]], ["water log done"])
+        self.assertEqual(s["count"], 1)
         self.assertEqual(s["moved"], [("R2", "doing", "done", "water log")])
         html_ = board.render(board.registry(), 0)
-        for part in ("Pinned", "Waiting on you", "Since you were last here", "doing → done"):
+        for part in ("Waiting on you", "Since you were last here", "doing → done"):
             self.assertIn(part, html_)
         self.assertNotIn("History", html_, "the plan and its record are on the Roadmap tab")
         plan = board.render(board.registry(), 0, "roadmap")
@@ -2235,9 +2242,9 @@ class MessagingTest(BoardBase):
             self.assertIn(f"Attached: {other / '.board/uploads/spec.md'}", typed[0])
             self.assertIn("colony send shop", typed[0], "plants's agent writes it")
             page = urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/?p=0&view=roadmap").read().decode()
-            self.assertIn("<h2>Messages</h2>", page, "the record is with the plan's, on the Roadmap tab")
-            self.assertNotIn("<h2>Messages</h2>", board.render(board.registry(), 0, ""), "the overview is what's new")
-            self.assertNotIn(">Leave note<", page.split("<h2>Messages</h2>")[1], "one place to write: Message, at the top")
+            self.assertIn("<h3>Messages</h3>", page, "the record is with the plan's, on the Roadmap tab")
+            self.assertNotIn("<h3>Messages</h3>", board.render(board.registry(), 0, ""), "the overview is what's new")
+            self.assertNotIn(">Leave note<", page.split("<h3>Messages</h3>")[1], "one place to write: Message, at the top")
             self.assertLess(page.index("to shop, written by its agent"), page.index("into its console"), "newest first")
         finally:
             console.type_into, console.paste_into, console.ensure = saved
@@ -4556,7 +4563,7 @@ class DailyPageTest(HoursBase):
         self.assertEqual(self.NUM.findall(page), [("1", "Keep the old export?")], "a new day numbers afresh")
         self.assertIn("Unsent, from when the numbers were different", page)
         self.assertNotIn(">3 keep it</textarea>", page, "never sent to the wrong decision")
-        self.assertIn("Landed since Thu 10:00 AM", page, "the day turned: since the last look on Thursday")
+        self.assertIn("nothing landed since Thu 10:00 AM", page, "the day turned: since the last look on Thursday")
 
     def test_needs_you_rolls_up_each_projects_numbered_decisions_with_a_box_for_each(self):
         shop = Path(self.tmp.name) / "shop"
@@ -4619,6 +4626,181 @@ class DailyPageTest(HoursBase):
             self.assertFalse(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
             board.set_setting("active_hours", "off")                    # always around: released at once
             self.assertTrue(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
+
+
+class PhonePageTest(HoursBase):
+    """The board laid out for a phone first (the design review of the person's board, 2026-10-19): what changed since
+    their last look, dated and capped, with nothing to clear; long records folded; the steward's page by project;
+    what each project is at; questions first; no furniture or empty sections; nothing that clears a decision under a
+    thumb."""
+
+    NUM = re.compile(r"<span class='num'>(\d+)</span> <b>([^<]+)</b>")
+
+    def commit_at(self, msg, t):
+        env = dict(os.environ, GIT_AUTHOR_DATE=f"@{int(t)}", GIT_COMMITTER_DATE=f"@{int(t)}")
+        self.git("add", "-A")
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg,
+                        "--allow-empty"], capture_output=True, env=env)
+
+    def shop(self):
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
+        (shop / "ROADMAP.md").write_text(ROADMAP)
+        board.track(shop)
+        return shop
+
+    def test_what_changed_starts_from_the_last_look_and_shows_the_newest_few_dated_with_the_rest_counted(self):
+        with self.clock(18, day=6):
+            board.render(board.registry(), 0)                      # Tuesday evening, the person looks at the project
+        for k in range(12):
+            self.commit_at(f"step {k:02d}", self.at(9, k, day=7))
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("[~] R2", "[x] R2"))
+        self.commit_at("R2 water log keeps a year", self.at(10, day=7))
+        with self.clock(14):
+            board.add_gate(self.root, "Which reminders first?", "R3")
+            page, again = board.render(board.registry(), 0), board.render(board.registry(), 0)
+            today = board.render(board.registry(), 0, "today")
+        cut = lambda p: p.split("Since you were last here")[1].split("</div>")[0]
+        since = cut(page)
+        self.assertTrue(since.startswith(" · Oct 6</h2>"), "since their last look, on Tuesday")
+        self.assertEqual(len(re.findall(r"<span class='when'>[^<]+</span>", since)), board.SINCE_SHOWN, "the newest few, each dated")
+        self.assertIn("<b>doing → done</b>", since)
+        self.assertIn("gate opened: Which reminders first?", since)
+        self.assertIn("step 11", since)
+        self.assertNotIn("step 05", since, "older commits are counted, not listed")
+        self.assertIn("view=roadmap#history'>13 commits</a>", since, "how much in all, pointing to where it lives")
+        self.assertEqual(cut(again), since, "a second look the same day reads the same")
+        self.assertNotIn("/seen", page, "nothing to clear: it starts from their last look by itself")
+        self.assertIn("Landed since Tue 6:00 PM", today, "one record of their looks, for the day's page too")
+        with self.clock(9, day=8):
+            self.assertNotIn("Since you were last here", board.render(board.registry(), 0),
+                             "the day turned: nothing since Wednesday's look, so no section")
+
+    def test_the_roadmap_tabs_long_records_fold_behind_their_counts_with_the_newest_ten_then_all(self):
+        for k in range(14):
+            with self.clock(12, k):
+                board.append(self.root, "messages.jsonl", {"at": board.now(), "to": "console", "text": f"message {k:02d}"})
+        with self.clock(13):
+            page = board.render(board.registry(), 0, "roadmap")
+            whole = board.render(board.registry(), 0, "roadmap", "messages")
+        n = 14 + sum(1 for x in board.notes(self.root) if not x["anchor"])
+        head, fold = page.split("id='messages'", 1)
+        self.assertTrue(head.endswith("<details class='card fold' "), "folded until opened")
+        self.assertIn(f"<h3>Messages</h3><span class='muted'>{n} · ", fold)
+        fold = fold.split("</details>")[0]
+        self.assertEqual(fold.count("<div class='note'>"), board.FOLD_SHOWN, "opened, the newest ten")
+        shown = re.findall(r"message (\d\d)", fold)
+        self.assertEqual(shown, sorted(shown, reverse=True), "newest first")
+        self.assertIn(f"&all=messages#messages'>Show all {n} →", fold)
+        self.assertEqual(whole.split("id='messages' open>")[1].split("</details>")[0].count("<div class='note'>"), n,
+                         "all of it, when asked for")
+        self.assertIn("<h3>History</h3>", page)
+        self.assertNotIn("Mail with other projects", page, "no mail, no section")
+
+    def test_the_stewards_page_lists_projects_first_then_what_waits_project_by_project_and_folds_its_log(self):
+        shop = self.shop()
+        with self.clock(14):
+            for k in range(5):
+                board.add_gate(self.root, f"Plants question {k}?")
+            board.add_gate(shop, "Open on Sundays?")
+            (board.home() / "decisions.jsonl").write_text(json.dumps(
+                {"project": str(self.root), "at": board.now(), "text": "Approved the formatter's prompt."}) + "\n")
+            monitor.muted(True)
+            with patch.object(monitor, "ensure"):
+                page = board.monitor_page(board.registry())
+        self.assertIn(">Muted</span>", page, "its state in a word beside its name")
+        self.assertNotIn("<p class='muted'>Muted:", page, "not four lines on what that means")
+        projects_, needs = page.split("<h2>Needs you</h2>")
+        self.assertIn("<b>plants</b>", projects_, "every project at a glance, first")
+        self.assertIn("doing R2 water log", projects_)
+        self.assertLess(needs.index(">plants</a>"), needs.index("Plants question 0?"))
+        self.assertLess(needs.index("Plants question 4?"), needs.index(">shop</a>"), "each project's own, together")
+        self.assertEqual(self.NUM.findall(needs)[-1], ("1", "Open on Sundays?"), "numbered as its own page numbers it")
+        more = needs.split("<details class='more' data-k='more-0'>")[1].split("</details>")[0]
+        self.assertIn("2 more decisions from plants", more)
+        self.assertIn("Plants question 3?", more)
+        self.assertNotIn("Plants question 2?", more, "the first three in sight")
+        self.assertIn("<details class='card fold'><summary><h3>What the steward decided</h3>", page, "its log folded")
+
+    def test_on_a_phone_the_row_opens_on_its_own_chip_in_the_boards_order_and_the_steward_counts_what_waits(self):
+        shop = self.shop()
+        with self.clock(14):
+            board.add_gate(shop, "Open on Sundays?")
+        board.woke(self.root)                  # plants went to work last: it leads, though shop has something waiting
+        with self.clock(14):
+            side, page = board.sidebar(board.registry(), 1), board.render(board.registry(), 1)
+        self.assertLess(side.index(">plants<"), side.index(">shop<"), "the board's order: what last went to work first")
+        self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in all projects'>1</span>", side)
+        self.assertIn(board.CHIPS, page, "a page opens with its own chip in view")
+        self.assertIn("nav .proj.monitor { position:sticky", page, "the steward, with the count, stays in reach")
+
+    def test_the_status_says_what_the_project_is_at_never_its_consoles_spinner_or_footer(self):
+        console.snapshot = lambda root, lines=6, name=None: {
+            "state": "idle", "lines": ["⏵⏵ bypass permissions on (shift+tab to cycle)"],
+            "activity": {"line": "Sautéed for 15s", "agents": []}}
+        with self.clock(14):
+            page = board.render(board.registry(), 0)
+        status = page.split("class='status'")[1].split("</a>")[0]
+        self.assertIn("doing R2 water log", status)
+        self.assertIn("Nothing waits on you.", status)
+        self.assertIn("idle · doing R2 water log", page, "the project's line in the list says it too")
+        for noise in ("Sautéed", "bypass permissions", " new</span>"):
+            self.assertNotIn(noise, page)
+
+    def test_a_console_question_leads_with_its_question_and_folds_the_turn_as_prose(self):
+        text = ("Suite passes. Committing R57 to a parked branch now.\n\n"
+                "- **Where it is:** the build is on `park/ended-here`.\n- **What it lacks:** a review.\n\n"
+                + "It ran clean twice. " * 20
+                + "\n\nMy question from before is still open: is there a version of this you'd want to play yourself?")
+        with self.clock(14):
+            board.record_ask(self.root, "t1", text)
+            row = board.waiting_html(0, self.root)
+        self.assertIn("<p><b>My question from before is still open: is there a version of this you&#x27;d want to play "
+                      "yourself?</b></p>", row)
+        self.assertLess(row.index("want to play yourself?</b>"), row.index("<summary>Full message</summary>"))
+        full = row.split("<summary>Full message</summary>")[1]
+        self.assertIn("<li><strong>Where it is:</strong> the build is on <code>park/ended-here</code>.</li>", full)
+        self.assertNotIn("**", row)
+        self.assertLess(row.index("Full message"), row.index("action='/clear'"), "clearing it sits at its foot")
+        with self.clock(14, 5):
+            board.record_ask(self.root, "t2", "Export is done. Which format do you want?")
+            row = board.waiting_html(0, self.root)
+        self.assertIn("<p>Export is done. Which format do you want?</p>", row, "a short turn shows whole")
+        self.assertNotIn("Full message", row)
+
+    def test_no_furniture_or_empty_sections_waiting_before_pinned_and_showcase_once_it_has_shown_something(self):
+        with self.clock(14, day=6):
+            board.render(board.registry(), 0)                      # a look yesterday: nothing has changed since
+        with self.clock(14):
+            page = board.render(board.registry(), 0)
+        remote = page.index("Remote Control: on")
+        self.assertLess(page.index("<summary>Settings</summary>"), remote, "how it is reached is one of its settings")
+        self.assertLess(remote, page.index("<div class='dangers'>"))
+        self.assertEqual(page.count("Remote Control: on"), 1)
+        for empty in ("<h2>Pinned</h2>", "Nothing pinned yet", "Since you were last here", "Nothing is waiting on you",
+                      ">Showcase<", "Completed versions"):
+            self.assertNotIn(empty, page)
+        self.assertIn("<section id='waitingbox' hidden>", page, "out of the way, and back by itself when something waits")
+        self.assertIn("href='/pins/add?p=0'", page, "pinning stays at hand, under Message")
+        with self.clock(14):
+            for k in range(7):
+                pins.add(self.root, f"https://example.com/{k}", title=f"Pin {k}")
+            board.add_gate(self.root, "Ship it?")
+        showcase.add(self.root, "The app", "It runs on a phone.")
+        with self.clock(15):
+            page = board.render(board.registry(), 0)
+        self.assertLess(page.index("Waiting on you"), page.index("<h2>Pinned</h2>"), "what waits comes before pins")
+        self.assertIn("<summary>2 more</summary>", page, "past the newest five, the rest fold")
+        self.assertIn(">Showcase</a>", page)
+
+    def test_nothing_that_closes_a_decision_unanswered_sits_first_under_a_thumb(self):
+        with self.clock(14):
+            board.add_gate(self.root, "Ship it?")
+            row = board.waiting_html(0, self.root)
+        answer = row.split("<summary>Answer just this one</summary>")[1].split("</details>")[0]
+        self.assertIn(">Clear without an answer</button>", answer, "closing it unanswered is a step inside its answer")
+        self.assertEqual(row.count("action='/clear'"), 1)
+        self.assertLess(row.index("Ship it?"), row.index("action='/clear'"))
 
 
 if __name__ == "__main__":

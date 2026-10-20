@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -659,12 +659,26 @@ def item_times(root):
         seen = None                                  # kept before items knew when they moved: read the history again
     out = moved(seen if seen is not None else history_times(root), items(roadmap(root)), time.time())
     if out != seen:
-        every[str(root)] = out
-        home().mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(every))
-        tmp.replace(path)
+        with board_lock("items"):              # read afresh: another page or the watcher may have written meanwhile
+            try:
+                every = json.loads(path.read_text())
+            except (OSError, ValueError):
+                every = {}
+            every[str(root)] = out
+            save_json(path, every)
     return out
+
+
+def save_json(path, value):
+    """A file of the board's written whole, so no reader sees half of it, through a temporary file of this writer's
+    own: the board serves pages in threads, and two writing at once never take each other's."""
+    import tempfile
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(value))
+    os.replace(tmp, path)
 
 
 def moved(seen, its, t):
@@ -1564,11 +1578,13 @@ def open_notes(root, item=None):
 # ---------------------------------------------------------------- what changed while the person was away
 
 def since(root, seen):
-    """Commits, roadmap moves, gates and replies since the person last caught up."""
+    """Commits (the newest 40, and how many in all; a merge is not news of its own), roadmap moves, gates and replies
+    since the person last looked."""
     head = git(root, "rev-parse", "HEAD").strip()
     base, at = (seen or {}).get("head"), (seen or {}).get("at", "")
     rng = f"{base}..HEAD" if base else "HEAD"
-    commits = [l.split("\x1f") for l in git(root, "log", "-n", "40", "--format=%h\x1f%aI\x1f%s", rng).splitlines() if l]
+    commits = [l.split("\x1f") for l in git(root, "log", "-n", "40", "--no-merges", "--format=%h\x1f%aI\x1f%s", rng).splitlines() if l]
+    count = git(root, "rev-list", "--count", "--no-merges", rng).strip()
     moved = []
     if base:
         before = items(roadmap(root, git(root, "show", f"{base}:ROADMAP.md")))
@@ -1580,33 +1596,43 @@ def since(root, seen):
     replies = [n for n in notes(root) if n["addressed_at"] and n["addressed_at"] > at]
     pinned = [p for p in pins.pins(root) if p["at"] > at and p["by"] != "person"]
     moved_at = stamp(git(root, "log", "-1", "--format=%aI", "--", "ROADMAP.md").strip()) if moved else ""
-    return {"head": head, "commits": commits, "moved": moved, "moved_at": moved_at, "opened": opened,
-            "replies": replies, "pinned": pinned, "first": not seen}
+    return {"head": head, "commits": commits, "count": int(count) if count.isdigit() else len(commits), "moved": moved,
+            "moved_at": moved_at, "opened": opened, "replies": replies, "pinned": pinned, "first": not seen}
 
 
 def page_base(root, mark=True):
-    """Where a project's page for the day starts what landed: the person's last look at it on an earlier day (when,
-    and the commit it stood at), or on a first look, the start of the day before. Each look is kept on this machine,
-    with the board: the page reads the same all day, and turns over with the person's day."""
+    """Where a project's page for the day starts what landed (and its Overview, what changed): the person's last look at
+    it on an earlier day (when, and the commit it stood at), or on a first look, the start of the day before. Each look
+    (at either page) is kept on this machine, with the board: the pages read the same all day, and turn over with the
+    person's day."""
     path = home() / "today.json"
-    try:
-        every = json.loads(path.read_text())
-    except (OSError, ValueError):
-        every = {}
-    rec, day = every.get(str(root)) or {}, hours.day_start(epoch(now()))
-    board_time = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
-    if rec.get("day") != board_time(day):
-        before = hours.day_start(day - 1)
-        rec = {"day": board_time(day), "from": rec.get("last") or {
-            "at": board_time(before), "head": git(root, "rev-list", "-1", f"--before=@{int(before)}", "HEAD").strip()}}
-    if mark:
-        rec["last"] = {"at": now(), "head": git(root, "rev-parse", "HEAD").strip()}
-        every[str(root)] = rec
-        home().mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(every))
-        tmp.replace(path)
+    with board_lock("today") if mark else nullcontext():
+        try:
+            every = json.loads(path.read_text())
+        except (OSError, ValueError):
+            every = {}
+        rec, day = every.get(str(root)) or {}, hours.day_start(epoch(now()))
+        board_time = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        if rec.get("day") != board_time(day):
+            before = hours.day_start(day - 1)
+            rec = {"day": board_time(day), "from": rec.get("last") or {
+                "at": board_time(before), "head": git(root, "rev-list", "-1", f"--before=@{int(before)}", "HEAD").strip()}}
+        if mark:
+            rec["last"] = {"at": now(), "head": git(root, "rev-parse", "HEAD").strip()}
+            every[str(root)] = rec
+            save_json(path, every)
     return rec["from"]
+
+
+@contextmanager
+def board_lock(name):
+    """One writer at a time to one of the board's own files: read, change and write it as one step, so two pages
+    served at once never lose each other's change."""
+    import fcntl
+    home().mkdir(parents=True, exist_ok=True)
+    with open(home() / f"{name}.lock", "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        yield
 
 
 def stamp(iso):
@@ -1616,6 +1642,18 @@ def stamp(iso):
         return datetime.fromisoformat(iso).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         return iso
+
+
+def on_day(at):
+    """A board time as a list on the page dates it: the clock time if it was today, else the day (Oct 17)."""
+    try:
+        t = epoch(at)
+    except (TypeError, ValueError):
+        return ""
+    then, today = time.localtime(t), time.localtime(epoch(now()))
+    if then[:3] == today[:3]:
+        return hours.at_clock(t)
+    return time.strftime("%b %-d" if then.tm_year == today.tm_year else "%b %-d %Y", then)
 
 
 # ---------------------------------------------------------------- the page
@@ -1672,25 +1710,37 @@ def nest_form(pid, root):
             "<button class='quiet'>Put in nest</button></form>")
 
 
-def all_projects_page(reg):
-    """Every project at a glance, under its nest: what it's doing, what waits on the person, what it's for."""
-    plist, out, heading = projects(reg), ["<h1>All projects</h1>"], None
+def project_row(i, p, sub=""):
+    """One project in a list (the steward's, All projects, a nest's), one design everywhere, the whole row a link to
+    it: its state, its name, what it is at, what waits on the person; and under it, given one, what it is for. The
+    board's poll keeps the state, the line and the count current."""
+    snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
+    waiting = len(moments(p)) if p.exists() else 0
+    st = snap["state"]
+    return (f"<a class='prow' href='/?p={i}'><span class='prowline'>"
+            f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}' title='{e(st)}'></span><b>{e(p.name)}</b>"
+            f"<span class='pwork' data-p='{i}'>{e(at_work(p) if p.exists() else '')}</span>"
+            f"<span class='badge gate pbadge' data-p='{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span></span>"
+            + (f"<span class='psub'>{e(sub)}</span>" if sub else "") + "</a>")
+
+
+def project_list(plist, sub=None):
+    """Projects in the board's order, each under its nest's name when there are nests."""
+    out, heading = [], None
     for i, p, here in arranged(plist):
         if here != heading and here is not None:
-            if heading is not None or out[-1] != "<h1>All projects</h1>":
-                out.append("</div>")
-            out.append(f"<h2>{f'<a href=/nest?n={urllib.parse.quote(here)}>{e(here)} nest</a>' if here else 'Other projects'}</h2><div class='card'>")
-        elif heading is None and here is None and out[-1] == "<h1>All projects</h1>":
-            out.append("<div class='card'>")
+            out.append(f"<h3 class='listhead'>{f'<a href=/nest?n={urllib.parse.quote(here)}>{e(here)} nest</a>' if here else 'Other projects'}</h3>")
         heading = here
-        snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
-        waiting = len(moments(p)) if p.exists() else 0
-        goal = first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"]) if p.exists() else ""
-        out.append(f"<div class='prow'><a href='/?p={i}'><span class='sdot {snap['state'].replace(' ', '-')}'></span> <b>{e(p.name)}</b></a>"
-                   f" <span class='who'>{e(snap['state'])}{' · ' + str(waiting) + ' waiting on you' if waiting else ''}</span>"
-                   f"<div class='muted'>{e(goal)}</div></div>")
-    out.append("</div>" if plist else "<p class='muted'>No projects yet.</p>")
-    return shell(reg, -2, "".join(out))
+        out.append(project_row(i, p, sub(p) if sub and p.exists() else ""))
+    return "".join(out)
+
+
+def all_projects_page(reg):
+    """Every project at a glance, under its nest: what it's doing, what waits on the person, what it's for."""
+    plist = projects(reg)
+    goal = lambda p: first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"])
+    return shell(reg, -2, "<h1>All projects</h1>" + (f"<div class='card plist'>{project_list(plist, goal)}</div>" if plist
+                                                      else "<p class='muted'>No projects yet.</p>"))
 
 
 def woke(root):
@@ -1701,10 +1751,7 @@ def woke(root):
     except (OSError, ValueError):
         rows = {}
     rows[str(Path(root).resolve())] = now()
-    home().mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(rows))
-    tmp.replace(path)
+    save_json(path, rows)
 
 
 def woken():
@@ -1714,15 +1761,33 @@ def woken():
         return {}
 
 
+def at_work(root, n=70):
+    """What a project is at, in a few words from its roadmap: the item in progress (and how many more are), else the
+    next one to come outside Later. Sharing a plan, an agent's own items in progress; a helper with none, nothing."""
+    from . import lead
+    road = roadmap(root)
+    its = [i for m in road["milestones"] for i in m["items"]]
+    doing = [i for i in its if i["state"] == "doing"]
+    g, mine = lead.group(root), str(Path(root).resolve())
+    if g and len(g["members"]) > 1:
+        own = [i for i in doing if i.get("owner") == mine]
+        if own or mine != g["lead"]:
+            doing = own
+            if not own:
+                return ""
+    if doing:
+        return f"doing {doing[0]['id']} {short(plain(doing[0]['text']), n)}" + (f" +{len(doing) - 1}" if len(doing) > 1 else "")
+    later = lambda m: re.match(r"later\b", (m["title"] or m["id"]).strip(), re.I)
+    nxt = next((i for m in road["milestones"] if not later(m) for i in m["items"] if i["state"] == "todo"), None)
+    return f"next {nxt['id']} {short(plain(nxt['text']), n)}" if nxt else ""
+
+
 def sidebar(reg, pid):
     from . import monitor
     plist = projects(reg)
     ms = monitor.snapshot()
     helm = "at the helm" if monitor.helm() else "helm with you"
-    side = [f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
-            f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward</span>"
-            f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>"]
-    heading = None
+    side, heading, total = [], None, 0
     for i, p, here in arranged(plist):
         if here != heading and here is not None:
             label = e(here + ' nest' if here else 'other projects')
@@ -1730,15 +1795,20 @@ def sidebar(reg, pid):
                         + (f"<a href='/nest?n={urllib.parse.quote(here)}'>{label}</a>" if here else label) + "</div>")
         heading = here
         waiting = len(moments(p))
-        new = len(since(p, reg["seen"].get(str(p)))["commits"]) if p.exists() else 0
-        badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>" + \
-                (f"<span class='badge new'>{new} new</span>" if new else "")
-        snap = console.snapshot(p, lines=1) if p.exists() else {"state": "off", "lines": []}
-        last = snap["lines"][-1] if snap["lines"] else ""
+        total += waiting
+        badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
+        snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off", "lines": []}
+        # its line says what it is at, from its roadmap: never its console's footer or spinner words
+        work = at_work(p) if p.exists() else ""
         side.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'><span class='pname'>"
                     f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                     f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
-                    f"{' · ' + e(last) if last else ''}</span></a>")
+                    f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
+    # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
+    side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
+                   f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
+                   f"<span id='badge-all' class='badge gate' title='waiting on you, in all projects'{'' if total else ' hidden'}>{total}</span></span>"
+                   f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>")
     from . import providers as pv, usage
     for k, prov in pv.PROVIDERS.items():
         ws = usage.read(k) if pv.usable(prov) else {}
@@ -1755,7 +1825,17 @@ def sidebar(reg, pid):
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}{STUCK}{DRAFTS}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}{CHIPS}{DRAFTS}</script></body></html>")
+
+
+# On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
+# stays at the left. Only the row scrolls, never the page; the order is the board's own.
+CHIPS = """
+(() => { const n = document.querySelector('nav'), on = n && n.querySelector('.proj.on:not(.monitor)');
+  if (!on || n.scrollWidth <= n.clientWidth) return;
+  const s = n.querySelector('.proj.monitor'), left = s && getComputedStyle(s).position === 'sticky' ? s.offsetLeft + s.offsetWidth : 0;
+  n.scrollLeft = Math.max(0, on.offsetLeft - left - (n.clientWidth - left - on.offsetWidth) / 2); })();
+"""
 
 
 # What's typed in a box for answering by number is kept as it's typed (answer_box): a reload, or a list redrawn
@@ -1771,31 +1851,27 @@ document.addEventListener('submit', (ev) => { if (ev.target.matches('form.bynumb
 """
 
 
-# What stays pinned at the top (the project chips on a phone): things that stick sit below it, not under it.
-STUCK = """
-const stuck = () => { const n = document.querySelector('nav');
-  const h = n && getComputedStyle(n).position === 'sticky' ? n.offsetHeight : 0;
-  document.documentElement.style.setProperty('--stuck-top', h + 'px'); };
-stuck(); addEventListener('resize', stuck);
-"""
-
 # Every few seconds: each project's status dot, line and waiting count in the sidebar.
 POLL = """
 async function poll() {
   try {
     const r = await fetch('/status', {cache: 'no-store'}); const st = await r.json();
     const md = document.getElementById('dot-m'); if (md) md.className = 'sdot ' + st.monitor.state.replace(' ', '-');
+    const all = document.getElementById('badge-all');
+    if (all) { const n = st.projects.reduce((k, s) => k + (s.waiting || 0), 0); all.hidden = !n; all.textContent = n; }
     st.projects.forEach((s, i) => {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
       document.querySelectorAll(`.msdot[data-p="${i}"]`).forEach((d) => { d.className = 'sdot msdot ' + s.state.replace(' ', '-'); });
-      if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.lines.length ? ' · ' + s.lines[s.lines.length - 1] : '');
+      document.querySelectorAll(`.pwork[data-p="${i}"]`).forEach((x) => { x.textContent = s.work || ''; });
+      document.querySelectorAll(`.pbadge[data-p="${i}"]`).forEach((x) => { x.hidden = !s.waiting; x.textContent = s.waiting; });
+      if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.work ? (s.state === 'off' ? '' : ' · ') + s.work : '');
       const status = document.getElementById('status-' + i);
       if (status) {
         const act = s.activity || {}, st = s.state.replace(' ', '-');
         status.querySelector('.sdot').className = 'sdot ' + st;
         status.querySelector('b').textContent = s.state;
-        status.querySelector('.statusline .muted').textContent = act.line ? ' · ' + act.line : '';
+        status.querySelector('.statusline .muted').textContent = s.work ? ' · ' + s.work : '';
         const box = status.querySelector('.agents'); box.textContent = '';
         (act.agents || []).forEach((a) => {
           const row = document.createElement('div'); row.className = 'agent' + (a.current ? ' current' : '');
@@ -1813,10 +1889,14 @@ setInterval(poll, 2500);
 """
 
 
-def tabs(pid, view):
+def tabs(pid, view, root=None):
+    """A project's tabs. Showcase only once the project has shown something (or when it is the page open): an empty
+    tab is one more place to look that says nothing."""
     tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
+    shown = root is None or view == "showcase" or showcase.entries(root)
     return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview") + tab("today", "Today", f"/?p={pid}&view=today")
-            + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap") + tab("showcase", "Showcase", f"/?p={pid}&view=showcase")
+            + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
+            + (tab("showcase", "Showcase", f"/?p={pid}&view=showcase") if shown else "")
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
@@ -1858,8 +1938,10 @@ box.addEventListener('click', (ev) => {{
   pick.value = b.dataset.file; box.hidden = true;
 }});
 }})();</script>""")
+    # pinning lives here too: with nothing pinned yet, the page has no Pinned section to start from
+    pin = f"<p class='pinlink'><a href='/pins/add?p={pid}'>+ Pin a file, link or upload, for you both to keep at hand</a></p>"
     return (f"<details class='{cls}'><summary>Message</summary>"
-            + (f"<div class='panel'>{form}</div>" if cls == "psettings" else form) + "</details>")
+            + (f"<div class='panel'>{form}{pin}</div>" if cls == "psettings" else form) + "</details>")
 
 
 def vision_box(root, pid):
@@ -1944,55 +2026,94 @@ def lead_is_shared(root):
     return bool(g and len(g['members']) > 1)
 
 
+def lead_form(root, pid):
+    """Which of a shared project's agents leads it (edits the plan): one of its settings."""
+    from . import lead
+    g = lead.group(root)
+    if not g or len(g['members']) < 2:
+        return ''
+    options = ''.join(f"<option value='{e(member)}'{' selected' if member == g['lead'] else ''}>{e(Path(member).name)}</option>" for member in g['members'])
+    return (f"<hr><form method='post' action='/lead/switch'><input type='hidden' name='p' value='{pid}'>"
+            f"<label>Project lead <select name='member'>{options}</select></label><button class='quiet'>Switch lead</button></form>"
+            + ("<p>Handoff is landing; the incoming lead waits for the current turn and committed work.</p>" if g.get('handoff') else ''))
+
+
+def version_hold(root):
+    """What holds a shared plan's version now, read live (the record of the last hold outlasts it once no version
+    runs): (reason, [(member, gate)]: the open decisions that hold it, each where it waits), or None."""
+    from . import lead, progress
+    g = lead.group(root)
+    c = progress.current(root) if g else None
+    if not c or c['state'] not in ('active', 'corrections'):
+        return None
+    reason = progress.hold(root, root)
+    if not reason:
+        return None
+    blocking = [(Path(m), gate) for m in g['members'] for gate in gates(Path(m))
+                if due(gate) and (not gate.get('item') or gate['item'] in c['items'])] if reason == 'blocking decision' else []
+    return reason, blocking
+
+
+def where_waiting(member):
+    """A link to the project a decision waits in, on its Overview."""
+    at = next((i for i, p in enumerate(projects()) if p.resolve() == Path(member).resolve()), None)
+    return f"<a href='/?p={at}'>{e(Path(member).name)}</a>" if at is not None else e(Path(member).name)
+
+
 def progress_panel(root, pid):
+    """A shared plan's versions, on its Roadmap tab, only while there is one to run, review or start: the version under
+    way, what holds it now and the decisions holding it, Pause and Continue; or the planned ones, to start one."""
     from . import lead, progress, continuation
     g = lead.group(root)
-    if not g:
+    if not g or not g['checkpoints']:
         return ''
-    hidden = f"<input type='hidden' name='p' value='{pid}'>"
-    parts = []
-    if len(g['members']) > 1:
-        options = ''.join(f"<option value='{e(member)}'{' selected' if member == g['lead'] else ''}>{e(Path(member).name)}</option>" for member in g['members'])
-        parts.append(f"<form method='post' action='/lead/switch'>{hidden}<label>Project lead <select name='member'>{options}</select></label>"
-                     "<button class='quiet'>Switch lead</button></form>"
-                     + ("<p>Handoff is landing; the incoming lead waits for the current turn and committed work.</p>" if g.get('handoff') else ''))
-    if g['checkpoints']:
-        c = progress.current(root)
-        if c:
-            parts.append(f"<p><b>{e(c['outcome'])}</b> · {e(c['state'])}</p><p>{e(c['definition'])}</p>")
-        status = continuation.status(root)
-        message = status.get('error') or status.get('hold')
-        if message:
-            parts.append(f"<p class='muted'>{e(message)}</p>")
+    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=roadmap'>"
+    parts, c = [], progress.current(root)
+    if c:
+        summary = f"{c['outcome']} · {c['state']}"
+        parts.append(f"<p><b>{e(c['outcome'])}</b> · {e(c['state'])}</p><p>{e(c['definition'])}</p>")
+        held = version_hold(root)
+        if held:
+            parts.append(f"<p class='muted'>Held: {e(held[0])}</p>" + "".join(
+                f"<p>Waiting on you in {where_waiting(m)}: {e(gate['question'])}</p>" for m, gate in held[1]))
+        error = continuation.status(root).get('error')
+        if error:
+            parts.append(f"<p class='muted'>{e(error)}</p>")
         parts.append(f"<form method='post' action='/progress/control'>{hidden}"
                      "<button class='quiet' name='action' value='pause'>Pause work</button>"
                      "<button class='quiet' name='action' value='resume'>Continue current version</button></form>")
-        planned = [v for v in g['checkpoints'] if v['state'] == 'planned']
-        if not c and planned:
-            opts = ''.join(f"<option value='{e(v['id'])}'>{e(v['outcome'])}</option>" for v in planned)
-            parts.append(f"<form method='post' action='/progress/control'>{hidden}<select name='checkpoint'>{opts}</select>"
-                         "<button name='action' value='start'>Start selected version</button></form>")
-        if c and c['state'] == 'review':
+        if c['state'] == 'review' and progress.waiting(root)[0]['key'] in dismissed(root):
             # Visible even after Clear; hiding a card never grants approval.
-            if progress.waiting(root)[0]['key'] in dismissed(root):
-                parts.append("<p>Version review is hidden from Needs you; it remains unapproved.</p>"
-                             f"<form method='post' action='/progress/control'>{hidden}<button class='quiet' name='action' value='show'>Show version review</button></form>")
-    return "<details class='card'><summary>" + ('Project lead and versions' if len(g['members']) > 1 else 'Completed versions') + '</summary>' + ''.join(parts) + '</details>' if parts else ''
+            parts.append("<p>Version review is hidden from Needs you; it remains unapproved.</p>"
+                         f"<form method='post' action='/progress/control'>{hidden}<button class='quiet' name='action' value='show'>Show version review</button></form>")
+    else:
+        planned = [v for v in g['checkpoints'] if v['state'] == 'planned']
+        if not planned:
+            return ''                                   # every version accepted: nothing to run, review or start
+        summary = f"{len(planned)} planned"
+        opts = ''.join(f"<option value='{e(v['id'])}'>{e(v['outcome'])}</option>" for v in planned)
+        parts.append(f"<form method='post' action='/progress/control' class='startver'>{hidden}<select name='checkpoint'>{opts}</select>"
+                     "<button name='action' value='start'>Start selected version</button></form>")
+    return (f"<details class='card versions'{' open' if c else ''}><summary><b>Versions</b> · {e(summary)}</summary>"
+            + "".join(parts) + "</details>")
 
 
-def render(reg, pid, view="overview"):
+def render(reg, pid, view="overview", show_all=""):
+    """A project's page: its Overview, Today, Roadmap, Showcase or Console. show_all names a record on the Roadmap tab
+    (history, messages, mail) to show in full."""
     plist = projects(reg)
     out = []
     if not plist:
         return shell(reg, pid, "")
+    view = view if view in ("today", "roadmap", "showcase", "console") else "overview"
     if view == "console":
         root = plist[pid]
         message = message_form(pid, plist, "msgbox")
         if not providers.installed(providers.of(root)) and not console.live(root):
-            return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}</header>{vision_box(root, pid)}"
+            return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}</header>{vision_box(root, pid)}"
                          f"<div class='card'><p>{e(providers.missing(providers.of(root)))}, so its console can't start.</p>"
                          f"<p class='muted'>Install it, or choose another provider in this project's Settings.</p></div>")
-        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view)}{message}</header>"
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}{message}</header>"
                      + vision_box(root, pid)
                      + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
@@ -2006,7 +2127,7 @@ def render(reg, pid, view="overview"):
     # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
     settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
                 f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
-                f"<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
+                f"{remote_line(root)}{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
                 f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
                 f"<input name='why' placeholder='Why it is being archived (its agent reads this if it reopens)'>"
                 f"<button class='quiet'>Archive</button></form>"
@@ -2019,17 +2140,19 @@ def render(reg, pid, view="overview"):
     # time its agent has spent at work, all told: turns only, never the time it sat waiting
     secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
-    # the day's page opens on the day itself: the vision and the project's state are a tab away
-    lead_status = status_card(pid, console.snapshot(root)) if view not in ("today", "showcase", "roadmap") else ""
-    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view)}"
+    # the day's page opens on the day itself: the vision and the project's state are a tab away. The status says what
+    # the project is at, from its roadmap, and whether anything waits on the person.
+    waiting = len(moments(root)) if view == "overview" else 0
+    lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
+    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view, root)}"
                + lead_status + ("" if view == "today" else
-                  f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>{remote_line(root)}") + "</header>")
-    out.append(progress_panel(root, pid))
+                  f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>") + "</header>")
     if view == "today":
         out.append(today_html(pid, root))
     elif view == "showcase":
         out.append(showcase_html(pid, root))
     elif view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
+        out.append(progress_panel(root, pid))       # a shared plan's versions, while one runs or waits to start
         # the person's own notes the agent has not acted on yet, wherever they were left
         its_now = items(road)
         mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
@@ -2039,7 +2162,7 @@ def render(reg, pid, view="overview"):
                                  f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>" for n in mine)
                        + "</div>")
         # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
-        out.append("<h2>Roadmap</h2>")
+        out.append("<h2 id='roadmap'>Roadmap</h2>")
         if road["milestones"]:
             its = items(road)
             order = list(its)
@@ -2098,61 +2221,109 @@ def render(reg, pid, view="overview"):
         if gone:                        # an item renamed or dropped keeps its conversation
             out.append(f"<details class='card'><summary>Notes on items no longer on the roadmap ({', '.join(map(e, gone))})</summary>"
                        + "".join(f"<h3>{e(g)}</h3>" + thread(by("item", g), items(road)) for g in gone) + "</details>")
-        # history
-        out.append("<h2>History</h2><div class='card'>")
-        for line in git(root, "log", "-n", "20", "--format=%h\x1f%aI\x1f%s").splitlines():
+        # The record: what was built, what the person said to the project as a whole (with Message at the top), and
+        # its mail. Each folds behind its count and latest date; opened, its newest few, the rest a click further.
+        hist_n = int(git(root, "rev-list", "--count", "HEAD").strip() or 0)
+        hist = []
+        for line in git(root, "log", "-n", str(RECORD_ALL if show_all == "history" else FOLD_SHOWN),
+                        "--format=%h\x1f%aI\x1f%s").splitlines():
             h, t, subj = line.split("\x1f")
-            out.append(f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
-                       + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
-                       + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"/?p={pid}&view=roadmap") + "</details>")
-        # what the person has said to the project as a whole, newest first: sent with Message at the top
+            hist.append((stamp(t), f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
+                         + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
+                         + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"/?p={pid}&view=roadmap") + "</details>"))
+        out.append(record_fold(pid, "history", "History", hist, hist_n, show_all, rest="the rest are in its git log"))
         whole = [(n["at"], thread([n], items(road))) for n in all_notes if not n["anchor"]]
         whole += [(m["at"], f"<div class='note'><span class='who'>you · {e(m['at'][:10])} · "
                             f"{'into its console' if m['to'] == 'console' else 'to ' + e(m['to']) + ', written by its agent'}</span>"
                             f"<div>{e(m['text'])}</div></div>") for m in read(root, "messages.jsonl")]
-        out.append("</div><h2>Messages</h2><div class='card'>"
-                   + ("".join(h for _, _, h in sorted(((at, i, h) for i, (at, h) in enumerate(whole)), reverse=True))
-                      or "<p class='muted'>Nothing yet. Message, at the top, sends to its console or to another project.</p>"))
+        whole = [(at, h) for at, _, h in sorted(((at, i, h) for i, (at, h) in enumerate(whole)), reverse=True)]
+        out.append(record_fold(pid, "messages", "Messages", whole, len(whole), show_all))
         from . import mail
-        ms = mail.messages(root)[-15:]
-        if ms:
-            me = mail.address(root)
-            rows = []
-            for m in reversed(ms):
-                way = f"from <b>{e(mail.shown(m['from']))}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
-                state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
-                if m["to"] == me and not m["delivered_at"]:
-                    state = "reaches the agent on its next turn"
-                rows.append(f"<div class='note'><span class='who'>{e(m['at'][:16].replace('T', ' '))} · {way}"
-                            f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>")
-            out.append("</div><h2>Mail with other projects</h2><div class='card'>" + "".join(rows))
-        out.append("</div>")
+        ms = mail.messages(root)
+        me, rows = mail.address(root), []
+        for m in reversed(ms):
+            way = f"from <b>{e(mail.shown(m['from']))}</b>" if m["to"] == me else f"to <b>{e(m['to'])}</b>"
+            state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
+            if m["to"] == me and not m["delivered_at"]:
+                state = "reaches the agent on its next turn"
+            rows.append((m["at"], f"<div class='note'><span class='who'>{e(m['at'][:16].replace('T', ' '))} · {way}"
+                                  f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>"))
+        out.append(record_fold(pid, "mail", "Mail with other projects", rows, len(rows), show_all))
     else:                                 # what needs the person now, and what changed (its status leads the page)
+        # waiting on you, first: the same as this project's part of Needs you, kept current like it (what the agent
+        # settles meanwhile drops out, except while being typed in). With nothing waiting, the section is out of the
+        # way, and comes back by itself when something does.
+        rows = waiting_html(pid, root)
+        out.append(f"<section id='waitingbox'{'' if rows else ' hidden'}><h2>Waiting on you (<span id='wcount'>{waiting}</span>)</h2>"
+                   f"<div class='card' id='waiting'>{rows}</div></section>"
+                   f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('waiting'), '/needs?p={pid}', (w) => {{"
+                   " const n = w.querySelectorAll('.need:not(.held)').length; document.getElementById('wcount').textContent = n;"
+                   " document.getElementById('waitingbox').hidden = !w.children.length;"
+                   f" const q = document.querySelector('#status-{pid} .waits'); if (q) q.hidden = !!n; }});</script>")
         out.append(pinned_section(pid, root))
-        # waiting on you: the same as this project's part of Needs you
-        # kept current like Needs you: what the agent settles meanwhile drops out, except while being typed in
-        out.append(f"<h2>Waiting on you (<span id='wcount'>{len(moments(root))}</span>)</h2><div class='card' id='waiting'>"
-                   f"{waiting_html(pid, root)}</div>"
-                   f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('waiting'), '/needs?p={pid}',"
-                   " (w) => { document.getElementById('wcount').textContent = w.querySelectorAll('.need:not(.held)').length; });</script>")
-        # since you were last here: one timeline, newest first; Clear rides down the list as you read,
-        # and stays within it
-        s = since(root, reg["seen"].get(str(root)))
-        out.append("<h2>Since you were last here</h2><div class='card since'>")
-        if s["first"]:
-            out.append("<p class='muted'>First visit: everything below is the current state.</p>")
-        events = [(s["moved_at"], f"<li><b>{e(a)} → {e(b)}</b> {e(i)} {e(t)}</li>") for i, a, b, t in s["moved"]]
-        events += [(g["at"], f"<li>gate opened: {e(g['question'])}</li>") for g in s["opened"]]
-        events += [(n["addressed_at"], f"<li>the agent acted on your note “{e(n['text'][:80])}”: {e(n['reply'])}</li>") for n in s["replies"]]
-        events += [(p["at"], f"<li>the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(p['title'])}</a>"
-                    + (f": {e(p['why'])}" if p.get("why") else "") + "</li>") for p in s["pinned"]]
-        events += [(stamp(t), f"<li class='muted'><code>{e(h)}</code> {e(t[:10])} {e(subj)}</li>") for h, t, subj in s["commits"][:15]]
-        lines = [html_ for _, html_ in sorted(events, key=lambda ev: ev[0] or "", reverse=True)]
-        caught_up = (f"<form method='post' action='/seen' class='caughtup'><input type='hidden' name='p' value='{pid}'>"
-                     f"<input type='hidden' name='head' value='{e(s['head'])}'><button title='Seen all of this: nothing new until something changes'>Clear</button></form>")
-        out.append(caught_up + f"<ul>{''.join(lines)}</ul>" if lines else "<p class='muted'>Nothing has changed.</p>")
-        out.append("</div>")
+        # what changed since the person's last look on an earlier day: the newest few, dated, and how much in all
+        out.append(since_html(pid, root, page_base(root)))
     return shell(reg, pid, "".join(out))
+
+
+FOLD_SHOWN = 10          # entries of a folded record shown when it is opened, before "Show all"
+RECORD_ALL = 200         # entries "Show all" lists: a phone page stays a page (History's rest is in its git log)
+SINCE_SHOWN = 8          # things listed under "Since you were last here"; the rest are counted
+
+
+def record_fold(pid, key, title, rows, total, show_all, rest=""):
+    """A record on the Roadmap tab (History, Messages, Mail), folded behind its count and latest date: opened, its
+    newest few, the rest a click further (the newest RECORD_ALL). rows: [(board time, html)], newest first. Nothing at
+    all, no section."""
+    if not total:
+        return ""
+    everything = show_all == key
+    shown = rows[:RECORD_ALL] if everything else rows[:FOLD_SHOWN]
+    latest = on_day(rows[0][0]) if rows else ""
+    more = (f"<p><a class='showall' href='/?p={pid}&view=roadmap&all={key}#{key}'>Show "
+            f"{f'all {total}' if total <= RECORD_ALL else f'the newest {RECORD_ALL} of {total}'} →</a></p>"
+            if not everything and total > len(shown) else
+            f"<p class='muted'>The newest {len(shown)}{'; ' + e(rest) if rest else ''}.</p>" if everything and total > len(shown) else "")
+    return (f"<details class='card fold' id='{key}'{' open' if everything else ''}><summary><h3>{e(title)}</h3>"
+            f"<span class='muted'>{total}{' · ' + e(latest) if latest else ''}</span></summary>"
+            + "".join(h for _, h in shown) + more + "</details>")
+
+
+def since_html(pid, root, base):
+    """What changed since the person's last look on an earlier day (as the day's page counts it; no clearing needed):
+    the newest few things, one line each with its date, and when there is more, how much in all, each count pointing
+    to where it lives. Items moved, gates opened, the person's and the steward's notes answered, and the agent's pins
+    come first; commits fill what room is left. Nothing changed, no section."""
+    s = since(root, base)
+    times = item_times(root) if s["moved"] else {}
+    road = f"/?p={pid}&view=roadmap"
+    told = [n for n in s["replies"] if n.get("author") in ("person", "monitor") and not n.get("quiet")]
+    events = [(times.get(iid, {}).get("since") or s["moved_at"], False,
+               f"<b>{e(was)} → {e(state)}</b> <a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a> {e(short(plain(text), 90))}")
+              for iid, was, state, text in s["moved"]]
+    events += [(g["at"], False, f"gate opened: {e(short(g['question'], 100))}") for g in s["opened"]]
+    events += [(n["addressed_at"], False, f"{'your' if n.get('author') == 'person' else 'the steward' + chr(8217) + 's'} note "
+                f"“{e(short(n['text'], 40))}” answered: {e(short(n['reply'] or '', 70))}") for n in told]
+    events += [(p["at"], False, f"the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(short(p['title'], 70))}</a>")
+               for p in s["pinned"]]
+    events.sort(key=lambda ev: ev[0] or "", reverse=True)
+    commits = [(stamp(t), True, f"<code>{e(h)}</code> {e(short(subj, 100))}") for h, t, subj in s["commits"] if not MERGE.match(subj)]
+    shown = events[:SINCE_SHOWN]
+    shown = sorted(shown + commits[:SINCE_SHOWN - len(shown)], key=lambda ev: ev[0] or "", reverse=True)
+    if not shown:
+        return ""
+    lines = "".join(f"<li{' class=muted' if muted else ''}><span class='when'>{e(on_day(at))}</span> {body}</li>"
+                    for at, muted, body in shown)
+    more = ""
+    if len(events) + s["count"] > len(shown):
+        counts = [(len(s["moved"]), "item moved", "items moved", f"{road}#roadmap"), (len(s["opened"]), "gate opened", "gates opened", ""),
+                  (len(told), "note answered", "notes answered", f"{road}&all=messages#messages"),
+                  (len(s["pinned"]), "pin", "pins", "#pinned"), (s["count"], "commit", "commits", f"{road}#history")]
+        said = [(f"<a href='{href}'>{n} {one if n == 1 else many}</a>" if href else f"{n} {one if n == 1 else many}")
+                for n, one, many, href in counts if n]
+        more = f"<p class='more muted'>In all: {' · '.join(said)}</p>"
+    return (f"<h2>Since you were last here · {e(on_day(base['at']))}</h2>"
+            f"<div class='card since'><ul class='events'>{lines}</ul>{more}</div>")
 
 
 MERGE = re.compile(r"Merge (branch|remote-tracking branch|pull request|commit)\b")
@@ -2173,24 +2344,12 @@ def today_html(pid, root):
     link = lambda iid: f"<a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a>" if iid in its else e(iid)
     linked = lambda text: re.sub(r"\bR\d+\b", lambda m: link(m.group(0)), e(text))
     away = "" if hours.active(clock) else f" · outside your hours until {hours.at_clock(hours.next_start(clock))}"
-    out = [f"<p class='muted'>{e(time.strftime('%A %-d %B', time.localtime(hours.day_start(clock))))}{e(away)}</p>"]
     base = page_base(root)
     s = since(root, base)
     landed = [f"<li>{link(i)} {e(short(plain(t)))} <span class='st done'>done</span></li>"
               for i, _, state, t in s["moved"] if state == "done"]
     landed += [f"<li class='muted'><code>{e(h)}</code> {linked(subj)}</li>" for h, _, subj in s["commits"] if not MERGE.match(subj)]
-    out.append(f"<h2>Landed since {e(hours.at_day(epoch(base['at'])))}</h2><div class='card'>"
-               + (f"<ul class='landed'>{''.join(landed)}</ul>" if landed else "<p class='muted'>Nothing has landed since then.</p>")
-               + "</div>")
     numbered = decisions(root)
-    rows = "".join(f"<div class='need{'' if due(g) else ' settled'}'>{gate_body(root, pid, g, back, number=n, fold=True)}</div>"
-                   for n, g in numbered)
-    out.append(f"<h2>Decisions ({sum(1 for _, g in numbered if due(g))})</h2><div class='card'>"
-               + (rows + answer_box(pid, root, numbered, back, hint=True) if numbered else
-                  "<p class='muted'>Nothing to decide today.</p>") + "</div>")
-    others = waiting_on(pid, root, back, label=False, with_gates=False)
-    if others:
-        out.append(f"<h2>Also waiting on you</h2><div class='card'>{''.join(others)}</div>")
     queue = []
     for m in road["milestones"]:
         left = [i for i in m["items"] if i["state"] != "done"]
@@ -2198,8 +2357,24 @@ def today_html(pid, root):
             queue.append(f"<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3><ul class='queue'>" + "".join(
                 f"<li><span class='st {i['state']}'>{LABEL[i['state']]}</span> {link(i['id'])} {e(short(plain(i['text'])))}</li>"
                 for i in left) + "</ul>")
-    out.append("<h2>Queue</h2><div class='card'>" + ("".join(queue) or "<p class='muted'>Nothing open outside Later.</p>")
-               + "</div>")
+    # an empty section is a heading and a card that say nothing: what is empty is said once, under the date
+    quiet = ([] if landed else [f"nothing landed since {hours.at_day(epoch(base['at']))}"]) + \
+            ([] if numbered else ["nothing to decide"]) + ([] if queue else ["nothing open outside Later"])
+    out = [f"<p class='muted'>{e(time.strftime('%A %-d %B', time.localtime(hours.day_start(clock))))}{e(away)}"
+           f"{e(' · ' + ', '.join(quiet)) if quiet else ''}</p>"]
+    if landed:
+        out.append(f"<h2>Landed since {e(hours.at_day(epoch(base['at'])))}</h2><div class='card'>"
+                   f"<ul class='landed'>{''.join(landed)}</ul></div>")
+    if numbered:
+        rows = "".join(f"<div class='need{'' if due(g) else ' settled'}'>{gate_body(root, pid, g, back, number=n, fold=True)}</div>"
+                       for n, g in numbered)
+        out.append(f"<h2>Decisions ({sum(1 for _, g in numbered if due(g))})</h2><div class='card'>"
+                   + rows + answer_box(pid, root, numbered, back, hint=True) + "</div>")
+    others = waiting_on(pid, root, back, label=False, with_gates=False)
+    if others:
+        out.append(f"<h2>Also waiting on you</h2><div class='card'>{''.join(others)}</div>")
+    if queue:
+        out.append("<h2>Queue</h2><div class='card'>" + "".join(queue) + "</div>")
     later = held_html(pid, root, back)
     if later:
         out.append(f"<h2>Held for your hours</h2><div class='card'>{later}</div>")
@@ -2293,9 +2468,10 @@ def render_item(reg, pid, iid):
     return shell(reg, pid, "".join(body))
 
 
-def gate_body(root, pid, gate, back, number=None, fold=False):
+def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
     """The same point decisions in Needs you, Waiting on you and the item's record. With its number on the day's page;
-    folded, its own answer box tucks away beside the page's box for answering by number."""
+    folded, its own answer box tucks away beside the page's box for answering by number. A tail (clearing it unanswered)
+    goes with its own answer, folded with it."""
     body = (f"<span class='num'>{e(number)}</span> " if number else "") + f"<b>{e(gate['question'])}</b>"
     if gate.get("why"):
         body += f"<p class='muted'>{e(gate['why'])}</p>"
@@ -2346,9 +2522,9 @@ def gate_body(root, pid, gate, back, number=None, fold=False):
             body += ("<details><summary>Revise your choices</summary>"
                      + form("".join(editable), gate.get("comment", "")) + "</details>")
     elif fold and not points:
-        body += f"<details class='one'><summary>Answer just this one</summary>{form('')}</details>"
+        body += f"<details class='one' data-k='one-{e(gate['id'])}'><summary>Answer just this one</summary>{form('')}{tail}</details>"
     else:
-        body += form("".join(rows))
+        body += form("".join(rows)) + tail
     if rec:
         body += ("<details><summary>Full consultant answers</summary>"
                  + consultation(dict(rec, adopted=None, point_decisions=[])) + "</details>")
@@ -2693,7 +2869,7 @@ def focus(root):
     for m in road["milestones"]:
         open_ = [i for i in m["items"] if i["state"] != "done"]
         if open_:
-            pick = lambda st, n=5: [f"{i['id']} {i['text'][:70]}" for i in open_ if i["state"] == st][:n]
+            pick = lambda st, n=5: [f"{i['id']} {short(i['text'], 70)}" for i in open_ if i["state"] == st][:n]
             return {"milestone": f"{m['id']} — {m['title']}" if m['title'] else m['id'], "doing": pick("doing"), "verify": pick("verify"), "next": pick("todo", 3)}
     return {"milestone": "", "doing": [], "verify": [], "next": []}
 
@@ -2714,15 +2890,19 @@ def monitor_page(reg, view="overview"):
                f"<label class='stack'>What should the steward tell them for you?"
                f"<textarea name='text' placeholder='It relays it as yours, in full, and checks it landed'></textarea></label>"
                f"<button>Have the steward send it</button></form></div></details>") if targets else ""
-    head = (f"<header class='project'><div class='titlerow'><h1>steward</h1>{message}<form method='post' action='/helm' class='helmform'>"
+    # its state in a word beside its name; what that means is on the Helm tab (and under a pointer, in the word's title)
+    stance, means = (("At the helm", "It holds the helm of every project included in it, and settles routine questions "
+                      "within each one's direction.") if on else
+                     ("Muted", "Nothing wakes it and it spends nothing; it answers only when you talk to it.") if monitor.muted() else
+                     ("Asleep", "Nothing wakes it but you and its scouting, and the board shows you what needs you."))
+    head = (f"<header class='project'><div class='titlerow'><h1>steward</h1><span class='badge stance' title='{e(means)}'>{stance}</span>"
+            f"{message}<form method='post' action='/helm' class='helmform'>"
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form>"
             + ("" if on else f"<form method='post' action='/mute' class='helmform'><input type='hidden' name='state' "
                f"value='{'off' if monitor.muted() else 'on'}'><button class='quiet'>{'Unmute' if monitor.muted() else 'Mute'}</button></form>")
             + "</div>"
-            f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div>"
-            f"<p class='muted'>{'It holds the helm of every project included in it, and settles routine questions within each one' + chr(39) + 's direction.' if on else 'Muted: nothing wakes it and it spends nothing; it answers only when you talk to it.' if monitor.muted() else 'It sleeps: nothing wakes it but you and its scouting, and the board shows you what needs you.'}"
-            f" Which projects are included, and each one's direction, are on the Helm tab.</p></header>")
+            f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div></header>")
     plist = projects(reg)
     if view == "console":
         body = head + console.PAGE.format(label=e(monitor.provider().label), path=e(monitor.home()), name=monitor.name(), pid=-1,
@@ -2742,8 +2922,10 @@ def monitor_page(reg, view="overview"):
     if view == "helm":
         cards = [f"<div class='card'><div class='titlerow'><h3>Every project</h3>"
                  f"<a href='/steward?view=direction'>Standing direction →</a></div>"
+                 f"<p><b>{stance}.</b> {e(means)}</p>"
                  f"<p class='muted'>What the steward settles, what always comes back to you, and how it steers, for all projects"
-                 f"{' (your version)' if (home() / 'direction.md').exists() else ''}. Each project below adds its own.</p></div>"]
+                 f"{' (your version)' if (home() / 'direction.md').exists() else ''}. Each project below adds its own, and "
+                 f"whether it is included in the steward's helm.</p></div>"]
         for pid, p in enumerate(plist):
             if not p.exists():
                 continue
@@ -2767,27 +2949,33 @@ def monitor_page(reg, view="overview"):
                          + (f"<details><summary>What it decided here</summary>{made}</details>" if made else "") + "</div>")
         body = head + ("".join(cards) if len(cards) > 1 else cards[0] + "<p class='muted'>No projects yet.</p>")
         return shell(reg, -1, body)
-    statuses = "".join(f"<div class='mstatus'><div class='who'>{e(p.name)}</div>{status_card(pid, console.snapshot(p))}</div>"
-                       for pid, p in enumerate(plist) if p.exists())
+    # Every project at a glance first, one line each (what it is at, what waits on the person), then what waits on them,
+    # project by project, then, folded, what the steward decided.
+    made = monitor.decisions(None, 10)
     recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(d['at'][:16].replace('T', ' '))}</span>"
-                     f"<div>{e(d['text'])}</div></div>" for d in monitor.decisions(None, 10))
-    body = (head + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
+                     f"<div>{e(d['text'])}</div></div>" for d in made)
+    body = (head + "<div class='listtop'><h2>Projects</h2><a href='/projects'>All projects →</a></div>"
+            + (f"<div class='card plist'>{project_list(plist)}</div>" if plist else "<p class='muted'>No projects yet.</p>")
+            + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
             f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
-            f"<h2>Projects</h2>{statuses or '<p class=muted>No projects yet.</p>'}"
-            + (f"<h2>What the steward decided</h2><div class='card'>{recent}</div>" if recent else ""))
+            + (f"<details class='card fold'><summary><h3>What the steward decided</h3><span class='muted'>{len(made)}"
+               f"{' · ' + e(on_day(made[0]['at'])) if on_day(made[0]['at']) else ''}</span></summary>{recent}</details>" if made else ""))
     return shell(reg, -1, body)
 
 
-def status_card(pid, snap):
-    """The project's status, as its console shows it: working / needs you / idle / off, what it's doing,
-    and its background agents."""
+def status_card(pid, snap, work="", waiting=None):
+    """The project's status: working / needs you / idle / off, as its console shows it; what it is at, from its
+    roadmap (never its console's spinner words); its background agents; and, given the count, when nothing waits on
+    the person, that it doesn't (what does is listed just below)."""
     act = snap.get("activity") or {}
     agents = "".join(f"<div class='agent{' current' if a['current'] else ''}'><span>{'●' if a['current'] else '○'} {e(a['name'])}</span>"
                      f"<span class='muted'>{e(a['detail'])}</span></div>" for a in act.get("agents", []))
     return (f"<a class='status' id='status-{pid}' href='/?p={pid}&view=console'><div class='statusline'>"
             f"<span class='sdot {snap['state'].replace(' ', '-')}'></span><b>{e(snap['state'])}</b>"
-            f"<span class='muted'>{(' · ' + e(act['line'])) if act.get('line') else ''}</span></div>"
-            f"<div class='agents'>{agents}</div></a>")
+            f"<span class='muted'>{(' · ' + e(work)) if work else ''}</span></div>"
+            f"<div class='agents'>{agents}</div>"
+            + ("" if waiting is None else f"<div class='waits muted'{' hidden' if waiting else ''}>Nothing waits on you.</div>")
+            + "</a>")
 
 
 def showcase_html(pid, root):
@@ -2843,13 +3031,9 @@ def nest_page(reg, name):
            *([f"<h2>Standards</h2><div class='card'>" + "".join(
                f"<div class='note'>“{e(r['words'])}”<span class='who'>{' · said in ' + e(r['from']) if r.get('from') else ''}"
                f" · {e(r['at'][:10])}</span></div>" for r in n["standards"]) + "</div>"] if n.get("standards") else []),
-           "<h2>Projects</h2><div class='card'>"]
+           "<h2>Projects</h2><div class='card plist'>"]
     for i, p in members:
-        snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
-        waiting = len(moments(p)) if p.exists() else 0
-        goal = " ".join(roadmap(p)["goal"].split())[:140] if p.exists() else ""
-        out.append(f"<div class='prow'><a href='/?p={i}'><span class='sdot {snap['state'].replace(' ', '-')}'></span> <b>{e(p.name)}</b></a> <span class='who'>{e(snap['state'])}"
-                   f"{' · ' + str(waiting) + ' waiting on you' if waiting else ''}</span><div class='muted'>{e(goal)}</div></div>")
+        out.append(project_row(i, p, first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"]) if p.exists() else ""))
     out.append("</div>")
     links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
     new_tab, icons = " target='_blank' rel='noopener'", {"url": "🔗", "upload": "📎"}
@@ -2888,9 +3072,16 @@ def pinned_section(pid, root):
                     f"<form method='post' action='/unpin'>{hidden}<button class='quiet'>Unpin</button></form></div></details></div>"
                     f"<div class='who'>{'by the agent · ' if p['by'] == 'agent' else ''}{e(p['target'] if p['kind'] != 'url' else p['target'][:60])}"
                     + (f" · {e(p['why'])}" if p.get("why") else "") + "</div></div>")
-    return (f"<div class='pinned'><div class='pinhead'><h2>Pinned</h2><a href='/pins/add?p={pid}'>+ Pin</a></div>"
-            + ("".join(rows) if rows else "<p class='muted'>Nothing pinned yet: files, links and uploads you and the agent want at hand.</p>")
+    if not rows:
+        return ""                          # nothing pinned, no section: pinning is also under Message, at the top
+    rest = rows[PINS_SHOWN:]
+    return (f"<div class='pinned' id='pinned'><div class='pinhead'><h2>Pinned</h2><a href='/pins/add?p={pid}'>+ Pin</a></div>"
+            + "".join(rows[:PINS_SHOWN])
+            + (f"<details class='morepins'><summary>{len(rest)} more</summary>{''.join(rest)}</details>" if rest else "")
             + "</div>")
+
+
+PINS_SHOWN = 5           # the newest pins shown; the rest fold
 
 
 def pin_add_page(reg, pid):
@@ -3064,12 +3255,65 @@ def moments(p, snap=None):
     return single + ([asks + verify] if asks else [verify] if verify else [])
 
 
+def clear_form(hidden, keys, label="Clear"):
+    """Clearing something off the person's list (the agent hears quietly, on its next turn). Never the first thing
+    under a thumb: it sits at the foot of what it clears, and for a decision, inside its own answer."""
+    return (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(keys)}'>"
+            f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>{e(label)}</button></form>")
+
+
+def question_lines(text):
+    """The sentences in a turn that ask something, as written (its code and links kept, list marks off); a question
+    that follows a clause ending in a colon keeps it."""
+    out = []
+    for block in re.split(r"```.*?```", text or "", flags=re.S):
+        parts = [s.strip() for s in re.split(r"(?<=[.!?:])\s+|\n", block)]
+        for k, s in enumerate(parts):
+            if re.search(r"\?[)*_\"'»]*$", re.sub(r"`[^`]*`|https?://\S+", " ", s).strip()):
+                lead_in = parts[k - 1] if k and parts[k - 1].endswith(":") and len(parts[k - 1]) < 90 else ""
+                out.append(re.sub(r"^(?:[-*+]|\d+[.)])\s+", "", f"{lead_in} {s}".strip()))
+    return out
+
+
+def reply_form(pid, hidden, ask_id, keys):
+    """A reply typed into the project's console, its Send on one row with Clear: Send at the right, under the thumb,
+    and Clear at the far left."""
+    fid = f"reply-{pid}-{e(ask_id)}"
+    return (f"<form class='add' id='{fid}' method='post' action='/reply'>{hidden}"
+            f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea></form>"
+            f"<div class='needfoot'>{clear_form(hidden, keys)}<button form='{fid}'>Send</button></div>")
+
+
+ASK_WHOLE = 320          # characters: a turn this short shows whole, its question already in sight
+
+
+def ask_html(text):
+    """A turn that asked the person something: its questions first, as written, and the whole turn folded beneath
+    them, as a page shows prose. With no sentence that reads as a question, its last paragraph leads (where an agent
+    leaves what it asks of the person). A short turn shows whole."""
+    text = (text or "").strip()
+    asked, blocks = question_lines(text), [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+    if len(text) <= ASK_WHOLE or (not asked and len(blocks) < 2):
+        return f"<div class='asktext'>{prose(text)}</div>"
+    lead = "".join(f"<p><b>{_inline(q)}</b></p>" for q in asked) if asked else prose(blocks[-1])
+    return (f"<div class='asked'>{lead}</div>"
+            f"<details class='full'><summary>Full message</summary><div class='asktext'>{prose(text)}</div></details>")
+
+
 def waiting_on(pid, p, back, label=True, with_gates=True):
-    """The project's moments as the person answers them, where they stand: its gates are the day's decisions, by
-    number, answered together in one box (each reaches the agent as a note), a choice gets a button per option, a
-    question (with what it left to verify) gets a reply typed into the console, items to verify get one note about
-    them. Without its gates, the rest."""
-    rows = []
+    """The project's moments as the person answers them, in one list: the decisions, their box, then the rest."""
+    decided, box, others = waiting_parts(pid, p, back, label, with_gates)
+    return decided + ([box] if box else []) + others
+
+
+def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
+    """The project's moments as the person answers them, where they stand: (its decisions, the box answering them by
+    number, the rest). Its gates are the day's decisions, by number, answered together in one box (each reaches the
+    agent as a note); a choice gets a button per option; a question (with what it left to verify) gets a reply typed
+    into the console; items to verify get one note about them. Without its gates, the rest. Labelled, each says its
+    project, and the box links to its day's page (or, given day, as day says). Clearing one sits at its foot, or for a
+    decision inside its own answer: never first under a thumb."""
+    decided, others = [], []
     hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
     groups = moments(p)
     ours = [g for g in groups if g[0]["kind"] == "gate"] if with_gates else []
@@ -3077,17 +3321,13 @@ def waiting_on(pid, p, back, label=True, with_gates=True):
     number = {g["id"]: n for n, g in numbered}
     ours.sort(key=lambda g: int(number.get(g[0]["gate"]["id"], 0)))
     rest = [g for g in groups if g[0]["kind"] != "gate"]
-    box = answer_box(pid, p, numbered, back, day=label) if ours else ""
-    for k, group in enumerate(ours + rest + [None]):
-        if k == len(ours) and box:
-            rows.append(box)                       # after the decisions, before the rest
-        if group is None:
-            break
+    box = answer_box(pid, p, numbered, back, day=label if day is None else day) if ours else ""
+    for group in ours + rest:
+        rows = decided if group[0]["kind"] == "gate" else others
         w = group[0]
         keys = ",".join(x["key"] for x in group)
-        clear = (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(keys)}'>"
-                 f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
-        who = lambda what: f"<div class='who'>{clear}<span class='kind'>{e(p.name) + ' · ' if label else ''}{what}</span></div>"
+        foot = f"<div class='needfoot'>{clear_form(hidden, keys)}</div>"
+        who = lambda what: f"<div class='who'><span class='kind'>{e(p.name) + ' · ' if label else ''}{what}</span></div>"
         verify = [x["item"] for x in group if x["kind"] == "verify"]
         def ready_row(it):
             # a request for sign-off: what's ready, how to see it, and Approve or say what's wrong
@@ -3111,34 +3351,41 @@ def waiting_on(pid, p, back, label=True, with_gates=True):
                         f"<input type='hidden' name='candidate' value='{e(candidate['id'])}'>"
                         f"{choose_next}<input name='text' placeholder='Your feedback'>"
                         "<button name='action' value='approve'>Approve version</button>"
-                        "<button class='quiet' name='action' value='changes'>Request corrections</button></form></div>")
+                        f"<button class='quiet' name='action' value='changes'>Request corrections</button></form>{foot}</div>")
         elif w["kind"] == "gate":
             g = w["gate"]
+            folded = not g.get("points")                 # its own answer folds away, and clearing it waits inside
             rows.append(f"<div class='need'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
-                        + gate_body(p, pid, g, back, number=number.get(g["id"]), fold=True) + "</div>")
+                        + gate_body(p, pid, g, back, number=number.get(g["id"]), fold=True,
+                                    tail=f"<div class='needfoot'>{clear_form(hidden, keys, 'Clear without an answer')}</div>" if folded else "")
+                        + ("" if folded else foot) + "</div>")
         elif w["kind"] == "choice":
             rows.append(f"<div class='need'>{who('asking in its console')}"
                         + "".join(f"<div>{e(q)}</div>" for q in w["question"])
                         + "<div class='choices'>" + "".join(
                             f"<form method='post' action='/choose'>{hidden}<input type='hidden' name='option' value='{e(o)}'>"
-                            f"<button class='quiet'>{e(o)}</button></form>" for o in w["options"]) + "</div></div>")
+                            f"<button class='quiet'>{e(o)}</button></form>" for o in w["options"]) + f"</div>{foot}</div>")
         elif w["kind"] == "screen":
             rows.append(f"<div class='need'>{who('needs you in its console')}<pre>{e(chr(10).join(w['lines']))}</pre>"
-                        f"<a href='/?p={pid}&view=console'>Open its console →</a></div>")
+                        f"<a class='go' href='/?p={pid}&view=console'>Open its console →</a>{foot}</div>")
         elif w["kind"] == "ask":
             a = w["ask"]
             rows.append(f"<div class='need'>{who('asked in its console · ' + e(a['at'][:16].replace('T', ' ')))}"
-                        f"<div class='asktext'>{e(a['text'])}</div>{to_verify}"
-                        f"<form class='add' method='post' action='/reply'>{hidden}"
-                        f"<textarea name='text' placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>")
+                        f"{ask_html(a['text'])}{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
         else:                                         # items ready for the person's OK, with no question beside them
-            rows.append(f"<div class='need'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}</div>")
-    return rows
+            rows.append(f"<div class='need'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}{foot}</div>")
+    return decided, box, others
 
 
 def waiting_html(pid, root):
-    rows = waiting_on(pid, root, f"/?p={pid}", label=False)
-    return ("".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>") + held_html(pid, root)
+    """A project's Waiting on you: its moments; a decision in another of its agents that holds the version it shares,
+    pointed to (it is answered there); and what is held for the person's hours. Nothing, nothing at all."""
+    held = version_hold(root)
+    elsewhere = [(m, g) for m, g in (held[1] if held else []) if m.resolve() != Path(root).resolve()]
+    return ("".join(waiting_on(pid, root, f"/?p={pid}", label=False))
+            + "".join(f"<div class='need held'><div class='who'><span class='kind'>holds this version</span></div>"
+                      f"Waiting on you in {where_waiting(m)}: <b>{e(g['question'])}</b></div>" for m, g in elsewhere)
+            + held_html(pid, root))
 
 
 def held_html(pid, root, back=None):
@@ -3150,18 +3397,15 @@ def held_html(pid, root, back=None):
         return ""
     back = back or f"/?p={pid}"
     hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>"
-    clear = lambda key: (f"<form class='clear' method='post' action='/clear'>{hidden}<input type='hidden' name='key' value='{e(key)}'>"
-                         f"<button class='quiet' title='Clear it: the agent hears quietly, on its next turn'>Clear</button></form>")
+    foot = lambda key, label="Clear": f"<div class='needfoot'>{clear_form(hidden, key, label)}</div>"
     until = lambda x: e(hours.at_clock(epoch(x["held"])))
     return ("<p class='muted'>From outside your active hours: these reach your list when the hours begin, and you can "
             "answer them now.</p>" + "".join(
-                f"<div class='need held'><div class='who'>{clear('gate:' + g['id'])}<span class='kind'>gate"
+                f"<div class='need held'><div class='who'><span class='kind'>gate"
                 f"{' on ' + e(g['item']) if g.get('item') else ''} · held until {until(g)}</span></div>"
-                f"{gate_body(root, pid, g, back)}</div>" for g in later) + "".join(
-                f"<div class='need held'><div class='who'>{clear('ask:' + a['id'])}<span class='kind'>asked in its console · "
-                f"held until {until(a)}</span></div><div class='asktext'>{e(a['text'])}</div>"
-                f"<form class='add' method='post' action='/reply'>{hidden}<textarea name='text' "
-                f"placeholder='Your reply goes straight to its console'></textarea><button>Send</button></form></div>"
+                f"{gate_body(root, pid, g, back)}{foot('gate:' + g['id'], 'Clear without an answer')}</div>" for g in later) + "".join(
+                f"<div class='need held'><div class='who'><span class='kind'>asked in its console · "
+                f"held until {until(a)}</span></div>{ask_html(a['text'])}{reply_form(pid, hidden, a['id'], 'ask:' + a['id'])}</div>"
                 for a in asked))
 
 
@@ -3175,12 +3419,12 @@ def support_rows():
         approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
         rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the steward brought</span></div>"
                     f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
-                    f"<div class='asktext'>{e(a['text'])}</div><p class='muted'>{e(supports.NOTICE)}</p>"
+                    f"<div class='asktext'>{prose(a['text'])}</div><p class='muted'>{e(supports.NOTICE)}</p>"
                     f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"
                     f"{approve}<button name='verdict' value='test' class='{'quiet' if approve else ''}'>Test it</button>"
                     f"<input name='text' placeholder='anything to tell the steward'>"
                     f"<button class='quiet' name='verdict' value='drop'>Drop</button></form>"
-                    f"<a href='/steward?view=console'>Talk it over with the steward →</a></div>")
+                    f"<a class='go' href='/steward?view=console'>Talk it over with the steward →</a></div>")
     return rows
 
 
@@ -3197,7 +3441,9 @@ function keepCurrent(el, url, after) {
     const r = await fetch(url, {cache: 'no-store'}); if (!r.ok) return;
     const html = await r.text(); if (html === last) return;
     const kept = [...el.querySelectorAll('*')].filter((x) => x.scrollTop).map((x) => [x.className, x.textContent.slice(0, 80), x.scrollTop]);
+    const opened = new Set([...el.querySelectorAll('details[open][data-k]')].map((d) => d.dataset.k));   // what they unfolded stays so
     el.innerHTML = last = html;
+    el.querySelectorAll('details[data-k]').forEach((d) => { if (opened.has(d.dataset.k)) d.open = true; });
     for (const [cls, text, top] of kept) {
       const x = [...el.querySelectorAll('*')].find((y) => y.className === cls && y.textContent.slice(0, 80) === text);
       if (x) x.scrollTop = top;
@@ -3300,11 +3546,25 @@ def model_changes(pending_only=False):
     return ''.join(out)
 
 
+NEEDS_SHOWN = 3          # a project's decisions shown in Needs you; the rest fold, its box for answering by number below
+
+
 def needs_you(reg):
-    """Needs you: what every project is waiting on the person for, in one place, and the supports the
-    steward has brought them."""
+    """Needs you: what every project is waiting on the person for, in one place, project by project in the board's
+    order, each numbered as its own page numbers it: a project's first few decisions, the rest folded, its box for
+    answering them by number, then the rest. And the supports the steward has brought them."""
     choices = model_changes(pending_only=True)
-    rows = ([choices] if choices else []) + support_rows() + [r for pid, p in enumerate(projects(reg)) for r in waiting_on(pid, p, "/steward")]
+    rows = ([choices] if choices else []) + support_rows()
+    for pid, p, _ in arranged(projects(reg)):
+        decided, box, others = waiting_parts(pid, p, "/steward", label=False, day=True) if p.exists() else ([], "", [])
+        if not decided and not others:
+            continue
+        more = decided[NEEDS_SHOWN:]
+        fold = (f"<details class='more' data-k='more-{pid}'><summary>{len(more)} more decision{'s' * (len(more) != 1)} "
+                f"from {e(p.name)}</summary>{''.join(more)}</details>") if more else ""
+        rows.append(f"<section class='ngroup'><h3 class='nhead'><a href='/?p={pid}'>{e(p.name)}</a>"
+                    f"<span class='badge gate' title='waiting on you'>{len(decided) + len(others)}</span></h3>"
+                    f"{''.join(decided[:NEEDS_SHOWN])}{fold}{box}{''.join(others)}</section>")
     return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
 
 
@@ -3832,7 +4092,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/":
             view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
-            return self._send(200, render(reg, pid, view if view in ("overview", "today", "roadmap", "showcase", "console") else "overview").encode())
+            return self._send(200, render(reg, pid, view, (q.get("all") or [""])[0]).encode())
         if url.path == "/add":
             if (q.get("for") or ["project"])[0] == "project":
                 return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())
@@ -3930,8 +4190,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/status":
             from . import monitor
             body = json.dumps({"board": str(home()), "projects": [
-                dict(console.snapshot(p), waiting=len(moments(p))) if p.exists() else {"state": "off", "lines": [], "waiting": 0}
-                for p in plist], "monitor": monitor.snapshot()}).encode()
+                dict(console.snapshot(p), waiting=len(moments(p)), work=at_work(p)) if p.exists()
+                else {"state": "off", "lines": [], "waiting": 0, "work": ""} for p in plist], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -4465,9 +4725,6 @@ class Handler(BaseHTTPRequestHandler):
             answer_asks(root, "from the board")
         elif path == "/console/stop":
             console.stop(root)
-        elif path == "/seen":
-            reg["seen"][str(root)] = {"at": now(), "head": form.get("head") or git(root, "rev-parse", "HEAD").strip()}
-            save_registry(reg)
         self.send_response(303)
         self.send_header("Location", back)
         self.send_header("Content-Length", "0")
@@ -4519,8 +4776,16 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
 .item.doing .st { color:var(--accent); font-weight:600 } .item.verify .st, .st.verify { color:var(--flag); font-weight:600 }
 .node.verify { border-color:var(--flag) }
 .note { margin:8px 0 0 18px; padding:6px 10px; background:var(--sunk); border-radius:7px }
-.prow { margin:8px 0 0; padding:8px 10px; background:var(--sunk); border-radius:7px } .prow a { text-decoration:none }
-.prow .sdot { display:inline-block; vertical-align:-1px; margin-right:2px }
+/* one project in a list, the whole row a link: state, name, what it is at, what waits; under it, what it is for */
+.card.plist { padding:8px } a.prow, a.prow:visited { display:block; margin:4px 0 0; padding:9px 10px; background:var(--sunk);
+  border-radius:7px; color:var(--ink); text-decoration:none } .plist > .prow:first-child { margin-top:0 }
+.prowline { display:flex; align-items:center; gap:8px; min-width:0 } .prowline b { flex:none; max-width:62%; color:var(--accent);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .prowline .sdot { flex:none }
+.pwork { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--muted) }
+.psub { display:block; margin:3px 0 0 18px; color:var(--muted); font-size:13.5px }
+.listhead { margin:12px 4px 6px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em }
+.listhead:first-child { margin-top:4px } .listtop { display:flex; align-items:baseline; gap:12px }
+.listtop a { margin-left:auto; font-size:14px; text-decoration:none }
 .reply { margin-top:6px; padding-left:10px; border-left:2px solid var(--accent) } .who { font-size:12px; color:var(--muted) }
 form.add { margin:8px 0 4px 18px; display:flex; gap:8px; flex-wrap:wrap } form.add textarea { flex:1 1 100%; min-height:44px;
   font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
@@ -4580,11 +4845,12 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .sdot.needs-you { background:var(--flag); border-color:var(--flag); animation:beat 1.1s ease-in-out infinite }
 @keyframes spin { to { transform:rotate(360deg) } }
 @keyframes beat { 50% { transform:scale(1.35); box-shadow:0 0 0 4px color-mix(in srgb, var(--flag) 25%, transparent) } }
-.status { display:block; margin:10px 0 4px; padding:10px 14px; border-radius:10px; background:var(--card); border:1px solid var(--line);
+a.status, a.status:visited { display:block; margin:10px 0 4px; padding:10px 14px; border-radius:10px; background:var(--card); border:1px solid var(--line);
   color:var(--ink); text-decoration:none } .statusline { display:flex; align-items:center; gap:8px; min-width:0 }
 .statusline .muted { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .agents { font:12.5px/1.6 ui-monospace,Menlo,monospace; margin-top:4px } .agents:empty { display:none }
 .agent { display:flex; justify-content:space-between; gap:12px; color:var(--muted) } .agent.current { color:var(--ink); font-weight:600 }
+.agent > span:first-child { flex:none } .agent .muted { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 @keyframes pulse { 50% { opacity:.35 } }
 .console-bar { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; font-size:13px }
 .console-bar form { margin:0 } button.quiet { background:var(--sunk); color:var(--ink) }
@@ -4592,7 +4858,16 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .helmform { margin-left:auto } .titlerow .psettings + .helmform { margin-left:0 } .helmcard .titlerow .badge { margin-left:auto } .helmcard label.stack { flex-direction:column; align-items:stretch }
 .helmcard textarea { width:100%; min-height:56px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .focus ul { margin:6px 0 0; padding-left:0; list-style:none } .focus li .kind { display:inline-block; min-width:52px; font-size:12px; color:var(--muted) }
-.mstatus .who { margin:10px 0 -6px }
+/* Needs you, project by project: its name and count, its first decisions, the rest folded, its box, then the rest */
+.ngroup + .ngroup { margin-top:16px } .nhead { display:flex; align-items:center; gap:8px; margin:4px 0 2px; font-size:15px }
+.nhead a { text-decoration:none } .nhead .badge { margin-left:0 } .titlerow .badge.stance { margin-left:0; align-self:center }
+details.more > summary, details.morepins > summary { cursor:pointer; color:var(--accent); font-size:13px; padding:8px 0;
+  border-top:1px solid var(--line) }
+/* a long record folded behind its count and latest date */
+details.fold > summary, details.versions > summary { cursor:pointer } details.fold > summary h3 { display:inline; margin:0 8px 0 0 }
+details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8px }
+.startver { display:flex; gap:8px; flex-wrap:wrap; align-items:center } .pinlink { margin:12px 0 0; font-size:14px }
+.status .waits { font-size:13px; margin-top:2px }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
 .show .showhead { display:flex; gap:8px; align-items:baseline } .show .showhead .who { margin-left:auto; white-space:nowrap }
 .show { min-width:0 } .show .showhead { flex-wrap:wrap } .show > div { overflow-wrap:anywhere }
@@ -4614,9 +4889,14 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } .editbar { display:flex; align-items:center; gap:12px; padding:8px 0 }
 .editbar b { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } form.editor textarea { flex:1; width:100%;
   font:14px/1.5 ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--ink) }
-.since .caughtup { position:sticky; top:calc(var(--stuck-top, 0px) + 8px); z-index:2; height:34px; margin:0 0 -34px; display:flex; justify-content:flex-end;
-  pointer-events:none } .since .caughtup button { pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,.25) }
-.since ul { padding-right:4px; margin-bottom:0; padding-bottom:42px }  /* where the button comes to rest: below the last item */ .since li:first-child { padding-right:80px } .need .who { display:flex; align-items:center; gap:8px } form.clear { margin:0 } form.clear button { padding:2px 10px; font-size:12px } .need .who .kind { margin-left:auto; text-align:right } .ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+/* what changed since the last look: one dated line each, two at most on a phone; what more there is, counted */
+ul.events { list-style:none; padding:0; margin:0 } ul.events li { margin:5px 0 } ul.events .when { color:var(--muted); font-size:12.5px;
+  font-variant-numeric:tabular-nums; margin-right:4px } .since .more { margin:10px 0 0 }
+.need .who { display:flex; align-items:center; gap:8px } .need .who .kind { margin-left:auto; text-align:right }
+form.clear { margin:0; flex:none } form.clear button { padding:2px 10px; font-size:12px }
+/* clearing sits at the foot, at the far left: never first under a thumb, never beside the answer's own button */
+.needfoot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:6px }
+.ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .num { display:inline-block; min-width:1.7em; padding:0 6px; margin-right:2px; border-radius:999px; text-align:center;
   font-weight:700; font-size:13px; background:var(--flag-bg); color:var(--flag) }
 .need.settled { color:var(--muted) } .need.settled .num { background:var(--sunk); color:var(--muted) }
@@ -4624,7 +4904,10 @@ form.editor { display:flex; flex-direction:column; height:calc(100dvh - 24px) } 
 form.bynumber { margin:12px 0 14px; align-items:center } form.bynumber textarea { min-height:56px }
 form.bynumber button { margin-left:auto } .dayline { font-size:13px }
 ul.landed, ul.queue { padding-left:0; list-style:none } ul.landed li, ul.queue li { overflow-wrap:anywhere; margin:5px 0 }
-.need form.add button { margin-left:auto } .asktext { white-space:pre-wrap; margin:6px 0; max-height:24em; overflow:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
+.need form.add button { margin-left:auto } .need pre { margin:6px 0; font:12px/1.45 ui-monospace,Menlo,monospace; white-space:pre-wrap; color:var(--muted) }
+/* a question asked in a console: its questions first, the whole turn folded beneath, as prose */
+.asked p { margin:6px 0 } .asktext { margin:6px 0 } .asktext p, .asktext ul { margin:6px 0 } .asktext h3 { margin:10px 0 4px; font-size:14px }
+details.full > summary { cursor:pointer; color:var(--accent); font-size:13px }
 .need form.add { margin-left:0 } .choices { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px } .choices form { margin:0 }
 .keys { display:none; gap:6px; flex-wrap:wrap; margin-bottom:8px }
 .keys button { flex:1 1 auto; min-width:0; padding:10px 6px; background:var(--sunk); color:var(--ink); font-size:15px; white-space:nowrap }
@@ -4653,8 +4936,13 @@ body.copying .keys .selectall { display:block }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
 .ms[open] > summary { margin-bottom:6px } .ms > summary .msdot { align-self:center }
-/* what people and agents write can hold a long unbroken word (a flag, a URL): it breaks rather than widen a phone's page */
-.note, .need, .ready, .reply, header p, .item .body p { overflow-wrap:anywhere }
+/* what people and agents write can hold a long unbroken word (a flag, a path, a URL): it breaks rather than widen a
+   phone's page (anywhere, in what they write; at the edge, everywhere else, which never squeezes a row's label to a
+   letter a line); a control's own label never breaks mid-word, and a choice never outgrows its box */
+main { overflow-wrap:break-word }
+.note, .need, .ready, .reply, header p, .item .body p, ul.events li, .vision, .card > p, .show > div, .psub { overflow-wrap:anywhere }
+button, .badge, .num, .st, .timer, select { overflow-wrap:normal } .badge, .num { white-space:nowrap } select { max-width:100% }
+.statusline .sdot, .statusline b { flex:none } .statusline .muted { min-width:0 }
 table.bench { border-collapse:collapse; font-size:13px; width:100% } table.bench th, table.bench td { padding:4px 8px; text-align:left; white-space:nowrap }
 table.bench tr + tr { border-top:1px solid var(--line) } table.bench td.sc { text-align:right; background:color-mix(in srgb, var(--accent) calc(var(--s) * 45%), transparent) }
 table.bench td.gap { text-align:right; color:var(--muted) } table.best th { width:7em } table.best td { white-space:normal }
@@ -4684,6 +4972,13 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
     border-radius:999px; background:var(--sunk) }
   nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working { border-top-color:transparent }
   nav .sline, nav .badge.new { display:none }
+  /* the steward, with what waits in every project, stays at the left as the row scrolls under it */
+  nav .proj.monitor { position:sticky; left:0; z-index:1; box-shadow:0 0 0 6px var(--card), -10px 0 0 6px var(--card) }
+  .note { margin-left:0 } .reply { padding-left:8px } form.add { margin-left:0 }
+  ul.events li { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
+  /* nothing is wider than the phone: a table's words wrap, and what still can't fit scrolls in its own box */
+  table.bench { display:block; max-width:100%; overflow-x:auto } table.bench td { white-space:normal; overflow-wrap:anywhere }
+  .console-bar { flex-wrap:wrap } .console-bar > span { flex:1 1 220px; min-width:0; overflow-wrap:anywhere }
   .navfoot { flex-direction:row; margin:0 0 0 auto; padding:0; border:0; gap:2px; font-size:16px }
   .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline }
   nav { position:sticky; top:0; z-index:40 }
@@ -4694,4 +4989,12 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   /* the tab bar reads as navigation, not as more keys: its own tinted ground, the current tab in the accent */
   .tabs { background:color-mix(in srgb, var(--accent) 12%, var(--bg)); border-top:0; box-shadow:0 -1px 0 var(--line) }
   .tabs a.on { background:transparent; color:var(--accent); font-weight:700; box-shadow:inset 0 3px 0 var(--accent) } }
+/* A finger, not a pointer: whatever is tapped in a list is at least 44px tall. */
+@media (pointer: coarse) {
+  button, select, nav .proj, .tabs a, a.prow { min-height:44px }
+  .navfoot a { min-height:44px; min-width:44px; display:inline-flex; align-items:center; justify-content:center }
+  details > summary, details.more > summary, details.morepins > summary { padding-top:12px; padding-bottom:12px }
+  .pinmore > summary { min-width:44px; min-height:44px; padding:0; display:flex; align-items:center; justify-content:center }
+  .pintitle { line-height:44px } a.go, a.dayline, a.showall, .pinlink a, .listtop a, .pinhead a, .nhead a, .titlerow > a {
+    display:inline-block; padding-top:12px; padding-bottom:12px } }
 """
