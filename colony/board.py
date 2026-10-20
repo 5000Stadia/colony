@@ -2553,8 +2553,12 @@ CHAT = """
     try { const old = localStorage.getItem('kvoice:' + box.dataset.name);
       if (old) { localStorage.removeItem('kvoice:' + box.dataset.name); if (!pin.checked && old !== kvoice) keepVoice({voice: old, pin: '1'}); } } catch (e) {} }
   // heard, or waiting on the next clip still being made
-  player.addEventListener('playing', () => { if (loading && playing && !player.loop) { loading = false; mark(); } });
-  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading) { loading = true; mark(); } });
+  player.addEventListener('playing', () => { if (!player.loop) ready.add(player.src); if (loading && playing && !player.loop) { loading = false; mark(); } });
+  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !ready.has(player.src)) { loading = true; mark(); } });
+  // the clips made already: going on to one of them is no wait, so the button stays as it is
+  const ready = new Set();
+  const make = (p) => { const u = new URL(clip(p), location.href).href;
+    if (!ready.has(u)) fetch(u).then((r) => { if (r.ok) ready.add(u); }).catch(() => {}); };
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
@@ -2590,7 +2594,8 @@ CHAT = """
       if (i >= parts.length) return done(t);
       now = {t, parts, at: i};
       player.src = clip(parts[i]); player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // the next one, made while this one plays
+      // the next one, made while this one plays: this reply's next paragraph, or the first of the reply waiting after it
+      if (parts[i + 1]) make(parts[i + 1]); else if (waiting[0]) make(chunks(waiting[0].text)[0] || '');
       i += 1;
       player.play().catch(() => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });   // refused: the phone's voice
     };
@@ -2619,8 +2624,9 @@ CHAT = """
   const say = (t, text) => { waiting.length = 0; via = ''; start(t, text); };          // a tap: this one, now
   const later = (t, text) => { if (playing) waiting.push({t, text}); else start(t, text); };   // a new reply: after this one
   function start(t, text) {
-    hush(!!resting); playing = t; loading = true; mark();
     const parts = chunks(text).filter((p) => p.trim());
+    hush(!!resting); playing = t;
+    loading = !(KOKORO && parts[0] && ready.has(new URL(clip(parts[0]), location.href).href)); mark();
     if (parts[0]) tell(parts[0]);
     return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
   }
