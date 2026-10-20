@@ -108,6 +108,10 @@ def claude_events(path):
                     continue
                 if c.get("type") == "text" and c.get("text", "").strip():
                     out.append(("say", c["text"].strip(), at))
+                # PROVIDER: Claude Code shows the person updates on its work in the console (thinkingDisplay "updates"),
+                # kept as thinking: a response may hold only these, so they are what was said to the person
+                elif c.get("type") == "thinking" and e.get("thinkingDisplay") == "updates" and (c.get("thinking") or "").strip():
+                    out.append(("say", c["thinking"].strip(), at))
                 elif c.get("type") == "tool_use":
                     inp = c.get("input") or {}
                     arg = inp.get("description") or inp.get("command") or inp.get("file_path") or inp.get("pattern") \

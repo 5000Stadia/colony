@@ -741,6 +741,12 @@ class ChatTest(BoardBase):
         self.assertEqual([(t["from"], t["text"][:20]) for t in turns], [("you", "Make the tabs bigger"), ("colony", "[colony] You have ma")])
         self.assertEqual([k for k, _ in turns[0]["items"]], ["say", "step", "step", "say"], "hooks' context and tool results stay out")
         self.assertEqual(chat.worked(["Bash(Find the tab rules)", "Edit(/x/board.py)"]), "Ran 1 command, edited 1 file")
+        # what the console shows the person as updates on the work is what was said to them, though kept as thinking
+        path.write_text("\n".join(json.dumps(l) for l in [
+            {"type": "user", "message": {"content": "Rename it"}, "timestamp": "2026-10-19T10:00:00Z"},
+            {"type": "assistant", "thinkingDisplay": "updates", "message": {"content": [{"type": "thinking", "thinking": "Renaming it to Cancel now."}]}},
+            {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "private reasoning"}]}}]))
+        self.assertEqual(chat.turns(chat.events("claude", path))[0]["items"], [("say", "Renaming it to Cancel now.")])
 
     def test_pictures_and_files_in_the_project_show_in_the_chat_and_nothing_outside_it(self):
         board.track(self.root)
