@@ -763,6 +763,21 @@ class ChatTest(BoardBase):
         self.assertFalse(board.own_host("attacker.invalid:8765"), "a name pointed here from elsewhere (DNS rebinding)")
         self.assertFalse(board.own_host("evil.localhost"))
 
+    def test_the_voice_is_the_persons_own_and_a_project_can_pin_its_own(self):
+        other = Path(self.tmp.name) / "photonic"
+        self.assertEqual(board.voice_of(0, self.root), ("am_puck", False), "Puck out of the box")
+        board.choose_voice(0, self.root, "bf_emma")
+        self.assertEqual(board.voice_of(1, other), ("bf_emma", False), "a change on a project not pinned is the person's voice")
+        board.choose_voice(0, self.root, pin=True)
+        board.choose_voice(1, other, "am_echo")
+        self.assertEqual(board.voice_of(0, self.root), ("bf_emma", True), "pinned: a change elsewhere leaves it")
+        self.assertEqual(board.voice_of(1, Path(self.tmp.name) / "new"), ("am_echo", False), "a new project: the last voice chosen")
+        board.choose_voice(0, self.root, "bm_george")
+        self.assertEqual(board.voice_of(1, other), ("am_echo", False), "a pinned project's change is its own")
+        self.assertEqual(board.choose_voice(0, self.root, pin=False), ("am_echo", False))
+        with self.assertRaises(ValueError):
+            board.choose_voice(0, self.root, "nobody")
+
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
         turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},
@@ -846,7 +861,7 @@ class ChatTest(BoardBase):
             self.assertEqual(asked[0]["voice"], "bm_george")
             self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
             self.assertEqual(len(asked), 1)
-            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "bm_fable").name, "an unknown voice is Fable, the default")
+            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "am_puck").name, "an unknown voice is Puck, the default")
             from http.server import ThreadingHTTPServer
             server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()

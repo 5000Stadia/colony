@@ -21,6 +21,7 @@ VOICES = (("af_heart", "Heart"), ("af_bella", "Bella"), ("af_nicole", "Nicole"),
           ("bf_isabella", "Isabella"), ("bf_alice", "Alice"), ("bf_lily", "Lily"), ("bm_fable", "Arthur"), ("bm_george", "George"),
           ("bm_lewis", "Lewis"), ("bm_daniel", "Daniel"))
 GROUPS = (("af_", "American, women"), ("am_", "American, men"), ("bf_", "British, women"), ("bm_", "British, men"))
+DEFAULT = "am_puck"          # the voice out of the box; the person's own choice stands after it
 IDLE = 600                 # seconds without a word before Kokoro is let go: its memory back, a moment's start next time
 KEEP = 300                 # clips kept, newest first: a reply played again plays at once
 _lock, _worker = threading.Lock(), {}
@@ -93,7 +94,7 @@ def _let_go():
                 _worker["proc"] = None
 
 
-def options(chosen="bm_fable"):
+def options(chosen=None):
     """The voices as a picker's options, grouped by accent and voice."""
     from html import escape
     return "".join(f"<optgroup label='{escape(label)}'>" + "".join(
@@ -108,9 +109,9 @@ def _ask(line):
     return json.loads(w.stdout.readline() or '{"error": "the voice stopped"}')
 
 
-def speak(text, voice="bm_fable"):
+def speak(text, voice=None):
     """A WAV of the text in the voice: kept, so the same words again come at once. None where it can't be made."""
-    voice = voice if voice in dict(VOICES) else "bm_fable"
+    voice = voice if voice in dict(VOICES) else DEFAULT
     text = " ".join(text.split())[:1200]
     if not text or not ready():
         return None

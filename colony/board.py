@@ -2228,6 +2228,45 @@ ICONS = {"copy": _SVG.format("<rect x='8' y='8' width='12' height='12' rx='2.5'/
          "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>")}
 
 
+# The voice Chat reads in is the person's, on every device: one voice of theirs that every project uses, changed from
+# any project not pinned (so a new project starts in the last voice they chose), and a pin that keeps a project on a
+# voice of its own, changed only from there.
+def _voices():
+    path = home() / "voice.json"
+    try:
+        v = json.loads(path.read_text())
+    except (OSError, ValueError):
+        v = {}
+    from . import voice
+    return {"voice": v.get("voice") or voice.DEFAULT, "pins": v.get("pins") or {}}
+
+
+def voice_of(key, root):
+    """(the voice this chat reads in, whether it is pinned to it)"""
+    v, me = _voices(), "steward" if key == "steward" else str(Path(root).resolve())
+    return (v["pins"][me], True) if me in v["pins"] else (v["voice"], False)
+
+
+def choose_voice(key, root, name=None, pin=None):
+    """A voice chosen in a chat (the person's own, or this project's where it is pinned); pin=True keeps the voice it
+    reads in now for this project, pin=False lets it follow the person's voice again."""
+    from . import voice
+    v, me = _voices(), "steward" if key == "steward" else str(Path(root).resolve())
+    if name is not None and name not in dict(voice.VOICES):
+        raise ValueError(name)
+    now, pinned = voice_of(key, root)
+    if pin is True:
+        v["pins"][me] = name or now
+    elif pin is False:
+        v["pins"].pop(me, None)
+    elif name and pinned:
+        v["pins"][me] = name
+    elif name:
+        v["voice"] = name
+    (home() / "voice.json").write_text(json.dumps(v, indent=1))
+    return voice_of(key, root)
+
+
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
     from . import voice
@@ -2246,7 +2285,9 @@ def chat_page(key, root):
             "<input type='checkbox' id='aloud'> Auto-speak</label>"
             "<select class='rate' id='rate' aria-label='Reading speed'>"
             + "".join(f"<option value='{r}'>{r:g}×</option>" for r in (1, 1.25, 1.5, 1.75)) + "</select>"
-            + (f"<select id='kvoice' aria-label='Voice'>{voice.options()}</select>" if voice.ready() else "")
+            + (f"<select id='kvoice' aria-label='Voice'>{voice.options(voice_of(key, root)[0])}</select>"
+               f"<label class='vpin' title='Keep this voice for this project; unpinned, it uses your voice'>"
+               f"<input type='checkbox' id='vpin'{' checked' if voice_of(key, root)[1] else ''}> Pin to this project</label>" if voice.ready() else "")
             + "<span class='gap'></span><button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>const ICON = {json.dumps(ICONS)};{CHAT}</script>")
@@ -2410,10 +2451,21 @@ CHAT = """
   rateBtn.addEventListener('change', () => { rate = +rateBtn.value || 1;
     try { localStorage.setItem('pace', rate); } catch (e) {} again(false); });
   const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
-  const VKEY = 'kvoice:' + box.dataset.name;
-  let kvoice = 'bm_fable'; try { kvoice = localStorage.getItem(VKEY) || kvoice; } catch (e) {}
-  if (picker) { picker.value = kvoice; picker.addEventListener('change', () => { kvoice = picker.value;
-    try { localStorage.setItem(VKEY, kvoice); } catch (e) {} again(true); }); }
+  // the voice is the board's to keep: the person's own, or this project's where it is pinned
+  const pin = document.getElementById('vpin');
+  let kvoice = picker ? picker.value : 'am_puck';
+  const keepVoice = async (body) => {
+    const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
+    if (!r || !r.ok) return;
+    const got = await r.json(), changed = got.voice !== kvoice;
+    kvoice = picker.value = got.voice; pin.checked = got.pinned;
+    if (changed) again(true);
+  };
+  if (picker) { picker.addEventListener('change', () => keepVoice({voice: picker.value}));
+    pin.addEventListener('change', () => keepVoice({pin: pin.checked ? '1' : '0'}));
+    // a voice once kept on this device for this project stays with it, as its pin
+    try { const old = localStorage.getItem('kvoice:' + box.dataset.name);
+      if (old) { localStorage.removeItem('kvoice:' + box.dataset.name); if (!pin.checked && old !== kvoice) keepVoice({voice: old, pin: '1'}); } } catch (e) {} }
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
@@ -5305,6 +5357,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/chat/voice":                        # a voice chosen, or pinned to this project, in Chat
+            from . import monitor
+            key = values.get("p", ["0"])[0]
+            try:
+                root = monitor.home() if key == "steward" else projects(registry())[int(key)]
+                pin = {"1": True, "0": False}.get(values.get("pin", [""])[0])
+                name, pinned = choose_voice(key, root, values.get("voice", [None])[0] or None, pin)
+            except (ValueError, IndexError):
+                return self._send(400, b"no such voice or project")
+            return self._send(200, json.dumps({"voice": name, "pinned": pinned}).encode())
         if path == "/chat/measure":                      # where the box landed on the person's phone, typing
             line = f"{now()} {values.get('m', [''])[0][:400]} {self.headers.get('User-Agent', '')[:60]}\n"
             with open(home() / "chat-measure.log", "a") as fh:
@@ -5642,9 +5704,9 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts .vset { width:auto; min-width:36px; font-size:13px; padding:0 10px }
 .chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
-  display:flex; align-items:center; gap:10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
   box-shadow:0 2px 12px rgba(0,0,0,.12); font-size:14px } .voicesheet[hidden] { display:none } .voicesheet .gap { flex:1 }
-.voicesheet .aloud { display:flex; align-items:center; gap:6px; color:var(--ink); white-space:nowrap } .voicesheet .aloud input { width:18px; height:18px; margin:0 }
+.voicesheet .aloud { display:flex; align-items:center; gap:6px; color:var(--ink); white-space:nowrap } .voicesheet .aloud input { width:18px; height:18px; margin:0 } .voicesheet .vpin { display:flex; align-items:center; gap:5px; color:var(--ink); white-space:nowrap; font-size:14px } .voicesheet .vpin input { width:18px; height:18px; margin:0 }
 .voicesheet .rate, .voicesheet select { height:32px; min-height:32px; padding:0 10px; border-radius:999px; background:var(--sunk); color:var(--ink);
   border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
