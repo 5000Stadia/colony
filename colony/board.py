@@ -1894,7 +1894,7 @@ def tabs(pid, view, root=None):
     tab is one more place to look that says nothing."""
     tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
     shown = root is None or view == "showcase" or showcase.entries(root)
-    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview") + tab("today", "Today", f"/?p={pid}&view=today")
+    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview")
             + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
             + (tab("showcase", "Showcase", f"/?p={pid}&view=showcase") if shown else "")
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
@@ -2105,7 +2105,7 @@ def render(reg, pid, view="overview", show_all=""):
     out = []
     if not plist:
         return shell(reg, pid, "")
-    view = view if view in ("today", "roadmap", "showcase", "console") else "overview"
+    view = view if view in ("roadmap", "showcase", "console") else "overview"     # Today is Overview now
     if view == "console":
         root = plist[pid]
         message = message_form(pid, plist, "msgbox")
@@ -2145,11 +2145,8 @@ def render(reg, pid, view="overview", show_all=""):
     waiting = len(moments(root)) if view == "overview" else 0
     lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view, root)}"
-               + lead_status + ("" if view == "today" else
-                  f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>") + "</header>")
-    if view == "today":
-        out.append(today_html(pid, root))
-    elif view == "showcase":
+               + lead_status + f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
+    if view == "showcase":
         out.append(showcase_html(pid, root))
     elif view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         out.append(progress_panel(root, pid))       # a shared plan's versions, while one runs or waits to start
@@ -2260,9 +2257,14 @@ def render(reg, pid, view="overview", show_all=""):
                    " const n = w.querySelectorAll('.need:not(.held)').length; document.getElementById('wcount').textContent = n;"
                    " document.getElementById('waitingbox').hidden = !w.children.length;"
                    f" const q = document.querySelector('#status-{pid} .waits'); if (q) q.hidden = !!n; }});</script>")
+        clock = epoch(now())
+        if not hours.active(clock):
+            out.append(f"<p class='muted'>Outside your hours until {e(hours.at_clock(hours.next_start(clock)))}: "
+                       "what's asked now waits for them.</p>")
         out.append(pinned_section(pid, root))
         # what changed since the person's last look on an earlier day: the newest few, dated, and how much in all
         out.append(since_html(pid, root, page_base(root)))
+        out.append(queue_html(pid, root))
     return shell(reg, pid, "".join(out))
 
 
@@ -2306,6 +2308,8 @@ def since_html(pid, root, base):
                 f"“{e(short(n['text'], 40))}” answered: {e(short(n['reply'] or '', 70))}") for n in told]
     events += [(p["at"], False, f"the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(short(p['title'], 70))}</a>")
                for p in s["pinned"]]
+    events += [(g["answered_at"], False, f"decided: {e(short(g['question'], 70))} <b>{e(short(g['answer'], 70))}</b>")
+               for g in gates(root) if g["answered_at"] and g["answered_at"] > (base.get("at") or "")]
     events.sort(key=lambda ev: ev[0] or "", reverse=True)
     commits = [(stamp(t), True, f"<code>{e(h)}</code> {e(short(subj, 100))}") for h, t, subj in s["commits"] if not MERGE.match(subj)]
     shown = events[:SINCE_SHOWN]
@@ -2335,50 +2339,21 @@ def short(text, n=140):
     return text if len(text) <= n else text[:n - 1].rstrip() + "…"
 
 
-def today_html(pid, root):
-    """A project's page for the person's day, from colony's records at no token cost: what landed since their last
-    look on an earlier day, the day's decisions by number with their defaults, what else waits on them, the queue
-    (open items outside Later), and what is held for their hours, which joins the decisions as the hours begin."""
-    back, road, clock = f"/?p={pid}&view=today", roadmap(root), epoch(now())
+def queue_html(pid, root):
+    """The queue: open items outside Later, by milestone, folded behind its count (Later waits for the person)."""
+    road = roadmap(root)
     its = items(road)
     link = lambda iid: f"<a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a>" if iid in its else e(iid)
-    linked = lambda text: re.sub(r"\bR\d+\b", lambda m: link(m.group(0)), e(text))
-    away = "" if hours.active(clock) else f" · outside your hours until {hours.at_clock(hours.next_start(clock))}"
-    base = page_base(root)
-    s = since(root, base)
-    landed = [f"<li>{link(i)} {e(short(plain(t)))} <span class='st done'>done</span></li>"
-              for i, _, state, t in s["moved"] if state == "done"]
-    landed += [f"<li class='muted'><code>{e(h)}</code> {linked(subj)}</li>" for h, _, subj in s["commits"] if not MERGE.match(subj)]
-    numbered = decisions(root)
-    queue = []
+    parts, count = [], 0
     for m in road["milestones"]:
         left = [i for i in m["items"] if i["state"] != "done"]
         if left and not re.match(r"later\b", (m["title"] or m["id"]).strip(), re.I):
-            queue.append(f"<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3><ul class='queue'>" + "".join(
+            count += len(left)
+            parts.append(f"<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3><ul class='queue'>" + "".join(
                 f"<li><span class='st {i['state']}'>{LABEL[i['state']]}</span> {link(i['id'])} {e(short(plain(i['text'])))}</li>"
                 for i in left) + "</ul>")
-    # an empty section is a heading and a card that say nothing: what is empty is said once, under the date
-    quiet = ([] if landed else [f"nothing landed since {hours.at_day(epoch(base['at']))}"]) + \
-            ([] if numbered else ["nothing to decide"]) + ([] if queue else ["nothing open outside Later"])
-    out = [f"<p class='muted'>{e(time.strftime('%A %-d %B', time.localtime(hours.day_start(clock))))}{e(away)}"
-           f"{e(' · ' + ', '.join(quiet)) if quiet else ''}</p>"]
-    if landed:
-        out.append(f"<h2>Landed since {e(hours.at_day(epoch(base['at'])))}</h2><div class='card'>"
-                   f"<ul class='landed'>{''.join(landed)}</ul></div>")
-    if numbered:
-        rows = "".join(f"<div class='need{'' if due(g) else ' settled'}'>{gate_body(root, pid, g, back, number=n, fold=True)}</div>"
-                       for n, g in numbered)
-        out.append(f"<h2>Decisions ({sum(1 for _, g in numbered if due(g))})</h2><div class='card'>"
-                   + rows + answer_box(pid, root, numbered, back, hint=True) + "</div>")
-    others = waiting_on(pid, root, back, label=False, with_gates=False)
-    if others:
-        out.append(f"<h2>Also waiting on you</h2><div class='card'>{''.join(others)}</div>")
-    if queue:
-        out.append("<h2>Queue</h2><div class='card'>" + "".join(queue) + "</div>")
-    later = held_html(pid, root, back)
-    if later:
-        out.append(f"<h2>Held for your hours</h2><div class='card'>{later}</div>")
-    return "".join(out)
+    return (f"<details class='card fold' id='queue'><summary><h3>Queue</h3><span class='muted'>{count} open</span></summary>"
+            + "".join(parts) + "</details>") if parts else ""
 
 
 W, H, GX, GY = 172, 56, 38, 16
@@ -2551,7 +2526,7 @@ def answer_box(pid, root, numbered, back, hint=False, day=False):
             f"<input type='hidden' name='back' value='{e(back)}'>"
             f"<input type='hidden' name='n' value='{e(','.join(f'{n}:{gid}' for n, gid in numbers.items()))}'>"
             f"<textarea name='text' placeholder='{e(hint_)}'>{e(text)}</textarea>"
-            + (f"<a class='dayline' href='/?p={pid}&view=today'>{e(Path(root).name)} today →</a>" if day else "")
+            + (f"<a class='dayline' href='/?p={pid}'>{e(Path(root).name)} →</a>" if day else "")
             + "<button>Send answers</button></form>"
             + ("<p class='muted'>One answer a line, or after a semicolon; “2 default” takes a default now. Skip one, and "
                "its default stands as your day begins after a whole day here.</p>" if hint else ""))

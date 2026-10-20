@@ -4423,7 +4423,7 @@ class DailyPageTest(HoursBase):
         self.assertIn("If they skip it, its default stands at Fri 7:30 AM and arrives as their answer.", said)
         tick.assert_called_once_with(self.root, forced_hold="blocking decision")   # theirs, like any gate, until then
         with self.clock(15):
-            for page in (board.render(board.registry(), 0, "today"), board.needs_you(board.registry()),
+            for page in (board.render(board.registry(), 0), board.needs_you(board.registry()),
                          board.waiting_html(0, self.root), board.render_item(board.registry(), 0, "R3")):
                 self.assertIn("If you skip it: email first, SMS later", page)
                 self.assertIn("stands Fri 7:30 AM", page)
@@ -4461,12 +4461,12 @@ class DailyPageTest(HoursBase):
         with self.clock(7, 31, day=9):
             out = self.deliver()
             self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:" + plain["id"]])
-            page = board.render(board.registry(), 0, "today")
+            page = board.render(board.registry(), 0)
         self.assertIn('On "Which reminders first?": Default stood (skipped): email first', out)
         self.assertIn("Colony, the harness the person set up and trusts, tells you", out)
-        self.assertEqual(self.NUM.findall(page), [("1", "Which reminders first?"), ("2", "Keep the old export?"),
-                                                  ("3", "Rename the project?")], "settled today, each keeps its number")
-        self.assertIn("Default stood (skipped): email first", page)
+        self.assertEqual(self.NUM.findall(page), [("2", "Keep the old export?")],
+                         "what's still open keeps its number; what was settled is under what changed")
+        self.assertIn("decided: Which reminders first? <b>Default stood (skipped): email first</b>", page)
         self.assertNotIn("Your answer: Default stood", page)
         with self.clock(7, 30, day=12):
             self.assertEqual(board.stand_defaults(self.root), [], "a default stands once")
@@ -4511,7 +4511,7 @@ class DailyPageTest(HoursBase):
         (self.root / "ROADMAP.md").write_text(ROADMAP + "\n## Later\n\n- [ ] R9 a phone app\n")
         self.commit_at("Later: a phone app", self.at(12, day=6))
         with self.clock(18, day=6):
-            board.render(board.registry(), 0, "today")             # Tuesday evening, the person looks at the day
+            board.render(board.registry(), 0)             # Tuesday evening, the person looks at the day
         (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace("[~] R2", "[x] R2"))
         self.commit_at("R2 water log keeps a year", self.at(22, day=6))
         with self.clock(14):
@@ -4520,16 +4520,15 @@ class DailyPageTest(HoursBase):
             night = board.add_gate(self.root, "Rename the project?", default="keep plants")
         with self.clock(9, day=8):
             last = board.add_gate(self.root, "Keep the old export?", "R2")
-            page = board.render(board.registry(), 0, "today")
-        self.assertIn("<a class='on' href='/?p=0&view=today'>Today</a>", page)
-        self.assertIn("Landed since Tue 6:00 PM", page, "since the last look on an earlier day")
-        landed = page.split("<h2>Landed")[1].split("<h2>")[0]
-        self.assertIn("<a href='/item?p=0&id=R2'>R2</a> water log <span class='st done'>done</span>", landed)
-        self.assertIn("<a href='/item?p=0&id=R2'>R2</a> water log keeps a year", landed)
+            page = board.render(board.registry(), 0)
+        self.assertNotIn("view=today", page, "Today is Overview now")
+        landed = page.split("Since you were last here")[1].split("</ul>")[0]
+        self.assertIn("<a href='/item?p=0&id=R2'>R2</a> water log", landed, "since the last look on an earlier day")
+        self.assertIn("R2 water log keeps a year", landed)
         self.assertNotIn("a phone app", landed, "it landed before that look")
         self.assertEqual(self.NUM.findall(page), [("1", "Which reminders first?"), ("2", "Rename the project?"),
                                                   ("3", "Keep the old export?")], "in the order each became theirs")
-        queue = page.split("<h2>Queue</h2>")[1]
+        queue = page.split("<h3>Queue</h3>")[1]
         self.assertIn("<a href='/item?p=0&id=R3'>R3</a> reminders", queue)
         self.assertNotIn("R9", queue, "Later waits for the person")
         self.assertNotIn("add plants", queue)
@@ -4537,33 +4536,33 @@ class DailyPageTest(HoursBase):
         port = self.server()
         with self.clock(10, day=8):
             for text, why in (("yes", "Start each answer"), ("1 SMS 3 no", "another decision"), ("3 default", "no default")):
-                status, said = self.post(port, "/answers", p=0, n=numbers, text=text, back="/?p=0&view=today")
+                status, said = self.post(port, "/answers", p=0, n=numbers, text=text, back="/?p=0")
                 self.assertEqual(status, 400, text)
                 self.assertIn(why, said)
                 self.assertEqual(set(self.answers().values()), {None}, "nothing recorded")
                 self.assertEqual(board.draft(self.root)["text"], text, "what they wrote stays in the box")
             status, _ = self.post(port, "/answers/draft", p=0, n=numbers, text="1 SMS first\n2 default")
             self.assertEqual((status, board.draft(self.root)["text"]), (204, "1 SMS first\n2 default"))
-            self.assertIn(">1 SMS first\n2 default</textarea>", board.render(board.registry(), 0, "today"),
+            self.assertIn(">1 SMS first\n2 default</textarea>", board.render(board.registry(), 0),
                           "kept as typed: a reload loses nothing")
-            status, _ = self.post(port, "/answers", p=0, n=numbers, text="1 SMS first\r\n2 default", back="/?p=0&view=today")
+            status, _ = self.post(port, "/answers", p=0, n=numbers, text="1 SMS first\r\n2 default", back="/?p=0")
             self.assertEqual(status, 200)
-            page = board.render(board.registry(), 0, "today")
+            page = board.render(board.registry(), 0)
         self.assertEqual(self.answers(), {"Which reminders first?": "SMS first",
                                           "Rename the project?": "Default accepted: keep plants", "Keep the old export?": None})
         self.assertIsNone(board.draft(self.root), "sent: nothing left behind")
         [note] = [n for n in board.notes(self.root) if (n["anchor"] or {}).get("gate") == first["id"]]
         self.assertEqual((note["author"], note["text"]), ("person", 'On "Which reminders first?": SMS first'))
-        self.assertEqual(self.NUM.findall(page)[2], ("3", "Keep the old export?"), "a number keeps its decision all day")
+        self.assertEqual(self.NUM.findall(page), [("3", "Keep the old export?")], "a number keeps its decision all day")
         self.assertIn("name='n' value='3:" + last["id"] + "'", page, "only what's open is answered by number")
-        self.assertIn("Decisions (1)", page)
+        self.assertIn("decided: Which reminders first? <b>SMS first</b>", page, "what was settled is under what changed")
         with self.clock(9, day=9):
             board.save_draft(self.root, "3 keep it", {"3": night["id"]})       # typed against yesterday's numbers
-            page = board.render(board.registry(), 0, "today")
+            page = board.render(board.registry(), 0)
         self.assertEqual(self.NUM.findall(page), [("1", "Keep the old export?")], "a new day numbers afresh")
         self.assertIn("Unsent, from when the numbers were different", page)
         self.assertNotIn(">3 keep it</textarea>", page, "never sent to the wrong decision")
-        self.assertIn("nothing landed since Thu 10:00 AM", page, "the day turned: since the last look on Thursday")
+        self.assertNotIn("Since you were last here", page, "the day turned: nothing since the last look on Thursday")
 
     def test_needs_you_rolls_up_each_projects_numbered_decisions_with_a_box_for_each(self):
         shop = Path(self.tmp.name) / "shop"
@@ -4578,7 +4577,7 @@ class DailyPageTest(HoursBase):
         self.assertEqual(html.count("action='/answers'"), 2, "one box a project")
         self.assertIn("If you skip it: email", html)
         for name, pid in (("plants", 0), ("shop", 1)):
-            self.assertIn(f"<a class='dayline' href='/?p={pid}&view=today'>{name} today →</a>", html)
+            self.assertIn(f"<a class='dayline' href='/?p={pid}'>{name} →</a>", html)
 
     def test_a_question_asked_in_the_console_at_night_waits_for_the_hours_like_a_gate(self):
         monitor.helm(True)
@@ -4591,7 +4590,7 @@ class DailyPageTest(HoursBase):
             self.assertNotIn("Shall I index the log?", board.needs_you(board.registry()))
             held = board.waiting_html(0, self.root)
             self.assertIn("asked in its console · held until 7:30 AM", held, "someone up at night can answer it")
-            self.assertIn("Shall I index the log?", board.render(board.registry(), 0, "today").split("Held for your hours")[1])
+            self.assertIn("Shall I index the log?", board.render(board.registry(), 0).split("From outside your active hours")[1])
             w.tick()
         self.assertEqual(self.sent, [], "nor does it wake the monitor")
         with self.clock(7, 30):
@@ -4659,7 +4658,7 @@ class PhonePageTest(HoursBase):
         with self.clock(14):
             board.add_gate(self.root, "Which reminders first?", "R3")
             page, again = board.render(board.registry(), 0), board.render(board.registry(), 0)
-            today = board.render(board.registry(), 0, "today")
+            today = board.render(board.registry(), 0)
         cut = lambda p: p.split("Since you were last here")[1].split("</div>")[0]
         since = cut(page)
         self.assertTrue(since.startswith(" · Oct 6</h2>"), "since their last look, on Tuesday")
@@ -4671,7 +4670,7 @@ class PhonePageTest(HoursBase):
         self.assertIn("view=roadmap#history'>13 commits</a>", since, "how much in all, pointing to where it lives")
         self.assertEqual(cut(again), since, "a second look the same day reads the same")
         self.assertNotIn("/seen", page, "nothing to clear: it starts from their last look by itself")
-        self.assertIn("Landed since Tue 6:00 PM", today, "one record of their looks, for the day's page too")
+        self.assertEqual(cut(today), since, "one record of their looks: the page reads the same")
         with self.clock(9, day=8):
             self.assertNotIn("Since you were last here", board.render(board.registry(), 0),
                              "the day turned: nothing since Wednesday's look, so no section")
