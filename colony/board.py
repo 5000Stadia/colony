@@ -2116,7 +2116,7 @@ def chat_page(key, root):
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
             "<div class='composerbar'><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
-            "<label class='aloud'><input type='checkbox' id='aloud'> Read aloud</label>"
+            "<label class='aloud' title='Speak each new reply as it arrives'><input type='checkbox' id='aloud'> Auto-speak</label>"
             "<button type='button' class='rate' id='rate' aria-label='Reading speed'>1×</button>"
             + (("<select id='kvoice' aria-label='Voice'>" + "".join(f"<option value='{v}'>{n}</option>" for v, n in voice.VOICES)
                 + "</select>") if voice.ready() else "")
@@ -2234,7 +2234,8 @@ CHAT = """
   let kvoice = 'bm_fable'; try { kvoice = localStorage.getItem(VKEY) || kvoice; } catch (e) {}
   if (picker) { picker.value = kvoice; picker.addEventListener('change', () => { kvoice = picker.value;
     try { localStorage.setItem(VKEY, kvoice); } catch (e) {} again(true); }); }
-  const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + '&t=' + encodeURIComponent(p.trim());
+  let via = '';                          // marks a clip started by itself, in the board's log of asks
+  const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   const hush = () => { if (talk) talk.cancel(); player.pause(); player.onended = player.onerror = null; };
   // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
   // silence, and from then on new replies may be read by themselves.
@@ -2280,7 +2281,7 @@ CHAT = """
   };
   const waiting = [];
   function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); }
-  const say = (t, text) => { waiting.length = 0; start(t, text); };          // a tap: this one, now
+  const say = (t, text) => { waiting.length = 0; via = ''; start(t, text); };          // a tap: this one, now
   const later = (t, text) => { if (playing) waiting.push({t, text}); else start(t, text); };   // a new reply: after this one
   function start(t, text) {
     hush(); playing = t; mark();
@@ -2296,11 +2297,18 @@ CHAT = """
     if (aloud.checked) unlock();
     if (!aloud.checked) { hush(); playing = null; mark(); }
   });
-  const fresh = () => {                  // a turn just ended: its new prose, aloud
-    if (!aloud.checked || box.querySelector('.chatlive.busy')) return;
-    const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
+  // A reply is read once it is complete: a newer message came after it, or the agent has gone quiet. A busy agent
+  // takes up the next message within seconds, so waiting for it to be idle would read nothing.
+  const fresh = () => {
+    if (!aloud.checked) return;
+    const busy = !!box.querySelector('.chatlive.busy'), kids = [...box.children];
+    const done = (x) => !busy || kids.slice(kids.indexOf(x) + 1).some((y) => y.classList.contains('msg'));
+    const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k) && done(x));
     news.forEach((x) => heard.add(x.dataset.k));
-    if (news.length) later(news[news.length - 1].dataset.t, plain(news));
+    const turns = [];
+    news.forEach((x) => { const last = turns[turns.length - 1];
+      if (last && last.t === x.dataset.t) last.els.push(x); else turns.push({t: x.dataset.t, els: [x]}); });
+    turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   box.addEventListener('click', async (ev) => {
@@ -4580,7 +4588,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import voice
             clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0])
             ask = self.headers.get("Range", "")
-            voice.heard(ask, self.headers.get("User-Agent", ""), bool(clip))
+            voice.heard(ask + (" auto" if q.get("auto") else ""), self.headers.get("User-Agent", ""), bool(clip))
             if not clip:
                 return self._send(404, b"no voice here")
             body = clip.read_bytes()
