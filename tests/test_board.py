@@ -752,6 +752,13 @@ class ChatTest(BoardBase):
         with patch.object(mail, "inbox", return_value=letters):
             self.assertEqual(board.mail_by_turn(self.root, turns), {0: "plants asks:\nWhich pot?"},
                              "only what this notice brought: not a later letter, nor one still waiting")
+        near = [{"from": "colony", "text": "[colony] You have mail.", "at": "2026-10-20T10:00:00Z", "items": []},
+                {"from": "you", "text": "ok", "at": "2026-10-20T10:00:06Z", "items": []},
+                {"from": "colony", "text": "[colony] You have mail.", "at": "2026-10-20T10:00:10Z", "items": []}]
+        two = [dict(letters[0], delivered_at="2026-10-20T10:00:01Z"), dict(letters[1], delivered_at="2026-10-20T10:00:11Z")]
+        with patch.object(mail, "inbox", return_value=two):
+            self.assertEqual(board.mail_by_turn(self.root, near), {0: "plants asks:\nWhich pot?", 2: "plants writes:\nLater news"},
+                             "notices close together: each letter once, under its own")
         self.assertIn("const body = new FormData(form)", board.CHAT, "sent at once: the box clears before the board answers")
 
     def test_a_message_sent_mid_turn_shows_at_once_as_queued_then_where_the_agent_took_it_up(self):

@@ -2056,17 +2056,22 @@ def mail_by_turn(root, turns):
             return epoch(t["at"][:19] + "Z")
         except (ValueError, TypeError):
             return None
-    got = [(epoch(m["delivered_at"]), m) for m in mail.inbox(root) if m.get("delivered_at")]
-    out = {}
+    notices = []                                         # (turn, began, the next turn's start)
     for i, t in enumerate(turns):
         start = at(t) if t["from"] == "colony" and "mail" in t["text"].split("\n")[0] else None
-        if start is None:
+        if start is not None:
+            notices.append((i, start, next((x for x in map(at, turns[i + 1:]) if x is not None), float("inf"))))
+    byturn = {}
+    for m in mail.inbox(root):                           # each letter under one notice: the last begun by its delivery
+        if not m.get("delivered_at"):
             continue
-        end = next((x for x in map(at, turns[i + 1:]) if x is not None), float("inf"))
-        ms = [m for when, m in got if start - 30 <= when < end]
-        if ms:
-            out[i] = "\n\n".join(f"{mail.shown(m['from'])} {'asks' if m['ask'] else 'writes'}:\n{m['text']}" for m in ms)
-    return out
+        when = epoch(m["delivered_at"])
+        fits = [(i, start) for i, start, end in notices if start - 30 <= when < end]
+        before = [x for x in fits if x[1] <= when]
+        if fits:
+            byturn.setdefault((max(before, key=lambda x: x[1]) if before else min(fits, key=lambda x: x[1]))[0], []).append(m)
+    return {i: "\n\n".join(f"{mail.shown(m['from'])} {'asks' if m['ask'] else 'writes'}:\n{m['text']}" for m in ms)
+            for i, ms in byturn.items()}
 
 
 def chat_feed(key, root, shown=40):
@@ -2219,7 +2224,9 @@ CHAT = """
   toEnd();
   let last = box.innerHTML, pending = [];
   // what was just sent shows at once, faded, until the conversation has it (a busy agent takes it up mid-turn)
-  const seen = (p) => [...box.querySelectorAll('.msg.you')].some((m) => !m.classList.contains('mine') && m.textContent.includes(p.match));
+  // counted against what was there when it was sent, so the same words sent again still show
+  const times = (match) => [...box.querySelectorAll('.msg.you')].filter((m) => !m.classList.contains('mine') && m.textContent.includes(match)).length;
+  const seen = (p) => times(p.match) > p.before;
   const keep = () => { pending = pending.filter((p) => !seen(p));
     pending.forEach((p) => { const d = document.createElement('div'); d.className = 'msg you pending mine'; d.textContent = p.show; box.appendChild(d); }); };
   const file = form.querySelector('input[type=file]'), chip = form.querySelector('.attached');
@@ -2293,6 +2300,7 @@ CHAT = """
     // it goes out at once: the box clears and the message shows while the board hands it over, however long that takes
     const body = new FormData(form), mine = {show: (fs.length ? '📎 ' + fs.map((x) => x.name).join(', ') + (text ? '\\n' : '') : '') + text,
       match: text || fs[0].name.replace(/\\.[^.]*$/, '')};
+    mine.before = times(mine.match);
     ta.value = ''; grow(); file.value = ''; chosen(); busy(); held.hidden = true;
     pending.push(mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
     const r = await fetch('/chat/send', {method: 'POST', body}).catch(() => null);
@@ -2300,7 +2308,7 @@ CHAT = """
     // not sent: it comes back to the box, ahead of anything typed since, its files with it
     pending = pending.filter((p) => p !== mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep();
     if (text) ta.value = text + (ta.value.trim() ? '\\n\\n' + ta.value : '');
-    if (fs.length && !file.files.length) { try { const dt = new DataTransfer(); fs.forEach((x) => dt.items.add(x)); file.files = dt.files; } catch (e) {} }
+    if (fs.length) { try { const dt = new DataTransfer(); [...fs, ...file.files].forEach((x) => dt.items.add(x)); file.files = dt.files; } catch (e) {} }
     grow(); chosen(); busy();
     held.hidden = false;
     held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.';
