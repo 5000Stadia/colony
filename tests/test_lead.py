@@ -838,6 +838,38 @@ class LeadTest(unittest.TestCase):
         finally:
             server.shutdown(); server.server_close(); thread.join()
 
+    def test_a_versions_hold_shows_only_while_it_holds_and_points_to_the_decision_where_it_waits(self):
+        self.pair()
+        c = progress.define(self.root, 'M1', 'Useful garden', 'Works', items=['R2'])
+        mine = str(self.root.resolve())
+        lead.update(self.root, lambda g: g['goals'].__setitem__(mine, {'hold': 'blocking decision'}))   # an old record
+        page = board.render(board.registry(), 0, 'roadmap')
+        self.assertIn('<b>Versions</b> · 1 planned', page, 'a version to start, on the Roadmap tab')
+        self.assertIn('Start selected version', page)
+        self.assertNotIn('blocking decision', page, 'the record of a past hold is not a hold')
+        overview = board.render(board.registry(), 0)
+        self.assertNotIn('Start selected version', overview, 'not in the header of every tab')
+        self.assertIn('Switch lead', overview.split('<summary>Settings</summary>')[1], 'who leads is one of its settings')
+        with patch.object(continuation, 'tick'):
+            progress.start(self.root, c['id'])
+            gate = board.add_gate(self.helper, 'Which soil?')      # a decision in the helper holds the shared version
+        page = board.render(board.registry(), 0, 'roadmap')
+        self.assertIn('Held: blocking decision', page)
+        self.assertIn("Waiting on you in <a href='/?p=1'>garden-codex</a>: Which soil?", page)
+        waiting = board.waiting_html(0, self.root)
+        self.assertIn('holds this version', waiting, "the lead's own Waiting on you points to it")
+        self.assertIn('Which soil?', waiting)
+        with patch.object(continuation, 'tick'):
+            board.answer_gate(self.helper, gate['id'], 'loam', tell=False)
+        self.assertNotIn('Held:', board.render(board.registry(), 0, 'roadmap'))
+        self.assertNotIn('holds this version', board.waiting_html(0, self.root))
+        def accepted(g):
+            g['active_checkpoint'] = None
+            for x in g['checkpoints']:
+                x['state'] = 'accepted'
+        lead.update(self.root, accepted)
+        self.assertNotIn('Versions', board.render(board.registry(), 0, 'roadmap'), 'every version accepted: nothing to show')
+
     def test_candidate_can_be_read_and_decided_from_the_browser(self):
         self.pair()
         c = progress.define(self.root, 'M1', 'Useful garden', 'Works', items=['R2'])
