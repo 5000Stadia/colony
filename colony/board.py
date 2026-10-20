@@ -3301,13 +3301,13 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
         hint = ("Optional comment" if points else "Something else, or a follow-up question…" if gate.get("options") or gate.get("default")
                 else "Your answer, or a follow-up question…")
         css = "add consultant-gate" if points else "add"
-        button = "Save decisions" if points else "Send"
+        button = "Save decisions" if points else "Answer"
         return (f"<form class='{css}' method='post' action='/answer'>"
                 f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(gate['id'])}'>"
                 f"<input type='hidden' name='back' value='{e(back)}'>" + content
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
                 + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button>"
-                + ("" if points else "<button class='quiet' name='keep' value='1'>Ask, keep it open</button>") + "</form>")
+                + ("" if points else "<button class='quiet' name='keep' value='1'>Ask a question first</button>") + "</form>")
     if gate["answer"]:
         answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
                        if gate.get("answered_by") in ("colony", "agent") else f"Your answer: {e(gate['answer'])}")
