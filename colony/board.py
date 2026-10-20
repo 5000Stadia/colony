@@ -2078,9 +2078,9 @@ def chat_feed(key, root, shown=40):
             if kind == "say":
                 out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
-            out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>⧉</button>"
-                       f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>▷</button>"
-                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>⏭</button>"
+            out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
+                       f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
+                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button>"
                        "<button class='vset' aria-label='Reading aloud: auto-speak, speed, voice'>⋯</button></div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
@@ -2136,6 +2136,16 @@ def tasks_html(tasks, shown=15):
             + "</div>")
 
 
+# The reply's actions as drawn icons, one line weight, in the text's colour: a symbol font or an emoji (⏭ on a phone)
+# would not match.
+_SVG = "<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'>{}</svg>"
+ICONS = {"copy": _SVG.format("<rect x='8' y='8' width='12' height='12' rx='2.5'/><path d='M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2'/>"),
+         "play": _SVG.format("<path d='M7 4.5v15l12.5-7.5z'/>"),
+         "stop": _SVG.format("<rect x='6' y='6' width='12' height='12' rx='2' fill='currentColor'/>"),
+         "skip": _SVG.format("<path d='M4.5 5.5v13l8-6.5z'/><path d='M12.5 5.5v13l8-6.5z'/>"),
+         "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>")}
+
+
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
     from . import voice
@@ -2156,7 +2166,7 @@ def chat_page(key, root):
             + (f"<select id='kvoice' aria-label='Voice'>{voice.options()}</select>" if voice.ready() else "")
             + "<span class='gap'></span><button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
-            f"<script>{CHAT}</script>")
+            f"<script>const ICON = {json.dumps(ICONS)};{CHAT}</script>")
 
 
 CHAT = """
@@ -2267,7 +2277,8 @@ CHAT = """
   };
   const sheet = document.getElementById('voicesheet');
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
-  const mark = () => { box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■' : '▷'; });
+  const mark = () => { box.querySelectorAll('button.listen').forEach((b) => { const on = b.dataset.t === playing;
+      if (b.dataset.on !== String(on)) { b.dataset.on = on; b.innerHTML = on ? ICON.stop : ICON.play; } });
     box.querySelectorAll('button.skip').forEach((b) => { b.hidden = b.dataset.t !== playing; });
     const sets = [...box.querySelectorAll('button.vset')];
     sets.forEach((b, i) => { const on = i === sets.length - 1 && aloud && aloud.checked; b.textContent = on ? 'Auto' : '⋯';
@@ -2374,7 +2385,7 @@ CHAT = """
         t.style.opacity = '0'; document.body.appendChild(t); t.select(); t.setSelectionRange(0, text.length);
         ok = document.execCommand('copy'); t.remove(); } catch (e) {}
       if (!ok && navigator.clipboard) { try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {} }
-      cp.textContent = ok ? '✓' : '✗'; setTimeout(() => { cp.textContent = '⧉'; }, 1500); return;
+      cp.innerHTML = ok ? ICON.check : '✗'; setTimeout(() => { cp.innerHTML = ICON.copy; }, 1500); return;
     }
     // ⏭: on to the next reply waiting to be read, or, with none waiting, to the next part of this one
     if (ev.target.closest('button.skip')) {
@@ -5414,7 +5425,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
-.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts .vset { width:auto; min-width:36px; font-size:16px; padding:0 8px }
+.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts .vset { width:auto; min-width:36px; font-size:16px; padding:0 8px }
 .chat .turnacts .vset.on { color:var(--accent); font-size:12px; font-weight:600 }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
   display:flex; align-items:center; gap:10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
