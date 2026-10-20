@@ -2763,7 +2763,7 @@ CHAT = """
           draw(); }));
         editor.appendChild(row); });
       const foot = document.createElement('div'); foot.className = 'qfoot';
-      foot.innerHTML = "<button type='button' class='qcancel quiet'>As it was</button><button type='button' class='qdone'>Done</button>";
+      foot.innerHTML = "<button type='button' class='qcancel quiet'>Cancel</button><button type='button' class='qdone'>Done</button>";
       foot.querySelector('.qdone').addEventListener('click', () => put(items));
       foot.querySelector('.qcancel').addEventListener('click', () => put(was));
       editor.appendChild(foot); };
