@@ -2416,7 +2416,21 @@ CHAT = """
     try { localStorage.setItem(VKEY, kvoice); } catch (e) {} again(true); }); }
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
-  const hush = () => { if (talk) talk.cancel(); player.pause(); player.onended = player.onerror = null; paused = false; };
+  // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
+  // not let it start again)
+  const hush = (keep) => { if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false;
+    player.loop = false; resting = 0; };
+  // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
+  // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
+  let resting = 0;
+  const rest = () => { if (!KOKORO || !aloud.checked) return;
+    player.onended = player.onerror = null; player.loop = true; player.src = SILENT; resting = Date.now();
+    player.play().catch(() => { resting = 0; }); };
+  setInterval(() => { if (resting && Date.now() - resting > 20 * 60e3) { player.pause(); player.loop = false; resting = 0; } }, 30e3);
+  // on the lock screen as a song is: what is being read, with pause and skip
+  const ms = navigator.mediaSession;
+  const tell = (text) => { try { if (ms && window.MediaMetadata) ms.metadata = new MediaMetadata({title: text.slice(0, 90),
+    artist: box.dataset.name, album: 'colony'}); } catch (e) {} };
   // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
   // silence, and from then on new replies may be read by themselves.
   const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
@@ -2460,12 +2474,13 @@ CHAT = """
     if (KOKORO) sayK(t, parts, at); else sayPhone(t, parts.slice(at));
   };
   const waiting = [];
-  function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); }
+  function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); else rest(); }
   const say = (t, text) => { waiting.length = 0; via = ''; start(t, text); };          // a tap: this one, now
   const later = (t, text) => { if (playing) waiting.push({t, text}); else start(t, text); };   // a new reply: after this one
   function start(t, text) {
-    hush(); playing = t; mark();
+    hush(!!resting); playing = t; mark();
     const parts = chunks(text).filter((p) => p.trim());
+    if (parts[0]) tell(parts[0]);
     return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
   }
   // ▷ reads all the agent said since the person's own message before it, across colony's notices in between
@@ -2501,6 +2516,25 @@ CHAT = """
     turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
+  // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
+  function hold(want) {
+    if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } return; }
+    paused = want;
+    if (KOKORO && !talk?.speaking) { if (paused) player.pause(); else player.play().catch(() => {}); }
+    else if (talk) { if (paused) talk.pause(); else talk.resume(); }
+    mark();
+  }
+  // ⏭: on to the next reply waiting to be read, or, with none waiting, to the next part of this one
+  function skip() {
+    if (waiting.length) { const n = waiting.shift(); start(n.t, n.text); return; }
+    if (!now || now.t !== playing) return;
+    const {t, parts, at} = now;
+    hush(); playing = t;
+    if (at + 1 >= parts.length) return done(t);
+    mark(); if (KOKORO) sayK(t, parts, at + 1); else sayPhone(t, parts.slice(at + 1));
+  }
+  if (ms) { [['pause', () => hold(true)], ['play', () => hold(false)], ['nexttrack', skip],
+    ['stop', () => { hush(); playing = null; mark(); }]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
   // On coming back, what came since is read at once where the browser lets a page speak by itself; a phone lets it only
   // after a tap, so there it starts with the first touch anywhere on the page.
   if (aloud.checked && says.some((x) => !heard.has(x.dataset.k))) {
@@ -2520,23 +2554,8 @@ CHAT = """
       cp.innerHTML = ok ? ICON.check : '✗'; setTimeout(() => { cp.innerHTML = ICON.copy; }, 1500); return;
     }
     // ⏸ holds the reading where it is, ▷ takes it up from there
-    if (ev.target.closest('button.hold')) {
-      if (!playing) return;
-      paused = !paused;
-      if (KOKORO && !talk?.speaking) { if (paused) player.pause(); else player.play().catch(() => {}); }
-      else if (talk) { if (paused) talk.pause(); else talk.resume(); }
-      mark(); return;
-    }
-    // ⏭: on to the next reply waiting to be read, or, with none waiting, to the next part of this one
-    if (ev.target.closest('button.skip')) {
-      if (waiting.length) { const n = waiting.shift(); start(n.t, n.text); return; }
-      if (!now || now.t !== playing) return;
-      const {t, parts, at} = now;
-      hush(); playing = t;
-      if (at + 1 >= parts.length) return done(t);
-      mark(); if (KOKORO) sayK(t, parts, at + 1); else sayPhone(t, parts.slice(at + 1));
-      return;
-    }
+    if (ev.target.closest('button.hold')) return hold(!paused);
+    if (ev.target.closest('button.skip')) return skip();
     const l = ev.target.closest('button.listen');
     if (l) { if (playing === l.dataset.t) { hush(); playing = null; mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
