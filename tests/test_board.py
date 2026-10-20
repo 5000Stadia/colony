@@ -798,6 +798,18 @@ class ChatTest(BoardBase):
         self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
         self.assertIn("compositionstart", board.CHAT, "dictating into the box pauses reading")
 
+    def test_the_project_at_work_leads_the_lists_the_steward_muted_or_not(self):
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        board.track(other)
+        board.woke(other)
+        w = monitor.Watcher.__new__(monitor.Watcher)
+        with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "working" if Path(p) == self.root else "idle"}), \
+                patch.object(board, "now", return_value="2099-01-01T00:00:00Z"):
+            w.stir()
+        self.assertEqual([p.name for _, p, _ in board.arranged(board.projects(board.registry()), theirs=False)][0], self.root.name)
+
     def test_a_project_has_a_colour_of_its_own_chosen_where_its_settings_are(self):
         board.track(self.root)
         self.assertIn("name='color' value='' checked", board.project_settings_form(0, {}), "the board's green, unchosen")

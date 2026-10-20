@@ -564,8 +564,7 @@ class Watcher:
             else:
                 self.settling.pop(str(p), None)
             self.states[str(p)] = now
-            if now == "working" and before != "working":
-                board.woke(p)                 # it comes to the front of the board's list
+            self.at_work(p, now == "working")  # it comes to the front of the board's list, and stays while working
             if now == "working":
                 self.worked.add(str(p))
             # What it completed since the last look; the first look, at the board's start, only notes where it is.
@@ -845,6 +844,8 @@ class Watcher:
         continuation.tick_all()
         self.freshen()
         self.close()                                # a project being closed comes off once it has landed its work
+        if not self.enabled or muted():
+            self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:
             self.usage()  # so are the safe pause and its waking at the reset
             self.mail()  # project delivery is independent of the steward agent
@@ -882,6 +883,23 @@ class Watcher:
                 queue(" | ".join(fresh) + f" ({HELM_ON_NOTE})")
             self.pending = []
         self.tell()
+
+    def stir(self):
+        """Each project at work comes to the front of the board's lists: noted as it starts working, and again each
+        minute it goes on, so the one working now leads. Apart from the steward's own watch, which muting stops."""
+        for p in board.projects():
+            if p.exists():
+                self.at_work(p, console.snapshot(p, lines=1)["state"] == "working")
+
+    def at_work(self, p, working):
+        seen = getattr(self, "stirring", None)
+        if seen is None:
+            seen = self.stirring = {}
+        if working and time.time() - seen.get(str(p), 0) >= 60:
+            board.woke(p)
+            seen[str(p)] = time.time()
+        elif not working:
+            seen.pop(str(p), None)
 
     def run(self):
         while True:
