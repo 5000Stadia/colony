@@ -1017,6 +1017,13 @@ class ChatTest(BoardBase):
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
 
+    def test_a_markdown_table_and_a_quote_in_a_reply_show_as_such(self):
+        said = board.chat_prose("Here:\n\n| Project | Who takes it |\n|---|---|\n| Novel | `wc -w` **count** |\n\n> 31,200 words\n\nAfter.")
+        self.assertIn("<div class='mdtable'><table><tr><th>Project</th><th>Who takes it</th></tr>"
+                      "<tr><td>Novel</td><td><code>wc -w</code> <strong>count</strong></td></tr></table></div>", said)
+        self.assertIn("<blockquote><p>31,200 words</p></blockquote><p>After.</p>", said)
+        self.assertNotIn("|", said)
+
     def test_a_context_carry_over_shows_in_chat_as_one_folded_line(self):
         board.track(self.root)
         path = Path(self.tmp.name) / "t.jsonl"

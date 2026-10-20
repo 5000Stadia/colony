@@ -2949,8 +2949,12 @@ def _inline(text):
 
 def prose(text):
     """Markdown written in a file, as a page shows it: paragraphs flow (a line wrapped in the file isn't a break on
-    the page), lists stay lists, headings stay headings."""
-    out, para, items = [], [], []
+    the page), lists stay lists, headings stay headings, tables are tables (scrolling sideways on a phone if wide)
+    and a quote is set off."""
+    out, para, items, rows, quote = [], [], [], [], []
+
+    def cells(line):
+        return [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
 
     def flush():
         if para:
@@ -2959,9 +2963,32 @@ def prose(text):
         if items:
             out.append("<ul>" + "".join(f"<li>{_inline(' '.join(i))}</li>" for i in items) + "</ul>")
             items.clear()
+        if rows:
+            head = len(rows) > 1 and all(re.fullmatch(r":?-{3,}:?", c) for c in cells(rows[1]))
+            body = rows[2:] if head else rows
+            out.append("<div class='mdtable'><table>"
+                       + (f"<tr>{''.join(f'<th>{_inline(c)}</th>' for c in cells(rows[0]))}</tr>" if head else "")
+                       + "".join(f"<tr>{''.join(f'<td>{_inline(c)}</td>' for c in cells(r))}</tr>" for r in body)
+                       + "</table></div>")
+            rows.clear()
+        if quote:
+            out.append(f"<blockquote>{prose(chr(10).join(quote))}</blockquote>")
+            quote.clear()
     for raw in (text or "").splitlines():
         line = raw.strip()
         bullet = re.match(r"^(?:[-*+]|\d+[.)])\s+(.*)", line)
+        if line.startswith("|"):
+            if not rows:
+                flush()
+            rows.append(line)
+            continue
+        if line.startswith(">"):
+            if not quote:
+                flush()
+            quote.append(line[1:].lstrip())
+            continue
+        if rows or quote:
+            flush()
         if not line:
             flush()
         elif line.startswith("#"):
@@ -6065,6 +6092,10 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
+.mdtable { overflow-x:auto; margin:10px 0 } .mdtable table { border-collapse:collapse; font-size:14px; line-height:1.4 }
+.mdtable th, .mdtable td { border-bottom:1px solid var(--line); padding:6px 10px 6px 0; text-align:left; vertical-align:top }
+.mdtable th { font-weight:600; border-bottom-width:2px } .mdtable td code { white-space:nowrap }
+blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--line); color:var(--muted) }
 .chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
