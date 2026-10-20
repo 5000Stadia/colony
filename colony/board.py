@@ -2578,12 +2578,20 @@ CHAT = """
   player.addEventListener('playing', () => { if (!player.loop) ready.add(player.src); if (loading && playing && !player.loop) { loading = false; mark(); } });
   // The phone stopped the sound itself (locked, a call, another app's audio): shown as paused, ▷ takes it up again,
   // and coming back to the page, what is shown is checked against what is heard.
-  let ours = 0;
+  // Back on the page, a reading the phone stopped (dictation in another app, a call) goes on by itself, and one shown
+  // as playing whose sound has not moved is set going again; a pause the person chose stays.
+  let ours = 0, byPhone = false;
   player.addEventListener('pause', () => { if (Date.now() - ours < 600 || player.ended || player.loop || !playing || paused) return;
-    paused = true; loading = false; mark(); });
-  document.addEventListener('visibilitychange', () => { if (document.hidden || !playing || paused || player.loop) return;
-    if (KOKORO && !(talk && talk.speaking) && player.paused && !player.ended) { paused = true; loading = false; mark(); }
-    else if (!KOKORO && talk && !talk.speaking && !talk.pending) { playing = null; mark(); } });
+    paused = true; byPhone = true; loading = false; mark(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    if (resting && player.paused) { player.play().catch(() => {}); return; }
+    if (!playing) return;
+    if (!KOKORO) { if (talk && !talk.speaking && !talk.pending) { playing = null; mark(); } return; }
+    if (paused) { if (byPhone) { byPhone = false; hold(false); } return; }
+    const at = player.currentTime;
+    setTimeout(() => { if (playing && !paused && !player.ended && player.currentTime === at) player.play().catch(() => {}); }, 700);
+  });
   player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !ready.has(player.src)) { loading = true; mark(); } });
   // the clips made already: going on to one of them is no wait, so the button stays as it is
   const ready = new Set();
@@ -2722,7 +2730,7 @@ CHAT = """
   // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } return; }
-    paused = want; ours = Date.now();
+    paused = want; ours = Date.now(); byPhone = false;
     if (KOKORO && !talk?.speaking) { if (paused) player.pause(); else player.play().catch(() => { paused = true; mark(); }); }
     else if (talk) { if (paused) talk.pause(); else talk.resume(); }
     mark();
