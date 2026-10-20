@@ -1713,16 +1713,21 @@ def arranged(plist, theirs=True):
 
 
 def nest_form(pid, root):
-    """Put the project in a nest, or take it out."""
+    """Put the project in a nest, or take it out: the nests there are, listed to tap, and a box for a new one."""
     from . import nest
-    hidden, here = f"<input type='hidden' name='p' value='{pid}'>", nest.nest_of(root)
+    hidden, here, every = f"<input type='hidden' name='p' value='{pid}'>", nest.nest_of(root), nest.nests()
+    others = [n for n in every if n != here]
+    pick = (f"<form method='post' action='/nest/join' class='nestpick'>{hidden}"
+            + "".join(f"<button class='quiet' name='name' value='{e(n)}'>{e(n)} <span class='muted'>"
+                      f"{len(every[n].get('members', []))}</span></button>" for n in others) + "</form>") if others else ""
     if here:
         return (f"<form method='post' action='/nest/leave'>{hidden}In the <a href='/nest?n={urllib.parse.quote(here)}'>"
-                f"{e(here)} nest</a> <button class='quiet'>Take it out</button></form>")
-    names = "".join(f"<option value='{e(n)}'>" for n in nest.nests())
-    return (f"<form method='post' action='/nest/join'>{hidden}<input name='name' list='nests-{pid}' "
-            f"placeholder='A nest: projects that share a purpose'><datalist id='nests-{pid}'>{names}</datalist>"
-            "<button class='quiet'>Put in nest</button></form>")
+                f"{e(here)} nest</a> <button class='quiet'>Take it out</button></form>"
+                + (f"<p class='muted'>Move it to another nest:</p>{pick}" if pick else ""))
+    return ((f"<p class='muted'>Join a nest, with projects that share its purpose:</p>{pick}" if pick else "")
+            + f"<form method='post' action='/nest/join'>{hidden}<input name='name' "
+            f"placeholder='{'Or a new nest' if pick else 'A nest: projects that share a purpose'}'>"
+            "<button class='quiet'>Start a new nest</button></form>")
 
 
 def project_row(i, p, sub=""):
@@ -2256,6 +2261,10 @@ def render(reg, pid, view="overview", show_all=""):
                 f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
     # Message sits on the title's line too, where a phone reaches it (its console is full screen)
     message = message_form(pid, plist, "psettings")
+    # pinned or not, it says so beside Message, and a tap changes it
+    pinned = str(root.resolve()) in pinned_projects()
+    pin = (f"<a class='ppin{' on' if pinned else ''}' href='#' onclick='return pinProject(event, {pid}, {0 if pinned else 1})'>"
+           f"<span class='ppinmark'>📌</span>{'Unpin' if pinned else 'Pin'}</a>")
     # time its agent has spent at work, all told: turns only, never the time it sat waiting
     secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
@@ -2263,7 +2272,7 @@ def render(reg, pid, view="overview", show_all=""):
     # the project is at, from its roadmap, and whether anything waits on the person.
     waiting = len(moments(root)) if view == "overview" else 0
     lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
-    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{message}{settings}</div>{tabs(pid, view, root)}"
+    out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
                + lead_status + f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
@@ -4940,6 +4949,7 @@ div.nestgroup[data-open='0'] { padding-bottom:2px } div.nestgroup > .listhead { 
 div.nestgroup > .listhead .foldbtn { background:var(--card) }
 div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-content:center; min-height:36px; padding:4px 10px;
   background:var(--card); margin-top:4px } div.nestgroup .members .psub { margin-top:1px }
+.nestpick { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px }
 .pinbtn { flex:none; display:inline-flex; align-items:center; justify-content:center; width:36px; height:32px; margin:-6px -6px -6px 0;
   font-size:15px; opacity:.25; filter:grayscale(1); cursor:pointer } .pinbtn.on { opacity:1; filter:none }
 a.proj.pinchip .pname::before { content:'📌'; font-size:11px; margin-right:2px }
@@ -4997,6 +5007,8 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .psettings .panel textarea { width:100%; min-height:90px; font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .psettings summary::-webkit-details-marker { display:none } header.project { position:relative }
 .titlerow { display:flex; align-items:baseline; gap:12px } .titlerow .psettings, .titlerow .exitlink { margin-left:auto } .titlerow .psettings + .psettings { margin-left:0 }
+.titlerow .ppin { margin-left:auto; text-decoration:none; white-space:nowrap } .titlerow .ppin + .psettings { margin-left:0 }
+.ppinmark { font-size:13px; margin-right:3px; opacity:.3; filter:grayscale(1) } .ppin.on .ppinmark { opacity:1; filter:none }
 .exitlink { font-size:14px; text-decoration:none; white-space:nowrap }
 .segs { display:flex; gap:4px; margin:6px 0 12px; padding:3px; border-radius:10px; background:var(--sunk); width:fit-content; max-width:100% }
 .seg { background:transparent; color:var(--muted); padding:6px 12px; border-radius:8px } .seg.on { background:var(--card); color:var(--ink); font-weight:600 }

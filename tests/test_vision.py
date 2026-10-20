@@ -537,12 +537,13 @@ class ArchiveAndListTest(BoardBase):
         other.mkdir()
         (other / "ROADMAP.md").write_text(ROADMAP)
         board.track(other)
-        self.assertIn("Put in nest", board.nest_form(0, self.root))
+        self.assertIn("Start a new nest", board.nest_form(0, self.root))
         nest.join(other, "holodeck")
         page = board.all_projects_page(board.registry())
         self.assertLess(page.index("holodeck nest"), page.index("<b>photonic</b>"))
         self.assertLess(page.index("Other projects"), page.index("<b>plants</b>"))
-        self.assertIn("value='holodeck'", board.nest_form(0, self.root))          # existing nests offered
+        self.assertIn("name='name' value='holodeck'>holodeck <span class='muted'>1</span></button>", board.nest_form(0, self.root),
+                      "the nests there are, listed to join with a tap")
         self.assertIn("Take it out", board.nest_form(1, other))
         self.assertIn("href='/projects'", board.sidebar(board.registry(), 0))
 
@@ -684,3 +685,16 @@ class PinTest(BoardBase):
         self.assertEqual([h for _, _, h in board.arranged(board.projects())][0], "", "the steward's list keeps their order")
         nav = board.sidebar(board.registry(), -1)
         self.assertLess(nav.index("nav:holodeck"), nav.index(f">{self.root.name}<"))
+
+    def test_a_project_page_says_whether_it_is_pinned_beside_message_and_a_tap_changes_it(self):
+        board.track(self.root)
+        page = board.render(board.registry(), 0)
+        title = page.split("<div class='titlerow'>")[1].split("</div>")[0]
+        self.assertIn("pinProject(event, 0, 1)'>", title)
+        self.assertLess(title.index("class='ppin"), title.index("Message"))
+        reg = board.registry()
+        reg["settings"]["pinned_projects"] = [str(self.root.resolve())]
+        board.save_registry(reg)
+        title = board.render(board.registry(), 0).split("<div class='titlerow'>")[1].split("</div>")[0]
+        self.assertIn("pinProject(event, 0, 0)'>", title)
+        self.assertIn("Unpin</a>", title)
