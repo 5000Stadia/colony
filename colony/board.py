@@ -1427,6 +1427,8 @@ def stand_defaults(root, gs=None):
     ripe = {g["id"] for g in gs if g.get("default") and not g.get("points") and not g.get("consult") and due(g)
             and stands_at(root, g, times) <= clock}
     ripe -= answering(root) if ripe else set()
+    if ripe:                                         # one the person replied on waits for the agent to settle it
+        ripe -= {(n.get("anchor") or {}).get("gate") for n in notes(root) if n.get("author") == "person"}
     stood = []
     if ripe:
         with gate_lock(root):
@@ -3298,16 +3300,16 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
         rows.append(prefix + control + suffix)
         editable.append(prefix + select + suffix)
     def form(content, comment=""):
-        hint = ("Optional comment" if points else "Something else, or a follow-up question…" if gate.get("options") or gate.get("default")
-                else "Your answer, or a follow-up question…")
+        hint = ("Optional comment" if points else "Something else, or a question…" if gate.get("options") or gate.get("default")
+                else "Your answer, or a question…")
         css = "add consultant-gate" if points else "add"
-        button = "Save decisions" if points else "Answer"
+        button = "Save decisions" if points else "Send"
         return (f"<form class='{css}' method='post' action='/answer'>"
                 f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(gate['id'])}'>"
                 f"<input type='hidden' name='back' value='{e(back)}'>" + content
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
-                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button>"
-                + ("" if points else "<button class='quiet' name='keep' value='1'>Ask a question first</button>") + "</form>")
+                + ("" if points else "<input type='hidden' name='reply' value='1'>")
+                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
     if gate["answer"]:
         answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
                        if gate.get("answered_by") in ("colony", "agent") else f"Your answer: {e(gate['answer'])}")
@@ -5624,14 +5626,16 @@ class Handler(BaseHTTPRequestHandler):
             from . import lead
             recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
             add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text, author='person')
-        elif path == "/answer" and form.get("keep") and text:   # a follow-up question: to the agent, the decision still open
+        elif path == "/answer" and form.get("reply") and text:
+            # typed in a decision's own box: an answer or a question, the agent judges which; it stays open meanwhile
             g = next((g for g in gates(root) if g["id"] == form.get("gate")), None)
             if not g:
                 return self._send(404, b"No such gate in this project.")
             add_note(root, {"gate": g["id"], "item": g.get("item")},
-                     f"A follow-up question on \"{g['question']}\" (the decision stays open): {text}\n"
-                     f"Answer it, then ask the decision again with what it was missing, so it reads whole: "
-                     f"colony gate \"the question\" --reframes {g['id']} (with --why, --option, --recommended, --default as fit).",
+                     f"The person replied on \"{g['question']}\" (still open): {text}\n"
+                     f"If this answers it, record it: colony gate --answered {g['id']} \"their words\" --context \"your reading\". "
+                     f"If it asks something or leaves it unclear, answer them, then ask the decision again with what it was "
+                     f"missing: colony gate \"the question\" --reframes {g['id']} (with --why, --option, --recommended, --default as fit).",
                      author="person")
         elif path == "/answer":
             try:

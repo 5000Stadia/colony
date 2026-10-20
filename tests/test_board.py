@@ -787,7 +787,8 @@ class ChatTest(BoardBase):
         self.assertIn("Needs you · 1", feed)
         self.assertIn("action='/answer'", feed)
         self.assertIn("<span class='tag'>Recommended</span>email first</button>", feed, "the default, one tap away")
-        self.assertIn("Something else, or a follow-up question…", feed)
+        self.assertIn("Something else, or a question…", feed)
+        self.assertIn("name='reply' value='1'", feed, "typed in its box, the agent judges answer or question")
         with patch.object(hours, "held_until", return_value=None):
             g = board.add_gate(self.root, "Which pot?", options=["clay", "plastic"], recommended="plastic")
         feed = board.chat_feed("0", self.root)
@@ -2690,11 +2691,11 @@ class NeedsYouTest(BoardBase):
             self.assertEqual(own.count("class='need'"), board.needs_you(board.registry()).count("class='need'"),
                              "the project's own Waiting on you and Needs you show the same things")
             self.assertIn("ready for your OK", own)
-            self.post(port, "/answer", p=0, gate="g1", text="What does the old export hold?", keep="1", back="/monitor")
-            self.assertIn("Keep the old export?", board.needs_you(board.registry()), "a follow-up keeps the decision open")
-            self.assertTrue(any("follow-up question" in n["text"] and "What does the old export hold?" in n["text"]
-                                and "--reframes g1" in n["text"] for n in board.notes(self.root)),
-                            "and reaches the agent, who asks it again with what it was missing")
+            self.post(port, "/answer", p=0, gate="g1", text="What does the old export hold?", reply="1", back="/monitor")
+            self.assertIn("Keep the old export?", board.needs_you(board.registry()), "typed in its box, it stays open")
+            said = next(n["text"] for n in board.notes(self.root) if "What does the old export hold?" in n["text"])
+            self.assertIn("--answered g1", said, "the agent records it if it answers")
+            self.assertIn("--reframes g1", said, "or answers the question and asks again with what it was missing")
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
         finally:
