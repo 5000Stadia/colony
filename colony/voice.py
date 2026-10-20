@@ -110,14 +110,14 @@ def _ask(line):
 
 
 def speak(text, voice=None):
-    """A WAV of the text in the voice: kept, so the same words again come at once. None where it can't be made."""
+    """An MP3 of the text in the voice: kept, so the same words again come at once. None where it can't be made."""
     voice = voice if voice in dict(VOICES) else DEFAULT
     text = " ".join(text.split())[:1200]
     if not text or not ready():
         return None
     cache = folder() / "cache"
     cache.mkdir(parents=True, exist_ok=True)
-    out = cache / (hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest() + ".wav")
+    out = cache / (hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest() + ".mp3")
     if out.exists():
         return out
     with _lock:                                          # one at a time: the worker reads one line, answers one
@@ -125,7 +125,7 @@ def speak(text, voice=None):
             got = _ask({"text": text, "voice": voice, "out": str(out)})
             if got.get("error"):
                 return None
-    old = sorted(cache.glob("*.wav"), key=lambda f: f.stat().st_mtime)[:-KEEP]
+    old = list(cache.glob("*.wav")) + sorted(cache.glob("*.mp3"), key=lambda f: f.stat().st_mtime)[:-KEEP]
     for f in old:
         f.unlink(missing_ok=True)
     return out if out.exists() else None

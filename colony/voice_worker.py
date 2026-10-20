@@ -14,7 +14,11 @@ for line in sys.stdin:
         ask = json.loads(line)
         samples, rate = kokoro.create(ask["text"], voice=ask.get("voice") or "af_heart", speed=1.0,
                                       lang="en-gb" if str(ask.get("voice", "")).startswith("b") else "en-us")
-        soundfile.write(ask["out"], samples, rate)
+        if ask["out"].endswith(".mp3"):                 # a seventh of a WAV's size: quick to reach a phone
+            soundfile.write(ask["out"], samples, rate, format="MP3", subtype="MPEG_LAYER_III", compression_level=0.5,
+                            bitrate_mode="VARIABLE")
+        else:
+            soundfile.write(ask["out"], samples, rate)
         print(json.dumps({"out": ask["out"]}), flush=True)
     except Exception as err:                            # one bad line never ends the worker
         print(json.dumps({"error": f"{err.__class__.__name__}: {err}"}), flush=True)

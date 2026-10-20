@@ -941,7 +941,7 @@ class ChatTest(BoardBase):
 
         def made(line):
             asked.append(line)
-            Path(line["out"]).write_bytes(b"RIFFwav")
+            Path(line["out"]).write_bytes(b"ID3mp3")
             return {"out": line["out"]}
         with patch.object(voice, "ready", return_value=True), patch.object(voice, "_ask", side_effect=made), \
                 patch.object(voice, "warm"):
@@ -949,7 +949,8 @@ class ChatTest(BoardBase):
             self.assertIn("data-voice='1'", page)
             self.assertIn("<option value='bm_george'>George</option>", page)
             first = voice.speak("Hello   there.", "bm_george")
-            self.assertEqual(first.read_bytes(), b"RIFFwav")
+            self.assertEqual(first.read_bytes(), b"ID3mp3")
+            self.assertEqual(first.suffix, ".mp3", "a seventh of a WAV's size, quick to reach a phone")
             self.assertEqual(asked[0]["voice"], "bm_george")
             self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
             self.assertEqual(len(asked), 1)
@@ -961,10 +962,10 @@ class ChatTest(BoardBase):
             host = f"127.0.0.1:{server.server_address[1]}"
             url = f"http://{host}/voice?v=bm_george&t=Hello%20there."
             r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host, "Range": "bytes=0-1"}))
-            self.assertEqual((r.status, r.read(), r.headers["Content-Range"]), (206, b"RI", "bytes 0-1/7"),
+            self.assertEqual((r.status, r.read(), r.headers["Content-Range"]), (206, b"ID", "bytes 0-1/6"),
                              "Safari plays audio only as byte ranges, each answered with just its part")
             r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host}))
-            self.assertEqual((r.status, r.read()), (200, b"RIFFwav"))
+            self.assertEqual((r.status, r.read(), r.headers["Content-Type"]), (200, b"ID3mp3", "audio/mpeg"))
 
     def test_a_codex_rollout_reads_the_same_way(self):
         from colony import chat

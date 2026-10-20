@@ -2622,6 +2622,14 @@ CHAT = """
   const ready = new Set();
   const make = (p) => { const u = new URL(clip(p), location.href).href;
     if (!ready.has(u)) fetch(u).then((r) => { if (r.ok) ready.add(u); }).catch(() => {}); };
+  // how long each of the first few clips took to be heard from being asked for, against how long it plays: the
+  // phone's own wait (the making, and the network), for the board's log, so the sizes are set from real numbers
+  let timed = 0;
+  const timeClip = (p) => { if (timed >= 6) return; const t0 = performance.now(), at = player.src;
+    player.addEventListener('playing', function once() { player.removeEventListener('playing', once); if (player.src !== at) return;
+      timed += 1; const m = {when: 'clip', chars: p.length, waited: Math.round(performance.now() - t0), plays: Math.round(player.duration * 1000 / pace()),
+        made: ready.has(at)};
+      fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {}); }); };
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
@@ -2657,6 +2665,7 @@ CHAT = """
       if (i >= parts.length) return done(t);
       now = {t, parts, at: i};
       player.src = clip(parts[i]); player.playbackRate = pace(); player.defaultPlaybackRate = pace();
+      timeClip(parts[i]);
       // the next one, made while this one plays: this reply's next paragraph, or the first of the reply waiting after it
       if (parts[i + 1]) make(parts[i + 1]); else if (waiting[0]) make(chunks(waiting[0].text)[0] || '');
       i += 1;
@@ -5214,7 +5223,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     start = max(0, len(body) - int(got.group(2)))
             self.send_response(206 if got else 200)
-            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Content-Type", "audio/mpeg" if clip.suffix == ".mp3" else "audio/wav")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "private, max-age=86400")
             if got:
