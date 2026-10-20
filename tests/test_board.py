@@ -2690,6 +2690,10 @@ class NeedsYouTest(BoardBase):
             self.assertEqual(own.count("class='need'"), board.needs_you(board.registry()).count("class='need'"),
                              "the project's own Waiting on you and Needs you show the same things")
             self.assertIn("ready for your OK", own)
+            self.post(port, "/answer", p=0, gate="g1", text="What does the old export hold?", keep="1", back="/monitor")
+            self.assertIn("Keep the old export?", board.needs_you(board.registry()), "a follow-up keeps the decision open")
+            self.assertTrue(any("follow-up question" in n["text"] and "What does the old export hold?" in n["text"]
+                                for n in board.notes(self.root)), "and reaches the agent")
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
         finally:

@@ -2109,9 +2109,13 @@ def chat_prose(text, key=None, root=None):
     return re.sub(r"(?<!!)\[([^\]]+)\]\(((?:https?://|/)[^)\s]+)\)", link, page)
 
 
+NOTE_FROM = {"monitor": "The person's steward", "suggestion": "The steward suggests", "colony": "Colony",
+             "observation": "Observed file change"}
+
+
 def mail_by_turn(root, turns):
-    """The letters behind each "[colony] You have mail" notice: those handed over from just before it until the next
-    turn began, from the project's own mail, as they were delivered."""
+    """What each of colony's notices ("[colony] You have mail", "... a note from the person") brought: the letters and
+    notes handed over from just before it until the next turn began, as they were delivered."""
     from . import mail
     def at(t):
         try:
@@ -2120,20 +2124,21 @@ def mail_by_turn(root, turns):
             return None
     notices = []                                         # (turn, began, the next turn's start)
     for i, t in enumerate(turns):
-        start = at(t) if t["from"] == "colony" and "mail" in t["text"].split("\n")[0] else None
+        start = at(t) if t["from"] == "colony" else None
         if start is not None:
             notices.append((i, start, next((x for x in map(at, turns[i + 1:]) if x is not None), float("inf"))))
     byturn = {}
-    for m in mail.inbox(root):                           # each letter under one notice: the last begun by its delivery
-        if not m.get("delivered_at"):
-            continue
-        when = epoch(m["delivered_at"])
+    said = [(m["delivered_at"], f"{mail.shown(m['from'])} {'asks' if m['ask'] else 'writes'}:\n{m['text']}")
+            for m in mail.inbox(root) if m.get("delivered_at")]
+    said += [(n["delivered_at"], f"{NOTE_FROM.get(n.get('author'), 'The person')}:\n{n['text']}")
+             for n in notes(root) if n.get("delivered_at")]
+    for delivered, m in sorted(said):                    # each under one notice: the last begun by its delivery
+        when = epoch(delivered[:19] + "Z")
         fits = [(i, start) for i, start, end in notices if start - 30 <= when < end]
         before = [x for x in fits if x[1] <= when]
         if fits:
             byturn.setdefault((max(before, key=lambda x: x[1]) if before else min(fits, key=lambda x: x[1]))[0], []).append(m)
-    return {i: "\n\n".join(f"{mail.shown(m['from'])} {'asks' if m['ask'] else 'writes'}:\n{m['text']}" for m in ms)
-            for i, ms in byturn.items()}
+    return {i: "\n\n".join(ms) for i, ms in byturn.items()}
 
 
 def chat_feed(key, root, shown=40):
@@ -2669,7 +2674,8 @@ CHAT = """
   box.addEventListener('submit', async (ev) => {
     const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
     ev.preventDefault();
-    const r = await fetch('/answer', {method: 'POST', body: new URLSearchParams(new FormData(f))}).catch(() => null);
+    const d = new FormData(f); if (ev.submitter && ev.submitter.name) d.append(ev.submitter.name, ev.submitter.value);
+    const r = await fetch('/answer', {method: 'POST', body: new URLSearchParams(d)}).catch(() => null);
     if (!r || !r.ok) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: try again.'; f.appendChild(p); return; }
     f.querySelectorAll('textarea').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
     refresh();
@@ -3300,7 +3306,8 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
                 f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(gate['id'])}'>"
                 f"<input type='hidden' name='back' value='{e(back)}'>" + content
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
-                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button></form>")
+                + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea><button>{button}</button>"
+                + ("" if points else "<button class='quiet' name='keep' value='1'>Ask, keep it open</button>") + "</form>")
     if gate["answer"]:
         answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
                        if gate.get("answered_by") in ("colony", "agent") else f"Your answer: {e(gate['answer'])}")
@@ -5617,6 +5624,12 @@ class Handler(BaseHTTPRequestHandler):
             from . import lead
             recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
             add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text, author='person')
+        elif path == "/answer" and form.get("keep") and text:   # a follow-up question: to the agent, the decision still open
+            g = next((g for g in gates(root) if g["id"] == form.get("gate")), None)
+            if not g:
+                return self._send(404, b"No such gate in this project.")
+            add_note(root, {"gate": g["id"], "item": g.get("item")},
+                     f"A follow-up question on \"{g['question']}\" (the decision stays open): {text}", author="person")
         elif path == "/answer":
             try:
                 decisions = {k.removeprefix("point_"): v for k, v in form.items() if k.startswith("point_")}
