@@ -439,6 +439,11 @@ def cmd_gate(a):
         print(str(err), file=sys.stderr)
         return 2
     gid = gate["id"]
+    if a.reframes:                       # the old question comes off their list: this one says it whole
+        try:
+            board.withdraw_gate(root, a.reframes, f"Asked again as {gid}, with what it was missing")
+        except (StopIteration, ValueError):
+            pass
     if a.when and next(g for g in board.gates(root) if g["id"] == gid).get("waits_for"):
         print(f"gate {gid} waits until {a.when} starts, off the person's list; carry on meanwhile")
         return 0
@@ -1459,6 +1464,7 @@ def main(argv=None):
                    "been on their page a whole day; a costly or irreversible decision has no default")
     p.add_argument("--option", action="append", default=[], help="an answer the person can tap (repeat for each)")
     p.add_argument("--recommended", help="the option you recommend: shown first, marked, one tap to choose")
+    p.add_argument("--reframes", metavar="ID", help="this question replaces gate ID, asked again with what it was missing")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")
     p.add_argument("--withdraw", metavar="ID", help="gate ID no longer applies (superseded, moot); QUESTION says why")

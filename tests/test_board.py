@@ -2693,7 +2693,8 @@ class NeedsYouTest(BoardBase):
             self.post(port, "/answer", p=0, gate="g1", text="What does the old export hold?", keep="1", back="/monitor")
             self.assertIn("Keep the old export?", board.needs_you(board.registry()), "a follow-up keeps the decision open")
             self.assertTrue(any("follow-up question" in n["text"] and "What does the old export hold?" in n["text"]
-                                for n in board.notes(self.root)), "and reaches the agent")
+                                and "--reframes g1" in n["text"] for n in board.notes(self.root)),
+                            "and reaches the agent, who asks it again with what it was missing")
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
         finally:
@@ -4404,6 +4405,12 @@ class HoursBase(BoardBase):
 class ActiveHoursTest(HoursBase):
     """R82: the person's active hours. Outside them agents keep working and hold their questions, which reach the
     person together when the hours begin; the person's own words and colony's safety notices go through at any hour."""
+
+    def test_a_decision_asked_again_whole_replaces_the_one_it_reframes(self):
+        first = board.add_gate(self.root, "Which pot?")
+        self.gate("Which pot: clay breathes, plastic holds water?", "--reframes", first["id"], "--option", "clay", "--option", "plastic")
+        self.assertEqual([g["question"] for g in board.gates(self.root) if not g["answer"]],
+                         ["Which pot: clay breathes, plastic holds water?"], "the old question comes off the list")
 
     def test_the_setting_reads_a_range_even_across_midnight_or_off_and_refuses_anything_else(self):
         self.assertEqual(board.DEFAULT_SETTINGS["active_hours"], "07:30-23:45", "the person's own hours, by default")

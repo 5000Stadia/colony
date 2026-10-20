@@ -5629,7 +5629,10 @@ class Handler(BaseHTTPRequestHandler):
             if not g:
                 return self._send(404, b"No such gate in this project.")
             add_note(root, {"gate": g["id"], "item": g.get("item")},
-                     f"A follow-up question on \"{g['question']}\" (the decision stays open): {text}", author="person")
+                     f"A follow-up question on \"{g['question']}\" (the decision stays open): {text}\n"
+                     f"Answer it, then ask the decision again with what it was missing, so it reads whole: "
+                     f"colony gate \"the question\" --reframes {g['id']} (with --why, --option, --recommended, --default as fit).",
+                     author="person")
         elif path == "/answer":
             try:
                 decisions = {k.removeprefix("point_"): v for k, v in form.items() if k.startswith("point_")}
