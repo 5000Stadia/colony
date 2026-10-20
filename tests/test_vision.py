@@ -465,6 +465,20 @@ class NestTest(BoardBase):
         self.assertEqual(len(heard), 1)
         self.assertEqual(heard[0]["author"], "monitor")
         self.assertNotEqual(self.cli("nest", "holodeck", "--tell", "2", "--to", "nobody").returncode, 0)
+        import threading                                          # two tellings at once still tell once
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        nest.join(other, "holodeck")
+        runs = [threading.Thread(target=nest.tell, args=("holodeck", 1, other)) for _ in range(6)]
+        [r.start() for r in runs]
+        [r.join() for r in runs]
+        self.assertEqual(len([n for n in board.notes(other) if "human sign-off" in n["text"]]), 1)
+        nest.leave(other)
+        nest.leave(self.root)
+        self.assertIn("holodeck", nest.nests())                  # its standards keep it, with no projects left
+        nest.join(self.root, "holodeck")
         self.cli("nest", "holodeck", "--drop", "1")
         self.assertEqual([r["words"] for r in nest.nests()["holodeck"]["standards"]], ["fixes go to the workflow, never one asset"])
         self.assertNotEqual(self.cli("nest", "holodeck", "--drop", "5").returncode, 0)

@@ -224,21 +224,32 @@ def cmd_remote(a):
         print("The board through it: " + (f"http://{private}:{port}/" if private else "off"))
         return 0
     if a.off:
-        board.set_setting("tailscale", "")
-        if settings.get("tailscale_lan_before") is not None:
-            board.set_setting("lan", "on" if settings["tailscale_lan_before"] else "off")
-            _saved_reach(settings["tailscale_lan_before"])
-        print("Remote access is off; restarting the board as it was before.")
-        return _restart_board().returncode
+        before = settings.get("tailscale_lan_before")
+        if before is not None:
+            board.set_setting("lan", "on" if before else "off")
+            _saved_reach(before)
+        # The guard stays on until the board runs with the reach it had before: no moment answers the home network
+        # by accident. If the restart fails, remote access stays on.
+        restarted = _restart_board()
+        if restarted.returncode:
+            print("The board didn't restart, so remote access stays on: " + (restarted.stdout + restarted.stderr).strip()[-400:])
+            return restarted.returncode
+        reg = board.registry()
+        reg["settings"]["tailscale"], reg["settings"]["tailscale_lan_before"] = "", None
+        board.save_registry(reg)
+        print("Remote access is off; the board answers as it did before.")
+        return 0
     if not st["installed"]:
         print(tailscale.INSTALL)
         return 1
     if not (st["running"] and st["name"]):
         print(tailscale.LOGIN)
         return 1
-    if settings.get("tailscale_lan_before") is None:
+    if not settings.get("tailscale"):            # what's running now, to put back with --off
+        saved = board.home() / "server.json"
+        running = json.loads(saved.read_text()) if saved.exists() else []
         reg = board.registry()
-        reg["settings"]["tailscale_lan_before"] = bool(settings["lan"])
+        reg["settings"]["tailscale_lan_before"] = "--lan" in running if running else bool(settings["lan"])
         board.save_registry(reg)
     board.set_setting("tailscale", st["name"])
     board.set_setting("lan", "on")              # it listens beyond this machine, and answers only your devices
@@ -1252,6 +1263,8 @@ def cmd_nest(a):
     if a.tell:
         if not (a.name and a.to):
             raise SystemExit("colony nest NAME --tell N --to PROJECT")
+        if not _caught_up(_project(a.to)):
+            return 1
         try:
             before = nest.tell(a.name, a.tell, _project(a.to))
         except ValueError as e:

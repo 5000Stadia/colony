@@ -8,6 +8,7 @@ project closed and reopened (colony track) is still in its nest.
 """
 import json
 import secrets
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import board
@@ -15,6 +16,16 @@ from . import board
 
 def _path():
     return board.home() / "nests.json"
+
+
+@contextmanager
+def _locked():
+    """One change to nests.json at a time: two tellings can't both pass the once-only check."""
+    import fcntl
+    board.home().mkdir(parents=True, exist_ok=True)
+    with (board.home() / "nests.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def nests():
@@ -32,6 +43,11 @@ def _save(data):
     tmp.replace(_path())
 
 
+def _keeps(n):
+    """A nest stays while it has projects, a shared vision or standards: what the person gave it isn't lost."""
+    return bool(n.get("members") or n.get("vision") or n.get("standards"))
+
+
 def nest_of(root):
     """The name of the nest this project is in, or None."""
     key = str(Path(root).resolve())
@@ -46,92 +62,97 @@ def nestmates(root):
 
 def join(root, name):
     """Put a project in a nest (leaving any other), and tell it where it now belongs."""
-    name, key = name.strip(), str(Path(root).resolve())
-    if not name:
-        raise ValueError("A nest needs a name.")
-    data = nests()
-    if key in data.get(name, {}).get("members", []):
-        return False
-    for n in data.values():
-        if key in n.get("members", []):
-            n["members"].remove(key)
-    data = {k: v for k, v in data.items() if v.get("members") or v.get("vision")}
-    data.setdefault(name, {"members": [], "vision": "", "history": []})["members"].append(key)
-    _save(data)
-    board.add_note(root, None, f"This project is now in the {name} nest. {_about(root)}", author="colony", quiet=True)
-    return True
+    with _locked():
+        name, key = name.strip(), str(Path(root).resolve())
+        if not name:
+            raise ValueError("A nest needs a name.")
+        data = nests()
+        if key in data.get(name, {}).get("members", []):
+            return False
+        for n in data.values():
+            if key in n.get("members", []):
+                n["members"].remove(key)
+        data = {k: v for k, v in data.items() if _keeps(v)}
+        data.setdefault(name, {"members": [], "vision": "", "history": []})["members"].append(key)
+        _save(data)
+        board.add_note(root, None, f"This project is now in the {name} nest. {_about(root)}", author="colony", quiet=True)
+        return True
 
 
 def leave(root):
-    key, data = str(Path(root).resolve()), nests()
-    name = nest_of(root)
-    if not name:
-        return None
-    data[name]["members"].remove(key)
-    if not data[name]["members"] and not data[name].get("vision"):
-        del data[name]
-    _save(data)
-    return name
+    with _locked():
+        key, data = str(Path(root).resolve()), nests()
+        name = nest_of(root)
+        if not name:
+            return None
+        data[name]["members"].remove(key)
+        if not _keeps(data[name]):
+            del data[name]
+        _save(data)
+        return name
 
 
 def set_vision(name, text, words="", context=""):
     """The nest's shared vision, agreed with the person; every member hears the change, before and after."""
-    data = nests()
-    if name not in data:
-        raise ValueError(f"No nest named {name}: put a project in it first (colony nest {name} PROJECT).")
-    before, text = data[name].get("vision", ""), text.strip()
-    if text == before:
-        return False
-    data[name]["vision"] = text
-    data[name].setdefault("history", []).append({"at": board.now(), "before": before, "after": text,
-                                                 "words": words.strip(), "context": context.strip()})
-    _save(data)
-    for p in data[name]["members"]:
-        if Path(p).is_dir():
-            board.add_note(Path(p), None, f"The {name} nest's shared vision, the why its projects build toward "
-                           f"together, changed. Consider what it means for your own vision and the work at hand."
-                           f"\nBefore:\n{before or '(none yet)'}\nAfter:\n{text}", author="colony")
-    return True
+    with _locked():
+        data = nests()
+        if name not in data:
+            raise ValueError(f"No nest named {name}: put a project in it first (colony nest {name} PROJECT).")
+        before, text = data[name].get("vision", ""), text.strip()
+        if text == before:
+            return False
+        data[name]["vision"] = text
+        data[name].setdefault("history", []).append({"at": board.now(), "before": before, "after": text,
+                                                     "words": words.strip(), "context": context.strip()})
+        _save(data)
+        for p in data[name]["members"]:
+            if Path(p).is_dir():
+                board.add_note(Path(p), None, f"The {name} nest's shared vision, the why its projects build toward "
+                               f"together, changed. Consider what it means for your own vision and the work at hand."
+                               f"\nBefore:\n{before or '(none yet)'}\nAfter:\n{text}", author="colony")
+        return True
 
 
 def standard(name, words, source="", replaces=None):
     """A standard the person stated, kept in their words for the nest's steward to carry to the nestmates it applies
     to when it matters (projects don't carry these in their context). A newer statement replaces an older one."""
-    data = nests()
-    if name not in data:
-        raise ValueError(f"No nest named {name}: put a project in it first (colony nest {name} PROJECT).")
-    rows = data[name].setdefault("standards", [])
-    if replaces is not None:
-        if not 1 <= replaces <= len(rows):
-            raise ValueError(f"The {name} nest has no standard {replaces}; colony nest lists them.")
-        rows.pop(replaces - 1)
-    if words.strip():
-        rows.append({"id": "s" + secrets.token_hex(3), "words": words.strip(), "from": source.strip(), "at": board.now(), "told": {}})
-    _save(data)
-    return len(rows)
+    with _locked():
+        data = nests()
+        if name not in data:
+            raise ValueError(f"No nest named {name}: put a project in it first (colony nest {name} PROJECT).")
+        rows = data[name].setdefault("standards", [])
+        if replaces is not None:
+            if not 1 <= replaces <= len(rows):
+                raise ValueError(f"The {name} nest has no standard {replaces}; colony nest lists them.")
+            rows.pop(replaces - 1)
+        if words.strip():
+            rows.append({"id": "s" + secrets.token_hex(3), "words": words.strip(), "from": source.strip(), "at": board.now(), "told": {}})
+        _save(data)
+        return len(rows)
 
 
 def tell(name, number, root):
     """Carry one of the nest's standards to a nestmate whose work has come to where it applies: once. The project
     keeps it as a note and acts on it; telling it again is refused, so the steward never badgers. Returns when it was
     told before, or None now that it has been."""
-    data, key = nests(), str(Path(root).resolve())
-    rows = data.get(name, {}).get("standards", [])
-    if not 1 <= number <= len(rows):
-        raise ValueError(f"The {name} nest has no standard {number}; colony nest lists them.")
-    if key not in data[name]["members"]:
-        raise ValueError(f"{Path(root).name} is not in the {name} nest.")
-    row = rows[number - 1]
-    told = row.setdefault("told", {})
-    if key in told:
-        return told[key]
-    told[key] = board.now()
-    _save(data)
-    said = f", said in {row['from']}" if row.get("from") else ""
-    board.add_note(root, None, f"A standard the person set for the {name} nest{said}, in their words: \"{row['words']}\". "
-                   "Weigh it where your work meets it; their direct request to you comes first. You hear this once: "
-                   "keep it from here.", author="monitor")
-    return None
+    with _locked():
+        data, key = nests(), str(Path(root).resolve())
+        rows = data.get(name, {}).get("standards", [])
+        if not 1 <= number <= len(rows):
+            raise ValueError(f"The {name} nest has no standard {number}; colony nest lists them.")
+        if key not in data[name]["members"]:
+            raise ValueError(f"{Path(root).name} is not in the {name} nest.")
+        row = rows[number - 1]
+        told = row.setdefault("told", {})
+        if key in told:
+            return told[key]
+        told[key] = board.now()
+        _save(data)
+        said = f", said in {row['from']}" if row.get("from") else ""
+        board.add_note(root, None, f"A standard the person set for the {name} nest{said}, in their words: \"{row['words']}\". "
+                       "Weigh it where your work meets it; their direct request to you comes first. You hear this once: "
+                       "keep it from here.", author="monitor")
+        return None
 
 
 def _about(root):

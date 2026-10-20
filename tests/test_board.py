@@ -4699,3 +4699,23 @@ class RemoteTest(BoardBase):
         self.assertEqual(code, 1)
         self.assertIn("not connected", out)
         self.assertEqual(board.registry()["settings"]["tailscale"], "")
+
+    def test_off_keeps_the_guard_until_the_board_runs_as_before_and_restores_what_was_really_running(self):
+        from unittest.mock import patch
+        import io, contextlib
+        from colony import cli
+        board.set_setting("lan", "on")                                   # the setting says lan, the board runs local
+        (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--local"]))
+        self.fake_tailscale()
+        self.assertEqual(self.remote()[0], 0)
+        seen = []
+        def restart():
+            seen.append(board.registry()["settings"]["tailscale"])        # the guard is still on while it restarts
+            return subprocess.CompletedProcess([], 1, "", "tmux failed")
+        with patch.object(cli, "_restart_board", side_effect=restart), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["remote", "--off"]), 1)
+        self.assertEqual(seen, ["colony.tail1234.ts.net"])
+        self.assertEqual(board.registry()["settings"]["tailscale"], "colony.tail1234.ts.net")   # failed: still guarded
+        self.assertEqual(self.remote("--off")[0], 0)
+        self.assertIn("--local", json.loads((board.home() / "server.json").read_text()))      # what was really running
+        self.assertIsNone(board.registry()["settings"]["tailscale_lan_before"])                # fresh next time
