@@ -767,7 +767,8 @@ class ChatTest(BoardBase):
         host = f"127.0.0.1:{server.server_address[1]}"
         body = (b"--B\r\nContent-Disposition: form-data; name=\"p\"\r\n\r\n0\r\n"
                 b"--B\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\nsee this\r\n"
-                b"--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"shot.png\"\r\nContent-Type: image/png\r\n\r\nPNGDATA\r\n--B--\r\n")
+                b"--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"shot.png\"\r\nContent-Type: image/png\r\n\r\nPNGDATA\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"notes.txt\"\r\nContent-Type: text/plain\r\n\r\nhi\r\n--B--\r\n")
         with patch.object(board.console, "ensure", return_value="s"), \
                 patch.object(board.console, "paste_into", return_value=True) as pasted:
             r = urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=body, headers={
@@ -775,6 +776,7 @@ class ChatTest(BoardBase):
             self.assertEqual(r.status, 204)
         sent = pasted.call_args[0][1]
         self.assertTrue(sent.startswith(f"Attached: {self.root}/.board/uploads/shot.png"), sent)
+        self.assertIn(f"\nAttached: {self.root}/.board/uploads/notes.txt\n\nsee this", sent, "several files, each with its path")
         self.assertTrue(sent.endswith("\n\nsee this"))
         self.assertEqual((self.root / ".board" / "uploads" / "shot.png").read_bytes(), b"PNGDATA")
         self.assertEqual(chat.running(["  ⏵⏵ bypass permissions on · 1 shell · ← for agents"]), "1 shell running")

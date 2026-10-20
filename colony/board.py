@@ -2157,7 +2157,7 @@ def chat_page(key, root):
             "<div class='attached' hidden></div>"
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
-            "<div class='composerbar'><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
+            "<div class='composerbar'><label class='attach' aria-label='Attach photos or files'>+<input type='file' name='file' multiple hidden></label>"
             "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
             # reading aloud's settings, opened from ⋯ beside a reply's ▷
             "<div class='voicesheet' id='voicesheet' hidden><label class='aloud' title='Speak each new reply as it arrives'>"
@@ -2178,11 +2178,17 @@ CHAT = """
   // behind it, so the visible part is read off the visual viewport.
   const atEnd = () => { const vv = window.visualViewport;
     const seen = window.scrollY + (vv ? vv.offsetTop + vv.height : window.innerHeight);
-    return seen >= document.body.scrollHeight - (document.body.classList.contains('typing') ? 160 : 80); };
+    return typingNow() ? seen - form.offsetHeight >= lastBottom() - 40 : seen >= document.body.scrollHeight - 80; };
   // It follows new messages only while the person is at the end; scrolled up, it stays where they are.
   let stick = true;
   window.addEventListener('scroll', () => { stick = atEnd(); }, {passive: true});
-  const toEnd = () => window.scrollTo(0, document.body.scrollHeight);
+  // The latest is the last message. Typing, the page has room below it (so it never ends above the keyboard, where a
+  // phone measures the visible part short), and the latest is brought just above the box.
+  const typingNow = () => document.body.classList.contains('typing');
+  const lastBottom = () => { const el = box.lastElementChild; return el ? el.getBoundingClientRect().bottom + window.scrollY : 0; };
+  const toEnd = () => { if (!typingNow()) return window.scrollTo(0, document.body.scrollHeight);
+    const v = window.visualViewport, shown = v ? v.offsetTop + v.height : window.innerHeight;
+    window.scrollTo(0, Math.max(0, lastBottom() - shown + form.offsetHeight + 24)); };
   toEnd();
   let last = box.innerHTML, pending = [];
   // what was just sent shows at once, faded, until the conversation has it (a busy agent takes it up mid-turn)
@@ -2190,10 +2196,10 @@ CHAT = """
   const keep = () => { pending = pending.filter((p) => !seen(p));
     pending.forEach((p) => { const d = document.createElement('div'); d.className = 'msg you pending mine'; d.textContent = p.show; box.appendChild(d); }); };
   const file = form.querySelector('input[type=file]'), chip = form.querySelector('.attached');
-  const chosen = () => { const f = file.files[0]; chip.hidden = !f;
-    chip.innerHTML = ''; if (!f) return;
-    const name = document.createElement('span'); name.textContent = '📎 ' + f.name; chip.appendChild(name);
-    const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Remove the file');
+  const chosen = () => { const fs = [...file.files]; chip.hidden = !fs.length;
+    chip.innerHTML = ''; if (!fs.length) return;
+    const name = document.createElement('span'); name.textContent = '📎 ' + fs.map((f) => f.name).join(', '); chip.appendChild(name);
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Remove the files');
     x.addEventListener('click', () => { file.value = ''; chosen(); }); chip.appendChild(x); };
   file.addEventListener('change', chosen);
   async function refresh() {
@@ -4530,10 +4536,13 @@ class Handler(BaseHTTPRequestHandler):
         msg = email.parser.BytesParser(policy=email.policy.default).parsebytes(
             b"Content-Type: " + self.headers.get("Content-Type", "").encode() + b"\r\n\r\n" + raw)
         fields, upload = {}, None
+        self._uploads = []                               # every file, where a form sends several
         for part in msg.iter_parts() if msg.is_multipart() else []:
             name = part.get_param("name", header="content-disposition")
             if part.get_filename():
                 upload = (part.get_filename(), part.get_payload(decode=True) or b"")
+                if upload[1]:
+                    self._uploads.append(upload)
             elif name:
                 fields[name] = (part.get_payload(decode=True) or b"").decode("utf-8", "replace").replace("\r\n", "\n")
         return fields, upload
@@ -4758,6 +4767,7 @@ class Handler(BaseHTTPRequestHandler):
         if urllib.parse.urlparse(self.path).path == "/pin/upload":
             return self._upload()
         body_text = ""
+        self._uploads = []
         if self.headers.get("Content-Type", "").startswith("multipart/form-data"):
             form, upload = self._multipart()       # Message, with a file or a long paste
             values = {k: [v] for k, v in form.items()}
@@ -5123,11 +5133,12 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             key, text = values.get("p", ["0"])[0], values.get("text", [""])[0].strip()
             dst = monitor.home() if key == "steward" else projects(registry())[int(key)]
-            if upload and upload[1]:                       # kept where the one it's for can read it, its path in the message
+            if self._uploads:                              # kept where the one it's for can read them, their paths in the message
                 try:
-                    text = f"Attached: {Path(dst) / pins.save_upload(dst, *upload)}" + (f"\n\n{text}" if text else "")
+                    kept = [f"Attached: {Path(dst) / pins.save_upload(dst, *u)}" for u in self._uploads]
                 except ValueError:
                     return self._send(413, b"that file is too large (25 MB at most)")
+                text = "\n".join(kept) + (f"\n\n{text}" if text else "")
             if key == "steward":
                 sent = not text or console.paste_into(monitor.ensure(), text)
             else:
@@ -5698,10 +5709,13 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
   input, textarea, select { font-size:16px }
   .composer { bottom:calc(64px + env(safe-area-inset-bottom)) }
-  body.typing .tabs { display:none } body.typing main { padding-bottom:0 }
-  body.typing .composer { position:fixed; left:8px; right:8px; top:calc(var(--kbtop, 100vh) - 6px); bottom:auto; transform:translateY(-100%);
-    margin:0 }
-  body.typing .chat { padding-bottom:140px }
+  body.typing .tabs { display:none }
+  body.typing .composer { position:fixed; left:8px; right:8px; top:var(--kbtop, 100vh); bottom:auto; transform:translateY(-100%);
+    margin:0; box-shadow:0 0 0 8px var(--bg) }
+  /* below it to the keyboard, the page's own ground: where the phone's measure and its keyboard differ, nothing shows through */
+  body.typing .composer::after { content:''; position:absolute; left:-8px; right:-8px; top:calc(100% + 8px); height:420px;
+    background:var(--bg); pointer-events:none }
+  body.typing .chat { padding-bottom:140px } body.typing main { padding-bottom:70vh }
   .voicesheet { bottom:calc(64px + 118px + env(safe-area-inset-bottom)) }
   body.typing .voicesheet { top:calc(var(--kbtop, 100vh) - 118px); bottom:auto; transform:translate(-50%, -100%) }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
