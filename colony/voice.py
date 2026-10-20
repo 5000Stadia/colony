@@ -21,7 +21,7 @@ VOICES = (("af_heart", "Heart"), ("af_bella", "Bella"), ("af_nicole", "Nicole"),
           ("bf_isabella", "Isabella"), ("bf_alice", "Alice"), ("bf_lily", "Lily"), ("bm_fable", "Arthur"), ("bm_george", "George"),
           ("bm_lewis", "Lewis"), ("bm_daniel", "Daniel"))
 GROUPS = (("af_", "American, women"), ("am_", "American, men"), ("bf_", "British, women"), ("bm_", "British, men"))
-DEFAULT = "am_puck"          # the voice out of the box; the person's own choice stands after it
+DEFAULT = "am_echo"          # the voice out of the box; the person's own choice stands after it
 IDLE = 600                 # seconds without a word before Kokoro is let go: its memory back, a moment's start next time
 KEEP = 300                 # clips kept, newest first: a reply played again plays at once
 _lock, _worker = threading.Lock(), {}

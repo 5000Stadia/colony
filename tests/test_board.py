@@ -765,7 +765,7 @@ class ChatTest(BoardBase):
 
     def test_the_voice_is_the_persons_own_and_a_project_can_pin_its_own(self):
         other = Path(self.tmp.name) / "photonic"
-        self.assertEqual(board.voice_of(0, self.root), ("am_puck", False), "Puck out of the box")
+        self.assertEqual(board.voice_of(0, self.root), ("am_echo", False), "Echo out of the box")
         board.choose_voice(0, self.root, "bf_emma")
         self.assertEqual(board.voice_of(1, other), ("bf_emma", False), "a change on a project not pinned is the person's voice")
         board.choose_voice(0, self.root, pin=True)
@@ -873,7 +873,7 @@ class ChatTest(BoardBase):
             self.assertEqual(asked[0]["voice"], "bm_george")
             self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
             self.assertEqual(len(asked), 1)
-            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "am_puck").name, "an unknown voice is Puck, the default")
+            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "am_echo").name, "an unknown voice is Echo, the default")
             from http.server import ThreadingHTTPServer
             server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()

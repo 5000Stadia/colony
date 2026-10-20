@@ -2468,7 +2468,7 @@ CHAT = """
   const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
   // the voice is the board's to keep: the person's own, or this project's where it is pinned
   const pin = document.getElementById('vpin');
-  let kvoice = picker ? picker.value : 'am_puck';
+  let kvoice = picker ? picker.value : 'am_echo';
   const keepVoice = async (body) => {
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
