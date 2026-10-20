@@ -757,6 +757,12 @@ class ChatTest(BoardBase):
         self.assertTrue(board.chat_file(0, self.root, str(self.root / "report.pdf")))
         self.assertIn("LASTPAGE", board.shell.__code__.co_names, "reopened, the board comes back to the last page")
 
+    def test_the_board_answers_only_at_this_machines_own_addresses_and_names(self):
+        for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765", "100.101.1.2:8765", ""):
+            self.assertTrue(board.own_host(host), host)
+        self.assertFalse(board.own_host("attacker.invalid:8765"), "a name pointed here from elsewhere (DNS rebinding)")
+        self.assertFalse(board.own_host("evil.localhost"))
+
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
         turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},
@@ -5044,6 +5050,7 @@ class RemoteTest(BoardBase):
         from unittest.mock import patch
         handler = board.Handler.__new__(board.Handler)
         handler.client_address = (ip, 50000)
+        handler.headers = {"Host": f"{ip}:8791"}
         with patch.object(board.BaseHTTPRequestHandler, "parse_request", return_value=True), \
                 patch.object(board.Handler, "send_error") as refused:
             ok = handler.parse_request()

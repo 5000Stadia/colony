@@ -1170,9 +1170,16 @@ def close_project(root, cancel=False, why="", archive=False):
             finish_closing(root)
             return "closed"
         console.ensure(root)              # archiving: its agent gets a moment to package where it stands first
-    if str(root) not in rows:
+    row = rows.get(str(root))
+    was = row and next((n for n in notes(root) if n["id"] == row["note"]), None)
+    if row and archive and not row.get("archive") and not (was and was["text"].startswith("The person is archiving")):
+        # closing already, now archived: the packaging is asked for too, and the project waits for that turn to end
+        if was and not was["delivered_at"]:             # the plain close not yet heard: this one goes in its place
+            append(root, "notes.jsonl", {"type": "addressed", "of": was["id"], "at": now(), "text": "archiving instead"})
+        row = None
+    if not row:
         note = add_note(root, None, archive_note(why) if archive else CLOSE_NOTE, author="colony", kind="close")
-        rows[str(root)] = {"at": now(), "note": note["id"]}
+        rows[str(root)] = {"at": now(), "note": note["id"], "archive": bool(archive)}
         _save_closing(rows)
     return "closing"
 
@@ -2374,16 +2381,14 @@ CHAT = """
   if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  // A sentence at a time, a long one broken at its commas and dashes: each is made in moments, so the voice starts
-  // soon, and the next ones are made while one plays. A scrap (a list's "1.") goes with what follows it.
-  const chunks = (text) => {
-    const bits = (text.match(/[^.!?\\n]+[.!?]*\\s*|\\n+/g) || []).flatMap((s) => s.length > 140 ? s.split(/(?<=[,;:\u2014])\\s+/) : [s])
-      .map((p) => p.trim()).filter(Boolean);
-    return bits.reduce((out, s) => {
-      if (out.length && out[out.length - 1].length < 12) out[out.length - 1] += ' ' + s;
-      else out.push(s);
-      return out; }, []);
-  };
+  // A paragraph at a time, as the person asked: read whole, it keeps its flow, and the next one is made while it
+  // plays, so there is no wait between them. Only a very long one is broken, between its sentences.
+  const chunks = (text) => text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).flatMap((p) => {
+    if (p.length <= 600) return [p];
+    return (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).reduce((out, s) => {
+      if (out.length && (out[out.length - 1] + s).length <= 600) out[out.length - 1] += s; else out.push(s);
+      return out; }, []).map((x) => x.trim());
+  });
   const sheet = document.getElementById('voicesheet');
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
   const mark = () => { box.querySelectorAll('button.listen').forEach((b) => { const on = b.dataset.t === playing;
@@ -2430,7 +2435,7 @@ CHAT = """
       if (i >= parts.length) return done(t);
       now = {t, parts, at: i};
       player.src = clip(parts[i]); player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      parts.slice(i + 1, i + 3).forEach((p) => fetch(clip(p)).catch(() => {}));   // the next two, made while this one plays
+      if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // the next one, made while this one plays
       i += 1;
       player.play().catch(() => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });   // refused: the phone's voice
     };
@@ -2463,8 +2468,20 @@ CHAT = """
     const parts = chunks(text).filter((p) => p.trim());
     return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
   }
-  const turn = (t) => plain([...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)]);
-  const heard = new Set([...box.querySelectorAll('.say')].map((x) => x.dataset.k));
+  // ▷ reads all the agent said since the person's own message before it, across colony's notices in between
+  const turn = (t) => {
+    const all = [...box.querySelectorAll('.say')], end = all.map((x) => x.dataset.t).lastIndexOf(t);
+    const you = [...box.querySelectorAll('.msg.you:not(.mine)')].filter((m) => m.compareDocumentPosition(all[end]) & Node.DOCUMENT_POSITION_FOLLOWING).pop();
+    return plain(all.slice(0, end + 1).filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)));
+  };
+  // What has been read is remembered on this device, for each project: coming back (a reload, another project and
+  // back) with Auto-speak on, it reads what came since, up to the last ten parts after the person's own last message.
+  const HKEY = 'heard:' + box.dataset.name, BACK = 10;
+  let before = null; try { before = JSON.parse(localStorage.getItem(HKEY) || 'null'); } catch (e) {}
+  const says = [...box.querySelectorAll('.say')], mineLast = [...box.querySelectorAll('.msg.you')].pop();
+  const since = says.filter((x) => !mineLast || (mineLast.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)).slice(-BACK);
+  const heard = new Set(says.filter((x) => !since.includes(x) || (before && before.includes(x.dataset.k))).map((x) => x.dataset.k));
+  const remember = () => { try { localStorage.setItem(HKEY, JSON.stringify([...heard].slice(-300))); } catch (e) {} };
   try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
   aloud.addEventListener('change', () => { mark();
     try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
@@ -2475,15 +2492,21 @@ CHAT = """
   // Each part of a reply is read as it lands (the transcript holds a part only once it is written whole), after any
   // still being read: waiting for the turn to end would hold the voice back for as long as the work takes.
   const fresh = () => {
-    if (!aloud.checked) return;
     const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
-    news.forEach((x) => heard.add(x.dataset.k));
+    news.forEach((x) => heard.add(x.dataset.k)); if (news.length) remember();
+    if (!aloud.checked) return;                    // what came while it was off isn't read later
     const turns = [];
     news.forEach((x) => { const last = turns[turns.length - 1];
       if (last && last.t === x.dataset.t) last.els.push(x); else turns.push({t: x.dataset.t, els: [x]}); });
     turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
+  // On coming back, what came since is read at once where the browser lets a page speak by itself; a phone lets it only
+  // after a tap, so there it starts with the first touch anywhere on the page.
+  if (aloud.checked && says.some((x) => !heard.has(x.dataset.k))) {
+    const go = () => { unlocked = true; fresh(); };
+    player.src = SILENT; player.play().then(go).catch(() => document.addEventListener('pointerdown', go, {once: true, capture: true}));
+  }
   box.addEventListener('click', async (ev) => {
     if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
     const cp = ev.target.closest('button.copy');
@@ -4588,6 +4611,31 @@ def inline(name):
     return f"inline; filename=\"{plain}\"; filename*=UTF-8''{urllib.parse.quote(name, safe='')}"
 
 
+_names = {"at": 0, "names": set()}
+
+
+def own_host(header):
+    """Whether a request was addressed to this machine: by an address, or by one of its own names (localhost, its
+    hostname, its name on Tailscale). A page elsewhere can point a name of its own at this machine (DNS rebinding) and
+    read the board through it; that name is none of these, so it is refused. A request with no Host is a local tool's."""
+    import ipaddress, socket
+    from . import tailscale
+    name = header.strip().lower()
+    name = name[1:name.index("]")] if name.startswith("[") and "]" in name else name.rsplit(":", 1)[0] if name.count(":") == 1 else name
+    if not name:
+        return True
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    if time.time() - _names["at"] > 60:                  # looked up again at most once a minute
+        me = socket.gethostname().lower()
+        ts = tailscale.status().get("name", "").lower() if shutil.which("tailscale") else ""
+        _names.update(at=time.time(), names={"localhost", me, me + ".local", me.split(".")[0], ts, ts.split(".")[0]} - {""})
+    return name.rstrip(".") in _names["names"]
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -4600,6 +4648,9 @@ class Handler(BaseHTTPRequestHandler):
         from . import tailscale
         if registry()["settings"].get("tailscale") and not tailscale.own_device(self.client_address[0]):
             self.send_error(403, "This board answers only this machine and your own devices on Tailscale")
+            return False
+        if not own_host(self.headers.get("Host", "")):
+            self.send_error(403, "This board answers only at this machine's own addresses and names")
             return False
         return True
 

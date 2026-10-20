@@ -530,6 +530,28 @@ class ArchiveAndListTest(BoardBase):
         board.track(self.root)
         self.assertEqual(len([n for n in board.notes(self.root) if "is open again" in n["text"]]), 1)   # said once
 
+    def test_a_project_already_closing_is_still_asked_to_package_when_it_is_archived(self):
+        board.track(self.root)
+        console.ensure(self.root)
+        self.assertEqual(board.close_project(self.root), "closing")
+        board.deliver(self.root)                                     # the plain close was heard
+        board.close_project(self.root, why="Parked", archive=True)
+        row = board.closing()[str(self.root)]
+        now = next(n for n in board.notes(self.root) if n["id"] == row["note"])
+        self.assertIn("ARCHIVE.md", now["text"], "it waits on the packaging turn, not the close already heard")
+        self.assertFalse(now["delivered_at"])
+        board.close_project(self.root, archive=True)
+        self.assertEqual(len([n for n in board.notes(self.root) if "ARCHIVE.md" in n["text"]]), 1, "asked once")
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        console.ensure(other)
+        board.close_project(other)
+        board.close_project(other, archive=True)                     # the close not yet heard: replaced, not doubled
+        waiting = [n["text"][:30] for n in board.open_notes(other) if n.get("kind") == "close"]
+        self.assertEqual(waiting, ["The person is archiving this p"])
+
     def test_all_projects_are_listed_under_their_nests_and_a_project_can_join_or_leave_one_from_its_page(self):
         from colony import nest
         board.track(self.root)
