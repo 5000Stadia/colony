@@ -32,6 +32,9 @@ what it assumes and what a second provider needs there. What a provider supplies
                            phone console's ↓ shows while it's there
   scrolls_in_tmux          True for a CLI that draws inline and takes no mouse: its history is tmux's, so its
                            session takes the mouse, and a swipe or wheel scrolls tmux's copy of it (optional)
+  queue_keys               the keys of its queue of messages sent mid-turn, {"now": send them at once, "back": take
+                           them back into the box (nothing sent meanwhile), "clear": one press clearing the box a
+                           line at a time}; Chat's Send now, Edit and reorder use them (optional; without, none)
   turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
                            turn that asks the person something shows under "Waiting on you"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
@@ -121,6 +124,9 @@ def _keep(path, text):
 
 class ClaudeCode:
     label = "Claude Code"
+    # Its queue, from its documentation (interactive mode, v2.1.281 on): Ctrl+X Ctrl+S sends what is queued now
+    # (work that can go to the background goes on there), Up on the box's first line takes it back into the box.
+    queue_keys = {"now": ["C-x", "C-s"], "back": ["Up"], "clear": "C-u"}
 
     @staticmethod
     def config_home():

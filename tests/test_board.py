@@ -825,6 +825,31 @@ class ChatTest(BoardBase):
         self.assertGreaterEqual(len(board.PALETTE), 24, "a wide choice")
         self.assertIn("fetch('/project/color'", board.project_settings_form(0, {}, root=self.root), "a tap is the choice, no Save")
 
+    def test_queued_messages_are_sent_now_or_taken_back_and_put_back_in_a_new_order(self):
+        from colony import chat
+        pressed, typed, box = [], [], ["second\nfirst"]
+        with patch.object(console, "running", return_value=True), patch.object(console, "provider", return_value=providers.get("claude")), \
+                patch.object(console, "unscroll"), patch.object(console, "drafting", side_effect=lambda n: bool(box[0])), \
+                patch.object(console, "paste_into", side_effect=lambda n, m: typed.append(m) or True), \
+                patch.object(console.subprocess, "run", side_effect=lambda a, **k: pressed.append(a[4:]) or box.__setitem__(0, box[0].rpartition("\n")[0])):
+            self.assertTrue(console.queue("s", "now"))
+            self.assertEqual(pressed[-2:], [["C-x"], ["C-s"]], "Claude Code's send-now")
+            box[0] = "my own draft"
+            self.assertFalse(console.queue("s", "back"), "over something half-typed: refused")
+            box[0] = ""
+            self.assertTrue(console.queue("s", "back"))
+            box[0] = "second\nfirst"
+            self.assertTrue(console.queue("s", "put", ["first", "second"]))
+            self.assertEqual(typed, ["first", "second"], "cleared, then queued again in the new order")
+        with patch.object(console, "running", return_value=True), patch.object(console, "provider", return_value=providers.get("codex")):
+            self.assertFalse(console.queue("s", "now"), "a program without queue keys: none")
+        path = Path(self.tmp.name) / "q.jsonl"
+        path.write_text("\n".join(json.dumps(l) for l in [
+            {"type": "user", "message": {"content": "go"}, "timestamp": "2026-10-20T10:00:00Z"},
+            {"type": "queue-operation", "operation": "enqueue", "content": "one"},
+            {"type": "queue-operation", "operation": "popAll", "content": "one"}]))
+        self.assertEqual([t["from"] for t in chat.turns(chat.events("claude", path))], ["you"], "taken back: no longer queued")
+
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
         turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},

@@ -352,6 +352,33 @@ def paste_into(name, text):
     return True
 
 
+def queue(name, action, msgs=()):
+    """PROVIDER: queue_keys. Messages sent mid-turn wait in the program's own queue: "now" sends them at once, "back"
+    takes them back into its box (none is sent meanwhile; refused over the person's own draft), "put" clears the box
+    and queues msgs again in this order. False where it can't, the box left as it was."""
+    keys = getattr(provider(name), "queue_keys", None)
+    if not keys or not running(name):
+        return False
+    if action == "now":
+        press(name, keys["now"])
+        return True
+    if action == "back":
+        if drafting(name):
+            return False
+        press(name, keys["back"])
+        return True
+    if action == "put":
+        for _ in range(120):                       # a line at a time, till the box is empty; never Esc (it interrupts)
+            if not drafting(name):
+                break
+            subprocess.run(["tmux", "send-keys", "-t", name, "C-e", keys["clear"]], check=True)
+            time.sleep(0.03)
+        if drafting(name):
+            return False
+        return all(paste_into(name, m) for m in msgs if m.strip())
+    return False
+
+
 def press(name, keys):
     """Press keys in a session (tmux key names: Up, Down, Enter, Escape...)."""
     unscroll(name)

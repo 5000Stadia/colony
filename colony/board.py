@@ -2201,7 +2201,7 @@ def chat_feed(key, root, shown=40):
                             if a.strip().lower().endswith(IMAGES) and (u := chat_file(key, root, e(a.strip()))))
             out.append(f"<div class='msg you'>{e(t['text'])}{shots}</div>")
         elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
-            out.append(f"<div class='msg you pending' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
+            out.append(f"<div class='msg you pending queued' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
         elif t["from"] == "colony":
             head, _, rest = t["text"].removeprefix("[colony]").strip().partition("\n")
             body = "\n\n".join(filter(None, [rest.strip(), letters.get(i, "")]))
@@ -2341,13 +2341,19 @@ def choose_voice(key, root, name=None, pin=None):
     return voice_of(key, root)
 
 
+def queue_keys(key, root):
+    """PROVIDER: whether this chat's program has a queue the board can work (queue_keys)."""
+    from . import monitor
+    return getattr(monitor.provider() if key == "steward" else providers.of(root), "queue_keys", None)
+
+
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
     from . import voice
     if voice.ready():
         threading.Thread(target=voice.warm, daemon=True).start()     # loaded before the first ▷
     return (f"<div class='chat' id='chat' data-key='{e(key)}' data-name='{e(Path(root).name if key != 'steward' else 'steward')}' "
-            f"data-voice='{1 if voice.ready() else 0}'>{chat_feed(key, root)}</div>"
+            f"data-voice='{1 if voice.ready() else 0}' data-queue='{1 if queue_keys(key, root) else 0}'>{chat_feed(key, root)}</div>"
             f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
             "<div class='attached' hidden></div>"
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
@@ -2705,6 +2711,43 @@ CHAT = """
     turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
+  // What waits in its queue, sent mid-turn: Send now, or Edit and reorder, taken back out of the queue meanwhile so
+  // none of it goes; Done puts it back in the new order. PROVIDER: queue_keys (where its program has none, no bar).
+  const qpost = (body) => fetch('/chat/queue', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
+  const qbar = document.createElement('div'); qbar.className = 'qbar';
+  qbar.innerHTML = "<button type='button' class='qnow'>Send now</button><button type='button' class='qedit'>Edit or reorder</button>";
+  let editor = null;
+  const placeBar = () => { const q = [...box.querySelectorAll('.msg.queued')];
+    if (box.dataset.queue !== '1' || editor || !q.length) { if (qbar.isConnected) qbar.remove(); return; }
+    if (qbar.previousElementSibling !== q[q.length - 1]) q[q.length - 1].after(qbar); };
+  new MutationObserver(placeBar).observe(box, {childList: true}); placeBar();
+  qbar.querySelector('.qnow').addEventListener('click', async () => { qbar.remove(); await qpost({action: 'now'}); setTimeout(refresh, 800); });
+  qbar.querySelector('.qedit').addEventListener('click', async () => {
+    const was = [...box.querySelectorAll('.msg.queued')].map((m) => m.textContent);
+    const r = await qpost({action: 'back'});
+    if (!r || !r.ok) { held.hidden = false; held.textContent = 'Not taken back: something is half-typed in its console.'; return; }
+    box.classList.add('editingq'); editor = document.createElement('div'); editor.className = 'qeditor'; box.after(editor);
+    let items = was.slice();
+    const draw = () => { editor.innerHTML = "<p class='muted'>Out of the queue while you edit: nothing goes until Done.</p>";
+      items.forEach((text, i) => { const row = document.createElement('div'); row.className = 'qrow';
+        row.innerHTML = "<textarea rows='2'></textarea><span class='qmoves'><button type='button' data-m='-1' aria-label='Earlier'>↑</button>"
+          + "<button type='button' data-m='1' aria-label='Later'>↓</button><button type='button' data-m='x' aria-label='Remove'>✕</button></span>";
+        const ta2 = row.querySelector('textarea'); ta2.value = text; ta2.addEventListener('input', () => { items[i] = ta2.value; });
+        row.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+          if (b.dataset.m === 'x') items.splice(i, 1);
+          else { const j = i + +b.dataset.m; if (j < 0 || j >= items.length) return; [items[i], items[j]] = [items[j], items[i]]; }
+          draw(); }));
+        editor.appendChild(row); });
+      const foot = document.createElement('div'); foot.className = 'qfoot';
+      foot.innerHTML = "<button type='button' class='qcancel quiet'>As it was</button><button type='button' class='qdone'>Done</button>";
+      foot.querySelector('.qdone').addEventListener('click', () => put(items));
+      foot.querySelector('.qcancel').addEventListener('click', () => put(was));
+      editor.appendChild(foot); };
+    const put = async (list) => { const r2 = await qpost({action: 'put', msgs: JSON.stringify(list.filter((x) => x.trim()))});
+      if (!r2 || !r2.ok) { held.hidden = false; held.textContent = "Not put back: it's in its console's box, as you left it."; }
+      editor.remove(); editor = null; box.classList.remove('editingq'); setTimeout(refresh, 600); placeBar(); };
+    draw();
+  });
   // opening something (a decision, a run of work) keeps the reader where they are: it no longer follows the end
   box.addEventListener('toggle', () => { stick = atEnd(); }, true);
   // Needs you opened by a tap: its top comes to the top of what is visible, below the bar, to be read from the start
@@ -5609,6 +5652,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/chat/queue":                        # what waits in its queue: sent now, taken back to edit, put back
+            from . import monitor
+            key = values.get("p", ["0"])[0]
+            try:
+                name = monitor.name() if key == "steward" else console.session_name(projects(registry())[int(key)])
+                msgs = json.loads(values.get("msgs", ["[]"])[0]) if values.get("action", [""])[0] == "put" else []
+            except (ValueError, IndexError):
+                return self._send(400, b"no such console")
+            ok = console.queue(name, values.get("action", [""])[0], [str(m) for m in msgs])
+            self.send_response(204 if ok else 409)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/chat/stop":                         # at work, ■ in Chat: Esc in its console, as the person would press it
             from . import monitor
             key = values.get("p", ["0"])[0]
@@ -5966,6 +6022,15 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .chat details.need textarea { width:100%; min-height:64px; margin:6px 0; font:inherit; padding:8px; border-radius:10px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
 .chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
+.chat .qbar { align-self:flex-end; display:flex; gap:6px; margin-top:-6px } .chat .qbar button { min-height:30px; padding:2px 12px;
+  border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:13px }
+.chat.editingq .msg.queued { display:none }
+.qeditor { max-width:760px; margin:8px auto; padding:10px; border:1px solid var(--accent); border-radius:14px; background:var(--card) }
+.qeditor .qrow { display:flex; flex-direction:column; gap:4px; margin:8px 0 } .qeditor textarea { flex:1; font:inherit; padding:8px;
+  border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.qeditor .qmoves { display:flex; gap:6px; align-self:flex-end } .qeditor .qmoves button { width:34px; height:30px; padding:0;
+  border-radius:8px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
+.qeditor .qfoot { display:flex; justify-content:flex-end; gap:8px; margin-top:8px } .qeditor .qfoot button { min-height:36px; padding:4px 16px; border-radius:999px }
 .round { margin:0 0 8px; padding:6px 10px; border-left:3px solid var(--line); color:var(--muted) } .round p { margin:4px 0 }
 .round > summary { cursor:pointer } .round.now { border-left-color:var(--accent); color:var(--ink) }
 .chat details.need form .attach { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; margin-right:6px;

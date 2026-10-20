@@ -84,6 +84,8 @@ def claude_events(path):
                 queued.remove(e["content"])
             elif e.get("operation") == "dequeue" and queued:
                 queued.pop(0)                             # the oldest, taken up as the next turn
+            elif e.get("operation") == "popAll":
+                queued.clear()                            # taken back into the box (to edit, or reorder)
             continue
         if e.get("type") == "attachment":
             a = e.get("attachment") or {}
