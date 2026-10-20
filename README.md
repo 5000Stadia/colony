@@ -54,6 +54,10 @@ where things stand; `colony remote --off` puts it back as it was.
 - **Every project's live console**, in the browser and on a phone (swipe to scroll, a key row for
   Esc/Tab/arrows, full screen). Sessions run in tmux, so closing the page stops nothing, and
   `tmux attach -t board-…` reaches the same session from a terminal.
+- **Chat**, beside each console (and the steward's): the conversation as the Claude app shows it, your messages
+  in bubbles, the agent's replies in full, each run of work folded to a line ("Ran 6 commands, edited 2 files")
+  that opens to the steps, and a choice on its screen as buttons. What you send goes into its console. It reads
+  the session's own transcript, so it costs nothing, and the Console tab is a tap away.
 - **Waiting on you:** what each project needs from you, in one list. That covers decisions it put to
   you (gates), questions it asked, choices on its screen, and work ready for your OK (Approve / Not
   yet). The sidebar counts them.

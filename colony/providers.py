@@ -30,6 +30,8 @@ what it assumes and what a second provider needs there. What a provider supplies
                            "agents": [{"name", "detail", "current"}]}, shown as the project's status
   scrolled_marker          text on screen while the view is scrolled up from the latest ("" if none); the
                            phone console's ↓ shows while it's there
+  scrolls_in_tmux          True for a CLI that draws inline and takes no mouse: its history is tmux's, so its
+                           session takes the mouse, and a swipe or wheel scrolls tmux's copy of it (optional)
   turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
                            turn that asks the person something shows under "Waiting on you"
   classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
@@ -852,6 +854,7 @@ class Codex:
     instructions = "AGENTS.md"
     enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
     scrolled_marker = ""
+    scrolls_in_tmux = True  # inline (--no-alt-screen), no mouse of its own: its scrollback is tmux's
     legacy_hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
                     "Stop": "colony turn && printf '{}\\n'"}
     hooks = {"SessionStart": "colony notes --deliver --session --console codex",

@@ -133,7 +133,29 @@ def ensure(root, name=None, label=None):
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
         _started(name, fingerprint(root, label))
+        scrollable(name, providers_of(root, label))
     return name
+
+
+def providers_of(root, label=None):
+    from . import providers
+    return providers.of(None if label else root)
+
+
+def scrollable(name, prov):
+    """A CLI drawing inline with no mouse of its own (Codex) leaves its history to tmux: its session takes the mouse,
+    so a swipe or wheel up scrolls tmux's copy of it, back down returns to the live screen, and a program that takes
+    the mouse itself (Claude Code) still gets it."""
+    if getattr(prov, "scrolls_in_tmux", False):
+        subprocess.run(["tmux", "set-option", "-t", name, "mouse", "on"], capture_output=True)
+
+
+def unscroll(name):
+    """Back to the live screen if the session is scrolled up in tmux's history: typed keys would go to the scrolling
+    instead of the program."""
+    mode = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_in_mode}"], capture_output=True, text=True)
+    if (getattr(mode, "stdout", "") or "").strip() == "1":
+        subprocess.run(["tmux", "send-keys", "-t", name, "-X", "cancel"], capture_output=True)
 
 
 # ---------------------------------------------------------------- staying current: reloading a stale console
@@ -302,7 +324,11 @@ def type_into(name, text):
         return False
     left = draft(name)
     if left:
-        return left.startswith("[colony]") and _sent(name, left)
+        if not left.startswith("[colony]"):
+            return False
+        unscroll(name)
+        return _sent(name, left)
+    unscroll(name)
     # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
@@ -317,6 +343,7 @@ def paste_into(name, text):
     all, in one piece (a bracketed paste where the program asks for one, as Claude Code does)."""
     if "\n" not in text or not running(name) or drafting(name):
         return type_into(name, text)
+    unscroll(name)
     buf = f"colony-{secrets.token_hex(4)}"
     subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
     subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
@@ -327,6 +354,7 @@ def paste_into(name, text):
 
 def press(name, keys):
     """Press keys in a session (tmux key names: Up, Down, Enter, Escape...)."""
+    unscroll(name)
     for k in keys:
         subprocess.run(["tmux", "send-keys", "-t", name, k], check=True)
 
@@ -422,6 +450,8 @@ def bridge(sock, root, name=None, label=None):
     """Attach a terminal to the session and pass bytes both ways until either side leaves. Leaving
     detaches; the session keeps running."""
     name = ensure(root, name, label)
+    inline, up = getattr(providers_of(root, label), "scrolls_in_tmux", False), False
+    scrollable(name, providers_of(root, label))                 # a session started before it took the mouse too
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
@@ -448,7 +478,15 @@ def bridge(sock, root, name=None, label=None):
                 if "r" in msg:
                     cols, rows = msg["r"]
                     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", int(rows), int(cols), 0, 0))
+                elif "live" in msg:                         # the ↓: back to the latest, however far up
+                    unscroll(name)
+                    up = False
                 elif "i" in msg:
+                    if inline and msg["i"].startswith("\x1b[<"):
+                        up = True                           # a swipe: tmux scrolls its history
+                    elif inline and up:
+                        unscroll(name)                          # a key: to the program, on the live screen
+                        up = False
                     os.write(fd, msg["i"].encode())
     except (ConnectionError, OSError, ValueError):
         pass
@@ -585,6 +623,7 @@ const showJump = () => {{ jump.hidden = MARKER ? !markerShown() : above === 0; i
 const scrolled = (n) => {{ above = Math.max(0, above + n); if (!MARKER) showJump(); }};
 jump.addEventListener('click', (ev) => {{
   ev.preventDefault(); cancelAnimationFrame(glide); acc = 0;
+  send({{live: 1}});                                  // scrolled in tmux's history (Codex), straight back to live
   let tries = 0;
   const down = () => {{ send({{i: wheel(false).repeat(40)}}); above = 0;
     setTimeout(() => {{ showJump(); if (!jump.hidden && ++tries < 8) down(); }}, 250); }};

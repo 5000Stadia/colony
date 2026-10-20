@@ -2019,6 +2019,7 @@ def tabs(pid, view, root=None):
     return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview")
             + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
             + (tab("showcase", "Showcase", f"/?p={pid}&view=showcase") if shown else "")
+            + tab("chat", "Chat", f"/?p={pid}&view=chat")
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
@@ -2029,6 +2030,112 @@ def held(who, back):
             f"<p>Not sent: {e(who)} has something half-typed in its console, and your message would have landed on it "
             f"and sent it. Send or clear it there, then send this again.</p>"
             f"<p><a href='javascript:history.back()'>Back to what you wrote</a> · <a href='{e(back)}'>Back to the board</a></p>")
+
+
+def chat_prose(text):
+    """An agent's prose in the chat: markdown as the page shows it, code blocks kept as they are, links live."""
+    out = []
+    for k, part in enumerate(re.split(r"^```[^\n]*\n", text, flags=re.M)):
+        if k % 2:                                            # inside a fence, up to its closing one
+            code, _, rest = part.partition("```")
+            out.append(f"<pre>{e(code.rstrip())}</pre>" + prose(rest))
+        else:
+            out.append(prose(part))
+    html = "".join(out)
+    return re.sub(r"\[([^\]]+)\]\(((?:https?://|/)[^)\s]+)\)", r"<a href='\2' target='_blank' rel='noopener'>\1</a>", html)
+
+
+def chat_feed(key, root, shown=40):
+    """The conversation, as the app shows one: the person's messages, the agent's prose in full, each run of work
+    between folded to a line (Ran 6 commands), colony's own notices small; then what it is doing now."""
+    from . import chat, context, monitor
+    s = context.session(root)
+    turns = chat.turns(chat.events(s["provider"], s["path"])) if s else []
+    out = []
+    for i, t in enumerate(turns[-shown:]):
+        k = f"{e(t['at'])}"
+        if t["from"] == "you":
+            out.append(f"<div class='msg you'>{e(t['text'])}</div>")
+        elif t["from"] == "colony":
+            head, _, rest = t["text"].removeprefix("[colony]").strip().partition("\n")
+            out.append(f"<details class='msg colony' data-k='c{k}'><summary>{e(short(head, 90))}</summary>"
+                       f"<div>{e(rest.strip()) if rest.strip() else ''}</div></details>")
+        elif t["from"] == "compact":
+            out.append("<div class='msg colony'>The conversation was compacted here</div>")
+        run = []
+        for j, (kind, text) in enumerate(t["items"] + [("end", "")]):
+            if kind == "step":
+                run.append(text)
+                continue
+            if run:
+                out.append(f"<details class='ran' data-k='r{k}-{j}'><summary>{e(chat.worked(run))}</summary>"
+                           f"<ul>{''.join(f'<li>{e(x)}</li>' for x in run)}</ul></details>")
+                run = []
+            if kind == "say":
+                out.append(f"<div class='say'>{chat_prose(text)}</div>")
+    if not turns:
+        out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
+    # what it is doing now: at work, or a choice in its console, answered here
+    name = monitor.name() if key == "steward" else console.session_name(root)
+    snap = monitor.snapshot() if key == "steward" else console.snapshot(root, lines=4)
+    if snap["state"] == "working":
+        act = (snap.get("activity") or {}).get("line") or "Working"
+        out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(short(act, 90))}</div>")
+    elif snap["state"] == "needs you" and key != "steward":
+        found = providers.of(root).choice(console.screen(name))
+        if found:
+            question, options, _ = found
+            out.append("<div class='chatask'>" + "".join(f"<div>{e(q)}</div>" for q in question) + "<div class='choices'>"
+                       + "".join(f"<button class='quiet' data-option='{e(o)}'>{e(o)}</button>" for o in options) + "</div></div>")
+        else:
+            out.append(f"<div class='chatask'>It needs you in its console. <a href='/?p={key}&view=console'>Open it →</a></div>")
+    return "".join(out)
+
+
+def chat_page(key, root):
+    """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
+    return (f"<div class='chat' id='chat' data-key='{e(key)}'>{chat_feed(key, root)}</div>"
+            f"<form class='composer' id='composer'><textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
+            "<button aria-label='Send'>↑</button></form><div class='chatheld muted' id='chatheld' hidden></div>"
+            f"<script>{CHAT}</script>")
+
+
+CHAT = """
+(() => {
+  const box = document.getElementById('chat'), key = box.dataset.key, form = document.getElementById('composer');
+  const ta = form.querySelector('textarea'), held = document.getElementById('chatheld');
+  const atEnd = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+  const toEnd = () => window.scrollTo(0, document.body.scrollHeight);
+  toEnd();
+  let last = box.innerHTML;
+  async function refresh() {
+    try {
+      const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
+      const html = await r.text(); if (html === last) return;
+      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = atEnd();
+      box.innerHTML = last = html;
+      open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
+      if (end) toEnd();
+    } catch (e) {}
+  }
+  setInterval(refresh, 3000);
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; };
+  ta.addEventListener('input', grow);
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const text = ta.value.trim(); if (!text) return;
+    const r = await fetch('/chat/send', {method: 'POST', body: new URLSearchParams({p: key, text})}).catch(() => null);
+    held.hidden = !!(r && r.ok);
+    if (!r || !r.ok) { held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.'; return; }
+    ta.value = ''; grow(); setTimeout(refresh, 600); setTimeout(toEnd, 700);
+  });
+  box.addEventListener('click', async (ev) => {
+    const b = ev.target.closest('button[data-option]'); if (!b) return;
+    await fetch('/choose', {method: 'POST', body: new URLSearchParams({p: key, option: b.dataset.option})}).catch(() => {});
+    setTimeout(refresh, 600);
+  });
+})();
+"""
 
 
 def message_form(pid, plist, cls):
@@ -2227,7 +2334,11 @@ def render(reg, pid, view="overview", show_all=""):
     out = []
     if not plist:
         return shell(reg, pid, "")
-    view = view if view in ("roadmap", "showcase", "console") else "overview"     # Today is Overview now
+    view = view if view in ("roadmap", "showcase", "console", "chat") else "overview"     # Today is Overview now
+    if view == "chat":
+        root = plist[pid]
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}</header>"
+                     + chat_page(str(pid), root))
     if view == "console":
         root = plist[pid]
         message = message_form(pid, plist, "msgbox")
@@ -3005,8 +3116,10 @@ def monitor_page(reg, view="overview"):
             + ("" if on else f"<form method='post' action='/mute' class='helmform'><input type='hidden' name='state' "
                f"value='{'off' if monitor.muted() else 'on'}'><button class='quiet'>{'Unmute' if monitor.muted() else 'Mute'}</button></form>")
             + "</div>"
-            f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('console', 'Console')}</div></header>")
+            f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('chat', 'Chat')}{tab('console', 'Console')}</div></header>")
     plist = projects(reg)
+    if view == "chat":
+        return shell(reg, -1, head + chat_page("steward", monitor.home()))
     if view == "console":
         body = head + console.PAGE.format(label=e(monitor.provider().label), path=e(monitor.home()), name=monitor.name(), pid=-1,
                                           token=console.token(), focus='true', scrolled=e(monitor.provider().scrolled_marker))
@@ -4277,6 +4390,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
+        if url.path == "/chat/feed":                  # the chat's conversation, as it stands now
+            from . import monitor
+            key = (q.get("p") or ["0"])[0]
+            try:
+                root = monitor.home() if key == "steward" else plist[int(key)]
+            except (ValueError, IndexError):
+                return self._send(404, b"No such console")
+            body = chat_feed(key, root).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if url.path == "/console/text":
             # The session's history as plain text, for scrolling and copying where the terminal can't.
             from . import monitor
@@ -4673,6 +4800,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/chat/send":                         # what the person sends in Chat: into the console, as Message does
+            from . import monitor
+            key, text = values.get("p", ["0"])[0], values.get("text", [""])[0].strip()
+            if key == "steward":
+                sent = not text or console.paste_into(monitor.ensure(), text)
+            else:
+                src = projects(registry())[int(key)]
+                sent = not text or console.paste_into(console.ensure(src), text)
+                if sent and text:
+                    answer_asks(src, "in the console")
+                    append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text, "to": "console"})
+            self.send_response(204 if sent else 409)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/nests/order":                       # the person moved the groups: their order, everywhere
             reg = registry()
             reg["settings"]["nest_order"] = list(dict.fromkeys(values.get("n", [])))
@@ -4950,6 +5092,30 @@ div.nestgroup > .listhead .foldbtn { background:var(--card) }
 div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-content:center; min-height:36px; padding:4px 10px;
   background:var(--card); margin-top:4px } div.nestgroup .members .psub { margin-top:1px }
 .nestpick { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px }
+/* Chat, as the app shows a conversation: the person's messages in bubbles at the right, the agent's prose in full, each
+   run of work folded to a line, colony's notices small; a rounded box at the bottom to send */
+.chat { display:flex; flex-direction:column; gap:12px; max-width:760px; margin:8px auto 0; padding-bottom:12px; font-size:16px; line-height:1.55 }
+.chat .msg.you { align-self:flex-end; max-width:86%; padding:10px 14px; border-radius:20px; background:var(--sunk);
+  border:1px solid var(--line); white-space:pre-wrap; overflow-wrap:anywhere }
+.chat .msg.colony { align-self:center; max-width:92%; padding:3px 12px; border-radius:999px; background:var(--sunk);
+  color:var(--muted); font-size:12.5px } .chat details.msg.colony[open] { border-radius:12px }
+.chat details.msg.colony > div { white-space:pre-wrap; padding:4px 0 6px; overflow-wrap:anywhere }
+.chat .say { overflow-wrap:anywhere } .chat .say p { margin:0 0 10px } .chat .say p:last-child { margin-bottom:0 }
+.chat .say pre { overflow-x:auto; padding:10px; border-radius:8px; background:var(--sunk); font-size:13px }
+.chat .say h3 { font-size:16px; margin:12px 0 6px }
+.chat details.ran > summary { list-style:none; cursor:pointer; color:var(--muted); font-size:15px; padding:4px 0 }
+.chat details.ran > summary::before { content:'☰'; margin-right:10px; opacity:.7 } .chat details.ran > summary::after { content:' ›' }
+.chat details.ran[open] > summary::after { content:' ⌄' } .chat details.ran > summary::-webkit-details-marker { display:none }
+.chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
+.chat details.ran li { overflow-wrap:anywhere }
+.chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
+.chatask { padding:10px 12px; border:1px solid var(--flag); border-radius:12px; background:var(--flag-bg) }
+.chatask .choices { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
+.composer { position:sticky; bottom:12px; z-index:30; display:flex; align-items:flex-end; gap:8px; max-width:760px; margin:14px auto 0;
+  padding:8px 8px 8px 14px; border:1px solid var(--line); border-radius:24px; background:var(--card); box-shadow:0 2px 12px rgba(0,0,0,.08) }
+.composer textarea { flex:1; min-height:28px; max-height:200px; resize:none; border:0; outline:0; background:transparent; color:var(--ink);
+  font-size:16px; line-height:1.45; font-family:inherit; padding:6px 0 } .composer button { flex:none; width:40px; height:40px; min-height:40px; border-radius:50%;
+  padding:0; font-size:20px; font-weight:700 } .chatheld { max-width:760px; margin:6px auto 0 }
 .pinbtn { flex:none; display:inline-flex; align-items:center; justify-content:center; width:36px; height:32px; margin:-6px -6px -6px 0;
   font-size:15px; opacity:.25; filter:grayscale(1); cursor:pointer } .pinbtn.on { opacity:1; filter:none }
 a.proj.pinchip .pname::before { content:'📌'; font-size:11px; margin-right:2px }
@@ -5169,6 +5335,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   nav { position:sticky; top:0; z-index:40 }
   /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
   input, textarea, select { font-size:16px }
+  .composer { bottom:calc(64px + env(safe-area-inset-bottom)) }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
   .tabs a { flex:1 1 0; min-width:0; text-align:center; padding:10px 0 9px; border-radius:0; color:var(--muted);

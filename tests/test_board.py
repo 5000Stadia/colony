@@ -691,6 +691,102 @@ class ConsoleTest(BoardBase):
         self.assertNotIn("id='exit'", page, "the tabs and chips stay on screen: no Exit")
 
 
+    def test_a_cli_drawing_inline_scrolls_by_swipe_in_tmux_and_any_key_or_the_arrow_returns_to_the_live_screen(self):
+        board.track(self.root)
+        console.COMMAND = "seq 1 400; cat"
+        port = self.serve()
+        prov = type(providers.of(self.root))
+        with patch.object(prov, "scrolls_in_tmux", True, create=True):
+            s, head = self.handshake(port, f"http://127.0.0.1:{port}", console.token())
+            s.settimeout(5)
+            s.recv(65536)
+            time.sleep(0.5)
+            name = console.session_name(self.root)
+            mode = lambda: subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_in_mode}"],
+                                          capture_output=True, text=True).stdout.strip()
+
+            def frame(m):
+                msg, mask = json.dumps(m).encode(), os.urandom(4)
+                s.sendall(bytes([0x81, 0x80 | len(msg)]) + mask + bytes(c ^ mask[i % 4] for i, c in enumerate(msg)))
+                time.sleep(0.5)
+            frame({"i": "\x1b[<64;40;12M" * 6})
+            self.assertEqual(mode(), "1", "a swipe up scrolls tmux's copy of its history")
+            frame({"i": "x"})
+            self.assertEqual(mode(), "0", "a key goes to the program, on the live screen")
+            frame({"i": "\x1b[<64;40;12M" * 6})
+            frame({"live": 1})
+            self.assertEqual(mode(), "0", "the arrow brings the latest back, however far up")
+            frame({"i": "\x1b[<64;40;12M" * 6})
+            console.press(name, ["Enter"])
+            self.assertEqual(mode(), "0", "what the board types never lands in the scrolling")
+            s.close()
+
+
+class ChatTest(BoardBase):
+    def test_a_claude_transcript_reads_as_turns_with_its_work_folded_between_its_prose(self):
+        from colony import chat
+        lines = [
+            {"type": "user", "message": {"content": "Make the tabs bigger"}, "timestamp": "2026-10-19T10:00:00Z"},
+            {"type": "user", "isMeta": True, "message": {"content": "hook context"}, "timestamp": "2026-10-19T10:00:00Z"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Looking at the CSS first:"},
+                                                          {"type": "tool_use", "name": "Bash", "input": {"command": "grep tabs", "description": "Find the tab rules"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "content": "..."}]}},
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Edit", "input": {"file_path": "/x/board.py"}}]}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Done: **bigger** tabs."}]}},
+            {"type": "user", "message": {"content": "[colony] You have mail.\nfrom plants"}, "timestamp": "2026-10-19T10:05:00Z"},
+        ]
+        path = Path(self.tmp.name) / "t.jsonl"
+        path.write_text("\n".join(json.dumps(l) for l in lines))
+        turns = chat.turns(chat.events("claude", path))
+        self.assertEqual([(t["from"], t["text"][:20]) for t in turns], [("you", "Make the tabs bigger"), ("colony", "[colony] You have ma")])
+        self.assertEqual([k for k, _ in turns[0]["items"]], ["say", "step", "step", "say"], "hooks' context and tool results stay out")
+        self.assertEqual(chat.worked(["Bash(Find the tab rules)", "Edit(/x/board.py)"]), "Ran 1 command, edited 1 file")
+
+    def test_a_codex_rollout_reads_the_same_way(self):
+        from colony import chat
+        item = lambda p: {"type": "response_item", "timestamp": "2026-10-19T10:00:00Z", "payload": p}
+        lines = [item({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions ..."}]}),
+                 item({"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Review R93"}]}),
+                 item({"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "catch-up"}]}),
+                 item({"type": "custom_tool_call", "name": "exec", "input": 'tools.exec_command({cmd:"git log -3",workdir:"/x"})'}),
+                 item({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Three findings."}]})]
+        path = Path(self.tmp.name) / "rollout.jsonl"
+        path.write_text("\n".join(json.dumps(l) for l in lines))
+        turns = chat.turns(chat.events("codex", path))
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["text"], "Review R93")
+        self.assertEqual(turns[0]["items"], [("step", "exec(git log -3)"), ("say", "Three findings.")])
+
+    def test_the_chat_tab_shows_the_conversation_and_what_is_sent_goes_into_its_console(self):
+        from colony import chat
+        board.track(self.root)
+        path = Path(self.tmp.name) / "t.jsonl"
+        path.write_text(json.dumps({"type": "user", "message": {"content": "hello"}, "timestamp": "2026-10-19T10:00:00Z"}) + "\n"
+                        + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi, see [the lab](https://x.io)."}]}}))
+        with patch("colony.context.session", return_value={"provider": "claude", "id": "s", "path": str(path)}):
+            page = board.render(board.registry(), 0, "chat")
+            self.assertIn("<div class='msg you'>hello</div>", page)
+            self.assertIn("<a href='https://x.io' target='_blank' rel='noopener'>the lab</a>", page)
+            self.assertIn("id='composer'", page)
+            self.assertIn("view=console'>Console<", page, "the console is a tab away")
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host = f"127.0.0.1:{server.server_address[1]}"
+        with patch.object(board.console, "ensure", return_value="s"), \
+                patch.object(board.console, "paste_into", return_value=True) as pasted:
+            r = urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=Ship+it",
+                                                              headers={"Host": host, "Origin": f"http://{host}"}))
+            self.assertEqual(r.status, 204)
+            pasted.assert_called_once_with("s", "Ship it")
+        with patch.object(board.console, "ensure", return_value="s"), patch.object(board.console, "paste_into", return_value=False):
+            with self.assertRaises(urllib.error.HTTPError) as held:
+                urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=x",
+                                                              headers={"Host": host, "Origin": f"http://{host}"}))
+            self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)
