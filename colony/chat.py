@@ -159,3 +159,37 @@ def running(lines):
         for n, what in re.findall(r"\b(\d+) (shells?|background tasks?|local agents?|running tasks?)\b", line):
             found.append(f"{n} {what}")
     return ", ".join(dict.fromkeys(found)) + " running" if found else ""
+
+
+def background(path):
+    """What the agent started in the background, and how each ended: [{id, kind, what, at, state, ended, exit}], oldest
+    first. state is running until its notice comes (completed, failed, killed). PROVIDER: Claude Code's transcript:
+    a tool run with run_in_background, and the <task-notification> that names its tool-use-id when it stops."""
+    started, notices = {}, {}
+    for e in _tail(path) if path and Path(path).exists() else []:
+        at = e.get("timestamp", "")
+        content = (e.get("message") or {}).get("content")
+        if e.get("type") == "assistant" and isinstance(content, list):
+            for c in content:
+                if isinstance(c, dict) and c.get("type") == "tool_use":
+                    inp = c.get("input") or {}
+                    started[c.get("id")] = {"id": c.get("id"), "kind": "Shell" if c.get("name") == "Bash" else c.get("name", "Task"),
+                                            "what": (inp.get("description") or inp.get("command") or inp.get("prompt") or "").strip(),
+                                            "at": at, "bg": bool(inp.get("run_in_background"))}
+        texts = [e.get("content")] if e.get("type") == "queue-operation" else \
+            [(e.get("attachment") or {}).get("prompt")] if e.get("type") == "attachment" else \
+            [content] if isinstance(content, str) else []
+        for text in texts:
+            if isinstance(text, str) and "<task-notification>" in text:
+                use = re.search(r"<tool-use-id>([^<]+)</tool-use-id>", text)
+                state = re.search(r"<status>([^<]+)</status>", text)
+                code = re.search(r"exit code (\d+)", text)
+                if use and use.group(1) not in notices:
+                    notices[use.group(1)] = {"state": state.group(1) if state else "completed", "ended": at,
+                                             "exit": int(code.group(1)) if code else None}
+    out = []
+    for uid, s in started.items():
+        if s["bg"] or uid in notices:
+            n = notices.get(uid) or {"state": "running", "ended": "", "exit": None}
+            out.append(dict(s, **n))
+    return out

@@ -6,14 +6,22 @@ import json
 from pathlib import Path
 import subprocess
 import threading
+import time
 
 from . import board
 
 MODEL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 FILES = ("kokoro-v1.0.onnx", "voices-v1.0.bin")
-# a few of its voices, as the person picks them in Chat (American, then British)
-VOICES = (("af_heart", "Heart"), ("af_bella", "Bella"), ("af_nicole", "Nicole"), ("am_michael", "Michael"),
-          ("am_fenrir", "Fenrir"), ("bf_emma", "Emma"), ("bm_george", "George"), ("bm_fable", "Fable"))
+# its English voices, as the person picks them in Chat, by accent and voice; Fable is shown as Arthur, since Fable
+# is also a model's name
+VOICES = (("af_heart", "Heart"), ("af_bella", "Bella"), ("af_nicole", "Nicole"), ("af_aoede", "Aoede"), ("af_kore", "Kore"),
+          ("af_sarah", "Sarah"), ("af_nova", "Nova"), ("af_sky", "Sky"), ("af_alloy", "Alloy"), ("af_jessica", "Jessica"),
+          ("af_river", "River"), ("am_michael", "Michael"), ("am_fenrir", "Fenrir"), ("am_puck", "Puck"), ("am_echo", "Echo"),
+          ("am_eric", "Eric"), ("am_liam", "Liam"), ("am_onyx", "Onyx"), ("am_adam", "Adam"), ("bf_emma", "Emma"),
+          ("bf_isabella", "Isabella"), ("bf_alice", "Alice"), ("bf_lily", "Lily"), ("bm_fable", "Arthur"), ("bm_george", "George"),
+          ("bm_lewis", "Lewis"), ("bm_daniel", "Daniel"))
+GROUPS = (("af_", "American, women"), ("am_", "American, men"), ("bf_", "British, women"), ("bm_", "British, men"))
+IDLE = 600                 # seconds without a word before Kokoro is let go: its memory back, a moment's start next time
 KEEP = 300                 # clips kept, newest first: a reply played again plays at once
 _lock, _worker = threading.Lock(), {}
 
@@ -57,13 +65,40 @@ def warm():
 
 
 def _start():
+    _worker["used"] = time.time()
     w = _worker.get("proc")
     if not w or w.poll() is not None:
         w = subprocess.Popen([str(python()), "-u", str(Path(__file__).with_name("voice_worker.py")), str(folder())],
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         _worker["proc"] = w
         json.loads(w.stdout.readline() or "{}")       # loaded
+        if not _worker.get("watch"):
+            _worker["watch"] = threading.Thread(target=_let_go, daemon=True)
+            _worker["watch"].start()
     return w
+
+
+def _let_go():
+    """Kokoro holds about 800 MB while loaded: after IDLE seconds unasked, it is stopped, and the next ask starts it."""
+    while True:
+        time.sleep(30)
+        with _lock:
+            w = _worker.get("proc")
+            if w and w.poll() is None and time.time() - _worker.get("used", 0) > IDLE:
+                w.terminate()
+                try:
+                    w.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    w.kill()
+                _worker["proc"] = None
+
+
+def options(chosen="bm_fable"):
+    """The voices as a picker's options, grouped by accent and voice."""
+    from html import escape
+    return "".join(f"<optgroup label='{escape(label)}'>" + "".join(
+        f"<option value='{v}'{' selected' if v == chosen else ''}>{escape(n)}</option>" for v, n in VOICES if v.startswith(pre))
+        + "</optgroup>" for pre, label in GROUPS)
 
 
 def _ask(line):

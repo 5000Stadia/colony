@@ -2079,20 +2079,30 @@ def chat_feed(key, root, shown=40):
                 out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>⧉</button>"
-                       f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>▷</button></div>")
+                       f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>▷</button>"
+                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>⏭</button>"
+                       "<button class='vset' aria-label='Reading aloud: auto-speak, speed, voice'>⋯</button></div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
     name = monitor.name() if key == "steward" else console.session_name(root)
     snap = monitor.snapshot() if key == "steward" else console.snapshot(root, lines=4)
-    # and what it waits on in the background, its turn over or not (a test run, a helper)
+    # and what it waits on in the background, its turn over or not (a test run, a helper): a tap opens the tasks
     behind = chat.running(snap.get("lines") or [])
+    tasks = chat.background(s["path"]) if s and s["provider"] == "claude" else []
+    if not behind:                                       # nothing runs, whatever the transcript last said
+        tasks = [dict(t, state="ended") if t["state"] == "running" else t for t in tasks]
+    line = ""
     if snap["state"] == "working":
         act = (snap.get("activity") or {}).get("line") or "Working"
-        out.append(f"<div class='chatlive busy'><span class='sdot working'></span>{e(short(act, 90))}"
-                   + (f" <span class='behind'>· {e(behind)}</span>" if behind else "") + "</div>")
+        line = f"<span class='sdot working'></span>{e(short(act, 90))}" + (f" <span class='behind'>· {e(behind)}</span>" if behind else "")
     elif behind:
-        out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(behind)}</div>")
+        line = f"<span class='sdot working'></span>{e(behind)}"
+    busy = " busy" if snap["state"] == "working" else ""
+    if line and tasks:
+        out.append(f"<details class='chatlive tasks{busy}' data-k='tasks'><summary>{line}</summary>{tasks_html(tasks)}</details>")
+    elif line:
+        out.append(f"<div class='chatlive{busy}'>{line}</div>")
     elif snap["state"] == "needs you" and key != "steward":
         found = providers.of(root).choice(console.screen(name))
         if found:
@@ -2102,6 +2112,28 @@ def chat_feed(key, root, shown=40):
         else:
             out.append(f"<div class='chatask'>It needs you in its console. <a href='/?p={key}&view=console'>Open it →</a></div>")
     return "".join(out)
+
+
+def tasks_html(tasks, shown=15):
+    """The background tasks, as the app lists them: running first, with how long; then the finished, newest first."""
+    def since(a, b=None):
+        try:
+            t0 = time.mktime(time.strptime(a[:19], "%Y-%m-%dT%H:%M:%S"))
+            t1 = time.mktime(time.strptime(b[:19], "%Y-%m-%dT%H:%M:%S")) if b else time.mktime(time.gmtime())
+            return took(max(0, t1 - t0))
+        except ValueError:
+            return ""
+    row = lambda t, tail: (f"<li><span class='tk'>{'›_' if t['kind'] == 'Shell' else '◆'}</span><span class='tw'>"
+                           f"<span class='tc'>{e(short(' '.join(t['what'].split()), 140))}</span>"
+                           f"<span class='tm'>{e(t['kind'])} · {tail}</span></span></li>")
+    running = [t for t in tasks if t["state"] == "running"]
+    done = [t for t in tasks if t["state"] != "running"][::-1][:shown]
+    word = lambda t: ("Completed" if t["state"] == "completed" and not t["exit"] else
+                      f"Failed (exit {t['exit']})" if t["exit"] else t["state"].capitalize())
+    return ("<div class='tasklist'>"
+            + (f"<div class='th'>Running</div><ul>{''.join(row(t, e(since(t['at']))) for t in running)}</ul>" if running else "")
+            + (f"<div class='th'>Finished {len(done)}</div><ul>{''.join(row(t, e(word(t))) for t in done)}</ul>" if done else "")
+            + "</div>")
 
 
 def chat_page(key, root):
@@ -2116,11 +2148,13 @@ def chat_page(key, root):
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
             "<div class='composerbar'><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
-            "<label class='aloud' title='Speak each new reply as it arrives'><input type='checkbox' id='aloud'> Auto-speak</label>"
+            "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
+            # reading aloud's settings, opened from ⋯ beside a reply's ▷
+            "<div class='voicesheet' id='voicesheet' hidden><label class='aloud' title='Speak each new reply as it arrives'>"
+            "<input type='checkbox' id='aloud'> Auto-speak</label>"
             "<button type='button' class='rate' id='rate' aria-label='Reading speed'>1×</button>"
-            + (("<select id='kvoice' aria-label='Voice'>" + "".join(f"<option value='{v}'>{n}</option>" for v, n in voice.VOICES)
-                + "</select>") if voice.ready() else "")
-            + "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
+            + (f"<select id='kvoice' aria-label='Voice'>{voice.options()}</select>" if voice.ready() else "")
+            + "<span class='gap'></span><button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>{CHAT}</script>")
 
@@ -2178,8 +2212,12 @@ CHAT = """
   const vv = window.visualViewport;
   const onKeys = () => { if (!vv || !document.body.classList.contains('typing')) return;
     document.documentElement.style.setProperty('--kbtop', (vv.offsetTop + vv.height) + 'px'); };
+  // The keyboard slides up, and the phone reports its size only now and then: while typing, the box is placed again on
+  // every frame, so it rides the keyboard up and lands on it.
+  let follow = 0;
+  const ride = () => { if (!document.body.classList.contains('typing')) return; onKeys(); follow = requestAnimationFrame(ride); };
   ta.addEventListener('focus', () => { if (!matchMedia('(max-width: 700px)').matches) return;
-    document.body.classList.add('typing'); onKeys(); setTimeout(() => { onKeys(); toEnd(); }, 300); });
+    document.body.classList.add('typing'); cancelAnimationFrame(follow); ride(); setTimeout(toEnd, 350); });
   ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kbtop'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
   // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
@@ -2220,7 +2258,15 @@ CHAT = """
       else out.push(s);
       return out; }, []).map((p) => p.trim()).filter(Boolean);
   };
-  const mark = () => box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■' : '▷'; });
+  const sheet = document.getElementById('voicesheet');
+  // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
+  const mark = () => { box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■' : '▷'; });
+    box.querySelectorAll('button.skip').forEach((b) => { b.hidden = b.dataset.t !== playing; });
+    const sets = [...box.querySelectorAll('button.vset')];
+    sets.forEach((b, i) => { const on = i === sets.length - 1 && aloud && aloud.checked; b.textContent = on ? 'Auto' : '⋯';
+      b.classList.toggle('on', on); }); };
+  sheet.querySelector('.shut').addEventListener('click', () => { sheet.hidden = true; });
+  document.addEventListener('click', (ev) => { if (!sheet.hidden && !ev.target.closest('#voicesheet, button.vset')) sheet.hidden = true; });
   // its speed, remembered on this device: a tap steps through them
   const RATES = [1, 1.25, 1.5, 1.75], rateBtn = document.getElementById('rate');
   // The voices read slowly: each speed plays a quarter faster than it says, so 1× is a natural pace.
@@ -2291,7 +2337,7 @@ CHAT = """
   const turn = (t) => plain([...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)]);
   const heard = new Set([...box.querySelectorAll('.say')].map((x) => x.dataset.k));
   try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
-  aloud.addEventListener('change', () => {
+  aloud.addEventListener('change', () => { mark();
     try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
     if (talk && aloud.checked) talk.speak(new SpeechSynthesisUtterance(''));   // a tap lets the phone speak later
     if (aloud.checked) unlock();
@@ -2312,6 +2358,7 @@ CHAT = """
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   box.addEventListener('click', async (ev) => {
+    if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
     const cp = ev.target.closest('button.copy');
     if (cp) {                            // the reply as text, code and all; a plain-http page has no clipboard API
       const text = [...box.querySelectorAll(`.say[data-t="${CSS.escape(cp.dataset.t)}"]`)].map((x) => x.innerText).join('\\n\\n');
@@ -2321,6 +2368,16 @@ CHAT = """
         ok = document.execCommand('copy'); t.remove(); } catch (e) {}
       if (!ok && navigator.clipboard) { try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {} }
       cp.textContent = ok ? '✓' : '✗'; setTimeout(() => { cp.textContent = '⧉'; }, 1500); return;
+    }
+    // ⏭: on to the next reply waiting to be read, or, with none waiting, to the next part of this one
+    if (ev.target.closest('button.skip')) {
+      if (waiting.length) { const n = waiting.shift(); start(n.t, n.text); return; }
+      if (!now || now.t !== playing) return;
+      const {t, parts, at} = now;
+      hush(); playing = t;
+      if (at + 1 >= parts.length) return done(t);
+      mark(); if (KOKORO) sayK(t, parts, at + 1); else sayPhone(t, parts.slice(at + 1));
+      return;
     }
     const l = ev.target.closest('button.listen');
     if (l) { if (playing === l.dataset.t) { hush(); playing = null; mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
@@ -5342,10 +5399,27 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
-.chat .turnacts { display:flex; gap:4px; margin-top:-4px }
+.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts .vset { width:auto; min-width:36px; font-size:16px; padding:0 8px }
+.chat .turnacts .vset.on { color:var(--accent); font-size:12px; font-weight:600 }
+.voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
+  display:flex; align-items:center; gap:10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
+  box-shadow:0 2px 12px rgba(0,0,0,.12); font-size:14px } .voicesheet[hidden] { display:none } .voicesheet .gap { flex:1 }
+.voicesheet .aloud { display:flex; align-items:center; gap:6px; color:var(--ink); white-space:nowrap } .voicesheet .aloud input { width:18px; height:18px; margin:0 }
+.voicesheet .rate, .voicesheet select { height:32px; min-height:32px; padding:0 10px; border-radius:999px; background:var(--sunk); color:var(--ink);
+  border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
+  min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
+  color:var(--muted); font-size:16px }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
+details.chatlive { display:block } details.chatlive > summary { display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none }
+details.chatlive > summary::-webkit-details-marker { display:none } details.chatlive > summary .behind { color:var(--accent) }
+.tasklist { margin:8px 0 0; padding:8px 10px; border:1px solid var(--line); border-radius:14px; background:var(--card) }
+.tasklist .th { margin:4px 2px 4px; font-size:13px; color:var(--muted) } .tasklist ul { list-style:none; margin:0 0 6px; padding:0 }
+.tasklist li { display:flex; gap:10px; padding:8px; margin:4px 0; border-radius:10px; background:var(--sunk); color:var(--ink) }
+.tasklist .tk { flex:none; font-family:ui-monospace,monospace; color:var(--muted) } .tasklist .tw { min-width:0; display:flex; flex-direction:column }
+.tasklist .tc { font:13px/1.4 ui-monospace,monospace; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+  overflow-wrap:anywhere } .tasklist .tm { font-size:12.5px; color:var(--muted) }
 .chatask { padding:10px 12px; border:1px solid var(--flag); border-radius:12px; background:var(--flag-bg) }
 .chatask .choices { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
 .composer { position:sticky; bottom:12px; z-index:30; display:flex; align-items:flex-end; gap:8px; max-width:760px; margin:14px auto 0;
@@ -5593,6 +5667,8 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   body.typing .composer { position:fixed; left:8px; right:8px; top:calc(var(--kbtop, 100vh) - 6px); bottom:auto; transform:translateY(-100%);
     margin:0 }
   body.typing .chat { padding-bottom:140px }
+  .voicesheet { bottom:calc(64px + 118px + env(safe-area-inset-bottom)) }
+  body.typing .voicesheet { top:calc(var(--kbtop, 100vh) - 118px); bottom:auto; transform:translate(-50%, -100%) }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
   .tabs a { flex:1 1 0; min-width:0; text-align:center; padding:10px 0 9px; border-radius:0; color:var(--muted);

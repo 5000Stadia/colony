@@ -1,4 +1,5 @@
 """Shared-plan ownership, Git engagement and candidate review in isolated projects."""
+import time
 import json
 import io
 import os
@@ -839,6 +840,13 @@ class LeadTest(unittest.TestCase):
             server.shutdown(); server.server_close(); thread.join()
 
     def test_a_versions_hold_shows_only_while_it_holds_and_points_to_the_decision_where_it_waits(self):
+        from colony import hours
+        # within the person's hours: outside them a new decision is held for morning, and holds nothing yet
+        afternoon = time.mktime(time.localtime()[:3] + (14, 0, 0, 0, 0, -1))
+        for held in (patch.object(hours, 'clock', return_value=afternoon),
+                     patch.object(board, 'now', return_value=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(afternoon)))):
+            held.start()
+            self.addCleanup(held.stop)
         self.pair()
         c = progress.define(self.root, 'M1', 'Useful garden', 'Works', items=['R2'])
         mine = str(self.root.resolve())
