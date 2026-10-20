@@ -434,7 +434,7 @@ def cmd_gate(a):
             raise ValueError("Use --consult ID and --points FILE together.")
         points = json.loads(sys.stdin.read() if a.points == "-" else Path(a.points).read_text()) if a.points else None
         gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when,
-                              default=a.default)
+                              default=a.default, options=a.option, recommended=a.recommended)
     except (ValueError, OSError) as err:
         print(str(err), file=sys.stderr)
         return 2
@@ -1457,6 +1457,8 @@ def main(argv=None):
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
     p.add_argument("--default", help="only for a reversible choice: what stands if the person skips it, once it has "
                    "been on their page a whole day; a costly or irreversible decision has no default")
+    p.add_argument("--option", action="append", default=[], help="an answer the person can tap (repeat for each)")
+    p.add_argument("--recommended", help="the option you recommend: shown first, marked, one tap to choose")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
     p.add_argument("--context", help="with --answered: your reading of what they meant")
     p.add_argument("--withdraw", metavar="ID", help="gate ID no longer applies (superseded, moot); QUESTION says why")

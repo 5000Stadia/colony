@@ -786,7 +786,14 @@ class ChatTest(BoardBase):
         feed = board.chat_feed("0", self.root)
         self.assertIn("Needs you · 1", feed)
         self.assertIn("action='/answer'", feed)
-        self.assertIn("Go with the default: email first", feed)
+        self.assertIn("<span class='tag'>Recommended</span>email first</button>", feed, "the default, one tap away")
+        self.assertIn("Something else, or a follow-up question…", feed)
+        with patch.object(hours, "held_until", return_value=None):
+            g = board.add_gate(self.root, "Which pot?", options=["clay", "plastic"], recommended="plastic")
+        feed = board.chat_feed("0", self.root)
+        self.assertLess(feed.index("Recommended</span>plastic"), feed.index(">clay</button>"), "the recommended one first")
+        with self.assertRaises(ValueError):
+            board.add_gate(self.root, "Which pot?", options=["clay"], recommended="glass")
         self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
         self.assertIn("compositionstart", board.CHAT, "dictating into the box pauses reading")
 

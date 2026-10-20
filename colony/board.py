@@ -1267,12 +1267,14 @@ def gate_lock(root):
         yield
 
 
-def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None):
+def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None, options=(),
+             recommended=None):
     with gate_lock(root):
-        return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default)
+        return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default,
+                         options=options, recommended=recommended)
 
 
-def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None):
+def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None, options=(), recommended=None):
     """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
     (stand_defaults); one with consultant points never does, since each point needs their decision."""
     default = (default or "").strip()
@@ -1282,6 +1284,16 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
         raise ValueError("A gate needs its question.")
     if default and (consultation or points is not None):
         raise ValueError("A gate with consultant points has no default: the person decides each point.")
+    # the answers the person can tap, the agent's recommended one among them
+    options, recommended = [o.strip() for o in options or () if o.strip()], (recommended or "").strip()
+    if (options or recommended) and (consultation or points is not None):
+        raise ValueError("A gate with consultant points is decided point by point, not by options.")
+    if recommended and options and recommended not in options:
+        raise ValueError("The recommended answer is one of the options.")
+    if options:
+        gate["options"] = options
+    if recommended:
+        gate["recommended"] = recommended
     until = hours.held_until(epoch(gate["at"]))     # outside the person's active hours: theirs when those begin
     if until:
         gate["held_until"] = until
@@ -2184,14 +2196,10 @@ def chat_feed(key, root, shown=40):
     # own answer, so none is missed and however many there are take no room until opened
     asks = [g for g in gates(root) if due(g)] if key != "steward" else []
     if asks:
-        default = lambda g: (f"<form class='usedefault' method='post' action='/answer'><input type='hidden' name='p' value='{e(key)}'>"
-                             f"<input type='hidden' name='gate' value='{e(g['id'])}'><input type='hidden' name='back' value='/'>"
-                             f"<input type='hidden' name='text' value='{e('Go with the default: ' + g['default'])}'>"
-                             f"<button>Go with the default</button></form>") if g.get("default") and not g.get("points") else ""
         out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · {len(asks)}</summary>"
                    + "".join(f"<details class='need' data-k='g{e(g['id'])}'><summary><span class='q'>{e(short(g['question'], 110))}</span>"
                              f"<span class='fold muted'>Fold ▴</span></summary>"
-                             f"{gate_body(root, key, g, '/')}{default(g)}</details>" for g in asks) + "</details>")
+                             f"{gate_body(root, key, g, '/')}</details>" for g in asks) + "</details>")
     if line and tasks:
         out.append(f"<details class='chatlive tasks{busy}' data-k='tasks'><summary>{line}</summary>{tasks_html(tasks)}</details>")
     elif line:
@@ -2350,8 +2358,13 @@ CHAT = """
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
       const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick, was = lastBottom();
+      // what the reader is looking at stays where it is, though the oldest turns above drop away as new ones come
+      const seen = [...box.querySelectorAll('[data-k]')].find((x) => x.getBoundingClientRect().bottom > 0);
+      const mark0 = seen && [seen.dataset.k, seen.getBoundingClientRect().top];
       box.innerHTML = last = html; keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
+      const again = mark0 && !end && box.querySelector(`[data-k="${CSS.escape(mark0[0])}"]`);
+      if (again) window.scrollBy(0, again.getBoundingClientRect().top - mark0[1]);
       if (end && (!typingNow() || lastBottom() !== was)) toEnd();       // typing, it moves only when the conversation grew
     } catch (e) {}
   }
@@ -2583,14 +2596,21 @@ CHAT = """
     turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
+  // opening something (a decision, a run of work) keeps the reader where they are: it no longer follows the end
+  box.addEventListener('toggle', () => { stick = atEnd(); }, true);
   // Dictating into the box: the voice would be heard by the phone too, so reading pauses as soon as dictated words
-  // arrive (as underlined words, or a run of them with no key pressed); ▷ takes it up again.
-  let keyed = 0, was = ta.value.length;
+  // arrive (as underlined words, or a run of them with no key pressed), and goes on once they have stopped coming
+  // for a couple of seconds, or the message is sent.
+  let keyed = 0, was = ta.value.length, byVoice = false, quiet = 0;
   ta.addEventListener('keydown', () => { keyed = Date.now(); });
-  const dictating = () => { if (playing && !paused) hold(true); };
+  const goOn = () => { clearTimeout(quiet); if (byVoice && paused) hold(false); byVoice = false; };
+  const dictating = () => { if (playing && !paused) { hold(true); byVoice = true; }
+    if (byVoice) { clearTimeout(quiet); quiet = setTimeout(goOn, 2200); } };
   ta.addEventListener('compositionstart', dictating);
+  ta.addEventListener('compositionupdate', () => { if (byVoice) dictating(); });
   ta.addEventListener('input', (ev) => { const grew = ta.value.length - was; was = ta.value.length;
-    if (ev.inputType !== 'insertFromPaste' && grew > 12 && Date.now() - keyed > 400) dictating(); });
+    if (ev.inputType !== 'insertFromPaste' && (grew > 12 || byVoice && grew > 0) && Date.now() - keyed > 400) dictating(); });
+  form.addEventListener('submit', goOn);
   // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } return; }
@@ -3194,6 +3214,22 @@ def render_item(reg, pid, iid):
     return shell(reg, pid, "".join(body))
 
 
+def gate_choices(pid, gate, back):
+    """The answers a decision offers, each a tap: the agent's recommended one first and marked (or, with no options,
+    the default that would stand), then the rest; anything else goes in the box below."""
+    if gate.get("points") or gate["answer"]:
+        return ""
+    rec = gate.get("recommended") or gate.get("default") or ""
+    opts = [rec] * bool(rec) + [o for o in gate.get("options") or [] if o != rec]
+    if not opts:
+        return ""
+    one = lambda o: (f"<form method='post' action='/answer'><input type='hidden' name='p' value='{e(pid)}'>"
+                     f"<input type='hidden' name='gate' value='{e(gate['id'])}'><input type='hidden' name='back' value='{e(back)}'>"
+                     f"<input type='hidden' name='text' value='{e(o)}'><button class='choice{' rec' if o == rec else ''}'>"
+                     + ("<span class='tag'>Recommended</span>" if o == rec else "") + f"{e(o)}</button></form>")
+    return "<div class='gatechoices'>" + "".join(one(o) for o in opts) + "</div>"
+
+
 def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
     """The same point decisions in Needs you, Waiting on you and the item's record. With its number on the day's page;
     folded, its own answer box tucks away beside the page's box for answering by number. A tail (clearing it unanswered)
@@ -3227,7 +3263,8 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
         rows.append(prefix + control + suffix)
         editable.append(prefix + select + suffix)
     def form(content, comment=""):
-        hint = "Optional comment" if points else "Your answer"
+        hint = ("Optional comment" if points else "Something else, or a follow-up question…" if gate.get("options") or gate.get("default")
+                else "Your answer, or a follow-up question…")
         css = "add consultant-gate" if points else "add"
         button = "Save decisions" if points else "Send"
         return (f"<form class='{css}' method='post' action='/answer'>"
@@ -3248,9 +3285,10 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
             body += ("<details><summary>Revise your choices</summary>"
                      + form("".join(editable), gate.get("comment", "")) + "</details>")
     elif fold and not points:
-        body += f"<details class='one' data-k='one-{e(gate['id'])}'><summary>Answer just this one</summary>{form('')}{tail}</details>"
+        body += (f"<details class='one' data-k='one-{e(gate['id'])}'><summary>Answer just this one</summary>"
+                 f"{gate_choices(pid, gate, back)}{form('')}{tail}</details>")
     else:
-        body += form("".join(rows)) + tail
+        body += gate_choices(pid, gate, back) + form("".join(rows)) + tail
     if rec:
         body += ("<details><summary>Full consultant answers</summary>"
                  + consultation(dict(rec, adopted=None, point_decisions=[])) + "</details>")
@@ -5731,7 +5769,11 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.need textarea { width:100%; min-height:64px; margin:6px 0; font:inherit; padding:8px; border-radius:10px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
 .chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
-.chat details.need .usedefault button { background:transparent; color:var(--accent) }
+.gatechoices { display:flex; flex-direction:column; gap:6px; margin:8px 0 } .gatechoices form { margin:0 }
+.gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
+  border:1px solid var(--line); background:var(--sunk); color:var(--ink); font:inherit; cursor:pointer }
+.gatechoices button.choice.rec { border:1.5px solid var(--accent); background:var(--card) }
+.gatechoices .tag { display:block; font-size:12px; font-weight:600; color:var(--accent); letter-spacing:.02em }
 .chat a.shot { display:block; margin-top:8px } .chat a.shot img { display:block; max-width:100%; max-height:420px; border-radius:12px;
   border:1px solid var(--line) } .chat a.file { display:inline-block; padding:2px 10px; border-radius:999px; background:var(--sunk) }
 .chat .say { overflow-wrap:anywhere } .chat .say p { margin:0 0 10px } .chat .say p:last-child { margin-bottom:0 }
