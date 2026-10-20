@@ -578,7 +578,7 @@ class StewardPageTest(BoardBase):
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
         self.assertIn("data-fold='nav:holodeck' data-open='0'>", board.sidebar(reg, -1))
         self.assertIn("data-fold='nav:holodeck' data-open='1' data-pin=1>", board.sidebar(reg, mine))
-        self.assertIn("data-fold='steward:holodeck' data-open='1'", board.monitor_page(reg))
+        self.assertIn("data-fold='steward:holodeck' data-nest='holodeck' data-open='1'", board.monitor_page(reg))
         self.assertIn("localStorage.setItem('fold:'", board.monitor_page(reg))
 
 

@@ -1899,7 +1899,8 @@ document.querySelectorAll('.nestgroup .grip').forEach((h) => {
     g.classList.add('dragging');
     const move = (e) => {
       const others = [...list.children].filter((x) => x.classList.contains('nestgroup') && x !== g);
-      const before = others.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+      // a group goes before the first whose heading is below the finger: a long group needn't be dragged past whole
+      const before = others.find((x) => { const r = x.querySelector('.listhead').getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
       list.insertBefore(g, before || null);
     };
     const up = () => {
