@@ -1684,19 +1684,31 @@ def thread(ns, road_items=None):
     return out
 
 
-def arranged(plist):
-    """(index, project, nest) in the board's order: the project that last went from idle to working first, its nest
-    with it, then the rest by the same. The nest is "" for a project in none, or None when there are no nests."""
+PINNED = "\x01pinned"                   # the group of the projects the person pinned, above every other
+
+
+def pinned_projects():
+    return registry()["settings"].get("pinned_projects") or []
+
+
+def arranged(plist, theirs=True):
+    """(index, project, group) in the board's order: the projects the person pinned first (group PINNED), then each
+    nest's, then the rest; groups as the person moved them, else by activity, and within each, the project that last
+    went from idle to working or took up a roadmap item first. The group is "" for a project in no nest, or None
+    when nothing is pinned or nested. Without theirs (the top menu), groups follow activity alone, the pinned still first."""
     from . import nest
     homes = {p: n for n, v in nest.nests().items() for p in v.get("members", [])}
-    rec, grp = woken(), (lambda p: homes.get(str(p.resolve()), ""))
+    pins = set(pinned_projects())
+    rec = stirred()
+    grp = lambda p: PINNED if str(p.resolve()) in pins else homes.get(str(p.resolve()), "")
     best = {}
     for p in plist:
         best[grp(p)] = max(best.get(grp(p), ""), rec.get(str(p.resolve()), ""))
     # the person's own order of the groups, where they've moved them ("" is Other projects); the rest after, by activity
-    mine = registry()["settings"].get("nest_order") or []
+    mine = [PINNED] + ((registry()["settings"].get("nest_order") or []) if theirs else [])
     place = lambda g: -mine.index(g) if g in mine else -len(mine)
-    return [(i, p, grp(p) if homes else None) for i, p in sorted(enumerate(plist), reverse=True,
+    grouped = bool(homes or any(grp(p) == PINNED for p in plist))
+    return [(i, p, grp(p) if grouped else None) for i, p in sorted(enumerate(plist), reverse=True,
             key=lambda ip: (place(grp(ip[1])), best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0]))]
 
 
@@ -1722,10 +1734,13 @@ def project_row(i, p, sub=""):
     st = snap["state"]
     from . import monitor
     out = p.exists() and not monitor.involved(p)
+    pinned = str(p.resolve()) in pinned_projects()
     return (f"<a class='prow{' out' if out else ''}' href='/?p={i}'{' title=' + chr(39) + 'the steward leaves it out' + chr(39) if out else ''}><span class='prowline'>"
             f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}' title='{e(st)}'></span><b>{e(p.name)}</b>"
             f"<span class='pwork' data-p='{i}'>{e(at_work(p) if p.exists() else '')}</span>"
-            f"<span class='badge gate pbadge' data-p='{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span></span>"
+            f"<span class='badge gate pbadge' data-p='{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
+            f"<span class='pinbtn{' on' if pinned else ''}' role='button' onclick='return pinProject(event, {i}, {0 if pinned else 1})' "
+            f"title='{'Unpin' if pinned else 'Pin to the top'}' aria-label='{'Unpin' if pinned else 'Pin to the top'}'>📌</span></span>"
             + (f"<span class='psub'>{e(sub)}</span>" if sub else "") + "</a>")
 
 
@@ -1737,14 +1752,19 @@ def project_list(plist, sub=None, fold="list"):
         if here != heading and here is not None:
             if heading is not None:
                 out.append("</div></div>")
-            # the whole heading folds the group; the arrow at its right opens the nest's page
+            # the whole heading folds the group; the arrow just after its name opens the nest's page; the grip at the
+            # far right moves it (the pinned stay on top)
+            nested = here and here != PINNED
             page = (f"<a class='nestgo' href='/nest?n={urllib.parse.quote(here)}' onclick='event.stopPropagation()' "
-                    f"aria-label='The {e(here)} nest page'>→</a>" if here else "")
-            out.append(f"<div class='nestgroup' data-fold='{e(fold)}:{e(here or '-')}' data-nest='{e(here)}' data-open='1'>"
+                    f"aria-label='The {e(here)} nest page'>→</a>" if nested else "")
+            name = "Pinned" if here == PINNED else here + " nest" if here else "Other projects"
+            grip = ("" if here == PINNED else
+                    "<span class='grip' title='Drag to move this group' aria-label='Drag to move this group'>⠿</span>")
+            attrs = "class='nestgroup pinned'" if here == PINNED else f"class='nestgroup' data-nest='{e(here)}'"
+            out.append(f"<div {attrs} data-fold='{e(fold)}:{e('*pinned' if here == PINNED else here or '-')}' data-open='1'>"
                        f"<h3 class='listhead' onclick='toggleFold(this.closest(\".nestgroup\"))'>"
-                       f"<span class='grip' title='Drag to move this group' aria-label='Drag to move this group'>⠿</span>"
-                       f"<span class='foldbtn' aria-hidden='true'>"
-                       f"</span><span class='nestname'>{e(here + ' nest' if here else 'Other projects')}</span>{page}</h3><div class='members'>")
+                       f"<span class='foldbtn' aria-hidden='true'></span><span class='nestname'>{e(name)}</span>{page}"
+                       f"<span class='headgap'></span>{grip}</h3><div class='members'>")
         heading = here
         out.append(project_row(i, p, sub(p) if sub and p.exists() else ""))
     if heading is not None:
@@ -1778,6 +1798,21 @@ def woken():
         return {}
 
 
+def stirred():
+    """When each project last stirred: went from idle to working, or took up a roadmap item, whichever came later."""
+    out = dict(woken())
+    try:
+        every = json.loads((home() / "items.json").read_text())
+    except (OSError, ValueError):
+        every = {}
+    for root, recs in every.items():
+        took_up = max((r["started"] for r in recs.values() if isinstance(r, dict) and r.get("started")), default=0)
+        if took_up:
+            at, key = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(took_up)), str(Path(root).resolve())
+            out[key] = max(out.get(key, ""), at)
+    return out
+
+
 def at_work(root, n=70):
     """What a project is at, in a few words from its roadmap: the item in progress (and how many more are), else the
     next one to come outside Later. Sharing a plan, an agent's own items in progress; a helper with none, nothing."""
@@ -1805,7 +1840,8 @@ def sidebar(reg, pid):
     ms = monitor.snapshot()
     helm = "at the helm" if monitor.helm() else "helm with you"
     side, total, groups = [], 0, []
-    for i, p, here in arranged(plist):
+    # the top menu follows activity: a nest comes forward whole, open or shut as it was, led by the project that moved it
+    for i, p, here in arranged(plist, theirs=False):
         if here and groups and groups[-1][0] == here:
             groups[-1][1].append((i, p))
         else:
@@ -1824,8 +1860,8 @@ def sidebar(reg, pid):
                          f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                          f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                          f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
-        if not here:
-            side += chips
+        if not here or here == PINNED:
+            side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here else chips
             continue
         # a nest: one chip that opens to its projects (remembered on this device); open while one of them is shown
         state = next((s for s in ("needs you", "working", "idle") if s in states), "off")
@@ -1852,7 +1888,8 @@ def sidebar(reg, pid):
                 "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
-    return "".join(side)
+    # on a phone the steward is a bar of its own above the projects' row, which scrolls alone
+    return side[0] + "<div class='navrow'>" + "".join(side[1:]) + "</div>"
 
 
 def shell(reg, pid, body, wide=False):
@@ -1864,10 +1901,9 @@ def shell(reg, pid, body, wide=False):
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
 # stays at the left. Only the row scrolls, never the page; the order is the board's own.
 CHIPS = """
-(() => { const n = document.querySelector('nav'), on = n && n.querySelector('.proj.on:not(.monitor)');
+(() => { const n = document.querySelector('nav .navrow'), on = n && n.querySelector('.proj.on');
   if (!on || n.scrollWidth <= n.clientWidth) return;
-  const s = n.querySelector('.proj.monitor'), left = s && getComputedStyle(s).position === 'sticky' ? s.offsetLeft + s.offsetWidth : 0;
-  n.scrollLeft = Math.max(0, on.offsetLeft - left - (n.clientWidth - left - on.offsetWidth) / 2); })();
+  n.scrollLeft = Math.max(0, on.offsetLeft - n.offsetLeft - (n.clientWidth - on.offsetWidth) / 2); })();
 """
 
 
@@ -1897,7 +1933,7 @@ document.querySelectorAll('.nestgroup .grip').forEach((h) => {
     ev.preventDefault(); ev.stopPropagation();
     g.classList.add('dragging');
     const move = (e) => {
-      const others = [...list.children].filter((x) => x.classList.contains('nestgroup') && x !== g);
+      const others = [...list.children].filter((x) => x.classList.contains('nestgroup') && !x.classList.contains('pinned') && x !== g);
       // a group goes before the first whose heading is below the finger: a long group needn't be dragged past whole
       const before = others.find((x) => { const r = x.querySelector('.listhead').getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
       list.insertBefore(g, before || null);
@@ -1905,12 +1941,17 @@ document.querySelectorAll('.nestgroup .grip').forEach((h) => {
     const up = () => {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
       g.classList.remove('dragging');
-      const order = [...list.children].filter((x) => x.classList.contains('nestgroup')).map((x) => ['n', x.dataset.nest]);
+      const order = [...list.children].filter((x) => x.classList.contains('nestgroup') && !x.classList.contains('pinned')).map((x) => ['n', x.dataset.nest]);
       fetch('/nests/order', {method: 'POST', body: new URLSearchParams(order)}).catch(() => {});
     };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
   });
 });
+function pinProject(ev, p, on) {
+  ev.preventDefault(); ev.stopPropagation();
+  fetch('/project/pin', {method: 'POST', body: new URLSearchParams({p, on})}).then(() => location.reload()).catch(() => {});
+  return false;
+}
 """
 
 
@@ -4631,6 +4672,16 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/project/pin":                      # pinned above every group, or back to its own
+            reg = registry()
+            root = str(projects(reg)[int(values.get("p", ["0"])[0])].resolve())
+            kept = [r for r in reg["settings"].get("pinned_projects") or [] if r != root]
+            reg["settings"]["pinned_projects"] = kept + ([root] if values.get("on", ["1"])[0] == "1" else [])
+            save_registry(reg)
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/steward/involved":                 # which projects the steward follows: the checked ones
             from . import monitor
             chosen = set(values.get("p", []))
@@ -4871,12 +4922,23 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .prowline .sdot { flex:none }
 span.nestgroup, span.nestgroup > .members { display:contents } .nestgroup[data-open='0'] > .members { display:none }
 .listhead { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; min-height:44px; margin:6px 0 2px }
-.listhead .nestname { flex:1 } .grip { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
+.listhead .nestname { flex:none; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .listhead .headgap { flex:1 }
+.listhead .nestgo { margin-left:-6px; line-height:1; padding-bottom:3px } .grip { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
   touch-action:none; cursor:grab; color:var(--muted); font-size:20px; flex:none } .nestgroup.dragging { opacity:.6 } .foldbtn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px;
   border-radius:6px; background:var(--sunk); color:var(--ink); font-size:16px; flex:none }
 .foldbtn::before { content:'▾' } .nestgroup[data-open='0'] .foldbtn::before { content:'▸' }
 .nestgo { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; font-size:20px;
   text-decoration:none; color:var(--accent) }
+/* a group in a list is one tinted panel, its heading at the top and its projects inside on lighter, slimmer rows */
+div.nestgroup { margin:6px 0 10px; padding:2px 6px 6px; border-radius:10px; background:color-mix(in srgb, var(--accent) 15%, var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 28%, var(--card)) } div.nestgroup:first-child { margin-top:0 }
+div.nestgroup[data-open='0'] { padding-bottom:2px } div.nestgroup > .listhead { margin:0; color:var(--ink) }
+div.nestgroup > .listhead .foldbtn { background:var(--card) }
+div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-content:center; min-height:36px; padding:4px 10px;
+  background:var(--card); margin-top:4px } div.nestgroup .members .psub { margin-top:1px }
+.pinbtn { flex:none; display:inline-flex; align-items:center; justify-content:center; width:36px; height:32px; margin:-6px -6px -6px 0;
+  font-size:15px; opacity:.25; filter:grayscale(1); cursor:pointer } .pinbtn.on { opacity:1; filter:none }
+a.proj.pinchip .pname::before { content:'📌'; font-size:11px; margin-right:2px }
 .nestchip .nestcount { color:var(--muted); font-weight:400 } .nestopen { cursor:pointer; padding:0 6px; font-size:16px; color:var(--accent) }
 .saidlast { display:block; margin:12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--card);
   color:var(--ink); text-decoration:none } .saidlast .said { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
@@ -5063,17 +5125,21 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   background:var(--card); border:1px solid var(--line); box-shadow:0 6px 20px rgba(0,0,0,.14); color:var(--ink);
   flex-direction:column; gap:5px; white-space:normal } .node:hover .pop { display:flex }
 .st.done { color:var(--muted) } .st.doing { color:var(--accent); font-weight:600 } .st.todo { color:var(--ink) }
-.navfoot .short { display:none }
+.navfoot .short { display:none } nav .navrow { display:contents }
 /* A phone: the sidebar becomes one row of chips (dot, name, waiting count), then + and ⚙; it scrolls sideways. */
 @media (max-width: 700px) { body { display:block }
-  nav { width:auto; border-right:0; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:6px;
-    padding:8px 10px; overflow-x:auto; white-space:nowrap }
-  nav .proj, nav .proj.monitor { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
+  nav { width:auto; border-right:0; border-bottom:1px solid var(--line); padding:0; white-space:nowrap }
+  nav .navrow { display:flex; align-items:center; gap:6px; padding:8px 10px; overflow-x:auto }
+  nav .proj { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
     border-radius:999px; background:var(--sunk) }
   nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working { border-top-color:transparent }
   nav .sline, nav .badge.new { display:none }
-  /* the steward, with what waits in every project, stays at the left as the row scrolls under it */
-  nav .proj.monitor { position:sticky; left:0; z-index:1; box-shadow:0 0 0 6px var(--card), -10px 0 0 6px var(--card) }
+  /* the steward is no project: a slim bar of its own across the top, its state, the helm and what waits in every project */
+  nav .proj.monitor { display:flex; gap:10px; margin:0; padding:6px 14px; min-height:38px; border:0; border-radius:0;
+    background:color-mix(in srgb, var(--accent) 14%, var(--card)); border-bottom:1px solid var(--line) }
+  nav .proj.monitor .pname { font-weight:700; letter-spacing:.02em } nav .proj.monitor .sline { display:block; flex:1; min-width:0;
+    overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:13px }
+  nav .proj.monitor.on { background:var(--accent); color:var(--card) } nav .proj.monitor.on .sline { color:var(--card); opacity:.85 }
   .note { margin-left:0 } .reply { padding-left:8px } form.add { margin-left:0 }
   ul.events li { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
   /* nothing is wider than the phone: a table's words wrap, and what still can't fit scrolls in its own box */

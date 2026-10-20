@@ -4731,7 +4731,10 @@ class PhonePageTest(HoursBase):
         self.assertLess(side.index(">plants<"), side.index(">shop<"), "the board's order: what last went to work first")
         self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in all projects'>1</span>", side)
         self.assertIn(board.CHIPS, page, "a page opens with its own chip in view")
-        self.assertIn("nav .proj.monitor { position:sticky", page, "the steward, with the count, stays in reach")
+        # the steward is no project: a bar of its own above the row of projects, which scrolls without it
+        self.assertLess(side.index("proj monitor"), side.index("<div class='navrow'>"), "the steward, with the count, above the row")
+        self.assertNotIn("proj monitor", side.split("<div class='navrow'>")[1])
+        self.assertIn("nav .navrow { display:flex", page)
 
     def test_the_status_says_what_the_project_is_at_never_its_consoles_spinner_or_footer(self):
         console.snapshot = lambda root, lines=6, name=None: {

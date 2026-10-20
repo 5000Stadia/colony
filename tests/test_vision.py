@@ -1,6 +1,8 @@
 """Shared vision: live text, scoped migration, and delivery without approval state."""
 import concurrent.futures
 import re
+import json
+import time
 import html
 from pathlib import Path
 import threading
@@ -578,7 +580,7 @@ class StewardPageTest(BoardBase):
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
         self.assertIn("data-fold='nav:holodeck' data-open='0'>", board.sidebar(reg, -1))
         self.assertIn("data-fold='nav:holodeck' data-open='1' data-pin=1>", board.sidebar(reg, mine))
-        self.assertIn("data-fold='steward:holodeck' data-nest='holodeck' data-open='1'", board.monitor_page(reg))
+        self.assertIn("data-nest='holodeck' data-fold='steward:holodeck' data-open='1'", board.monitor_page(reg))
         self.assertIn("localStorage.setItem('fold:'", board.monitor_page(reg))
 
 
@@ -611,3 +613,74 @@ class NestOrderTest(BoardBase):
         self.assertEqual(groups(), ["games", "", "holodeck"])
         board.woke(names[0])
         self.assertEqual(groups(), ["games", "", "holodeck"], "theirs stays, whatever wakes")
+
+
+class PinTest(BoardBase):
+    def test_pinned_projects_lead_every_list_and_each_group_sorts_by_its_latest_stir(self):
+        from colony import nest
+        board.track(self.root)
+        dirs = []
+        for n in ("photonic", "dnd", "shop"):
+            d = Path(self.tmp.name) / n
+            d.mkdir()
+            (d / "ROADMAP.md").write_text(ROADMAP)
+            board.track(d)
+            dirs.append(d)
+        nest.join(dirs[0], "holodeck")
+        nest.join(dirs[1], "holodeck")
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host = f"127.0.0.1:{server.server_address[1]}"
+        idx = {p.resolve(): i for i, p in enumerate(board.projects())}
+        pin = lambda d, on: urllib.request.urlopen(urllib.request.Request(
+            f"http://{host}/project/pin", data=f"p={idx[d.resolve()]}&on={on}".encode(),
+            headers={"Host": host, "Origin": f"http://{host}"})).status
+        self.assertEqual(pin(dirs[2], 1), 204)
+        self.assertEqual(pin(self.root, 1), 204)
+        rows = board.arranged(board.projects())
+        self.assertEqual([here for _, _, here in rows][:2], [board.PINNED] * 2, "the pinned come first")
+        self.assertEqual({p.resolve() for _, p, h in rows if h == board.PINNED}, {dirs[2].resolve(), self.root.resolve()})
+        # within the pinned, the one that last stirred leads: idle to working, or a roadmap item taken up
+        board.woke(self.root)
+        time.sleep(1.1)
+        board.woke(dirs[2])
+        self.assertEqual(board.arranged(board.projects())[0][1].resolve(), dirs[2].resolve())
+        items = json.loads((board.home() / "items.json").read_text()) if (board.home() / "items.json").exists() else {}
+        items[str(self.root.resolve())] = {"R9": {"state": "doing", "started": time.time() + 5, "at": time.time() + 5}}
+        board.save_json(board.home() / "items.json", items)
+        self.assertEqual(board.arranged(board.projects())[0][1].resolve(), self.root.resolve(), "an item taken up counts")
+        page = board.monitor_page(board.registry())
+        self.assertIn(">Pinned<", page)
+        self.assertIn("pinbtn on", page)
+        self.assertNotIn("data-nest='\x01", page)
+        # the arrow follows the nest's name; the grip sits at the far right
+        head = page[page.index("holodeck nest"):]
+        self.assertLess(head.index("nestgo"), head.index("grip"))
+        self.assertEqual(pin(dirs[2], 0), 204)
+        self.assertNotIn(dirs[2].resolve(), {p.resolve() for _, p, h in board.arranged(board.projects()) if h == board.PINNED})
+
+    def test_the_top_menu_follows_activity_alone_whatever_order_the_person_dragged(self):
+        from colony import nest
+        board.track(self.root)
+        dirs = []
+        for n in ("photonic", "dnd"):
+            d = Path(self.tmp.name) / n
+            d.mkdir()
+            (d / "ROADMAP.md").write_text(ROADMAP)
+            board.track(d)
+            dirs.append(d)
+        nest.join(dirs[0], "holodeck")
+        nest.join(dirs[1], "holodeck")
+        reg = board.registry()
+        reg["settings"]["nest_order"] = ["", "holodeck"]
+        board.save_registry(reg)
+        board.woke(dirs[0])
+        time.sleep(1.1)
+        board.woke(dirs[1])
+        menu = [(p.name, h) for _, p, h in board.arranged(board.projects(), theirs=False)]
+        self.assertEqual(menu[:2], [("dnd", "holodeck"), ("photonic", "holodeck")], "the nest comes forward, led by what moved it")
+        self.assertEqual([h for _, _, h in board.arranged(board.projects())][0], "", "the steward's list keeps their order")
+        nav = board.sidebar(board.registry(), -1)
+        self.assertLess(nav.index("nav:holodeck"), nav.index(f">{self.root.name}<"))
