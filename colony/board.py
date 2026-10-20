@@ -2352,7 +2352,12 @@ CHAT = """
     const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Remove the files');
     x.addEventListener('click', () => { file.value = ''; chosen(); }); chip.appendChild(x); };
   file.addEventListener('change', chosen);
+  // While a finger is on the page, or it still glides from a flick, nothing is redrawn or moved: a phone stops a
+  // gliding page at any change. The next look catches up.
+  let moving = 0;
+  ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true}));
   async function refresh() {
+    if (Date.now() - moving < 1200) return;
     // an answer being written in the conversation (to what it needs of the person) is never redrawn away
     if ([...box.querySelectorAll('textarea')].some((t) => t.value.trim()) || box.contains(document.activeElement) &&
         document.activeElement.matches('textarea, select, input')) return;
@@ -2374,7 +2379,8 @@ CHAT = """
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       shut.forEach((k) => { const d = k && box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = false; });
       const again = mark0 && !end && box.querySelector(`[data-k="${CSS.escape(mark0[0])}"]`);
-      if (again) window.scrollBy(0, again.getBoundingClientRect().top - mark0[1]);
+      const moved = again ? again.getBoundingClientRect().top - mark0[1] : 0;
+      if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
       if (end && (!typingNow() || lastBottom() !== was)) toEnd();       // typing, it moves only when the conversation grew
     } catch (e) {}
   }
@@ -2394,8 +2400,10 @@ CHAT = """
   // Typing on a phone: the box sits on the keyboard, the tabs step aside, and the latest stays just above it.
   // The keyboard covers the bottom of the page without resizing it, so its top is read off the visible part.
   const vv = window.visualViewport;
+  // placed by its own height rather than shifted up by it: a phone draws the cursor where a shifted box would have been
   const onKeys = () => { if (!vv || !document.body.classList.contains('typing')) return;
-    document.documentElement.style.setProperty('--kbtop', (vv.offsetTop + vv.height) + 'px'); };
+    document.documentElement.style.setProperty('--kbtop', (vv.offsetTop + vv.height) + 'px');
+    document.documentElement.style.setProperty('--boxh', form.offsetHeight + 'px'); };
   // The keyboard slides up, and the phone reports its size only now and then: while typing, the box is placed again on
   // every frame, so it rides the keyboard up and lands on it.
   let follow = 0;
@@ -6068,7 +6076,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   input, textarea, select { font-size:16px }
   .composer { bottom:calc(64px + env(safe-area-inset-bottom)) }
   body.typing .tabs { display:none }
-  body.typing .composer { position:fixed; left:8px; right:8px; top:var(--kbtop, 100vh); bottom:auto; transform:translateY(-100%);
+  body.typing .composer { position:fixed; left:8px; right:8px; top:calc(var(--kbtop, 100vh) - var(--boxh, 0px)); bottom:auto; transform:none;
     margin:0; box-shadow:0 0 0 8px var(--bg) }
   /* below it to the keyboard, the page's own ground: where the phone's measure and its keyboard differ, nothing shows through */
   body.typing .composer::after { content:''; position:absolute; left:-8px; right:-8px; top:calc(100% + 8px); height:420px;
