@@ -2549,19 +2549,21 @@ CHAT = """
   const chunks = (text) => {
     // a clip takes about 0.75 of its playing time to make here (measured: 0.74 to 0.80 at the person's speed), so
     // the next may be as long as all that has played lets it be made in time, with a margin: over 0.85
-    const out = []; let want = 80, heard = 0, made = 0;
+    const out = []; let want = 80, heard = 0, made = 0, lead = '';
     const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length;
       want = Math.min(600, Math.max(40, heard / 0.85 - made)); };
     text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).forEach((p) => {
       const sents = (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).map((x) => x.trim()).filter(Boolean);
       let cur = '';
       sents.forEach((x) => {
-        if (!out.length && !cur) { push(x); return; }                   // the first sentence, alone: a quick start
+        // the first sentence, alone, for a quick start; one under four words ("Done.") takes the next with it
+        if (!out.length) { lead = lead ? lead + ' ' + x : x; if (lead.split(' ').length >= 4) push(lead); return; }
         if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; }
         cur = cur ? cur + ' ' + x : x;                                  // a sentence is never broken, however long
       });
       if (cur) push(cur);
     });
+    if (!out.length && lead) push(lead);
     return out;
   };
   const sheet = document.getElementById('voicesheet');
