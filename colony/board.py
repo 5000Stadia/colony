@@ -2162,7 +2162,8 @@ def chat_page(key, root):
             # reading aloud's settings, opened from ⋯ beside a reply's ▷
             "<div class='voicesheet' id='voicesheet' hidden><label class='aloud' title='Speak each new reply as it arrives'>"
             "<input type='checkbox' id='aloud'> Auto-speak</label>"
-            "<button type='button' class='rate' id='rate' aria-label='Reading speed'>1×</button>"
+            "<select class='rate' id='rate' aria-label='Reading speed'>"
+            + "".join(f"<option value='{r}'>{r:g}×</option>" for r in (1, 1.25, 1.5, 1.75)) + "</select>"
             + (f"<select id='kvoice' aria-label='Voice'>{voice.options()}</select>" if voice.ready() else "")
             + "<span class='gap'></span><button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
@@ -2297,8 +2298,9 @@ CHAT = """
   // The voices read slowly: each speed plays a quarter faster than it says, so 1× is a natural pace.
   let rate = 1; try { rate = +localStorage.getItem('pace') || 1; } catch (e) {}
   const pace = () => rate + 0.25;
-  const showRate = () => { rateBtn.textContent = rate + '×'; }; showRate();
-  rateBtn.addEventListener('click', () => { rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length] || 1; showRate();
+  if (!RATES.includes(rate)) rate = 1;
+  rateBtn.value = String(rate);
+  rateBtn.addEventListener('change', () => { rate = +rateBtn.value || 1;
     try { localStorage.setItem('pace', rate); } catch (e) {} again(false); });
   const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
   const VKEY = 'kvoice:' + box.dataset.name;
