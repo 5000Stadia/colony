@@ -1895,7 +1895,6 @@ document.querySelectorAll('.nestgroup .grip').forEach((h) => {
   h.addEventListener('pointerdown', (ev) => {
     const g = h.closest('.nestgroup'), list = g.parentNode;
     ev.preventDefault(); ev.stopPropagation();
-    h.setPointerCapture(ev.pointerId);
     g.classList.add('dragging');
     const move = (e) => {
       const others = [...list.children].filter((x) => x.classList.contains('nestgroup') && x !== g);
@@ -1904,12 +1903,12 @@ document.querySelectorAll('.nestgroup .grip').forEach((h) => {
       list.insertBefore(g, before || null);
     };
     const up = () => {
-      h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+      window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up);
       g.classList.remove('dragging');
       const order = [...list.children].filter((x) => x.classList.contains('nestgroup')).map((x) => ['n', x.dataset.nest]);
       fetch('/nests/order', {method: 'POST', body: new URLSearchParams(order)}).catch(() => {});
     };
-    h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
   });
 });
 """
