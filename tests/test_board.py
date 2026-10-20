@@ -742,6 +742,21 @@ class ChatTest(BoardBase):
         self.assertEqual([k for k, _ in turns[0]["items"]], ["say", "step", "step", "say"], "hooks' context and tool results stay out")
         self.assertEqual(chat.worked(["Bash(Find the tab rules)", "Edit(/x/board.py)"]), "Ran 1 command, edited 1 file")
 
+    def test_pictures_and_files_in_the_project_show_in_the_chat_and_nothing_outside_it(self):
+        board.track(self.root)
+        shot = self.root / ".board" / "uploads" / "gap.png"
+        shot.parent.mkdir(parents=True, exist_ok=True)
+        shot.write_bytes(b"\x89PNG")
+        (self.root / "report.pdf").write_bytes(b"%PDF")
+        said = board.chat_prose(f"See ![the gap]({shot}) and [the report]({self.root}/report.pdf), not ![this](/etc/hostname)", 0, self.root)
+        self.assertIn("<img src='/chat/file?p=0&f=", said)
+        self.assertIn("📄 the report</a>", said)
+        self.assertIn("![this](/etc/hostname)", said, "outside the project: left as words")
+        self.assertIsNone(board.chat_file(0, self.root, "../../etc/hostname"))
+        self.assertIsNone(board.chat_file(0, self.root, "/etc/hostname"))
+        self.assertTrue(board.chat_file(0, self.root, str(self.root / "report.pdf")))
+        self.assertIn("LASTPAGE", board.shell.__code__.co_names, "reopened, the board comes back to the last page")
+
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
         turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},

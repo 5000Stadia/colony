@@ -1902,7 +1902,22 @@ def sidebar(reg, pid):
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}</script></body></html>")
+
+
+# Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
+# page (the steward's); a page opened in the same tab, or by a link to it, stays as it is.
+LASTPAGE = """
+(() => {
+  try {
+    const here = location.pathname + location.search, fresh = !sessionStorage.getItem('open');
+    sessionStorage.setItem('open', '1');
+    const was = localStorage.getItem('lastpage');
+    if (fresh && was && was !== here && ['/', '/steward'].includes(here)) return location.replace(was);
+    localStorage.setItem('lastpage', here);
+  } catch (e) {}
+})();
+"""
 
 
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
@@ -2034,8 +2049,21 @@ def held(who, back):
             f"<p><a href='javascript:history.back()'>Back to what you wrote</a> · <a href='{e(back)}'>Back to the board</a></p>")
 
 
-def chat_prose(text):
-    """An agent's prose in the chat: markdown as the page shows it, code blocks kept as they are, links live."""
+IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".svg")
+
+
+def chat_file(key, root, target):
+    """The address a file in the project is shown at in the chat, or None: nothing outside its folder is served."""
+    from . import pins
+    path = pins.inside(root, html.unescape(target)) if root else None
+    if not path or not path.is_file():
+        return None
+    return f"/chat/file?p={urllib.parse.quote(str(key))}&f={urllib.parse.quote(str(path))}"
+
+
+def chat_prose(text, key=None, root=None):
+    """An agent's prose in the chat: markdown as the page shows it, code blocks kept as they are, links live; a
+    picture in the project shown as itself (![what](path)), and a link to any other file there (a PDF) opens it."""
     out = []
     for k, part in enumerate(re.split(r"^```[^\n]*\n", text, flags=re.M)):
         if k % 2:                                            # inside a fence, up to its closing one
@@ -2043,8 +2071,20 @@ def chat_prose(text):
             out.append(f"<pre>{e(code.rstrip())}</pre>" + prose(rest))
         else:
             out.append(prose(part))
-    html = "".join(out)
-    return re.sub(r"\[([^\]]+)\]\(((?:https?://|/)[^)\s]+)\)", r"<a href='\2' target='_blank' rel='noopener'>\1</a>", html)
+    page = "".join(out)
+
+    def picture(m):
+        url = chat_file(key, root, m.group(2))
+        return (f"<a class='shot' href='{url}' target='_blank' rel='noopener'><img src='{url}' alt='{m.group(1)}' loading='lazy'></a>"
+                if url and m.group(2).lower().endswith(IMAGES) else m.group(0))
+
+    def link(m):
+        url = chat_file(key, root, m.group(2)) if not m.group(2).startswith("http") else None
+        if url:
+            return f"<a class='file' href='{url}' target='_blank' rel='noopener'>📄 {m.group(1)}</a>"
+        return f"<a href='{m.group(2)}' target='_blank' rel='noopener'>{m.group(1)}</a>"
+    page = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", picture, page)
+    return re.sub(r"(?<!!)\[([^\]]+)\]\(((?:https?://|/)[^)\s]+)\)", link, page)
 
 
 def mail_by_turn(root, turns):
@@ -2085,8 +2125,11 @@ def chat_feed(key, root, shown=40):
     out = []
     for i, t in enumerate(turns):
         k = f"{e(t['at'])}"
-        if t["from"] == "you":
-            out.append(f"<div class='msg you'>{e(t['text'])}</div>")
+        if t["from"] == "you":                          # with the pictures it sent, as pictures
+            shots = "".join(f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
+                            for a in re.findall(r"^Attached: (.+)$", t["text"], flags=re.M)
+                            if a.strip().lower().endswith(IMAGES) and (u := chat_file(key, root, e(a.strip()))))
+            out.append(f"<div class='msg you'>{e(t['text'])}{shots}</div>")
         elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
             out.append(f"<div class='msg you pending' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
         elif t["from"] == "colony":
@@ -2106,7 +2149,7 @@ def chat_feed(key, root, shown=40):
                            f"<ul>{''.join(f'<li>{e(x)}</li>' for x in run)}</ul></details>")
                 run = []
             if kind == "say":
-                out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text)}</div>")
+                out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text, key, root)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
@@ -2220,7 +2263,10 @@ CHAT = """
   const lastBottom = () => { const el = box.lastElementChild; return el ? el.getBoundingClientRect().bottom + window.scrollY : 0; };
   const toEnd = () => { if (!typingNow()) return window.scrollTo(0, document.body.scrollHeight);
     const v = window.visualViewport, shown = v ? v.offsetTop + v.height : window.innerHeight;
-    window.scrollTo(0, Math.max(0, lastBottom() - shown + form.offsetHeight + 24)); };
+    const to = Math.max(0, lastBottom() - shown + form.offsetHeight + 24);
+    // a scroll the phone makes while its keyboard is up shifts the whole page for a moment (the bar at the top slips
+    // away and back): only a real move is made
+    if (Math.abs(to - window.scrollY) > 4) window.scrollTo(0, to); };
   toEnd();
   let last = box.innerHTML, pending = [];
   // what was just sent shows at once, faded, until the conversation has it (a busy agent takes it up mid-turn)
@@ -2240,10 +2286,10 @@ CHAT = """
     try {
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
-      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick;
+      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick, was = lastBottom();
       box.innerHTML = last = html; keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
-      if (end) toEnd();
+      if (end && (!typingNow() || lastBottom() !== was)) toEnd();       // typing, it moves only when the conversation grew
     } catch (e) {}
   }
   setInterval(refresh, 3000);
@@ -4755,6 +4801,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
             return self.wfile.write(body[start:end + 1])
+        if url.path == "/chat/file":                  # a picture or a file the chat shows, from inside the project only
+            from . import monitor
+            import mimetypes
+            key = (q.get("p") or ["0"])[0]
+            try:
+                root = monitor.home() if key == "steward" else plist[int(key)]
+            except (ValueError, IndexError):
+                return self._send(404, b"No such console")
+            path = pins.inside(root, (q.get("f") or [""])[0])
+            if not path or not path.is_file():
+                return self._send(404, b"the file is gone")
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+            self.send_header("Content-Disposition", inline(path.name))
+            self.send_header("Content-Security-Policy", SANDBOX)
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         if url.path == "/chat/feed":                  # the chat's conversation, as it stands now
             from . import monitor
             key = (q.get("p") or ["0"])[0]
@@ -5489,6 +5555,8 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat .msg.colony { align-self:center; max-width:92%; padding:3px 12px; border-radius:999px; background:var(--sunk);
   color:var(--muted); font-size:12.5px } .chat details.msg.colony[open] { border-radius:12px }
 .chat details.msg.colony > div { white-space:pre-wrap; padding:4px 0 6px; overflow-wrap:anywhere }
+.chat a.shot { display:block; margin-top:8px } .chat a.shot img { display:block; max-width:100%; max-height:420px; border-radius:12px;
+  border:1px solid var(--line) } .chat a.file { display:inline-block; padding:2px 10px; border-radius:999px; background:var(--sunk) }
 .chat .say { overflow-wrap:anywhere } .chat .say p { margin:0 0 10px } .chat .say p:last-child { margin-bottom:0 }
 .chat .say pre { overflow-x:auto; padding:10px; border-radius:8px; background:var(--sunk); font-size:13px }
 .chat .say h3 { font-size:16px; margin:12px 0 6px }
