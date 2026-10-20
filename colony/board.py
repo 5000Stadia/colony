@@ -17,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import time
+import threading
 import urllib.parse
 from contextlib import contextmanager, nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2077,7 +2078,8 @@ def chat_feed(key, root, shown=40):
             if kind == "say":
                 out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
-            out.append(f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>▶ Listen</button>")
+            out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>⧉</button>"
+                       f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>▷</button></div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
@@ -2087,7 +2089,7 @@ def chat_feed(key, root, shown=40):
     behind = chat.running(snap.get("lines") or [])
     if snap["state"] == "working":
         act = (snap.get("activity") or {}).get("line") or "Working"
-        out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(short(act, 90))}"
+        out.append(f"<div class='chatlive busy'><span class='sdot working'></span>{e(short(act, 90))}"
                    + (f" <span class='behind'>· {e(behind)}</span>" if behind else "") + "</div>")
     elif behind:
         out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(behind)}</div>")
@@ -2104,12 +2106,18 @@ def chat_feed(key, root, shown=40):
 
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
-    return (f"<div class='chat' id='chat' data-key='{e(key)}'>{chat_feed(key, root)}</div>"
+    from . import voice
+    if voice.ready():
+        threading.Thread(target=voice.warm, daemon=True).start()     # loaded before the first ▷
+    return (f"<div class='chat' id='chat' data-key='{e(key)}' data-voice='{1 if voice.ready() else 0}'>{chat_feed(key, root)}</div>"
             f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
             "<div class='attached' hidden></div><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
             "<button aria-label='Send'>↑</button></form><button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
-            "<label class='aloud'><input type='checkbox' id='aloud'> Read replies aloud</label>"
+            "<div class='aloud'><label><input type='checkbox' id='aloud'> Read replies aloud</label>"
+            "<button type='button' class='rate' id='rate' aria-label='Reading speed'>1×</button>"
+            + (("<select id='kvoice' aria-label='Voice'>" + "".join(f"<option value='{v}'>{n}</option>" for v, n in voice.VOICES)
+                + "</select>") if voice.ready() else "") + "</div>"
             f"<script>{CHAT}</script>")
 
 
@@ -2143,6 +2151,12 @@ CHAT = """
     } catch (e) {}
   }
   setInterval(refresh, 3000);
+  const sendBtn = form.querySelector('button[aria-label=Send], button[aria-label=Stop]');
+  const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files[0];
+    sendBtn.textContent = b && empty ? '■' : '↑'; sendBtn.setAttribute('aria-label', b && empty ? 'Stop' : 'Send');
+    ta.placeholder = b ? 'Queue for after this turn…' : ta.dataset.idle; };
+  ta.dataset.idle = ta.placeholder; busy();
+  new MutationObserver(busy).observe(box, {childList: true}); ta.addEventListener('input', busy); file.addEventListener('change', busy);
   const down = document.getElementById('toend');
   const where = () => { down.hidden = atEnd(); };
   window.addEventListener('scroll', where, {passive: true});
@@ -2162,7 +2176,12 @@ CHAT = """
   ta.addEventListener('input', grow);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const text = ta.value.trim(), f = file.files[0]; if (!text && !f) return;
+    const text = ta.value.trim(), f = file.files[0];
+    if (!text && !f) {
+      if (box.querySelector('.chatlive.busy')) { await fetch('/chat/stop', {method: 'POST', body: new URLSearchParams({p: key})}).catch(() => {});
+        setTimeout(refresh, 800); }
+      return;
+    }
     const r = await fetch('/chat/send', {method: 'POST', body: new FormData(form)}).catch(() => null);
     held.hidden = !!(r && r.ok);
     if (!r || !r.ok) { held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.'; return; }
@@ -2181,16 +2200,53 @@ CHAT = """
   if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  const chunks = (text) => text.match(/[^.!?\\n]+[.!?]*[\\s]*|\\n+/g)?.reduce((out, s) => {
-    if (out.length && (out[out.length - 1] + s).length < 220) out[out.length - 1] += s; else out.push(s); return out; }, []) || [];
-  const mark = () => box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■ Stop' : '▶ Listen'; });
-  const say = (t, text) => {
-    if (!talk) return;
-    talk.cancel(); playing = t; mark();
-    const parts = chunks(text).filter((p) => p.trim());
-    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice;
+  // Sentences, a long one broken at its commas and dashes; the first piece short, so the voice starts soon, the rest
+  // longer, each made while the one before plays.
+  const chunks = (text) => {
+    const bits = (text.match(/[^.!?\\n]+[.!?]*\\s*|\\n+/g) || []).flatMap((s) => s.length > 140 ? s.split(/(?<=[,;:\u2014])\\s+/) : [s]);
+    return bits.reduce((out, s) => {
+      if (out.length && (out[out.length - 1] + ' ' + s).length < (out.length === 1 ? 70 : 260)) out[out.length - 1] += ' ' + s;
+      else out.push(s);
+      return out; }, []).map((p) => p.trim()).filter(Boolean);
+  };
+  const mark = () => box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■' : '▷'; });
+  // its speed, remembered on this device: a tap steps through them
+  const RATES = [1, 1.25, 1.5, 1.75], rateBtn = document.getElementById('rate');
+  let rate = 1; try { rate = +localStorage.getItem('rate') || 1; } catch (e) {}
+  const showRate = () => { rateBtn.textContent = rate + '×'; }; showRate();
+  rateBtn.addEventListener('click', () => { rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length] || 1; showRate();
+    try { localStorage.setItem('rate', rate); } catch (e) {} });
+  const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
+  let kvoice = 'af_heart'; try { kvoice = localStorage.getItem('kvoice') || kvoice; } catch (e) {}
+  if (picker) { picker.value = kvoice; picker.addEventListener('change', () => { kvoice = picker.value;
+    try { localStorage.setItem('kvoice', kvoice); } catch (e) {} }); }
+  const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + '&t=' + encodeURIComponent(p.trim());
+  const hush = () => { if (talk) talk.cancel(); player.pause(); player.onended = player.onerror = null; };
+  const sayK = (t, parts) => {
+    let i = 0;
+    const next = () => {
+      if (playing !== t) return;
+      if (i >= parts.length) { playing = null; mark(); return; }
+      player.src = clip(parts[i]); player.playbackRate = rate; player.defaultPlaybackRate = rate;
+      if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // made while this one plays
+      i += 1;
+      player.play().catch(() => { playing = null; mark(); });
+    };
+    player.onended = next;
+    player.onerror = () => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } };   // the phone's voice then
+    next();
+  };
+  const sayPhone = (t, parts) => {
+    if (!talk) { playing = null; mark(); return; }
+    playing = t; mark();
+    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = rate;
       if (i === parts.length - 1) u.onend = () => { if (playing === t) { playing = null; mark(); } };
       talk.speak(u); });
+  };
+  const say = (t, text) => {
+    hush(); playing = t; mark();
+    const parts = chunks(text).filter((p) => p.trim());
+    return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
   };
   const turn = (t) => plain([...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)]);
   const heard = new Set([...box.querySelectorAll('.say')].map((x) => x.dataset.k));
@@ -2198,7 +2254,9 @@ CHAT = """
   aloud.addEventListener('change', () => {
     try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
     if (talk && aloud.checked) talk.speak(new SpeechSynthesisUtterance(''));   // a tap lets the phone speak later
-    if (talk && !aloud.checked) { talk.cancel(); playing = null; mark(); }
+    if (aloud.checked && KOKORO) { player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+      player.play().catch(() => {}); }                                         // a tap lets the phone play later
+    if (!aloud.checked) { hush(); playing = null; mark(); }
   });
   const fresh = () => {                  // a turn just ended: its new prose, aloud
     if (!aloud.checked || box.querySelector('.chatlive')) return;
@@ -2208,8 +2266,18 @@ CHAT = """
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   box.addEventListener('click', async (ev) => {
+    const cp = ev.target.closest('button.copy');
+    if (cp) {                            // the reply as text, code and all; a plain-http page has no clipboard API
+      const text = [...box.querySelectorAll(`.say[data-t="${CSS.escape(cp.dataset.t)}"]`)].map((x) => x.innerText).join('\\n\\n');
+      let ok = false;
+      try { const t = document.createElement('textarea'); t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed';
+        t.style.opacity = '0'; document.body.appendChild(t); t.select(); t.setSelectionRange(0, text.length);
+        ok = document.execCommand('copy'); t.remove(); } catch (e) {}
+      if (!ok && navigator.clipboard) { try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {} }
+      cp.textContent = ok ? '✓' : '✗'; setTimeout(() => { cp.textContent = '⧉'; }, 1500); return;
+    }
     const l = ev.target.closest('button.listen');
-    if (l) { if (playing === l.dataset.t) { talk.cancel(); playing = null; mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
+    if (l) { if (playing === l.dataset.t) { hush(); playing = null; mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
     await fetch('/choose', {method: 'POST', body: new URLSearchParams({p: key, option: b.dataset.option})}).catch(() => {});
     setTimeout(refresh, 600);
@@ -4470,6 +4538,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
+        if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
+            from . import voice
+            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["af_heart"])[0])
+            if not clip:
+                return self._send(404, b"no voice here")
+            body = clip.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/wav")
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if url.path == "/chat/feed":                  # the chat's conversation, as it stands now
             from . import monitor
             key = (q.get("p") or ["0"])[0]
@@ -4880,6 +4960,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/chat/stop":                         # at work, ■ in Chat: Esc in its console, as the person would press it
+            from . import monitor
+            key = values.get("p", ["0"])[0]
+            console.press(monitor.name() if key == "steward" else console.session_name(projects(registry())[int(key)]), ["Escape"])
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/chat/send":                         # what the person sends in Chat: into the console, as Message does
             from . import monitor
             key, text = values.get("p", ["0"])[0], values.get("text", [""])[0].strip()
@@ -5195,9 +5283,14 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
-.chat button.listen { align-self:flex-start; min-height:32px; padding:2px 10px; border:0; border-radius:999px; background:transparent;
-  color:var(--muted); font-size:13px; cursor:pointer } .chat button.listen:hover { color:var(--accent) }
-.aloud { display:flex; align-items:center; gap:6px; max-width:760px; margin:6px auto 0; color:var(--muted); font-size:13px }
+.chat .turnacts { display:flex; gap:4px; margin-top:-4px }
+.chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
+  color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
+.aloud { display:flex; align-items:center; gap:10px; max-width:760px; margin:6px auto 0; color:var(--muted); font-size:13px }
+.aloud select { min-height:28px; font-size:13px; padding:2px 6px; border-radius:999px; background:var(--sunk); color:var(--ink);
+  border:1px solid var(--line) }
+.aloud label { display:flex; align-items:center; gap:6px } .aloud .rate { min-height:28px; padding:2px 10px; border-radius:999px;
+  background:var(--sunk); color:var(--ink); border:1px solid var(--line); font-size:13px }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
 .chatask { padding:10px 12px; border:1px solid var(--flag); border-radius:12px; background:var(--flag-bg) }
 .chatask .choices { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
@@ -5206,7 +5299,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .composer { flex-wrap:wrap } .composer .attached { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:14px;
   color:var(--muted); padding:2px 0 } .composer .attached[hidden] { display:none } .composer .attached button { width:28px; height:28px;
   min-height:28px; font-size:16px; background:var(--sunk); color:var(--ink) }
-.toend { position:fixed; right:16px; bottom:calc(150px + env(safe-area-inset-bottom)); z-index:35; width:44px; height:44px;
+.toend { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(150px + env(safe-area-inset-bottom)); z-index:35; width:44px; height:44px;
   min-height:44px; padding:0; border-radius:50%; font-size:20px; background:var(--card); color:var(--ink); border:1px solid var(--line);
   box-shadow:0 2px 10px rgba(0,0,0,.18) } .toend[hidden] { display:none }
 body.typing .toend { bottom:calc(var(--kb, 0px) + 84px) }

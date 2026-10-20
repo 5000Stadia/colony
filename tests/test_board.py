@@ -779,6 +779,31 @@ class ChatTest(BoardBase):
         self.assertEqual((self.root / ".board" / "uploads" / "shot.png").read_bytes(), b"PNGDATA")
         self.assertEqual(chat.running(["  ⏵⏵ bypass permissions on · 1 shell · ← for agents"]), "1 shell running")
 
+    def test_replies_are_read_in_kokoros_voice_where_it_is_installed_and_the_phones_otherwise(self):
+        from colony import voice
+        board.track(self.root)
+        page = board.render(board.registry(), 0, "chat")
+        self.assertIn("data-voice='0'", page, "not installed: the phone's own voice")
+        self.assertNotIn("id='kvoice'", page)
+        self.assertIsNone(voice.speak("Hello there."))
+        asked = []
+
+        def made(line):
+            asked.append(line)
+            Path(line["out"]).write_bytes(b"RIFFwav")
+            return {"out": line["out"]}
+        with patch.object(voice, "ready", return_value=True), patch.object(voice, "_ask", side_effect=made), \
+                patch.object(voice, "warm"):
+            page = board.render(board.registry(), 0, "chat")
+            self.assertIn("data-voice='1'", page)
+            self.assertIn("<option value='bm_george'>George</option>", page)
+            first = voice.speak("Hello   there.", "bm_george")
+            self.assertEqual(first.read_bytes(), b"RIFFwav")
+            self.assertEqual(asked[0]["voice"], "bm_george")
+            self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
+            self.assertEqual(len(asked), 1)
+            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "af_heart").name, "an unknown voice is the default")
+
     def test_a_codex_rollout_reads_the_same_way(self):
         from colony import chat
         item = lambda p: {"type": "response_item", "timestamp": "2026-10-19T10:00:00Z", "payload": p}

@@ -213,6 +213,17 @@ def cmd_urls(a):
     return 0
 
 
+def cmd_voice(a):
+    """Replies read aloud in a natural voice made on this machine (Kokoro): --setup installs it, once."""
+    from . import voice
+    if a.setup:
+        voice.setup()
+        return 0
+    print("Kokoro: " + ("ready; Chat reads replies in its voice" if voice.ready() else
+                        "not installed; Chat uses the phone's own voice. `colony voice --setup` installs it (about 500 MB)"))
+    return 0
+
+
 def cmd_remote(a):
     """The board from the person's own devices, anywhere, through Tailscale; --off undoes it; --check says where it stands."""
     from . import board, tailscale
@@ -1433,6 +1444,9 @@ def main(argv=None):
     p.add_argument("--off", action="store_true", help="stop: the board is reached as it was before")
     p.add_argument("--check", action="store_true", help="say where Tailscale and the board stand")
     p.add_argument("--port", type=int, default=8790); p.set_defaults(fn=cmd_remote)
+    p = sub.add_parser("voice", help="replies read aloud in a natural voice made on this machine (Kokoro)")
+    p.add_argument("--setup", action="store_true", help="install it: its own Python and the model, once")
+    p.set_defaults(fn=cmd_voice)
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     sub.add_parser("whoami").set_defaults(fn=cmd_whoami)

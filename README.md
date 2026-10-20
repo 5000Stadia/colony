@@ -57,7 +57,10 @@ where things stand; `colony remote --off` puts it back as it was.
 - **Chat**, beside each console (and the steward's): the conversation as the Claude app shows it, your messages
   in bubbles, the agent's replies in full, each run of work folded to a line ("Ran 6 commands, edited 2 files")
   that opens to the steps, and a choice on its screen as buttons. What you send goes into its console. It reads
-  the session's own transcript, so it costs nothing, and the Console tab is a tap away.
+  the session's own transcript, so it costs nothing, and the Console tab is a tap away. Under each reply, copy and
+  play: play reads everything since your message aloud (or each new reply, by itself, if you turn that on), at the
+  speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
+  nothing leaves it); without it, the phone's own voice reads.
 - **Waiting on you:** what each project needs from you, in one list. That covers decisions it put to
   you (gates), questions it asked, choices on its screen, and work ready for your OK (Approve / Not
   yet). The sidebar counts them.
