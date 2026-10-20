@@ -2613,18 +2613,34 @@ CHAT = """
     const at = player.currentTime;
     setTimeout(() => { if (playing && !paused && !player.ended && player.currentTime === at) player.play().catch(() => {}); }, 700);
   });
-  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !ready.has(player.src)) { loading = true; mark(); } });
+  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !player.src.startsWith('blob:') && !ready.has(player.src)) {
+    loading = true; mark(); } });
   // the clips made already: going on to one of them is no wait, so the button stays as it is
   const ready = new Set();
+  // A clip made ahead is downloaded whole and kept here as a file of the page's own (a phone's player would fetch
+  // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
+  const kept = new Map();                         // the clip's address -> the page's own copy
   const make = (p) => { const u = new URL(clip(p), location.href).href;
-    if (!ready.has(u)) fetch(u).then((r) => { if (r.ok) ready.add(u); }).catch(() => {}); };
+    if (kept.has(u)) return Promise.resolve();
+    return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) return;
+      kept.set(u, URL.createObjectURL(b)); ready.add(u);
+      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } }).catch(() => {}); };
+  // The clips after the one first heard are asked for one after another, each as soon as the one before has come, so
+  // the machine makes them back to back with no idle time, never more than three ahead of what is being heard.
+  let line = 0;
+  const pipe = (t, parts, from) => { const mine = ++line; let k = from;
+    const step = () => { if (mine !== line || playing !== t) return;
+      if (k >= parts.length) { if (waiting[0]) make(chunks(waiting[0].text)[0] || ''); return; }   // the next reply's start
+      if (k - ((now && now.t === t) ? now.at : from) > 3) { setTimeout(step, 400); return; }
+      make(parts[k++]).then(step); };
+    step(); };
   // how long each of the first few clips took to be heard from being asked for, against how long it plays: the
   // phone's own wait (the making, and the network), for the board's log, so the sizes are set from real numbers
   let timed = 0;
-  const timeClip = (p) => { if (timed >= 6) return; const t0 = performance.now(), at = player.src;
+  const timeClip = (p, here) => { if (timed >= 6) return; const t0 = performance.now(), at = player.src;
     player.addEventListener('playing', function once() { player.removeEventListener('playing', once); if (player.src !== at) return;
       timed += 1; const m = {when: 'clip', chars: p.length, waited: Math.round(performance.now() - t0), plays: Math.round(player.duration * 1000 / pace()),
-        made: ready.has(at)};
+        made: here || ready.has(at), here};
       fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {}); }); };
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
@@ -2660,10 +2676,11 @@ CHAT = """
       if (playing !== t) return;
       if (i >= parts.length) return done(t);
       now = {t, parts, at: i};
-      player.src = clip(parts[i]); player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      timeClip(parts[i]);
-      // the next one, made while this one plays: this reply's next paragraph, or the first of the reply waiting after it
-      if (parts[i + 1]) make(parts[i + 1]); else if (waiting[0]) make(chunks(waiting[0].text)[0] || '');
+      const u = new URL(clip(parts[i]), location.href).href;
+      player.src = kept.get(u) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
+      timeClip(parts[i], !!kept.get(u));
+      // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
+      if (i === from) player.addEventListener('loadeddata', () => pipe(t, parts, from + 1), {once: true});
       i += 1;
       // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again
       player.play().catch((err) => { if (err && err.name === 'AbortError') return;
