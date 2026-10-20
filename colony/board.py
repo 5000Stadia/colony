@@ -2292,7 +2292,8 @@ CHAT = """
       if (end && (!typingNow() || lastBottom() !== was)) toEnd();       // typing, it moves only when the conversation grew
     } catch (e) {}
   }
-  setInterval(refresh, 3000);
+  let tick = 0;                                  // every 3 s; reading aloud, twice as often, so the voice starts sooner
+  setInterval(() => { if (aloud.checked || ++tick % 2 === 0) refresh(); }, 1500);
   const sendBtn = form.querySelector('button.send');
   const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files.length;
     sendBtn.textContent = b && empty ? '■' : '↑'; sendBtn.setAttribute('aria-label', b && empty ? 'Stop' : 'Send');
@@ -2334,6 +2335,9 @@ CHAT = """
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
   // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
   form.querySelector('button.send').addEventListener('pointerdown', (ev) => ev.preventDefault());
+  // A phone still takes the focus away as the finger lifts: the keyboard drops, the box moves down, and the tap lands
+  // where the button was, sending nothing. It sends on the lift instead, before anything moves.
+  sendBtn.addEventListener('touchend', (ev) => { ev.preventDefault(); form.requestSubmit ? form.requestSubmit() : sendBtn.click(); });
   ta.addEventListener('input', grow);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -2370,14 +2374,15 @@ CHAT = """
   if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  // Sentences, a long one broken at its commas and dashes; the first piece short, so the voice starts soon, the rest
-  // longer, each made while the one before plays.
+  // A sentence at a time, a long one broken at its commas and dashes: each is made in moments, so the voice starts
+  // soon, and the next ones are made while one plays. A scrap (a list's "1.") goes with what follows it.
   const chunks = (text) => {
-    const bits = (text.match(/[^.!?\\n]+[.!?]*\\s*|\\n+/g) || []).flatMap((s) => s.length > 140 ? s.split(/(?<=[,;:\u2014])\\s+/) : [s]);
+    const bits = (text.match(/[^.!?\\n]+[.!?]*\\s*|\\n+/g) || []).flatMap((s) => s.length > 140 ? s.split(/(?<=[,;:\u2014])\\s+/) : [s])
+      .map((p) => p.trim()).filter(Boolean);
     return bits.reduce((out, s) => {
-      if (out.length && (out[out.length - 1] + ' ' + s).length < (out.length === 1 ? 70 : 260)) out[out.length - 1] += ' ' + s;
+      if (out.length && out[out.length - 1].length < 12) out[out.length - 1] += ' ' + s;
       else out.push(s);
-      return out; }, []).map((p) => p.trim()).filter(Boolean);
+      return out; }, []);
   };
   const sheet = document.getElementById('voicesheet');
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
@@ -2425,7 +2430,7 @@ CHAT = """
       if (i >= parts.length) return done(t);
       now = {t, parts, at: i};
       player.src = clip(parts[i]); player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // made while this one plays
+      parts.slice(i + 1, i + 3).forEach((p) => fetch(clip(p)).catch(() => {}));   // the next two, made while this one plays
       i += 1;
       player.play().catch(() => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });   // refused: the phone's voice
     };
@@ -2467,13 +2472,11 @@ CHAT = """
     if (aloud.checked) unlock();
     if (!aloud.checked) { hush(); playing = null; mark(); }
   });
-  // A reply is read once it is complete: a newer message came after it, or the agent has gone quiet. A busy agent
-  // takes up the next message within seconds, so waiting for it to be idle would read nothing.
+  // Each part of a reply is read as it lands (the transcript holds a part only once it is written whole), after any
+  // still being read: waiting for the turn to end would hold the voice back for as long as the work takes.
   const fresh = () => {
     if (!aloud.checked) return;
-    const busy = !!box.querySelector('.chatlive.busy'), kids = [...box.children];
-    const done = (x) => !busy || kids.slice(kids.indexOf(x) + 1).some((y) => y.classList.contains('msg'));
-    const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k) && done(x));
+    const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
     news.forEach((x) => heard.add(x.dataset.k));
     const turns = [];
     news.forEach((x) => { const last = turns[turns.length - 1];
