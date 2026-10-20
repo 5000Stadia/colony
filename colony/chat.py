@@ -2,32 +2,61 @@
 transcript the session's hooks recorded, so it costs nothing and the console itself is untouched; what the person sends
 goes into the console as Message does."""
 import json
+import os
 import re
+import threading
 from pathlib import Path
 
-TAIL = 3_000_000           # bytes from the transcript's end: plenty of turns, never a whole long session
+TAIL = 40_000_000          # bytes from the transcript's end, first read: many turns, never a whole long session
+BIG = 300_000              # a line this long is a picture or a long tool output, never shown: not read
+KEEP = 30_000              # entries kept
+_seen, _lock = {}, threading.Lock()
 
 
 def _tail(path, limit=TAIL):
-    """The transcript's last lines, whole ones only."""
+    """The transcript's last entries, whole lines only. Read once, then only what was added since (a page asks every
+    few seconds); a transcript started again, or rewritten, is read afresh."""
     try:
-        with open(path, "rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - limit))
-            chunk = fh.read()
+        size = os.path.getsize(path)
     except OSError:
         return []
-    lines = chunk.split(b"\n")
-    if size > limit:
-        lines = lines[1:]                             # the first is cut mid-line
-    out = []
-    for line in lines:
+    with _lock:
+        c = _seen.get(str(path))
         try:
-            out.append(json.loads(line))
+            with open(path, "rb") as fh:
+                if c and size >= c["end"] and c["end"] >= len(c["mark"]):
+                    fh.seek(c["end"] - len(c["mark"]))
+                    if fh.read(len(c["mark"])) != c["mark"]:
+                        c = None                      # not the file it was: read it afresh
+                elif c:
+                    c = None
+                if not c:
+                    c = {"end": max(0, size - limit), "mark": b"", "entries": [], "cut": size > limit}
+                fh.seek(c["end"])
+                chunk = fh.read(size - c["end"])
+        except OSError:
+            return []
+        last = chunk.rfind(b"\n")
+        if last >= 0:                                 # what is still being written waits for its line's end
+            lines = chunk[:last].split(b"\n")
+            if c.pop("cut", False):
+                lines = lines[1:]                     # the first is cut mid-line
+            for line in lines:
+                if len(line) > BIG:
+                    continue
+                try:
+                    c["entries"].append(json.loads(line))
+                except ValueError:
+                    pass
+            del c["entries"][:-KEEP]
+            c["end"] += last + 1
+            c["mark"] = chunk[max(0, last + 1 - 64):last + 1]
+        _seen[str(path)] = c
+        rest = chunk[last + 1:].strip()               # a whole last line with no line end yet: read, not kept
+        try:
+            return list(c["entries"]) + ([json.loads(rest)] if rest and len(rest) <= BIG else [])
         except ValueError:
-            pass
-    return out
+            return list(c["entries"])
 
 
 def _who(text):

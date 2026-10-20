@@ -2462,6 +2462,13 @@ CHAT = """
   }
   window.addEventListener('scroll', () => { if (!document.body.classList.contains('typing')) return;
     clearTimeout(settle); settle = setTimeout(() => measure('scroll'), 500); }, {passive: true});
+  // Back on the page with the keyboard still up (after a lock), the box is placed again and the cursor re-seated
+  // once things settle, since a phone can draw both from before; and its numbers go to the board's log.
+  const settleBox = () => { if (!document.body.classList.contains('typing')) return;
+    onKeys(); setTimeout(() => { onKeys(); const a = ta.selectionStart, b = ta.selectionEnd; ta.setSelectionRange(a, b);
+      measured = Math.min(measured, 3); measure('back'); }, 400); };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) settleBox(); });
+  window.addEventListener('pageshow', settleBox);
   ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kbtop'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
   // ↑ keeps the box in focus until it sends: the box doesn't move under the tap (then the keyboard goes down)
@@ -2554,6 +2561,14 @@ CHAT = """
       if (old) { localStorage.removeItem('kvoice:' + box.dataset.name); if (!pin.checked && old !== kvoice) keepVoice({voice: old, pin: '1'}); } } catch (e) {} }
   // heard, or waiting on the next clip still being made
   player.addEventListener('playing', () => { if (!player.loop) ready.add(player.src); if (loading && playing && !player.loop) { loading = false; mark(); } });
+  // The phone stopped the sound itself (locked, a call, another app's audio): shown as paused, ▷ takes it up again,
+  // and coming back to the page, what is shown is checked against what is heard.
+  let ours = 0;
+  player.addEventListener('pause', () => { if (Date.now() - ours < 600 || player.ended || player.loop || !playing || paused) return;
+    paused = true; loading = false; mark(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden || !playing || paused || player.loop) return;
+    if (KOKORO && !(talk && talk.speaking) && player.paused && !player.ended) { paused = true; loading = false; mark(); }
+    else if (!KOKORO && talk && !talk.speaking && !talk.pending) { playing = null; mark(); } });
   player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !ready.has(player.src)) { loading = true; mark(); } });
   // the clips made already: going on to one of them is no wait, so the button stays as it is
   const ready = new Set();
@@ -2563,7 +2578,7 @@ CHAT = """
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
   // not let it start again)
-  const hush = (keep) => { if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
+  const hush = (keep) => { ours = Date.now(); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
     player.loop = false; resting = 0; };
   // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
   // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
@@ -2688,8 +2703,8 @@ CHAT = """
   // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } return; }
-    paused = want;
-    if (KOKORO && !talk?.speaking) { if (paused) player.pause(); else player.play().catch(() => {}); }
+    paused = want; ours = Date.now();
+    if (KOKORO && !talk?.speaking) { if (paused) player.pause(); else player.play().catch(() => { paused = true; mark(); }); }
     else if (talk) { if (paused) talk.pause(); else talk.resume(); }
     mark();
   }
