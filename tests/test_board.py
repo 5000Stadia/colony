@@ -802,7 +802,7 @@ class ChatTest(BoardBase):
             self.assertEqual(asked[0]["voice"], "bm_george")
             self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
             self.assertEqual(len(asked), 1)
-            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "af_heart").name, "an unknown voice is the default")
+            self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "bm_fable").name, "an unknown voice is Fable, the default")
             from http.server import ThreadingHTTPServer
             server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
             threading.Thread(target=server.serve_forever, daemon=True).start()

@@ -73,9 +73,9 @@ def _ask(line):
     return json.loads(w.stdout.readline() or '{"error": "the voice stopped"}')
 
 
-def speak(text, voice="af_heart"):
+def speak(text, voice="bm_fable"):
     """A WAV of the text in the voice: kept, so the same words again come at once. None where it can't be made."""
-    voice = voice if voice in dict(VOICES) else "af_heart"
+    voice = voice if voice in dict(VOICES) else "bm_fable"
     text = " ".join(text.split())[:1200]
     if not text or not ready():
         return None

@@ -2109,7 +2109,8 @@ def chat_page(key, root):
     from . import voice
     if voice.ready():
         threading.Thread(target=voice.warm, daemon=True).start()     # loaded before the first ▷
-    return (f"<div class='chat' id='chat' data-key='{e(key)}' data-voice='{1 if voice.ready() else 0}'>{chat_feed(key, root)}</div>"
+    return (f"<div class='chat' id='chat' data-key='{e(key)}' data-name='{e(Path(root).name if key != 'steward' else 'steward')}' "
+            f"data-voice='{1 if voice.ready() else 0}'>{chat_feed(key, root)}</div>"
             f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
             "<div class='attached' hidden></div>"
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
@@ -2222,14 +2223,17 @@ CHAT = """
   const mark = () => box.querySelectorAll('button.listen').forEach((b) => { b.textContent = b.dataset.t === playing ? '■' : '▷'; });
   // its speed, remembered on this device: a tap steps through them
   const RATES = [1, 1.25, 1.5, 1.75], rateBtn = document.getElementById('rate');
-  let rate = 1; try { rate = +localStorage.getItem('rate') || 1; } catch (e) {}
+  // The voices read slowly: each speed plays a quarter faster than it says, so 1× is a natural pace.
+  let rate = 1; try { rate = +localStorage.getItem('pace') || 1; } catch (e) {}
+  const pace = () => rate + 0.25;
   const showRate = () => { rateBtn.textContent = rate + '×'; }; showRate();
   rateBtn.addEventListener('click', () => { rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length] || 1; showRate();
-    try { localStorage.setItem('rate', rate); } catch (e) {} again(false); });
+    try { localStorage.setItem('pace', rate); } catch (e) {} again(false); });
   const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
-  let kvoice = 'af_heart'; try { kvoice = localStorage.getItem('kvoice') || kvoice; } catch (e) {}
+  const VKEY = 'kvoice:' + box.dataset.name;
+  let kvoice = 'bm_fable'; try { kvoice = localStorage.getItem(VKEY) || kvoice; } catch (e) {}
   if (picker) { picker.value = kvoice; picker.addEventListener('change', () => { kvoice = picker.value;
-    try { localStorage.setItem('kvoice', kvoice); } catch (e) {} again(true); }); }
+    try { localStorage.setItem(VKEY, kvoice); } catch (e) {} again(true); }); }
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + '&t=' + encodeURIComponent(p.trim());
   const hush = () => { if (talk) talk.cancel(); player.pause(); player.onended = player.onerror = null; };
   // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
@@ -2249,7 +2253,7 @@ CHAT = """
       if (playing !== t) return;
       if (i >= parts.length) return done(t);
       now = {t, parts, at: i};
-      player.src = clip(parts[i]); player.playbackRate = rate; player.defaultPlaybackRate = rate;
+      player.src = clip(parts[i]); player.playbackRate = pace(); player.defaultPlaybackRate = pace();
       if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // made while this one plays
       i += 1;
       player.play().catch(() => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });   // refused: the phone's voice
@@ -2261,7 +2265,7 @@ CHAT = """
   const sayPhone = (t, parts) => {
     if (!talk) { playing = null; mark(); return; }
     playing = t; mark();
-    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = rate;
+    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
       u.onstart = () => { now = {t, parts, at: i}; };
       if (i === parts.length - 1) u.onend = () => done(t);
       talk.speak(u); });
@@ -2269,7 +2273,7 @@ CHAT = """
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
   const again = (voiceChanged) => {
     if (!playing || !now || now.t !== playing) return;
-    if (KOKORO && !voiceChanged) { player.playbackRate = rate; player.defaultPlaybackRate = rate; return; }
+    if (KOKORO && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
     const {t, parts, at} = now;
     hush(); playing = t; mark();
     if (KOKORO) sayK(t, parts, at); else sayPhone(t, parts.slice(at));
@@ -4574,7 +4578,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(data)
         if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
             from . import voice
-            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["af_heart"])[0])
+            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0])
             ask = self.headers.get("Range", "")
             voice.heard(ask, self.headers.get("User-Agent", ""), bool(clip))
             if not clip:
@@ -5342,8 +5346,9 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .composerbar { flex:1 1 100%; display:flex; align-items:center; gap:6px; margin-left:-6px }
 .composerbar .gap { flex:1 } .composerbar .aloud { display:flex; align-items:center; gap:5px; margin:0; color:var(--muted); font-size:13px;
   white-space:nowrap } .composerbar .aloud input { width:18px; height:18px; margin:0 }
-.composerbar .rate, .composerbar select { min-height:30px; padding:2px 9px; border-radius:999px; background:var(--sunk); color:var(--ink);
-  border:1px solid var(--line); font-size:13px }
+.composerbar .rate, .composerbar select { height:30px; min-height:30px; padding:0 10px; border-radius:999px; background:var(--sunk);
+  color:var(--ink); border:1px solid var(--line); font-size:13px; line-height:1 }
+.composerbar .rate { display:inline-flex; align-items:center; justify-content:center; min-width:48px; width:auto; flex:none }
 .composer .attached { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:14px;
   color:var(--muted); padding:2px 0 } .composer .attached[hidden] { display:none } .composer .attached button { width:28px; height:28px;
   min-height:28px; font-size:16px; background:var(--sunk); color:var(--ink) }
