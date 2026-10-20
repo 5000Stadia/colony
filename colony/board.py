@@ -3022,10 +3022,8 @@ def vision_box(root, pid):
 
 
 def _inline(text):
-    """Escaped text with **bold** and *emphasis* and `code` shown as such, and [a link](/a/board/page) (or https)
-    one to tap."""
+    """Escaped text with **bold** and *emphasis* and `code` shown as such."""
     text = e(text)
-    text = re.sub(r"\[([^\]]+)\]\(((?:/(?!/)|https://)[^\s)]+)\)", r"<a href='\2'>\1</a>", text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
     return re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
@@ -4410,11 +4408,13 @@ def ask_html(text):
     leaves what it asks of the person). A short turn shows whole."""
     text = (text or "").strip()
     asked, blocks = question_lines(text), [b for b in re.split(r"\n\s*\n", text) if b.strip()]
+    # a link written in it, to a board page or https, is one tap, as in Chat
+    links = lambda h: re.sub(r"(?<!!)\[([^\]]+)\]\(((?:/(?!/)|https://)[^)\s]+)\)", r"<a href='\2'>\1</a>", h)
     if len(text) <= ASK_WHOLE or (not asked and len(blocks) < 2):
-        return f"<div class='asktext'>{prose(text)}</div>"
+        return f"<div class='asktext'>{links(prose(text))}</div>"
     lead = "".join(f"<p><b>{_inline(q)}</b></p>" for q in asked) if asked else prose(blocks[-1])
-    return (f"<div class='asked'>{lead}</div>"
-            f"<details class='full' open><summary>Full message</summary><div class='asktext'>{prose(text)}</div></details>")
+    return (f"<div class='asked'>{links(lead)}</div>"
+            f"<details class='full' open><summary>Full message</summary><div class='asktext'>{links(prose(text))}</div></details>")
 
 
 def waiting_on(pid, p, back, label=True, with_gates=True):
