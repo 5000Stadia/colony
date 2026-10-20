@@ -960,10 +960,6 @@ class ChatTest(BoardBase):
             self.assertEqual(asked[0]["voice"], "bm_george")
             self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
             self.assertEqual(len(asked), 1)
-            self.assertNotEqual(voice.speak("Hello there.", "bm_george", fresh="run1"), first, "a benchmark run: made fresh")
-            page = board.voice_bench(board.registry())
-            self.assertIn("Whole paragraphs", page)
-            self.assertIn("when: 'bench'", page, "each run's numbers go to the board's log")
             self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "am_echo").name, "an unknown voice is Echo, the default")
             from http.server import ThreadingHTTPServer
             server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
@@ -5143,9 +5139,9 @@ class PhonePageTest(HoursBase):
             row = board.waiting_html(0, self.root)
         self.assertIn("<p>Export is done. Which format do you want?</p>", row, "a short turn shows whole")
         with self.clock(14, 10):
-            board.record_ask(self.root, "t3", "Can you [run the benchmark](/voice/bench)? Not [this](javascript:x) or [that](//evil.example).")
+            board.record_ask(self.root, "t3", "Can you [run the check](/voice/check)? Not [this](javascript:x) or [that](//evil.example).")
             row = board.waiting_html(0, self.root)
-        self.assertIn("<a href='/voice/bench'>run the benchmark</a>", row, "a link to a board page is one tap")
+        self.assertIn("<a href='/voice/check'>run the check</a>", row, "a link to a board page is one tap")
         self.assertNotIn("href='javascript", row)
         self.assertNotIn("href='//", row)
         self.assertNotIn("Full message", row)

@@ -2354,96 +2354,6 @@ def queue_keys(key, root):
     return getattr(monitor.provider() if key == "steward" else providers.of(root), "queue_keys", None)
 
 
-BENCH_TEXT = """Here is a short test of reading aloud. It runs a few paragraphs, with sentences of different lengths, so each way of breaking it up meets the same text.
-
-Some sentences are brief. Others run on for a while, carrying a thought through a clause or two before they reach their end, the way a reply often does when it explains how something works and why it was built that way.
-
-The measure is simple: how long until the voice begins, and how long it pauses between one clip and the next. A pause between sentences reads as a breath; a long one reads as a stall.
-
-That is all there is to it. Each run is made fresh, so nothing is ready before it starts."""
-
-
-def voice_bench(reg):
-    """A page to time ways of reading aloud on the person's own phone: the same text, made fresh for each run, read
-    in each way; how long until the voice begins and every pause between clips, shown and sent to the board's log."""
-    from . import voice
-    if not voice.ready():
-        return shell(reg, -2, "<h1>Reading aloud, timed</h1><p class='muted'>Kokoro isn't set up here (colony voice --setup).</p>")
-    return shell(reg, -2, "<h1>Reading aloud, timed</h1><p class='muted'>Each way reads the same text, made fresh, at your "
-                 "speed. Tap one, or all (about six minutes), and keep the page open; the phone sends its numbers to the "
-                 f"board.</p><div id='bench' data-voice='{e(_voices()['voice'])}' data-text='{e(BENCH_TEXT)}'>"
-                 "<div class='benchbtns'></div><table class='benchres'><tr><th>Way</th><th>Clips</th><th>Voice began</th>"
-                 "<th>Pauses, all</th><th>Longest</th></tr></table><p class='muted' id='benchnow'></p></div>"
-                 f"<script>{BENCH}</script>")
-
-
-BENCH = """
-(() => {
-  const B = document.getElementById('bench'), TEXT = B.dataset.text, VOICE = B.dataset.voice;
-  let pace = 1.25; try { pace = (+localStorage.getItem('pace') || 1) + 0.25; } catch (e) {}
-  const paras = (t) => t.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean);
-  const sentences = (p) => (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).map((x) => x.trim()).filter(Boolean);
-  const growing = (r) => (text) => { const out = []; let want = 80, heard = 0, made = 0;
-    const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length; want = Math.min(600, Math.max(40, heard / r - made)); };
-    paras(text).forEach((p) => { let cur = '';
-      sentences(p).forEach((x) => { if (!out.length && !cur) { push(x); return; }
-        if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; } cur = cur ? cur + ' ' + x : x; });
-      if (cur) push(cur); });
-    return out; };
-  const WAYS = [
-    {name: 'Now: grows from one sentence', chunks: growing(0.85), ahead: 3, keep: true},
-    {name: 'Bolder growth', chunks: growing(0.7), ahead: 3, keep: true},
-    {name: 'Whole paragraphs', chunks: paras, ahead: 1, keep: true},
-    {name: 'Sentence by sentence', chunks: (t) => paras(t).flatMap(sentences), ahead: 3, keep: true},
-    {name: 'Now, over the network', chunks: growing(0.85), ahead: 3, keep: false},
-    {name: 'Live: sized to what is buffered', live: true, ahead: 3, keep: true}];
-  // live: each clip is decided when it is asked for, as many sentences as can be made before what is already made
-  // runs out (seconds left to hear, times how fast clips are being made, measured as they come), within a paragraph
-  const live = () => { const items = paras(TEXT).flatMap((p, pi) => sentences(p).map((s) => ({s, pi}))); let c = 0;
-    return {more: () => c < items.length, next: (budget) => { const pi = items[c].pi; let cur = items[c++].s;
-      while (c < items.length && items[c].pi === pi && (cur + ' ' + items[c].s).length <= budget) cur += ' ' + items[c++].s;
-      return cur; }}; };
-  const player = new Audio(), table = B.querySelector('.benchres'), status = document.getElementById('benchnow');
-  let stop = false;
-  const run = (w) => new Promise((done) => {
-    const nonce = Math.random().toString(36).slice(2, 12), src = w.live && live(), parts = src ? [src.next(0)] : w.chunks(TEXT), kept = {};
-    const url = (p) => '/voice?v=' + encodeURIComponent(VOICE) + '&fresh=' + nonce + '&t=' + encodeURIComponent(p);
-    let k = 1, at = 0, first = null, ended = null, started = false; const gaps = [], t0 = performance.now();
-    let rate = 0, perChar = 0;           // characters made per second, and seconds of speech per character at 1x, as measured
-    const more = () => k < parts.length || (src && src.more());
-    const left = () => (Math.max(0, (player.duration || 0) - player.currentTime) + parts.slice(at + 1).reduce((a, p) => a + p.length, 0) * perChar) / pace;
-    const pump = () => { if (!more()) return; if (k - at > w.ahead) { setTimeout(pump, 300); return; }
-      if (k >= parts.length) parts.push(src.next(Math.min(600, Math.max(0, left() - 0.4) * rate * 0.8)));
-      const i = k++, s = performance.now();
-      fetch(url(parts[i])).then((r) => r.blob()).then((b) => { const x = parts[i].length * 1000 / (performance.now() - s);
-        rate = rate ? (rate + x) / 2 : x; if (w.keep) kept[i] = URL.createObjectURL(b); pump(); }).catch(pump); };
-    const play = (i) => { at = i; player.src = (w.keep && kept[i]) || url(parts[i]);
-      player.playbackRate = pace; player.defaultPlaybackRate = pace; player.play().catch(() => {}); };
-    player.onloadeddata = () => { if (isFinite(player.duration) && player.duration) { const x = player.duration / parts[at].length; perChar = perChar ? (perChar + x) / 2 : x; }
-      if (!started) { started = true; rate = parts[0].length * 1000 / (performance.now() - t0); pump(); } };
-    player.onplaying = () => { const n = performance.now(); if (first === null) first = n - t0; else if (ended !== null) gaps.push(n - ended); ended = null; };
-    player.onended = () => { ended = performance.now();
-      if (!stop && at + 1 < parts.length) return play(at + 1);
-      const r = {way: w.name, clips: parts.length, began: Math.round(first), pauses: Math.round(gaps.reduce((a, b) => a + b, 0)),
-        longest: Math.round(Math.max(0, ...gaps)), each: gaps.map(Math.round), sizes: parts.map((p) => p.length)};
-      Object.values(kept).forEach(URL.revokeObjectURL); done(r); };
-    status.textContent = 'Reading: ' + w.name + '…'; play(0); });
-  const show = (r) => { const tr = document.createElement('tr');
-    [r.way, r.clips, (r.began / 1000).toFixed(1) + ' s', (r.pauses / 1000).toFixed(1) + ' s', (r.longest / 1000).toFixed(1) + ' s'].forEach((x) => {
-      const td = document.createElement('td'); td.textContent = x; tr.appendChild(td); }); table.appendChild(tr);
-    fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(Object.assign({when: 'bench', pace}, r))})}).catch(() => {}); };
-  // the first clip starts within the tap itself, which is what lets a phone's page speak
-  const go = async (ways) => { stop = false;
-    for (const w of ways) { if (stop) break; show(await run(w)); await new Promise((ok) => setTimeout(ok, 1500)); }
-    status.textContent = stop ? 'Stopped.' : 'Done: the numbers are on the board too.'; };
-  const btns = B.querySelector('.benchbtns');
-  const add = (label, f) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', f); btns.appendChild(b); };
-  add('Run all', () => go(WAYS)); WAYS.forEach((w) => add(w.name, () => go([w])));
-  add('Stop', () => { stop = true; player.pause(); status.textContent = 'Stopped.'; });
-})();
-"""
-
-
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
     from . import voice
@@ -2465,8 +2375,7 @@ def chat_page(key, root):
             + (f"<select id='kvoice' aria-label='Voice'>{voice.options(voice_of(key, root)[0])}</select>"
                f"<label class='vpin' title='Keep this voice for this project; unpinned, it uses your voice'>"
                f"<input type='checkbox' id='vpin'{' checked' if voice_of(key, root)[1] else ''}> Pin voice to project</label>" if voice.ready() else "")
-            + "<span class='gap'></span><a class='muted' href='/voice/bench'>Benchmark</a>"
-            "<button type='button' class='shut' aria-label='Close'>✕</button></div>"
+            + "<button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>const ICON = {json.dumps(ICONS)};{CHAT}</script>")
 
@@ -2732,14 +2641,6 @@ CHAT = """
       if (k - ((now && now.t === t) ? now.at : from) > 3) { setTimeout(step, 400); return; }
       make(parts[k++]).then(step); };
     step(); };
-  // how long each of the first few clips took to be heard from being asked for, against how long it plays: the
-  // phone's own wait (the making, and the network), for the board's log, so the sizes are set from real numbers
-  let timed = 0;
-  const timeClip = (p, here) => { if (timed >= 6) return; const t0 = performance.now(), at = player.src;
-    player.addEventListener('playing', function once() { player.removeEventListener('playing', once); if (player.src !== at) return;
-      timed += 1; const m = {when: 'clip', chars: p.length, waited: Math.round(performance.now() - t0), plays: Math.round(player.duration * 1000 / pace()),
-        made: here || ready.has(at), here};
-      fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {}); }); };
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
@@ -2776,7 +2677,6 @@ CHAT = """
       now = {t, parts, at: i};
       const u = new URL(clip(parts[i]), location.href).href;
       player.src = kept.get(u) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      timeClip(parts[i], !!kept.get(u));
       // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
       if (i === from) player.addEventListener('loadeddata', () => pipe(t, parts, from + 1), {once: true});
       i += 1;
@@ -5319,11 +5219,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
-        if url.path == "/voice/bench":                # ways of reading aloud, timed on the person's phone
-            return self._send(200, voice_bench(reg).encode())
         if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
             from . import voice
-            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0], (q.get("fresh") or [""])[0][:16])
+            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0])
             ask = self.headers.get("Range", "")
             voice.heard(ask + (" auto" if q.get("auto") else ""), self.headers.get("User-Agent", ""), bool(clip))
             if not clip:
