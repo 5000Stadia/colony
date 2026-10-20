@@ -2346,7 +2346,7 @@ def chat_page(key, root):
             + "".join(f"<option value='{r}'>{r:g}×</option>" for r in (1, 1.25, 1.5, 1.75)) + "</select>"
             + (f"<select id='kvoice' aria-label='Voice'>{voice.options(voice_of(key, root)[0])}</select>"
                f"<label class='vpin' title='Keep this voice for this project; unpinned, it uses your voice'>"
-               f"<input type='checkbox' id='vpin'{' checked' if voice_of(key, root)[1] else ''}> Pin to this project</label>" if voice.ready() else "")
+               f"<input type='checkbox' id='vpin'{' checked' if voice_of(key, root)[1] else ''}> Pin voice to project</label>" if voice.ready() else "")
             + "<span class='gap'></span><button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>const ICON = {json.dumps(ICONS)};{CHAT}</script>")
