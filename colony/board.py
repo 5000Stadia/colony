@@ -1693,8 +1693,11 @@ def arranged(plist):
     best = {}
     for p in plist:
         best[grp(p)] = max(best.get(grp(p), ""), rec.get(str(p.resolve()), ""))
+    # the person's own order of the groups, where they've moved them ("" is Other projects); the rest after, by activity
+    mine = registry()["settings"].get("nest_order") or []
+    place = lambda g: -mine.index(g) if g in mine else -len(mine)
     return [(i, p, grp(p) if homes else None) for i, p in sorted(enumerate(plist), reverse=True,
-            key=lambda ip: (best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0]))]
+            key=lambda ip: (place(grp(ip[1])), best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0]))]
 
 
 def nest_form(pid, root):
@@ -1737,8 +1740,10 @@ def project_list(plist, sub=None, fold="list"):
             # the whole heading folds the group; the arrow at its right opens the nest's page
             page = (f"<a class='nestgo' href='/nest?n={urllib.parse.quote(here)}' onclick='event.stopPropagation()' "
                     f"aria-label='The {e(here)} nest page'>→</a>" if here else "")
-            out.append(f"<div class='nestgroup' data-fold='{e(fold)}:{e(here or '-')}' data-open='1'>"
-                       f"<h3 class='listhead' onclick='toggleFold(this.closest(\".nestgroup\"))'><span class='foldbtn' aria-hidden='true'>"
+            out.append(f"<div class='nestgroup' data-fold='{e(fold)}:{e(here or '-')}' data-nest='{e(here)}' data-open='1'>"
+                       f"<h3 class='listhead' onclick='toggleFold(this.closest(\".nestgroup\"))'>"
+                       f"<span class='grip' title='Drag to move this group' aria-label='Drag to move this group'>⠿</span>"
+                       f"<span class='foldbtn' aria-hidden='true'>"
                        f"</span><span class='nestname'>{e(here + ' nest' if here else 'Other projects')}</span>{page}</h3><div class='members'>")
         heading = here
         out.append(project_row(i, p, sub(p) if sub and p.exists() else ""))
@@ -1853,7 +1858,7 @@ def sidebar(reg, pid):
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{POLL}{CHIPS}{DRAFTS}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}</script></body></html>")
 
 
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
@@ -1879,6 +1884,32 @@ document.querySelectorAll('[data-fold]').forEach((g) => {
   let v = null;
   try { v = localStorage.getItem('fold:' + g.dataset.fold); } catch (e) {}
   if (v !== null && !g.dataset.pin) g.dataset.open = v;
+});
+"""
+
+
+# The groups in a list move by their grip (finger or mouse); where they're dropped is the person's order, kept by the board.
+GRIPS = """
+document.querySelectorAll('.nestgroup .grip').forEach((h) => {
+  h.addEventListener('click', (ev) => ev.stopPropagation());
+  h.addEventListener('pointerdown', (ev) => {
+    const g = h.closest('.nestgroup'), list = g.parentNode;
+    ev.preventDefault(); ev.stopPropagation();
+    h.setPointerCapture(ev.pointerId);
+    g.classList.add('dragging');
+    const move = (e) => {
+      const others = [...list.children].filter((x) => x.classList.contains('nestgroup') && x !== g);
+      const before = others.find((x) => { const r = x.getBoundingClientRect(); return e.clientY < r.top + r.height / 2; });
+      list.insertBefore(g, before || null);
+    };
+    const up = () => {
+      h.removeEventListener('pointermove', move); h.removeEventListener('pointerup', up); h.removeEventListener('pointercancel', up);
+      g.classList.remove('dragging');
+      const order = [...list.children].filter((x) => x.classList.contains('nestgroup')).map((x) => ['n', x.dataset.nest]);
+      fetch('/nests/order', {method: 'POST', body: new URLSearchParams(order)}).catch(() => {});
+    };
+    h.addEventListener('pointermove', move); h.addEventListener('pointerup', up); h.addEventListener('pointercancel', up);
+  });
 });
 """
 
@@ -4592,6 +4623,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/nests/order":                       # the person moved the groups: their order, everywhere
+            reg = registry()
+            reg["settings"]["nest_order"] = list(dict.fromkeys(values.get("n", [])))
+            save_registry(reg)
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/steward/involved":                 # which projects the steward follows: the checked ones
             from . import monitor
             chosen = set(values.get("p", []))
@@ -4832,7 +4871,8 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .prowline .sdot { flex:none }
 span.nestgroup, span.nestgroup > .members { display:contents } .nestgroup[data-open='0'] > .members { display:none }
 .listhead { display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none; min-height:44px; margin:6px 0 2px }
-.listhead .nestname { flex:1 } .foldbtn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px;
+.listhead .nestname { flex:1 } .grip { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px;
+  touch-action:none; cursor:grab; color:var(--muted); font-size:20px; flex:none } .nestgroup.dragging { opacity:.6 } .foldbtn { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px;
   border-radius:6px; background:var(--sunk); color:var(--ink); font-size:16px; flex:none }
 .foldbtn::before { content:'▾' } .nestgroup[data-open='0'] .foldbtn::before { content:'▸' }
 .nestgo { display:inline-flex; align-items:center; justify-content:center; min-width:44px; min-height:44px; font-size:20px;

@@ -580,3 +580,34 @@ class StewardPageTest(BoardBase):
         self.assertIn("data-fold='nav:holodeck' data-open='1' data-pin=1>", board.sidebar(reg, mine))
         self.assertIn("data-fold='steward:holodeck' data-open='1'", board.monitor_page(reg))
         self.assertIn("localStorage.setItem('fold:'", board.monitor_page(reg))
+
+
+class NestOrderTest(BoardBase):
+    def test_the_person_can_put_the_groups_in_their_own_order_and_projects_within_keep_to_activity(self):
+        from colony import nest
+        board.track(self.root)
+        names = []
+        for n in ("photonic", "dnd", "shop"):
+            d = Path(self.tmp.name) / n
+            d.mkdir()
+            (d / "ROADMAP.md").write_text(ROADMAP)
+            board.track(d)
+            names.append(d)
+        nest.join(names[0], "holodeck")
+        nest.join(names[1], "games")
+        board.woke(names[0])
+        groups = lambda: list(dict.fromkeys(here for _, _, here in board.arranged(board.projects())))
+        self.assertEqual(groups()[0], "holodeck", "by activity, until the person orders them")
+        self.assertIn("class='grip'", board.monitor_page(board.registry()))
+        port = None
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host = f"127.0.0.1:{server.server_address[1]}"
+        req = urllib.request.Request(f"http://{host}/nests/order", data=b"n=games&n=&n=holodeck",
+                                     headers={"Host": host, "Origin": f"http://{host}"})
+        self.assertEqual(urllib.request.urlopen(req).status, 204)
+        self.assertEqual(groups(), ["games", "", "holodeck"])
+        board.woke(names[0])
+        self.assertEqual(groups(), ["games", "", "holodeck"], "theirs stays, whatever wakes")
