@@ -788,6 +788,8 @@ class ChatTest(BoardBase):
         self.assertIn("data-voice='0'", page, "not installed: the phone's own voice")
         self.assertNotIn("id='kvoice'", page)
         self.assertIsNone(voice.speak("Hello there."))
+        self.assertIn("talk.pause()", board.CHAT, "⏸ between ■ and ⏭ holds the reading, ▷ takes it up")
+        self.assertIn("player.pause()", board.CHAT)
         asked = []
 
         def made(line):
