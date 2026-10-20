@@ -778,6 +778,18 @@ class ChatTest(BoardBase):
         with self.assertRaises(ValueError):
             board.choose_voice(0, self.root, "nobody")
 
+    def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
+        board.track(self.root)
+        from colony import hours
+        with patch.object(hours, "held_until", return_value=None):          # asked within the person's hours
+            board.add_gate(self.root, "Email or SMS first?", why="the reminder order", default="email first")
+        feed = board.chat_feed("0", self.root)
+        self.assertIn("Needs you · 1", feed)
+        self.assertIn("action='/answer'", feed)
+        self.assertIn("Go with the default: email first", feed)
+        self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
+        self.assertIn("compositionstart", board.CHAT, "dictating into the box pauses reading")
+
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
         turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},

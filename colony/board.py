@@ -2180,6 +2180,18 @@ def chat_feed(key, root, shown=40):
     elif behind:
         line = f"<span class='sdot working'></span>{e(behind)}"
     busy = " busy" if snap["state"] == "working" else ""
+    # what the agent needs of the person, at the end of the conversation: folded to a line, each one opening to its
+    # own answer, so none is missed and however many there are take no room until opened
+    asks = [g for g in gates(root) if due(g)] if key != "steward" else []
+    if asks:
+        default = lambda g: (f"<form class='usedefault' method='post' action='/answer'><input type='hidden' name='p' value='{e(key)}'>"
+                             f"<input type='hidden' name='gate' value='{e(g['id'])}'><input type='hidden' name='back' value='/'>"
+                             f"<input type='hidden' name='text' value='{e('Go with the default: ' + g['default'])}'>"
+                             f"<button>Go with the default</button></form>") if g.get("default") and not g.get("points") else ""
+        out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · {len(asks)}</summary>"
+                   + "".join(f"<details class='need' data-k='g{e(g['id'])}'><summary><span class='q'>{e(short(g['question'], 110))}</span>"
+                             f"<span class='fold muted'>Fold ▴</span></summary>"
+                             f"{gate_body(root, key, g, '/')}{default(g)}</details>" for g in asks) + "</details>")
     if line and tasks:
         out.append(f"<details class='chatlive tasks{busy}' data-k='tasks'><summary>{line}</summary>{tasks_html(tasks)}</details>")
     elif line:
@@ -2331,6 +2343,9 @@ CHAT = """
     x.addEventListener('click', () => { file.value = ''; chosen(); }); chip.appendChild(x); };
   file.addEventListener('change', chosen);
   async function refresh() {
+    // an answer being written in the conversation (to what it needs of the person) is never redrawn away
+    if ([...box.querySelectorAll('textarea')].some((t) => t.value.trim()) || box.contains(document.activeElement) &&
+        document.activeElement.matches('textarea, select, input')) return;
     try {
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
@@ -2568,6 +2583,14 @@ CHAT = """
     turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
+  // Dictating into the box: the voice would be heard by the phone too, so reading pauses as soon as dictated words
+  // arrive (as underlined words, or a run of them with no key pressed); ▷ takes it up again.
+  let keyed = 0, was = ta.value.length;
+  ta.addEventListener('keydown', () => { keyed = Date.now(); });
+  const dictating = () => { if (playing && !paused) hold(true); };
+  ta.addEventListener('compositionstart', dictating);
+  ta.addEventListener('input', (ev) => { const grew = ta.value.length - was; was = ta.value.length;
+    if (ev.inputType !== 'insertFromPaste' && grew > 12 && Date.now() - keyed > 400) dictating(); });
   // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } return; }
@@ -2593,6 +2616,15 @@ CHAT = """
     const go = () => { unlocked = true; fresh(); };
     player.src = SILENT; player.play().then(go).catch(() => document.addEventListener('pointerdown', go, {once: true, capture: true}));
   }
+  // an answer to what it needs goes from here, the page staying where it is
+  box.addEventListener('submit', async (ev) => {
+    const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
+    ev.preventDefault();
+    const r = await fetch('/answer', {method: 'POST', body: new URLSearchParams(new FormData(f))}).catch(() => null);
+    if (!r || !r.ok) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: try again.'; f.appendChild(p); return; }
+    f.querySelectorAll('textarea').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
+    refresh();
+  });
   box.addEventListener('click', async (ev) => {
     if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
     const cp = ev.target.closest('button.copy');
@@ -5690,6 +5722,16 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat .msg.colony { align-self:center; max-width:92%; padding:3px 12px; border-radius:999px; background:var(--sunk);
   color:var(--muted); font-size:12.5px } .chat details.msg.colony[open] { border-radius:12px }
 .chat details.msg.colony > div { white-space:pre-wrap; padding:4px 0 6px; overflow-wrap:anywhere }
+.chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
+.chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
+.chat details.needs > summary::-webkit-details-marker { display:none }
+.chat details.need { margin:8px 0 0; padding:8px 10px; border-radius:10px; background:var(--card) }
+.chat details.need > summary { cursor:pointer } .chat details.need .fold, .chat details.need[open] .q { display:none }
+.chat details.need[open] .fold { display:inline }
+.chat details.need textarea { width:100%; min-height:64px; margin:6px 0; font:inherit; padding:8px; border-radius:10px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
+.chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
+.chat details.need .usedefault button { background:transparent; color:var(--accent) }
 .chat a.shot { display:block; margin-top:8px } .chat a.shot img { display:block; max-width:100%; max-height:420px; border-radius:12px;
   border:1px solid var(--line) } .chat a.file { display:inline-block; padding:2px 10px; border-radius:999px; background:var(--sunk) }
 .chat .say { overflow-wrap:anywhere } .chat .say p { margin:0 0 10px } .chat .say p:last-child { margin-bottom:0 }
