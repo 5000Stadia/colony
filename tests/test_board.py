@@ -803,6 +803,17 @@ class ChatTest(BoardBase):
             self.assertEqual(voice.speak("Hello there.", "bm_george"), first, "kept: the same words again come at once")
             self.assertEqual(len(asked), 1)
             self.assertEqual(voice.speak("Hi", "someone-else").name, voice.speak("Hi", "af_heart").name, "an unknown voice is the default")
+            from http.server import ThreadingHTTPServer
+            server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.shutdown)
+            host = f"127.0.0.1:{server.server_address[1]}"
+            url = f"http://{host}/voice?v=bm_george&t=Hello%20there."
+            r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host, "Range": "bytes=0-1"}))
+            self.assertEqual((r.status, r.read(), r.headers["Content-Range"]), (206, b"RI", "bytes 0-1/7"),
+                             "Safari plays audio only as byte ranges, each answered with just its part")
+            r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host}))
+            self.assertEqual((r.status, r.read()), (200, b"RIFFwav"))
 
     def test_a_codex_rollout_reads_the_same_way(self):
         from colony import chat

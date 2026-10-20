@@ -93,3 +93,14 @@ def speak(text, voice="af_heart"):
     for f in old:
         f.unlink(missing_ok=True)
     return out if out.exists() else None
+
+
+def heard(ask, agent, made):
+    """The last few asks for a clip, to see what a phone asks for: when, which bytes, whether it was made."""
+    log = folder() / "asks.log"
+    try:
+        lines = log.read_text().splitlines()[-40:] if log.exists() else []
+        lines.append(f"{board.now()} range={ask or '-'} made={made} {agent[:80]}")
+        log.write_text("\n".join(lines) + "\n")
+    except OSError:
+        pass

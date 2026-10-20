@@ -2111,13 +2111,16 @@ def chat_page(key, root):
         threading.Thread(target=voice.warm, daemon=True).start()     # loaded before the first ▷
     return (f"<div class='chat' id='chat' data-key='{e(key)}' data-voice='{1 if voice.ready() else 0}'>{chat_feed(key, root)}</div>"
             f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
-            "<div class='attached' hidden></div><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
+            "<div class='attached' hidden></div>"
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
-            "<button aria-label='Send'>↑</button></form><button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
-            "<div class='aloud'><label><input type='checkbox' id='aloud'> Read replies aloud</label>"
+            # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
+            "<div class='composerbar'><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
+            "<label class='aloud'><input type='checkbox' id='aloud'> Read aloud</label>"
             "<button type='button' class='rate' id='rate' aria-label='Reading speed'>1×</button>"
             + (("<select id='kvoice' aria-label='Voice'>" + "".join(f"<option value='{v}'>{n}</option>" for v, n in voice.VOICES)
-                + "</select>") if voice.ready() else "") + "</div>"
+                + "</select>") if voice.ready() else "")
+            + "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
+            "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>{CHAT}</script>")
 
 
@@ -2151,7 +2154,7 @@ CHAT = """
     } catch (e) {}
   }
   setInterval(refresh, 3000);
-  const sendBtn = form.querySelector('button[aria-label=Send], button[aria-label=Stop]');
+  const sendBtn = form.querySelector('button.send');
   const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files[0];
     sendBtn.textContent = b && empty ? '■' : '↑'; sendBtn.setAttribute('aria-label', b && empty ? 'Stop' : 'Send');
     ta.placeholder = b ? 'Queue for after this turn…' : ta.dataset.idle; };
@@ -2172,7 +2175,7 @@ CHAT = """
   ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kb'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
   // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
-  form.querySelector('button').addEventListener('pointerdown', (ev) => ev.preventDefault());
+  form.querySelector('button.send').addEventListener('pointerdown', (ev) => ev.preventDefault());
   ta.addEventListener('input', grow);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
@@ -2222,15 +2225,25 @@ CHAT = """
     try { localStorage.setItem('kvoice', kvoice); } catch (e) {} }); }
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + '&t=' + encodeURIComponent(p.trim());
   const hush = () => { if (talk) talk.cancel(); player.pause(); player.onended = player.onerror = null; };
+  // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
+  // silence, and from then on new replies may be read by themselves.
+  const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+  let unlocked = false;
+  const unlock = () => {
+    if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
+    if (unlocked || !KOKORO || playing) return;
+    unlocked = true; player.src = SILENT; player.play().catch(() => { unlocked = false; });
+  };
+  document.addEventListener('pointerdown', () => { if (aloud.checked) unlock(); }, true);
   const sayK = (t, parts) => {
     let i = 0;
     const next = () => {
       if (playing !== t) return;
-      if (i >= parts.length) { playing = null; mark(); return; }
+      if (i >= parts.length) return done(t);
       player.src = clip(parts[i]); player.playbackRate = rate; player.defaultPlaybackRate = rate;
       if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // made while this one plays
       i += 1;
-      player.play().catch(() => { playing = null; mark(); });
+      player.play().catch(() => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });   // refused: the phone's voice
     };
     player.onended = next;
     player.onerror = () => { if (playing === t) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } };   // the phone's voice then
@@ -2240,29 +2253,32 @@ CHAT = """
     if (!talk) { playing = null; mark(); return; }
     playing = t; mark();
     parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = rate;
-      if (i === parts.length - 1) u.onend = () => { if (playing === t) { playing = null; mark(); } };
+      if (i === parts.length - 1) u.onend = () => done(t);
       talk.speak(u); });
   };
-  const say = (t, text) => {
+  const waiting = [];
+  function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); }
+  const say = (t, text) => { waiting.length = 0; start(t, text); };          // a tap: this one, now
+  const later = (t, text) => { if (playing) waiting.push({t, text}); else start(t, text); };   // a new reply: after this one
+  function start(t, text) {
     hush(); playing = t; mark();
     const parts = chunks(text).filter((p) => p.trim());
     return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
-  };
+  }
   const turn = (t) => plain([...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)]);
   const heard = new Set([...box.querySelectorAll('.say')].map((x) => x.dataset.k));
   try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
   aloud.addEventListener('change', () => {
     try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
     if (talk && aloud.checked) talk.speak(new SpeechSynthesisUtterance(''));   // a tap lets the phone speak later
-    if (aloud.checked && KOKORO) { player.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
-      player.play().catch(() => {}); }                                         // a tap lets the phone play later
+    if (aloud.checked) unlock();
     if (!aloud.checked) { hush(); playing = null; mark(); }
   });
   const fresh = () => {                  // a turn just ended: its new prose, aloud
     if (!aloud.checked || box.querySelector('.chatlive')) return;
     const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
     news.forEach((x) => heard.add(x.dataset.k));
-    if (news.length) say(news[news.length - 1].dataset.t, plain(news));
+    if (news.length) later(news[news.length - 1].dataset.t, plain(news));
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   box.addEventListener('click', async (ev) => {
@@ -4541,15 +4557,28 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
             from . import voice
             clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["af_heart"])[0])
+            ask = self.headers.get("Range", "")
+            voice.heard(ask, self.headers.get("User-Agent", ""), bool(clip))
             if not clip:
                 return self._send(404, b"no voice here")
             body = clip.read_bytes()
-            self.send_response(200)
+            # Safari plays audio only as byte ranges, each answered with just the part it asked for
+            got = re.match(r"bytes=(\d*)-(\d*)$", ask.strip())
+            start, end = 0, len(body) - 1
+            if got and (got.group(1) or got.group(2)):
+                if got.group(1):
+                    start, end = int(got.group(1)), min(int(got.group(2) or end), end)
+                else:
+                    start = max(0, len(body) - int(got.group(2)))
+            self.send_response(206 if got else 200)
             self.send_header("Content-Type", "audio/wav")
+            self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "private, max-age=86400")
-            self.send_header("Content-Length", str(len(body)))
+            if got:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+            self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
-            return self.wfile.write(body)
+            return self.wfile.write(body[start:end + 1])
         if url.path == "/chat/feed":                  # the chat's conversation, as it stands now
             from . import monitor
             key = (q.get("p") or ["0"])[0]
@@ -5286,23 +5315,24 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
-.aloud { display:flex; align-items:center; gap:10px; max-width:760px; margin:6px auto 0; color:var(--muted); font-size:13px }
-.aloud select { min-height:28px; font-size:13px; padding:2px 6px; border-radius:999px; background:var(--sunk); color:var(--ink);
-  border:1px solid var(--line) }
-.aloud label { display:flex; align-items:center; gap:6px } .aloud .rate { min-height:28px; padding:2px 10px; border-radius:999px;
-  background:var(--sunk); color:var(--ink); border:1px solid var(--line); font-size:13px }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
 .chatask { padding:10px 12px; border:1px solid var(--flag); border-radius:12px; background:var(--flag-bg) }
 .chatask .choices { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
 .composer { position:sticky; bottom:12px; z-index:30; display:flex; align-items:flex-end; gap:8px; max-width:760px; margin:14px auto 0;
   padding:8px 8px 8px 14px; border:1px solid var(--line); border-radius:24px; background:var(--card); box-shadow:0 2px 12px rgba(0,0,0,.08) }
-.composer { flex-wrap:wrap } .composer .attached { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:14px;
+.composer { flex-wrap:wrap; padding:8px 8px 6px 14px; border-radius:22px } .composer textarea { flex:1 1 100% }
+.composerbar { flex:1 1 100%; display:flex; align-items:center; gap:6px; margin-left:-6px }
+.composerbar .gap { flex:1 } .composerbar .aloud { display:flex; align-items:center; gap:5px; margin:0; color:var(--muted); font-size:13px;
+  white-space:nowrap } .composerbar .aloud input { width:18px; height:18px; margin:0 }
+.composerbar .rate, .composerbar select { min-height:30px; padding:2px 9px; border-radius:999px; background:var(--sunk); color:var(--ink);
+  border:1px solid var(--line); font-size:13px }
+.composer .attached { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:14px;
   color:var(--muted); padding:2px 0 } .composer .attached[hidden] { display:none } .composer .attached button { width:28px; height:28px;
   min-height:28px; font-size:16px; background:var(--sunk); color:var(--ink) }
-.toend { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(150px + env(safe-area-inset-bottom)); z-index:35; width:44px; height:44px;
+.toend { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(190px + env(safe-area-inset-bottom)); z-index:35; width:44px; height:44px;
   min-height:44px; padding:0; border-radius:50%; font-size:20px; background:var(--card); color:var(--ink); border:1px solid var(--line);
   box-shadow:0 2px 10px rgba(0,0,0,.18) } .toend[hidden] { display:none }
-body.typing .toend { bottom:calc(var(--kb, 0px) + 84px) }
+body.typing .toend { bottom:calc(var(--kb, 0px) + 124px) }
 .composer .attach { flex:none; display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:50%;
   background:var(--sunk); color:var(--ink); font-size:24px; cursor:pointer; margin-left:-6px }
 .composer textarea { flex:1; min-height:28px; max-height:200px; resize:none; border:0; outline:0; background:transparent; color:var(--ink);
@@ -5528,9 +5558,9 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
   input, textarea, select { font-size:16px }
   .composer { bottom:calc(64px + env(safe-area-inset-bottom)) }
-  body.typing .tabs { display:none } body.typing main { padding-bottom:0 } body.typing .aloud { display:none }
+  body.typing .tabs { display:none } body.typing main { padding-bottom:0 }
   body.typing .composer { position:fixed; left:8px; right:8px; bottom:calc(var(--kb, 0px) + 6px); margin:0 }
-  body.typing .chat { padding-bottom:96px }
+  body.typing .chat { padding-bottom:140px }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
   .tabs a { flex:1 1 0; min-width:0; text-align:center; padding:10px 0 9px; border-radius:0; color:var(--muted);
