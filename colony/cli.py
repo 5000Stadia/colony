@@ -1011,9 +1011,9 @@ def cmd_settings(a):
         except KeyError:
             raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
         for k in board.PROJECT_KEYS:
-            v = merged[k]
+            v = merged.get(k, "green" if k == "color" else "")      # a colour is the project's alone: the board's green else
             shown = ("on" if v else "off") if isinstance(v, bool) else str(v) or ("(none)" if k in board.TURBO else "(colony Auto)")
-            print(f"{k:14} {shown:24} {'set for this project' if k in own else 'default' if k in board.TURBO else 'global'}")
+            print(f"{k:14} {shown:24} {'set for this project' if k in own else 'default' if k in board.TURBO or k == 'color' else 'global'}")
         return 0
     if a.key:
         try:

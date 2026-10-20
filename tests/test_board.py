@@ -798,6 +798,19 @@ class ChatTest(BoardBase):
         self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
         self.assertIn("compositionstart", board.CHAT, "dictating into the box pauses reading")
 
+    def test_a_project_has_a_colour_of_its_own_chosen_where_its_settings_are(self):
+        board.track(self.root)
+        self.assertIn("name='color' value='' checked", board.project_settings_form(0, {}), "the board's green, unchosen")
+        self.assertIn("name='color' value='blue'", board.add_project_page(board.registry()), "chosen when it is added, too")
+        board.project_settings(self.root, {"color": "blue"})
+        page = board.render(board.registry(), 0, "")
+        self.assertIn(":root { --accent:#2f5487 }", page, "its page in its colour")
+        self.assertIn("style='--pc:#2f5487;--pcd:#93b4e0' href='/?p=0'", board.sidebar(board.registry(), -1), "its chip too")
+        with self.assertRaises(KeyError):
+            board.project_settings(self.root, {"color": "chartreuse"})
+        board.project_settings(self.root, {"color": ""})
+        self.assertNotIn("--accent:#2f5487", board.render(board.registry(), 0, ""), "back to the board's own")
+
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
         turns = [{"from": "colony", "text": "[colony] You have mail from another project in the colony.", "at": "2026-10-20T15:27:30.969Z", "items": []},

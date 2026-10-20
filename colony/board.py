@@ -356,7 +356,22 @@ def set_setting(key, value):
 # What turbo means for a project, as it ticks it (colony/turbo.py): stronger models, going deeper on its queued
 # work, research on a topic it names. Never part of how its console starts.
 TURBO = {"turbo_models": True, "turbo_deeper": True, "turbo_research": False, "turbo_topic": ""}
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", *TURBO)
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", "color", *TURBO)
+# A project's own colour, the person's to choose: its accent in light and dark, which every tint on its page comes
+# from (the bars, the chosen chip, buttons), and a light wash on its chip in the menu. Green is the board's own.
+PALETTE = {"green": ("#2f5d50", "#7fb5a2"), "teal": ("#1f6670", "#7cc3c9"), "blue": ("#2f5487", "#93b4e0"),
+           "indigo": ("#47478f", "#a9a8e6"), "plum": ("#6b3f78", "#c79ad6"), "rose": ("#8f3b57", "#e39ab3"),
+           "clay": ("#8f4a2c", "#e0a07f"), "amber": ("#7d5a10", "#dcb563"), "olive": ("#55611f", "#b5c27a"),
+           "slate": ("#46525f", "#a9b4c0")}
+
+
+def colour(root):
+    """The project's chosen colour, or None for the board's own."""
+    try:
+        c = json.loads((Path(root) / ".board" / "settings.json").read_text()).get("color")
+    except (OSError, ValueError):
+        return None
+    return c if c in PALETTE else None
 
 
 def project_settings(root, changes=None):
@@ -393,6 +408,8 @@ def project_settings(root, changes=None):
             elif k == "permissions" and v not in PERMISSIONS:
                 raise KeyError(k)
             elif k == "provider" and v not in __import__("colony.providers").providers.PROVIDERS:
+                raise KeyError(k)
+            elif k == "color" and v not in PALETTE:
                 raise KeyError(k)
             else:
                 own[k] = v
@@ -1887,7 +1904,9 @@ def sidebar(reg, pid):
             states.append(snap["state"])
             # its line says what it is at, from its roadmap: never its console's footer or spinner words
             work = at_work(p) if p.exists() else ""
-            chips.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'><span class='pname'>"
+            tint = PALETTE.get(colour(p)) if p.exists() else None
+            tint = f" style='--pc:{tint[0]};--pcd:{tint[1]}'" if tint else ""
+            chips.append(f"<a class='proj{' on' if i == pid else ''}'{tint} href='/?p={i}'><span class='pname'>"
                          f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                          f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
                          f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
@@ -1923,9 +1942,16 @@ def sidebar(reg, pid):
     return side[0] + "<div class='navrow'>" + "".join(side[1:]) + "</div>"
 
 
+def own_colour(reg, pid):
+    """A project's page in its own colour, light and dark."""
+    plist = projects(reg)
+    c = PALETTE.get(colour(plist[pid])) if 0 <= pid < len(plist) else None
+    return (f":root {{ --accent:{c[0]} }} @media (prefers-color-scheme: dark) {{ :root {{ --accent:{c[1]} }} }}" if c else "")
+
+
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
-            f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
+            f"<title>Projects — board</title><style>{CSS}{own_colour(reg, pid)}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}</script></body></html>")
 
 
@@ -2255,6 +2281,7 @@ _SVG = "<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='curr
 ICONS = {"copy": _SVG.format("<rect x='8' y='8' width='12' height='12' rx='2.5'/><path d='M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2'/>"),
          "play": _SVG.format("<path d='M7 4.5v15l12.5-7.5z'/>"),
          "stop": _SVG.format("<rect x='6' y='6' width='12' height='12' rx='2' fill='currentColor'/>"),
+         "load": _SVG.format("<path class='spin' d='M12 3.5a8.5 8.5 0 1 0 8.5 8.5'/>"),
          "pause": _SVG.format("<rect x='6.5' y='5' width='3.5' height='14' rx='1' fill='currentColor'/><rect x='14' y='5' width='3.5' height='14' rx='1' fill='currentColor'/>"),
          "skip": _SVG.format("<path d='M4.5 5.5v13l8-6.5z'/><path d='M12.5 5.5v13l8-6.5z'/>"),
          "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>")}
@@ -2470,7 +2497,7 @@ CHAT = """
   });
   // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
   const talk = window.speechSynthesis, aloud = document.getElementById('aloud');
-  let voice = null, playing = null, paused = false;
+  let voice = null, playing = null, paused = false, loading = false;
   const pick = () => {
     const vs = talk ? talk.getVoices().filter((v) => /^en/i.test(v.lang)) : [];
     const rank = (v) => (/premium/i.test(v.name) ? 4 : /enhanced|neural|natural/i.test(v.name) ? 3 : 0) + (v.localService ? 1 : 0) + (v.default ? .5 : 0);
@@ -2489,9 +2516,11 @@ CHAT = """
   });
   const sheet = document.getElementById('voicesheet');
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
-  const mark = () => { box.querySelectorAll('button.listen').forEach((b) => { const on = b.dataset.t === playing;
-      if (b.dataset.on !== String(on)) { b.dataset.on = on; b.innerHTML = on ? ICON.stop : ICON.play; } });
-    box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== playing; });
+  // ▷, then a spinner while the voice is being made, then ■ once it is heard; pause and skip come with the sound
+  const mark = () => { box.querySelectorAll('button.listen').forEach((b) => {
+      const st = b.dataset.t !== playing ? 'play' : loading ? 'load' : 'stop';
+      if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } });
+    box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== playing || loading; });
     box.querySelectorAll('button.hold').forEach((b) => { if (b.dataset.p !== String(paused)) { b.dataset.p = paused;
       b.innerHTML = paused ? ICON.play : ICON.pause; b.setAttribute('aria-label', paused ? 'Resume' : 'Pause'); } });
     const sets = [...box.querySelectorAll('button.vset')];
@@ -2523,11 +2552,14 @@ CHAT = """
     // a voice once kept on this device for this project stays with it, as its pin
     try { const old = localStorage.getItem('kvoice:' + box.dataset.name);
       if (old) { localStorage.removeItem('kvoice:' + box.dataset.name); if (!pin.checked && old !== kvoice) keepVoice({voice: old, pin: '1'}); } } catch (e) {} }
+  // heard, or waiting on the next clip still being made
+  player.addEventListener('playing', () => { if (loading && playing && !player.loop) { loading = false; mark(); } });
+  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading) { loading = true; mark(); } });
   let via = '';                          // marks a clip started by itself, in the board's log of asks
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
   // not let it start again)
-  const hush = (keep) => { if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false;
+  const hush = (keep) => { if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
     player.loop = false; resting = 0; };
   // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
   // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
@@ -2570,7 +2602,7 @@ CHAT = """
     if (!talk) { playing = null; mark(); return; }
     playing = t; mark();
     parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
-      u.onstart = () => { now = {t, parts, at: i}; };
+      u.onstart = () => { now = {t, parts, at: i}; if (loading) { loading = false; mark(); } };
       if (i === parts.length - 1) u.onend = () => done(t);
       talk.speak(u); });
   };
@@ -2587,7 +2619,7 @@ CHAT = """
   const say = (t, text) => { waiting.length = 0; via = ''; start(t, text); };          // a tap: this one, now
   const later = (t, text) => { if (playing) waiting.push({t, text}); else start(t, text); };   // a new reply: after this one
   function start(t, text) {
-    hush(!!resting); playing = t; mark();
+    hush(!!resting); playing = t; loading = true; mark();
     const parts = chunks(text).filter((p) => p.trim());
     if (parts[0]) tell(parts[0]);
     return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
@@ -3476,6 +3508,10 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
             f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
+            + "<div class='swatches'><span>Colour</span>" + "".join(
+                f"<label title='{k}' style='--sw:{light};--swd:{dark}'><input type='radio' name='color' value='{'' if k == 'green' else k}'"
+                f"{' checked' if (own.get('color') or 'green') == k else ''}><span></span></label>" for k, (light, dark) in PALETTE.items())
+            + "</div>"
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
             + (auto_balance_fields(root) + tier_fields(root) + turbo_fields(root) if root else "") + f"<button>Save</button></form>")
@@ -5809,6 +5845,14 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat .msg.colony { align-self:center; max-width:92%; padding:3px 12px; border-radius:999px; background:var(--sunk);
   color:var(--muted); font-size:12.5px } .chat details.msg.colony[open] { border-radius:12px }
 .chat details.msg.colony > div { white-space:pre-wrap; padding:4px 0 6px; overflow-wrap:anywhere }
+.swatches { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:6px 0 } .swatches > span { margin-right:4px }
+.swatches label { display:inline-flex; margin:0; cursor:pointer } .swatches input { position:absolute; opacity:0; pointer-events:none }
+.swatches label span { width:28px; height:28px; border-radius:50%; background:var(--sw); border:2px solid var(--card); box-shadow:0 0 0 1px var(--line) }
+.swatches input:checked + span { box-shadow:0 0 0 2px var(--ink) }
+@media (prefers-color-scheme: dark) { .swatches label span { background:var(--swd) } }
+nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
+@media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
+nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
 .chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
@@ -5836,6 +5880,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts .vset { width:auto; min-width:36px; font-size:13px; padding:0 10px }
 .chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
+.chat .turnacts .spin { transform-origin:12px 12px; animation:spin .9s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
   display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
   box-shadow:0 2px 12px rgba(0,0,0,.12); font-size:14px } .voicesheet[hidden] { display:none } .voicesheet .gap { flex:1 }
