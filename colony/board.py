@@ -3022,8 +3022,10 @@ def vision_box(root, pid):
 
 
 def _inline(text):
-    """Escaped text with **bold** and *emphasis* and `code` shown as such."""
+    """Escaped text with **bold** and *emphasis* and `code` shown as such, and [a link](/a/board/page) (or https)
+    one to tap."""
     text = e(text)
+    text = re.sub(r"\[([^\]]+)\]\(((?:/(?!/)|https://)[^\s)]+)\)", r"<a href='\2'>\1</a>", text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<em>\1</em>", text)
     return re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
@@ -4403,8 +4405,8 @@ ASK_WHOLE = 320          # characters: a turn this short shows whole, its questi
 
 
 def ask_html(text):
-    """A turn that asked the person something: its questions first, as written, and the whole turn folded beneath
-    them, as a page shows prose. With no sentence that reads as a question, its last paragraph leads (where an agent
+    """A turn that asked the person something: its questions first, as written, and the whole turn beneath them,
+    open (a question can lean on what came before it; Fold puts it away), as a page shows prose. With no sentence that reads as a question, its last paragraph leads (where an agent
     leaves what it asks of the person). A short turn shows whole."""
     text = (text or "").strip()
     asked, blocks = question_lines(text), [b for b in re.split(r"\n\s*\n", text) if b.strip()]
@@ -4412,7 +4414,7 @@ def ask_html(text):
         return f"<div class='asktext'>{prose(text)}</div>"
     lead = "".join(f"<p><b>{_inline(q)}</b></p>" for q in asked) if asked else prose(blocks[-1])
     return (f"<div class='asked'>{lead}</div>"
-            f"<details class='full'><summary>Full message</summary><div class='asktext'>{prose(text)}</div></details>")
+            f"<details class='full' open><summary>Full message</summary><div class='asktext'>{prose(text)}</div></details>")
 
 
 def waiting_on(pid, p, back, label=True, with_gates=True):

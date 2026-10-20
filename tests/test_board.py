@@ -5117,7 +5117,8 @@ class PhonePageTest(HoursBase):
             row = board.waiting_html(0, self.root)
         self.assertIn("<p><b>My question from before is still open: is there a version of this you&#x27;d want to play "
                       "yourself?</b></p>", row)
-        self.assertLess(row.index("want to play yourself?</b>"), row.index("<summary>Full message</summary>"))
+        self.assertLess(row.index("want to play yourself?</b>"), row.index("<details class='full' open><summary>Full message</summary>"),
+                        "the turn shows open beneath its question, which can lean on it")
         full = row.split("<summary>Full message</summary>")[1]
         self.assertIn("<li><strong>Where it is:</strong> the build is on <code>park/ended-here</code>.</li>", full)
         self.assertNotIn("**", row)
@@ -5126,6 +5127,12 @@ class PhonePageTest(HoursBase):
             board.record_ask(self.root, "t2", "Export is done. Which format do you want?")
             row = board.waiting_html(0, self.root)
         self.assertIn("<p>Export is done. Which format do you want?</p>", row, "a short turn shows whole")
+        with self.clock(14, 10):
+            board.record_ask(self.root, "t3", "Can you [run the benchmark](/voice/bench)? Not [this](javascript:x) or [that](//evil.example).")
+            row = board.waiting_html(0, self.root)
+        self.assertIn("<a href='/voice/bench'>run the benchmark</a>", row, "a link to a board page is one tap")
+        self.assertNotIn("href='javascript", row)
+        self.assertNotIn("href='//", row)
         self.assertNotIn("Full message", row)
 
     def test_no_furniture_or_empty_sections_waiting_before_pinned_and_showcase_once_it_has_shown_something(self):
