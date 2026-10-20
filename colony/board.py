@@ -2490,6 +2490,15 @@ CHAT = """
   }
   window.addEventListener('scroll', () => { if (!document.body.classList.contains('typing')) return;
     clearTimeout(settle); settle = setTimeout(() => measure('scroll'), 500); }, {passive: true});
+  // a tap into the text while typing: where it landed and which letter the phone put the cursor at, with the page's
+  // pan (the person saw the cursor land away from their tap); for the board's log, a few a page, until it is fixed
+  let taps = 0;
+  ta.addEventListener('touchend', (ev) => { if (!document.body.classList.contains('typing') || taps++ > 5) return;
+    const t = ev.changedTouches[0], r = ta.getBoundingClientRect(), v = window.visualViewport;
+    setTimeout(() => fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'tap',
+      x: Math.round(t.clientX - r.left), y: Math.round(t.clientY - r.top), w: Math.round(r.width), at: ta.selectionStart, of: ta.value.length,
+      near: ta.value.slice(Math.max(0, ta.selectionStart - 12), ta.selectionStart + 12), vvtop: v && v.offsetTop, vvh: v && v.height,
+      boxTop: Math.round(r.top), scroll: scrollY})})}).catch(() => {}), 120); }, {passive: true});
   // Back on the page with the keyboard still up (after a lock), the box is placed again and the cursor re-seated
   // once things settle, since a phone can draw both from before; and its numbers go to the board's log.
   const settleBox = () => { if (!document.body.classList.contains('typing')) return;
