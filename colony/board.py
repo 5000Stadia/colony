@@ -901,7 +901,12 @@ def gates(root):
                                 answered_by=e.get("author", "person"))
         elif e["type"] == "held" and e["of"] in out:            # the person's hours changed: released at the new ones
             out[e["of"]]["held_until"] = e["until"]
+    # one the person replied on is the agent's to take up: off their list until it settles it, asks it again, or
+    # finishes with their reply and leaves it as it was (then it is theirs again)
+    replied = {(n.get("anchor") or {}).get("gate") for n in notes(root)
+               if n.get("author") == "person" and not n.get("addressed_at") and not n.get("reply")}
     for g in out.values():
+        g["awaiting"] = g["id"] in replied and not g["answer"]
         if g.get("when"):
             if later is None:
                 later = {iid for iid, it in items(roadmap(root)).items() if it["state"] == "todo"}
@@ -913,7 +918,7 @@ def gates(root):
 def due(g):
     """An unanswered gate whose moment has come: the person's question now (not one waiting for its item, nor one
     held for their active hours)."""
-    return not g["answer"] and not g.get("waits_for") and not g.get("held")
+    return not g["answer"] and not g.get("waits_for") and not g.get("held") and not g.get("awaiting")
 
 
 def notes(root):
