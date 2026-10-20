@@ -1672,7 +1672,7 @@ def all_projects_page(reg):
         snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
         waiting = len(moments(p)) if p.exists() else 0
         goal = first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"]) if p.exists() else ""
-        out.append(f"<div class='note'><a href='/?p={i}'><span class='sdot {snap['state'].replace(' ', '-')}'></span> <b>{e(p.name)}</b></a>"
+        out.append(f"<div class='prow'><a href='/?p={i}'><span class='sdot {snap['state'].replace(' ', '-')}'></span> <b>{e(p.name)}</b></a>"
                    f" <span class='who'>{e(snap['state'])}{' · ' + str(waiting) + ' waiting on you' if waiting else ''}</span>"
                    f"<div class='muted'>{e(goal)}</div></div>")
     out.append("</div>" if plist else "<p class='muted'>No projects yet.</p>")
@@ -2834,7 +2834,7 @@ def nest_page(reg, name):
         snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
         waiting = len(moments(p)) if p.exists() else 0
         goal = " ".join(roadmap(p)["goal"].split())[:140] if p.exists() else ""
-        out.append(f"<div class='note'><a href='/?p={i}'><b>{e(p.name)}</b></a> <span class='who'>{e(snap['state'])}"
+        out.append(f"<div class='prow'><a href='/?p={i}'><span class='sdot {snap['state'].replace(' ', '-')}'></span> <b>{e(p.name)}</b></a> <span class='who'>{e(snap['state'])}"
                    f"{' · ' + str(waiting) + ' waiting on you' if waiting else ''}</span><div class='muted'>{e(goal)}</div></div>")
     out.append("</div>")
     links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
@@ -4505,6 +4505,8 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
 .item.doing .st { color:var(--accent); font-weight:600 } .item.verify .st, .st.verify { color:var(--flag); font-weight:600 }
 .node.verify { border-color:var(--flag) }
 .note { margin:8px 0 0 18px; padding:6px 10px; background:var(--sunk); border-radius:7px }
+.prow { margin:8px 0 0; padding:8px 10px; background:var(--sunk); border-radius:7px } .prow a { text-decoration:none }
+.prow .sdot { display:inline-block; vertical-align:-1px; margin-right:2px }
 .reply { margin-top:6px; padding-left:10px; border-left:2px solid var(--accent) } .who { font-size:12px; color:var(--muted) }
 form.add { margin:8px 0 4px 18px; display:flex; gap:8px; flex-wrap:wrap } form.add textarea { flex:1 1 100%; min-height:44px;
   font:inherit; padding:7px 9px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
