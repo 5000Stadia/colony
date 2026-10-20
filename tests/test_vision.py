@@ -425,9 +425,11 @@ class NestTest(BoardBase):
         self.assertIn("No nest named", board.nest_page(board.registry(), "nowhere"))
         side = board.sidebar(board.registry(), 0)                     # the board groups its projects by nest
         self.assertIn("/nest?n=holodeck", side)
-        self.assertLess(side.index("holodeck nest"), side.index(">photonic<"))
-        self.assertLess(side.index(">photonic<"), side.index("other projects"))
-        self.assertLess(side.index("other projects"), side.index(">dnd<"))
+        start = side.index("data-fold='nav:holodeck'")
+        group = side[start:side.index("</a></span></span>", side.index("<span class='members'>", start))]
+        self.assertIn(">photonic<", group, "its projects open from the nest's chip")
+        self.assertIn(">plants<", group)
+        self.assertNotIn(">dnd<", group, "a project in no nest stands on its own")
 
     def test_a_project_is_in_one_nest_and_keeps_it_when_closed_and_reopened(self):
         from colony import nest
@@ -541,3 +543,40 @@ class ArchiveAndListTest(BoardBase):
         self.assertIn("value='holodeck'", board.nest_form(0, self.root))          # existing nests offered
         self.assertIn("Take it out", board.nest_form(1, other))
         self.assertIn("href='/projects'", board.sidebar(board.registry(), 0))
+
+
+class StewardPageTest(BoardBase):
+    def test_the_steward_page_shows_its_last_word_and_follows_only_the_projects_left_checked(self):
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        monitor.said_last("**Bookflow** finished R12.\n\nNothing else needs you.")
+        page = board.monitor_page(board.registry())
+        self.assertIn("<a class='saidlast' href='/steward?view=console'>", page)
+        self.assertIn("Bookflow finished R12. Nothing else needs you.", page)
+        self.assertIn("2 of 2", page)
+        monitor.set_posture(other, steward=False)
+        self.assertFalse(monitor.involved(other))
+        monitor.helm(True)
+        self.assertFalse(monitor.helm_for(other), "left out: no wakes for it")
+        self.assertTrue(monitor.helm_for(self.root))
+        page = board.monitor_page(board.registry())
+        self.assertIn("1 of 2", page)
+        self.assertIn("class='prow out'", page)
+
+    def test_nests_fold_in_the_menu_shut_unless_shown_and_open_in_the_stewards_list(self):
+        from colony import nest
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        nest.join(other, "holodeck")
+        reg = board.registry()
+        mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
+        self.assertIn("data-fold='nav:holodeck' data-open='0'>", board.sidebar(reg, -1))
+        self.assertIn("data-fold='nav:holodeck' data-open='1' data-pin=1>", board.sidebar(reg, mine))
+        self.assertIn("data-fold='steward:holodeck' data-open='1'", board.monitor_page(reg))
+        self.assertIn("localStorage.setItem('fold:'", board.monitor_page(reg))

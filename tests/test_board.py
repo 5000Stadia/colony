@@ -4711,7 +4711,7 @@ class PhonePageTest(HoursBase):
         self.assertNotIn("<p class='muted'>Muted:", page, "not four lines on what that means")
         projects_, needs = page.split("<h2>Needs you</h2>")
         self.assertIn("<b>plants</b>", projects_, "every project at a glance, first")
-        self.assertIn("doing R2 water log", projects_)
+        self.assertIn(">R2 water log", projects_)
         self.assertLess(needs.index(">plants</a>"), needs.index("Plants question 0?"))
         self.assertLess(needs.index("Plants question 4?"), needs.index(">shop</a>"), "each project's own, together")
         self.assertEqual(self.NUM.findall(needs)[-1], ("1", "Open on Sundays?"), "numbered as its own page numbers it")
@@ -4740,9 +4740,9 @@ class PhonePageTest(HoursBase):
         with self.clock(14):
             page = board.render(board.registry(), 0)
         status = page.split("class='status'")[1].split("</a>")[0]
-        self.assertIn("doing R2 water log", status)
+        self.assertIn("· R2 water log", status)
         self.assertIn("Nothing waits on you.", status)
-        self.assertIn("idle · doing R2 water log", page, "the project's line in the list says it too")
+        self.assertIn("idle · R2 water log", page, "the project's line in the list says it too")
         for noise in ("Sautéed", "bypass permissions", " new</span>"):
             self.assertNotIn(noise, page)
 

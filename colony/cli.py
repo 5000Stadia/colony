@@ -744,6 +744,9 @@ def cmd_turn(a):
     if context.carry_reply(root, a.console or providers.key(context.program(root)), payload):
         return 0
     key, text = context.program(root).turn_text(payload)
+    from . import monitor
+    if Path(root).resolve() == monitor.home().resolve() and text.strip():
+        monitor.said_last(text)                     # the steward's last word, at the top of its page
     board.record_ask(root, key, text)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     from . import continuation

@@ -1717,21 +1717,31 @@ def project_row(i, p, sub=""):
     snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off"}
     waiting = len(moments(p)) if p.exists() else 0
     st = snap["state"]
-    return (f"<a class='prow' href='/?p={i}'><span class='prowline'>"
+    from . import monitor
+    out = p.exists() and not monitor.involved(p)
+    return (f"<a class='prow{' out' if out else ''}' href='/?p={i}'{' title=' + chr(39) + 'the steward leaves it out' + chr(39) if out else ''}><span class='prowline'>"
             f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}' title='{e(st)}'></span><b>{e(p.name)}</b>"
             f"<span class='pwork' data-p='{i}'>{e(at_work(p) if p.exists() else '')}</span>"
             f"<span class='badge gate pbadge' data-p='{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span></span>"
             + (f"<span class='psub'>{e(sub)}</span>" if sub else "") + "</a>")
 
 
-def project_list(plist, sub=None):
-    """Projects in the board's order, each under its nest's name when there are nests."""
+def project_list(plist, sub=None, fold="list"):
+    """Projects in the board's order, each nest's under its name, folding open or shut (remembered on this device,
+    open at first) when there are nests."""
     out, heading = [], None
     for i, p, here in arranged(plist):
         if here != heading and here is not None:
-            out.append(f"<h3 class='listhead'>{f'<a href=/nest?n={urllib.parse.quote(here)}>{e(here)} nest</a>' if here else 'Other projects'}</h3>")
+            if heading is not None:
+                out.append("</div></div>")
+            name = (f"<a href='/nest?n={urllib.parse.quote(here)}'>{e(here)} nest</a>" if here else "Other projects")
+            out.append(f"<div class='nestgroup' data-fold='{e(fold)}:{e(here or '-')}' data-open='1'>"
+                       f"<h3 class='listhead'><button type='button' class='foldbtn' onclick='toggleFold(this.closest(\".nestgroup\"))' "
+                       f"aria-label='Fold'></button>{name}</h3><div class='members'>")
         heading = here
         out.append(project_row(i, p, sub(p) if sub and p.exists() else ""))
+    if heading is not None:
+        out.append("</div></div>")
     return "".join(out)
 
 
@@ -1776,7 +1786,7 @@ def at_work(root, n=70):
             if not own:
                 return ""
     if doing:
-        return f"doing {doing[0]['id']} {short(plain(doing[0]['text']), n)}" + (f" +{len(doing) - 1}" if len(doing) > 1 else "")
+        return f"{doing[0]['id']} {short(plain(doing[0]['text']), n)}" + (f" +{len(doing) - 1}" if len(doing) > 1 else "")
     later = lambda m: re.match(r"later\b", (m["title"] or m["id"]).strip(), re.I)
     nxt = next((i for m in road["milestones"] if not later(m) for i in m["items"] if i["state"] == "todo"), None)
     return f"next {nxt['id']} {short(plain(nxt['text']), n)}" if nxt else ""
@@ -1787,23 +1797,39 @@ def sidebar(reg, pid):
     plist = projects(reg)
     ms = monitor.snapshot()
     helm = "at the helm" if monitor.helm() else "helm with you"
-    side, heading, total = [], None, 0
+    side, total, groups = [], 0, []
     for i, p, here in arranged(plist):
-        if here != heading and here is not None:
-            label = e(here + ' nest' if here else 'other projects')
-            side.append(f"<div class='sline nesthead' style='padding:8px 10px 2px;text-transform:uppercase;letter-spacing:.06em'>"
-                        + (f"<a href='/nest?n={urllib.parse.quote(here)}'>{label}</a>" if here else label) + "</div>")
-        heading = here
-        waiting = len(moments(p))
-        total += waiting
-        badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
-        snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off", "lines": []}
-        # its line says what it is at, from its roadmap: never its console's footer or spinner words
-        work = at_work(p) if p.exists() else ""
-        side.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'><span class='pname'>"
-                    f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
-                    f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
-                    f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
+        if here and groups and groups[-1][0] == here:
+            groups[-1][1].append((i, p))
+        else:
+            groups.append((here, [(i, p)]))
+    for here, members in groups:
+        chips, states, waits = [], [], 0
+        for i, p in members:
+            waiting = len(moments(p))
+            total, waits = total + waiting, waits + waiting
+            badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
+            snap = console.snapshot(p, lines=0) if p.exists() else {"state": "off", "lines": []}
+            states.append(snap["state"])
+            # its line says what it is at, from its roadmap: never its console's footer or spinner words
+            work = at_work(p) if p.exists() else ""
+            chips.append(f"<a class='proj{' on' if i == pid else ''}' href='/?p={i}'><span class='pname'>"
+                         f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
+                         f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
+                         f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
+        if not here:
+            side += chips
+            continue
+        # a nest: one chip that opens to its projects (remembered on this device); open while one of them is shown
+        state = next((s for s in ("needs you", "working", "idle") if s in states), "off")
+        mine = any(i == pid for i, _ in members)
+        q = urllib.parse.quote(here)
+        side.append(f"<span class='nestgroup' data-fold='nav:{e(here)}' data-open='{1 if mine else 0}'{' data-pin=1' if mine else ''}>"
+                    f"<a class='proj nestchip' href='/nest?n={q}' onclick='return toggleFold(this.parentNode)'>"
+                    f"<span class='pname'><span class='sdot {state.replace(' ', '-')}'></span>{e(here)} <span class='nestcount'>"
+                    f"{len(members)}</span><span class='badge gate'{'' if waits else ' hidden'}>{waits}</span></span>"
+                    f"<span class='sline'>nest · <span class='nestopen' onclick=\"event.stopPropagation(); location.href='/nest?n={q}'\">"
+                    f"its page</span></span></a><span class='members'>{''.join(chips)}</span></span>")
     # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
@@ -1825,7 +1851,7 @@ def sidebar(reg, pid):
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><style>{CSS}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{POLL}{CHIPS}{DRAFTS}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{POLL}{CHIPS}{DRAFTS}</script></body></html>")
 
 
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
@@ -1835,6 +1861,23 @@ CHIPS = """
   if (!on || n.scrollWidth <= n.clientWidth) return;
   const s = n.querySelector('.proj.monitor'), left = s && getComputedStyle(s).position === 'sticky' ? s.offsetLeft + s.offsetWidth : 0;
   n.scrollLeft = Math.max(0, on.offsetLeft - left - (n.clientWidth - left - on.offsetWidth) / 2); })();
+"""
+
+
+# A nest folds open or shut where it's listed, and stays as the person left it on this device; one pinned open (the nest
+# of the project being shown, in the menu) stays open, whatever was stored.
+FOLDS = """
+function toggleFold(g) {
+  g.dataset.open = g.dataset.open === '1' ? '0' : '1';
+  delete g.dataset.pin;
+  try { localStorage.setItem('fold:' + g.dataset.fold, g.dataset.open); } catch (e) {}
+  return false;
+}
+document.querySelectorAll('[data-fold]').forEach((g) => {
+  let v = null;
+  try { v = localStorage.getItem('fold:' + g.dataset.fold); } catch (e) {}
+  if (v !== null && !g.dataset.pin) g.dataset.open = v;
+});
 """
 
 
@@ -2131,6 +2174,8 @@ def render(reg, pid, view="overview", show_all=""):
                 f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
                 f"<input name='why' placeholder='Why it is being archived (its agent reads this if it reopens)'>"
                 f"<button class='quiet'>Archive</button></form>"
+                f"<form method='post' action='/project/close' onsubmit=\"return confirm('Close {e(root.name)}? Its agent lands its work, then it comes off the board; its files and conversation stay, and colony track reopens it.')\">"
+                f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Close</button></form>"
                 f"<form method='post' action='/project/remove' onsubmit=\"return confirm('Take {e(root.name)} off the board? Its session stops; its files stay where they are.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
@@ -2929,8 +2974,18 @@ def monitor_page(reg, view="overview"):
     made = monitor.decisions(None, 10)
     recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(d['at'][:16].replace('T', ' '))}</span>"
                      f"<div>{e(d['text'])}</div></div>" for d in made)
-    body = (head + "<div class='listtop'><h2>Projects</h2><a href='/projects'>All projects →</a></div>"
-            + (f"<div class='card plist'>{project_list(plist)}</div>" if plist else "<p class='muted'>No projects yet.</p>")
+    last = monitor.said_last()
+    said = (f"<a class='saidlast' href='/steward?view=console'><span class='who'>The steward said · {e(on_day(last['at']))}"
+            f"</span><div class='said'>{e(' '.join(re.sub(r'[*_`#>]', '', last['text']).split()))}</div></a>" if last else "")
+    follows = "".join(f"<label><input type='checkbox' name='p' value='{i}'{' checked' if monitor.involved(p) else ''}> {e(p.name)}</label>"
+                      for i, p, _ in arranged(plist) if p.exists())
+    kept = sum(monitor.involved(p) for p in plist if p.exists())
+    follow = (f"<details class='card fold' id='follows'><summary><h3>Projects it follows</h3><span class='muted'>{kept} of "
+              f"{sum(1 for p in plist if p.exists())}</span></summary><form class='options' method='post' action='/steward/involved'>"
+              f"<p class='muted'>Unchecked, the steward leaves a project out: it doesn't wake for it, report on it or scout for it, "
+              f"and hears of it only when you bring it up.</p>{follows}<button>Save</button></form></details>") if plist else ""
+    body = (head + said + "<div class='listtop'><h2>Projects</h2><a href='/projects'>All projects →</a></div>"
+            + (f"<div class='card plist'>{project_list(plist, fold='steward')}</div>{follow}" if plist else "<p class='muted'>No projects yet.</p>")
             + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
             f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
             + (f"<details class='card fold'><summary><h3>What the steward decided</h3><span class='muted'>{len(made)}"
@@ -4192,6 +4247,7 @@ class Handler(BaseHTTPRequestHandler):
         body_text = ""
         if self.headers.get("Content-Type", "").startswith("multipart/form-data"):
             form, upload = self._multipart()       # Message, with a file or a long paste
+            values = {k: [v] for k, v in form.items()}
         else:
             upload = None
             length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
@@ -4534,6 +4590,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/steward/involved":                 # which projects the steward follows: the checked ones
+            from . import monitor
+            chosen = set(values.get("p", []))
+            for i, p in enumerate(projects(reg)):
+                if p.exists() and monitor.involved(p) != (str(i) in chosen):
+                    monitor.set_posture(p, steward=str(i) in chosen)
+            self.send_response(303)
+            self.send_header("Location", "/steward")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/mute":
             from . import monitor
             try:
@@ -4632,9 +4699,14 @@ class Handler(BaseHTTPRequestHandler):
             keys = providers.of(root).choose(console.screen(name), form["option"])
             if keys:
                 console.press(name, keys)
-        elif path in ("/project/archive", "/nest/join", "/nest/leave"):
+        elif path in ("/project/archive", "/project/close", "/nest/join", "/nest/leave"):
             from . import nest
-            if path == "/project/archive":
+            if path == "/project/close":
+                try:
+                    close_project(root)
+                except ValueError:
+                    pass
+            elif path == "/project/archive":
                 try:
                     close_project(root, why=form.get("why", ""), archive=True)
                 except ValueError:
@@ -4756,6 +4828,13 @@ details.item { border-top:1px solid var(--line); padding:6px 0 } details.item su
   border-radius:7px; color:var(--ink); text-decoration:none } .plist > .prow:first-child { margin-top:0 }
 .prowline { display:flex; align-items:center; gap:8px; min-width:0 } .prowline b { flex:none; max-width:62%; color:var(--accent);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .prowline .sdot { flex:none }
+span.nestgroup, span.nestgroup > .members { display:contents } .nestgroup[data-open='0'] > .members { display:none }
+.listhead { display:flex; align-items:center; gap:6px } .foldbtn { min-height:0 !important; padding:0 4px; background:none;
+  border:0; color:var(--muted); cursor:pointer } .foldbtn::before { content:'▾' } .nestgroup[data-open='0'] .foldbtn::before { content:'▸' }
+.nestchip .nestcount { color:var(--muted); font-weight:400 } .nestopen { text-decoration:underline; cursor:pointer }
+.saidlast { display:block; margin:12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--card);
+  color:var(--ink); text-decoration:none } .saidlast .said { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+  overflow:hidden } a.prow.out { opacity:.55 }
 .pwork { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; color:var(--muted) }
 .psub { display:block; margin:3px 0 0 18px; color:var(--muted); font-size:13.5px }
 .listhead { margin:12px 4px 6px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em }
@@ -4957,6 +5036,8 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   .navfoot { flex-direction:row; margin:0 0 0 auto; padding:0; border:0; gap:2px; font-size:16px }
   .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline }
   nav { position:sticky; top:0; z-index:40 }
+  /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
+  input, textarea, select { font-size:16px }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
   .tabs a { flex:1 1 0; min-width:0; text-align:center; padding:10px 0 9px; border-radius:0; color:var(--muted);

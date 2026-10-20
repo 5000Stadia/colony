@@ -404,10 +404,29 @@ def posture(root=None):
 # scout_note: what the person wants those supports to favour there.
 # helm: whether the project is included when the person gives the steward the helm (False: left out);
 # scouting: whether the steward scouts for it at all.
-POSTURE = {"helm": None, "direction": "", "scout": 24, "scout_note": "", "scouting": True}
+# steward: whether the steward is involved with it at all (False: the person left it out, to bias its focus).
+POSTURE = {"helm": None, "direction": "", "scout": 24, "scout_note": "", "scouting": True, "steward": True}
 
 
-def set_posture(root, helm=None, direction=None, scout=None, scout_note=None, scouting=None):
+def said_last(text=None):
+    """The steward's last message to the person: saved when its turn ends, shown at the top of its page."""
+    path = board.home() / "steward-said.json"
+    if text is None:
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+    board.home().mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"at": board.now(), "text": text.strip()}))
+
+
+def involved(root):
+    """Whether the steward takes part in this project: wakes for it, reports on it, scouts for it. The person can
+    leave a project out on the steward's page; it then hears of that project only when they bring it up."""
+    return posture(root).get("steward", True) is not False
+
+
+def set_posture(root, helm=None, direction=None, scout=None, scout_note=None, scouting=None, steward=None):
     """Change the stance toward one project: whether it is included in the helm, its direction, its scouting."""
     path = board.home() / "posture.json"
     allp = posture()
@@ -422,6 +441,8 @@ def set_posture(root, helm=None, direction=None, scout=None, scout_note=None, sc
         p["scout_note"] = scout_note.strip()
     if scouting is not None:
         p["scouting"] = bool(scouting)
+    if steward is not None:
+        p["steward"] = bool(steward)
     allp[str(root)] = p
     board.home().mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(allp, indent=1))
@@ -430,7 +451,7 @@ def set_posture(root, helm=None, direction=None, scout=None, scout_note=None, sc
 
 def helm_for(root):
     """The person gives the steward the helm once, for every project that is included in it."""
-    return helm() and posture(root)["helm"] is not False
+    return helm() and posture(root)["helm"] is not False and involved(root)
 
 
 def decided(root, text):
@@ -656,7 +677,7 @@ class Watcher:
         last = json.loads(path.read_text()) if path.exists() else {}
         due, clock = [], dict(last)
         for p in board.projects():
-            hours = posture(p)["scout"] if posture(p)["scouting"] else 0
+            hours = posture(p)["scout"] if posture(p)["scouting"] and involved(p) else 0
             if not p.exists() or not hours:
                 continue
             if str(p) not in last:            # its clock starts the first time it is seen
@@ -894,7 +915,7 @@ def update(now=None):
         return None
     done, asked, said, saying = [], [], set(state.get("mentioned") or []), []
     for p in board.projects():
-        if not p.exists() or p == home():
+        if not p.exists() or p == home() or not involved(p):
             continue
         for key, text in completed(p, since=last).items():
             if f"{p}|{key}" not in said:
