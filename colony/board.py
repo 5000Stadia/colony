@@ -2083,9 +2083,14 @@ def chat_feed(key, root, shown=40):
     # what it is doing now: at work, or a choice in its console, answered here
     name = monitor.name() if key == "steward" else console.session_name(root)
     snap = monitor.snapshot() if key == "steward" else console.snapshot(root, lines=4)
+    # and what it waits on in the background, its turn over or not (a test run, a helper)
+    behind = chat.running(snap.get("lines") or [])
     if snap["state"] == "working":
         act = (snap.get("activity") or {}).get("line") or "Working"
-        out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(short(act, 90))}</div>")
+        out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(short(act, 90))}"
+                   + (f" <span class='behind'>· {e(behind)}</span>" if behind else "") + "</div>")
+    elif behind:
+        out.append(f"<div class='chatlive'><span class='sdot working'></span>{e(behind)}</div>")
     elif snap["state"] == "needs you" and key != "steward":
         found = providers.of(root).choice(console.screen(name))
         if found:
@@ -2100,8 +2105,10 @@ def chat_feed(key, root, shown=40):
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
     return (f"<div class='chat' id='chat' data-key='{e(key)}'>{chat_feed(key, root)}</div>"
-            f"<form class='composer' id='composer'><textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
-            "<button aria-label='Send'>↑</button></form><div class='chatheld muted' id='chatheld' hidden></div>"
+            f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
+            "<div class='attached' hidden></div><label class='attach' aria-label='Attach a photo or file'>+<input type='file' name='file' hidden></label>"
+            f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
+            "<button aria-label='Send'>↑</button></form><button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             "<label class='aloud'><input type='checkbox' id='aloud'> Read replies aloud</label>"
             f"<script>{CHAT}</script>")
 
@@ -2115,9 +2122,16 @@ CHAT = """
   toEnd();
   let last = box.innerHTML, pending = [];
   // what was just sent shows at once, faded, until the conversation has it (a busy agent takes it up mid-turn)
-  const seen = (t) => [...box.querySelectorAll('.msg.you')].some((m) => !m.classList.contains('mine') && m.textContent.trim() === t);
-  const keep = () => { pending = pending.filter((t) => !seen(t));
-    pending.forEach((t) => { const d = document.createElement('div'); d.className = 'msg you pending mine'; d.textContent = t; box.appendChild(d); }); };
+  const seen = (p) => [...box.querySelectorAll('.msg.you')].some((m) => !m.classList.contains('mine') && m.textContent.includes(p.match));
+  const keep = () => { pending = pending.filter((p) => !seen(p));
+    pending.forEach((p) => { const d = document.createElement('div'); d.className = 'msg you pending mine'; d.textContent = p.show; box.appendChild(d); }); };
+  const file = form.querySelector('input[type=file]'), chip = form.querySelector('.attached');
+  const chosen = () => { const f = file.files[0]; chip.hidden = !f;
+    chip.innerHTML = ''; if (!f) return;
+    const name = document.createElement('span'); name.textContent = '📎 ' + f.name; chip.appendChild(name);
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Remove the file');
+    x.addEventListener('click', () => { file.value = ''; chosen(); }); chip.appendChild(x); };
+  file.addEventListener('change', chosen);
   async function refresh() {
     try {
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
@@ -2129,15 +2143,31 @@ CHAT = """
     } catch (e) {}
   }
   setInterval(refresh, 3000);
+  const down = document.getElementById('toend');
+  const where = () => { down.hidden = atEnd(); };
+  window.addEventListener('scroll', where, {passive: true});
+  down.addEventListener('click', () => window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'}));
   const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; };
+  // Typing on a phone: the box sits on the keyboard, the tabs step aside, and the latest stays just above it.
+  // The keyboard covers the bottom of the page without resizing it, so its top is read off the visible part.
+  const vv = window.visualViewport;
+  const onKeys = () => { if (!vv || !document.body.classList.contains('typing')) return;
+    document.documentElement.style.setProperty('--kb', Math.max(0, window.innerHeight - vv.height - vv.offsetTop) + 'px'); };
+  ta.addEventListener('focus', () => { if (!matchMedia('(max-width: 700px)').matches) return;
+    document.body.classList.add('typing'); onKeys(); setTimeout(() => { onKeys(); toEnd(); }, 300); });
+  ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kb'); });
+  if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
+  // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
+  form.querySelector('button').addEventListener('pointerdown', (ev) => ev.preventDefault());
   ta.addEventListener('input', grow);
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const text = ta.value.trim(); if (!text) return;
-    const r = await fetch('/chat/send', {method: 'POST', body: new URLSearchParams({p: key, text})}).catch(() => null);
+    const text = ta.value.trim(), f = file.files[0]; if (!text && !f) return;
+    const r = await fetch('/chat/send', {method: 'POST', body: new FormData(form)}).catch(() => null);
     held.hidden = !!(r && r.ok);
     if (!r || !r.ok) { held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.'; return; }
-    ta.value = ''; grow(); pending.push(text); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
+    ta.value = ''; grow(); file.value = ''; chosen();
+    pending.push({show: (f ? '📎 ' + f.name + (text ? '\\n' : '') : '') + text, match: text || f.name.replace(/\\.[^.]*$/, '')}); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
     setTimeout(refresh, 600);
   });
   // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
@@ -4853,6 +4883,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/chat/send":                         # what the person sends in Chat: into the console, as Message does
             from . import monitor
             key, text = values.get("p", ["0"])[0], values.get("text", [""])[0].strip()
+            dst = monitor.home() if key == "steward" else projects(registry())[int(key)]
+            if upload and upload[1]:                       # kept where the one it's for can read it, its path in the message
+                try:
+                    text = f"Attached: {Path(dst) / pins.save_upload(dst, *upload)}" + (f"\n\n{text}" if text else "")
+                except ValueError:
+                    return self._send(413, b"that file is too large (25 MB at most)")
             if key == "steward":
                 sent = not text or console.paste_into(monitor.ensure(), text)
             else:
@@ -5167,6 +5203,15 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chatask .choices { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px }
 .composer { position:sticky; bottom:12px; z-index:30; display:flex; align-items:flex-end; gap:8px; max-width:760px; margin:14px auto 0;
   padding:8px 8px 8px 14px; border:1px solid var(--line); border-radius:24px; background:var(--card); box-shadow:0 2px 12px rgba(0,0,0,.08) }
+.composer { flex-wrap:wrap } .composer .attached { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:14px;
+  color:var(--muted); padding:2px 0 } .composer .attached[hidden] { display:none } .composer .attached button { width:28px; height:28px;
+  min-height:28px; font-size:16px; background:var(--sunk); color:var(--ink) }
+.toend { position:fixed; right:16px; bottom:calc(150px + env(safe-area-inset-bottom)); z-index:35; width:44px; height:44px;
+  min-height:44px; padding:0; border-radius:50%; font-size:20px; background:var(--card); color:var(--ink); border:1px solid var(--line);
+  box-shadow:0 2px 10px rgba(0,0,0,.18) } .toend[hidden] { display:none }
+body.typing .toend { bottom:calc(var(--kb, 0px) + 84px) }
+.composer .attach { flex:none; display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:50%;
+  background:var(--sunk); color:var(--ink); font-size:24px; cursor:pointer; margin-left:-6px }
 .composer textarea { flex:1; min-height:28px; max-height:200px; resize:none; border:0; outline:0; background:transparent; color:var(--ink);
   font-size:16px; line-height:1.45; font-family:inherit; padding:6px 0 } .composer button { flex:none; width:40px; height:40px; min-height:40px; border-radius:50%;
   padding:0; font-size:20px; font-weight:700 } .chatheld { max-width:760px; margin:6px auto 0 }
@@ -5390,6 +5435,9 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
   input, textarea, select { font-size:16px }
   .composer { bottom:calc(64px + env(safe-area-inset-bottom)) }
+  body.typing .tabs { display:none } body.typing main { padding-bottom:0 } body.typing .aloud { display:none }
+  body.typing .composer { position:fixed; left:8px; right:8px; bottom:calc(var(--kb, 0px) + 6px); margin:0 }
+  body.typing .chat { padding-bottom:96px }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
   .tabs a { flex:1 1 0; min-width:0; text-align:center; padding:10px 0 9px; border-radius:0; color:var(--muted);

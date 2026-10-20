@@ -53,6 +53,8 @@ def claude_events(path):
                 queued.append(e["content"])
             elif e.get("operation") == "remove" and e.get("content") in queued:
                 queued.remove(e["content"])
+            elif e.get("operation") == "dequeue" and queued:
+                queued.pop(0)                             # the oldest, taken up as the next turn
             continue
         if e.get("type") == "attachment":
             a = e.get("attachment") or {}
@@ -147,3 +149,13 @@ def worked(steps):
     parts = [f"{words[k][0]} {n} {words[k][1]}{'s' if n != 1 else ''}" for k, n in kinds.items() if n]
     line = ", ".join(parts)
     return line[:1].upper() + line[1:]
+
+
+def running(lines):
+    """What runs in the background while the agent waits, off its console's footer (Claude Code: "· 1 shell",
+    "2 background tasks", "1 local agent"): a few words, or "". PROVIDER: Claude Code's footer wording."""
+    found = []
+    for line in lines:
+        for n, what in re.findall(r"\b(\d+) (shells?|background tasks?|local agents?|running tasks?)\b", line):
+            found.append(f"{n} {what}")
+    return ", ".join(dict.fromkeys(found)) + " running" if found else ""

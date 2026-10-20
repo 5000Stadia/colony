@@ -757,6 +757,28 @@ class ChatTest(BoardBase):
         self.assertEqual([(t["from"], t["text"]) for t in chat.turns(chat.events("claude", path))][1:],
                          [("you", "Also it's slow"), ("queued", "And one more")], "taken up within the turn: where it landed")
 
+    def test_a_photo_or_file_goes_with_a_chat_message_and_what_runs_behind_shows(self):
+        from colony import chat
+        board.track(self.root)
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host = f"127.0.0.1:{server.server_address[1]}"
+        body = (b"--B\r\nContent-Disposition: form-data; name=\"p\"\r\n\r\n0\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"text\"\r\n\r\nsee this\r\n"
+                b"--B\r\nContent-Disposition: form-data; name=\"file\"; filename=\"shot.png\"\r\nContent-Type: image/png\r\n\r\nPNGDATA\r\n--B--\r\n")
+        with patch.object(board.console, "ensure", return_value="s"), \
+                patch.object(board.console, "paste_into", return_value=True) as pasted:
+            r = urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=body, headers={
+                "Host": host, "Origin": f"http://{host}", "Content-Type": "multipart/form-data; boundary=B"}))
+            self.assertEqual(r.status, 204)
+        sent = pasted.call_args[0][1]
+        self.assertTrue(sent.startswith(f"Attached: {self.root}/.board/uploads/shot.png"), sent)
+        self.assertTrue(sent.endswith("\n\nsee this"))
+        self.assertEqual((self.root / ".board" / "uploads" / "shot.png").read_bytes(), b"PNGDATA")
+        self.assertEqual(chat.running(["  ⏵⏵ bypass permissions on · 1 shell · ← for agents"]), "1 shell running")
+
     def test_a_codex_rollout_reads_the_same_way(self):
         from colony import chat
         item = lambda p: {"type": "response_item", "timestamp": "2026-10-19T10:00:00Z", "payload": p}
