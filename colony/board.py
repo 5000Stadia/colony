@@ -111,11 +111,14 @@ steer all of them from one board, and the projects can write to each other.
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
-  `--default "what stands if they skip it"`); the answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`. An open gate stays on their list.
+  `--default "what stands if they skip it"`); where it has clear answers, `--option "..."` for each and `--recommended "..."` for
+  yours: they answer with a tap. The answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`. An open gate stays on their list.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
 - What the person will keep opening: `colony pin PATH-or-URL --title "..." --why "..."`.
+- In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
+  there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
 - A turn that ends with a question waits for the person on the board; if they ask you something first, answer
   it and ask yours again.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
