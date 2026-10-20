@@ -2202,6 +2202,13 @@ def chat_feed(key, root, shown=40):
             out.append(f"<div class='msg you'>{e(t['text'])}{shots}</div>")
         elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
             out.append(f"<div class='msg you pending queued' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
+        elif t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
+            # what it wrote down before a context refresh: one line, opened to read; never read aloud
+            said = "\n\n".join(x for kind, x in t["items"] if kind == "say")
+            m = re.search(r"<colony-carry[^>]*>([\s\S]*?)</colony-carry>", said)
+            out.append(f"<details class='msg colony' data-k='c{k}'><summary>Context refreshed: what it carried over</summary>"
+                       f"<div>{chat_prose((m[1] if m else said).strip(), key, root)}</div></details>")
+            continue
         elif t["from"] == "colony":
             head, _, rest = t["text"].removeprefix("[colony]").strip().partition("\n")
             body = "\n\n".join(filter(None, [rest.strip(), letters.get(i, "")]))

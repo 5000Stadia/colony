@@ -1021,6 +1021,21 @@ class ChatTest(BoardBase):
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
 
+    def test_a_context_carry_over_shows_in_chat_as_one_folded_line(self):
+        board.track(self.root)
+        path = Path(self.tmp.name) / "t.jsonl"
+        ask = "[colony] Context carry-over (1234567890abcdef). Write a short carry-over... Reply only inside <colony-carry>."
+        path.write_text("".join(json.dumps(x) + "\n" for x in [
+            {"type": "user", "message": {"content": ask}, "timestamp": "2026-10-19T10:00:00Z"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text":
+                '<colony-carry id="1234567890abcdef">**Pending:** the bench.</colony-carry>'}]}}]))
+        with patch("colony.context.session", return_value={"provider": "claude", "id": "s", "path": str(path)}):
+            feed = board.chat_feed(0, self.root)
+        self.assertIn("<summary>Context refreshed: what it carried over</summary>", feed)
+        self.assertIn("<strong>Pending:</strong> the bench.", feed)
+        for gone in ("Write a short carry-over", "colony-carry", "class='say'", "class='listen'"):
+            self.assertNotIn(gone, feed, "the request, the tags, and reading it aloud are left out")
+
 
 class GlanceTest(BoardBase):
     def tearDown(self):

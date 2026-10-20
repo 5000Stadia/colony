@@ -172,6 +172,24 @@ class ContextTest(unittest.TestCase):
         context._cache.clear()
         self.assertIn('Already sent the invoice', context.transcript(self.s)['summary'])
 
+    def test_claude_compaction_keeping_the_carry_reply_word_for_word_does_not_repeat_it(self):
+        self.s['provider'] = 'claude'
+        atomic_json(context.file(self.root, 'context-session.json'), self.s)
+        self.state('prepared', tail=[], boundary=0)
+        carry = '<colony-carry id="1234567890abcdef">Already sent the invoice; do not repeat.</colony-carry>'
+        events = [dict(type='assistant', uuid='u-old', message=dict(content='<colony-carry id="fedcba0987654321">Older.</colony-carry>')),
+                  dict(type='assistant', uuid='u-carry', message=dict(content=[dict(type='text', text=carry)])),
+                  dict(type='system', subtype='compact_boundary',
+                       compactMetadata=dict(preservedMessages=dict(uuids=['u-carry'], allUuids=['u-x', 'u-carry']))),
+                  dict(type='user', isCompactSummary=True, message=dict(content='Native summary, the carry reworded.'))]
+        self.path.write_text(''.join(json.dumps(e) + '\n' for e in events))
+        with patch.object(context, 'register', return_value=True):
+            restored = context.on_prompt(self.root, 'claude', dict(self.payload, hook_event_name='SessionStart', source='compact'))
+        self.assertNotIn('Already sent the invoice', restored)
+        self.assertIn('kept word for word', restored)
+        context._cache.clear()
+        self.assertEqual(context.transcript(self.s)['preserved'], ['1234567890abcdef'], 'only the one kept, read back from the cache')
+
     def test_claude_summary_quoting_only_colonys_request_still_restores_the_carry(self):
         self.s['provider'] = 'claude'
         atomic_json(context.file(self.root, 'context-session.json'), self.s)

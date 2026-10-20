@@ -120,10 +120,11 @@ def _transcript(s, cache_file):
         cached['markers'] = set(cached['markers'])
         cached.pop('summary_carries', None)
         cached.setdefault('summary', '')
+        cached.setdefault('carries', {}); cached.setdefault('preserved', [])
         cached['current'] = cached['exchanges'][-1] if cached['current'] and cached['exchanges'] else None
     if not cached or cached['inode'] != stat.st_ino or cached['offset'] > stat.st_size:
         cached = dict(inode=stat.st_ino, offset=0, exchanges=[], current=None, tokens=None,
-                      window=None, usage_at=0, markers=set(), summary='', compact=0)
+                      window=None, usage_at=0, markers=set(), summary='', compact=0, carries={}, preserved=[])
         _cache[key] = cached
     if cached['offset'] == stat.st_size:
         return cached
@@ -142,9 +143,16 @@ def _transcript(s, cache_file):
             if s['provider'] == 'claude':
                 if event.get('type') == 'attachment' and (event.get('attachment') or {}).get('type') == 'hook_success':
                     cached['markers'].update(re.findall(r'colony-restored-([a-f0-9]{16})', line))
-                if event.get('type') == 'system' and event.get('subtype') == 'compact_boundary':
-                    cached.update(tokens=None, usage_at=0, compact=cached['offset'], summary='')
                 message = event.get('message') or {}
+                if event.get('type') == 'assistant' and '<colony-carry id=' in line:
+                    for cid in re.findall(r'<colony-carry id="([a-f0-9]{16})">', _text(message.get('content'))):
+                        cached['carries'] = dict(list(cached['carries'].items())[-19:], **{event.get('uuid') or '': cid})
+                if event.get('type') == 'system' and event.get('subtype') == 'compact_boundary':
+                    # the messages it keeps word for word, by id: a carry-over among them is in context already
+                    kept = ((event.get('compactMetadata') or {}).get('preservedMessages') or {})
+                    kept = set(kept.get('allUuids') or kept.get('uuids') or [])
+                    cached.update(tokens=None, usage_at=0, compact=cached['offset'], summary='',
+                                  preserved=[cid for u, cid in cached['carries'].items() if u in kept])
                 if event.get('isCompactSummary'):
                     cached['summary'] = _text(message.get('content'))
                 if event.get('type') == 'assistant' and (usage := message.get('usage')):
@@ -299,7 +307,8 @@ def historical(root, job, *, omit_carry=False):
             'Do not redo actions from these exchanges. Current user instructions take precedence. '
             'The carry-over may predate the native summary; use that summary for newer progress. '
             'Read the current Vision, roadmap, notes and gates for durable project state.\n'
-            + ('The native summary already retains this carry-over; its text is not repeated here.\n\n' if omit_carry else
+            + ('The native summary already retains this carry-over (in its summary, or the messages it kept word for word); '
+               'its text is not repeated here.\n\n' if omit_carry else
                f"Carry-over recorded {job.get('written') or 'before this refresh'}:\n{job.get('carry') or '(none)'}\n\n"))
     text += '\n\n'.join(m['role'] + ' (verbatim historical text):\n' + m['text'] for m in job.get('tail', []))
     if job.get('tail_deferred'):
@@ -335,7 +344,8 @@ def on_prompt(root, key, payload):
             return ''
         if not compact_start and snap['compact'] <= job.get('boundary', snap['offset']):
             return ''  # PreCompact is not evidence that compaction succeeded.
-        text = historical(root, job, omit_carry=retained(job.get('carry'), snap.get('summary')))
+        text = historical(root, job, omit_carry=retained(job.get('carry'), snap.get('summary'))
+                          or job['id'] in snap.get('preserved', []))
         if len(text.encode()) > OUTPUT_BUDGET:
             raise ValueError('Restoration exceeds the provider output budget; retained for recovery.')
         return text
