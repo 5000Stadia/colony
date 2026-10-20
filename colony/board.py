@@ -2534,14 +2534,33 @@ CHAT = """
   if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  // A paragraph at a time, as the person asked: read whole, it keeps its flow, and the next one is made while it
-  // plays, so there is no wait between them. Only a very long one is broken, between its sentences.
-  const chunks = (text) => text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).flatMap((p) => {
-    if (p.length <= 600) return [p];
-    return (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).reduce((out, s) => {
-      if (out.length && (out[out.length - 1] + s).length <= 600) out[out.length - 1] += s; else out.push(s);
-      return out; }, []).map((x) => x.trim());
-  });
+  // A fast start that grows into paragraphs: the first clip is the first sentence alone, so the voice starts in
+  // moments, and each next one a third longer than the last, which the machine makes in less time than the one before
+  // it takes to play (all that has played gives it its time), so there is no wait; soon a clip is a whole paragraph. A clip never
+  // runs across a paragraph's end, and breaks between sentences (a long one at its commas).
+  const chunks = (text) => {
+    // a clip takes about 0.75 of its playing time to make here (measured: 0.74 to 0.80 at the person's speed), so
+    // the next may be as long as all that has played lets it be made in time, with a margin: over 0.85
+    const out = []; let want = 80, heard = 0, made = 0;
+    const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length;
+      want = Math.min(600, Math.max(40, heard / 0.85 - made)); };
+    // a sentence longer than a clip may be breaks at its commas and dashes
+    const pieces = (x) => x.length <= want ? [x] : x.split(/(?<=[,;:\u2014])\\s+/).reduce((acc, y) => {
+      if (acc.length && (acc[acc.length - 1] + ' ' + y).length <= want) acc[acc.length - 1] += ' ' + y; else acc.push(y);
+      return acc; }, []);
+    text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).forEach((p) => {
+      const sents = (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).map((x) => x.trim()).filter(Boolean);
+      let cur = '';
+      sents.forEach((x) => {
+        if (!out.length && !cur) { pieces(x).forEach(push); return; }   // the first sentence, alone: a quick start
+        if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; }
+        if (!cur && x.length > want) { const ps = pieces(x); ps.slice(0, -1).forEach(push); cur = ps[ps.length - 1]; }
+        else cur = cur ? cur + ' ' + x : x;
+      });
+      if (cur) push(cur);
+    });
+    return out;
+  };
   const sheet = document.getElementById('voicesheet');
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
   // ▷, then a spinner while the voice is being made, then ■ once it is heard; pause and skip come with the sound
