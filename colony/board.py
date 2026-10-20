@@ -2195,11 +2195,13 @@ def chat_feed(key, root, shown=40):
     # what the agent needs of the person, at the end of the conversation: folded to a line, each one opening to its
     # own answer, so none is missed and however many there are take no room until opened
     asks = [g for g in gates(root) if due(g)] if key != "steward" else []
-    if asks:
-        out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · {len(asks)}</summary>"
-                   + "".join(f"<details class='need' data-k='g{e(g['id'])}'><summary><span class='q'>{e(short(g['question'], 110))}</span>"
+    # and the rest the project waits on them for, as its Overview shows it (a sign-off, a question asked in its console)
+    rest = waiting_parts(key, root, f"/?p={key}&view=chat", label=False, with_gates=False)[2] if key != "steward" else []
+    if asks or rest:
+        out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · {len(asks) + len(rest)}</summary>"
+                   + "".join(f"<details class='need' open data-k='g{e(g['id'])}'><summary><span class='q'>{e(short(g['question'], 110))}</span>"
                              f"<span class='fold muted'>Fold ▴</span></summary>"
-                             f"{gate_body(root, key, g, '/')}</details>" for g in asks) + "</details>")
+                             f"{gate_body(root, key, g, '/')}</details>" for g in asks) + "".join(rest) + "</details>")
     if line and tasks:
         out.append(f"<details class='chatlive tasks{busy}' data-k='tasks'><summary>{line}</summary>{tasks_html(tasks)}</details>")
     elif line:
@@ -2358,11 +2360,13 @@ CHAT = """
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
       const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick, was = lastBottom();
+      const shut = [...box.querySelectorAll('details:not([open])')].map((d) => d.dataset.k);   // what came open, folded by them
       // what the reader is looking at stays where it is, though the oldest turns above drop away as new ones come
       const seen = [...box.querySelectorAll('[data-k]')].find((x) => x.getBoundingClientRect().bottom > 0);
       const mark0 = seen && [seen.dataset.k, seen.getBoundingClientRect().top];
       box.innerHTML = last = html; keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
+      shut.forEach((k) => { const d = k && box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = false; });
       const again = mark0 && !end && box.querySelector(`[data-k="${CSS.escape(mark0[0])}"]`);
       if (again) window.scrollBy(0, again.getBoundingClientRect().top - mark0[1]);
       if (end && (!typingNow() || lastBottom() !== was)) toEnd();       // typing, it moves only when the conversation grew
@@ -2598,6 +2602,13 @@ CHAT = """
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   // opening something (a decision, a run of work) keeps the reader where they are: it no longer follows the end
   box.addEventListener('toggle', () => { stick = atEnd(); }, true);
+  // Needs you opened by a tap: its top comes to the top of what is visible, below the bar, to be read from the start
+  box.addEventListener('click', (ev) => {
+    const s = ev.target.closest('details.needs > summary'); if (!s || s.parentElement.open) return;
+    requestAnimationFrame(() => { const d = s.parentElement, bar = document.querySelector('nav');
+      const under = bar && getComputedStyle(bar).position === 'sticky' ? bar.getBoundingClientRect().bottom : 0;
+      window.scrollBy(0, d.getBoundingClientRect().top - under - 8); stick = false; });
+  });
   // Dictating into the box: the voice would be heard by the phone too, so reading pauses as soon as dictated words
   // arrive (as underlined words, or a run of them with no key pressed), and goes on once they have stopped coming
   // for a couple of seconds, or the message is sent.
@@ -5764,7 +5775,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
 .chat details.need { margin:8px 0 0; padding:8px 10px; border-radius:10px; background:var(--card) }
-.chat details.need > summary { cursor:pointer } .chat details.need .fold, .chat details.need[open] .q { display:none }
+.chat details.need > summary { cursor:pointer; list-style:none } .chat details.need > summary::-webkit-details-marker { display:none } .chat details.need .fold, .chat details.need[open] .q { display:none }
 .chat details.need[open] .fold { display:inline }
 .chat details.need textarea { width:100%; min-height:64px; margin:6px 0; font:inherit; padding:8px; border-radius:10px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
