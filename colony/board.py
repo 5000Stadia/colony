@@ -2128,7 +2128,14 @@ CHAT = """
 (() => {
   const box = document.getElementById('chat'), key = box.dataset.key, form = document.getElementById('composer');
   const ta = form.querySelector('textarea'), held = document.getElementById('chatheld');
-  const atEnd = () => window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+  // At the end: what is really visible reaches it. With the keyboard up the page's own height still counts the part
+  // behind it, so the visible part is read off the visual viewport.
+  const atEnd = () => { const vv = window.visualViewport;
+    const seen = window.scrollY + (vv ? vv.offsetTop + vv.height : window.innerHeight);
+    return seen >= document.body.scrollHeight - (document.body.classList.contains('typing') ? 160 : 80); };
+  // It follows new messages only while the person is at the end; scrolled up, it stays where they are.
+  let stick = true;
+  window.addEventListener('scroll', () => { stick = atEnd(); }, {passive: true});
   const toEnd = () => window.scrollTo(0, document.body.scrollHeight);
   toEnd();
   let last = box.innerHTML, pending = [];
@@ -2147,7 +2154,7 @@ CHAT = """
     try {
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
-      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = atEnd();
+      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick;
       box.innerHTML = last = html; keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       if (end) toEnd();
@@ -2169,10 +2176,10 @@ CHAT = """
   // The keyboard covers the bottom of the page without resizing it, so its top is read off the visible part.
   const vv = window.visualViewport;
   const onKeys = () => { if (!vv || !document.body.classList.contains('typing')) return;
-    document.documentElement.style.setProperty('--kb', Math.max(0, window.innerHeight - vv.height - vv.offsetTop) + 'px'); };
+    document.documentElement.style.setProperty('--kbtop', (vv.offsetTop + vv.height) + 'px'); };
   ta.addEventListener('focus', () => { if (!matchMedia('(max-width: 700px)').matches) return;
     document.body.classList.add('typing'); onKeys(); setTimeout(() => { onKeys(); toEnd(); }, 300); });
-  ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kb'); });
+  ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kbtop'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
   // ↑ keeps the box in focus: the keyboard stays up for the next message, and the box doesn't move under the tap
   form.querySelector('button.send').addEventListener('pointerdown', (ev) => ev.preventDefault());
@@ -2275,7 +2282,7 @@ CHAT = """
     if (!aloud.checked) { hush(); playing = null; mark(); }
   });
   const fresh = () => {                  // a turn just ended: its new prose, aloud
-    if (!aloud.checked || box.querySelector('.chatlive')) return;
+    if (!aloud.checked || box.querySelector('.chatlive.busy')) return;
     const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
     news.forEach((x) => heard.add(x.dataset.k));
     if (news.length) later(news[news.length - 1].dataset.t, plain(news));
@@ -5332,7 +5339,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .toend { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(190px + env(safe-area-inset-bottom)); z-index:35; width:44px; height:44px;
   min-height:44px; padding:0; border-radius:50%; font-size:20px; background:var(--card); color:var(--ink); border:1px solid var(--line);
   box-shadow:0 2px 10px rgba(0,0,0,.18) } .toend[hidden] { display:none }
-body.typing .toend { bottom:calc(var(--kb, 0px) + 124px) }
+body.typing .toend { top:calc(var(--kbtop, 100vh) - 124px); bottom:auto; transform:translate(-50%, -100%) }
 .composer .attach { flex:none; display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:50%;
   background:var(--sunk); color:var(--ink); font-size:24px; cursor:pointer; margin-left:-6px }
 .composer textarea { flex:1; min-height:28px; max-height:200px; resize:none; border:0; outline:0; background:transparent; color:var(--ink);
@@ -5559,7 +5566,8 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   input, textarea, select { font-size:16px }
   .composer { bottom:calc(64px + env(safe-area-inset-bottom)) }
   body.typing .tabs { display:none } body.typing main { padding-bottom:0 }
-  body.typing .composer { position:fixed; left:8px; right:8px; bottom:calc(var(--kb, 0px) + 6px); margin:0 }
+  body.typing .composer { position:fixed; left:8px; right:8px; top:calc(var(--kbtop, 100vh) - 6px); bottom:auto; transform:translateY(-100%);
+    margin:0 }
   body.typing .chat { padding-bottom:140px }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
