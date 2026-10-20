@@ -2225,11 +2225,11 @@ CHAT = """
   let rate = 1; try { rate = +localStorage.getItem('rate') || 1; } catch (e) {}
   const showRate = () => { rateBtn.textContent = rate + '×'; }; showRate();
   rateBtn.addEventListener('click', () => { rate = RATES[(RATES.indexOf(rate) + 1) % RATES.length] || 1; showRate();
-    try { localStorage.setItem('rate', rate); } catch (e) {} });
+    try { localStorage.setItem('rate', rate); } catch (e) {} again(false); });
   const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
   let kvoice = 'af_heart'; try { kvoice = localStorage.getItem('kvoice') || kvoice; } catch (e) {}
   if (picker) { picker.value = kvoice; picker.addEventListener('change', () => { kvoice = picker.value;
-    try { localStorage.setItem('kvoice', kvoice); } catch (e) {} }); }
+    try { localStorage.setItem('kvoice', kvoice); } catch (e) {} again(true); }); }
   const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + '&t=' + encodeURIComponent(p.trim());
   const hush = () => { if (talk) talk.cancel(); player.pause(); player.onended = player.onerror = null; };
   // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
@@ -2242,11 +2242,13 @@ CHAT = """
     unlocked = true; player.src = SILENT; player.play().catch(() => { unlocked = false; });
   };
   document.addEventListener('pointerdown', () => { if (aloud.checked) unlock(); }, true);
-  const sayK = (t, parts) => {
-    let i = 0;
+  let now = null;                       // what is being read: {t, parts, at}, the piece being heard
+  const sayK = (t, parts, from = 0) => {
+    let i = from;
     const next = () => {
       if (playing !== t) return;
       if (i >= parts.length) return done(t);
+      now = {t, parts, at: i};
       player.src = clip(parts[i]); player.playbackRate = rate; player.defaultPlaybackRate = rate;
       if (parts[i + 1]) fetch(clip(parts[i + 1])).catch(() => {});           // made while this one plays
       i += 1;
@@ -2260,8 +2262,17 @@ CHAT = """
     if (!talk) { playing = null; mark(); return; }
     playing = t; mark();
     parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = rate;
+      u.onstart = () => { now = {t, parts, at: i}; };
       if (i === parts.length - 1) u.onend = () => done(t);
       talk.speak(u); });
+  };
+  // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
+  const again = (voiceChanged) => {
+    if (!playing || !now || now.t !== playing) return;
+    if (KOKORO && !voiceChanged) { player.playbackRate = rate; player.defaultPlaybackRate = rate; return; }
+    const {t, parts, at} = now;
+    hush(); playing = t; mark();
+    if (KOKORO) sayK(t, parts, at); else sayPhone(t, parts.slice(at));
   };
   const waiting = [];
   function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); }
