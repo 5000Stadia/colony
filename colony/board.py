@@ -359,10 +359,15 @@ TURBO = {"turbo_models": True, "turbo_deeper": True, "turbo_research": False, "t
 PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", "color", *TURBO)
 # A project's own colour, the person's to choose: its accent in light and dark, which every tint on its page comes
 # from (the bars, the chosen chip, buttons), and a light wash on its chip in the menu. Green is the board's own.
-PALETTE = {"green": ("#2f5d50", "#7fb5a2"), "teal": ("#1f6670", "#7cc3c9"), "blue": ("#2f5487", "#93b4e0"),
-           "indigo": ("#47478f", "#a9a8e6"), "plum": ("#6b3f78", "#c79ad6"), "rose": ("#8f3b57", "#e39ab3"),
-           "clay": ("#8f4a2c", "#e0a07f"), "amber": ("#7d5a10", "#dcb563"), "olive": ("#55611f", "#b5c27a"),
-           "slate": ("#46525f", "#a9b4c0")}
+PALETTE = {"green": ("#2f5d50", "#7fb5a2"), "forest": ("#2e5a2e", "#8fc48f"), "sage": ("#566f50", "#aac4a2"),
+           "mint": ("#1f6b57", "#7dcbb2"), "teal": ("#1f6670", "#7cc3c9"), "sky": ("#2a6a94", "#8cc4e6"),
+           "blue": ("#2f5487", "#93b4e0"), "navy": ("#273f6b", "#8ea7d6"), "indigo": ("#47478f", "#a9a8e6"),
+           "violet": ("#5a3d8f", "#b49ae6"), "lavender": ("#675a8f", "#c2b5e3"), "plum": ("#6b3f78", "#c79ad6"),
+           "magenta": ("#8a2f78", "#e08fd0"), "rose": ("#8f3b57", "#e39ab3"), "crimson": ("#8f2a33", "#e68c93"),
+           "coral": ("#9a4434", "#ef9e8c"), "clay": ("#8f4a2c", "#e0a07f"), "rust": ("#8a3d1c", "#e39570"),
+           "amber": ("#7d5a10", "#dcb563"), "gold": ("#776410", "#e0c75e"), "olive": ("#55611f", "#b5c27a"),
+           "sand": ("#76674a", "#cdbb94"), "brown": ("#5e4430", "#c2a183"), "slate": ("#46525f", "#a9b4c0"),
+           "charcoal": ("#3c3f44", "#a8adb4")}
 
 
 def colour(root):
@@ -3572,10 +3577,19 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             + "<div class='swatches'><span>Colour</span>" + "".join(
                 f"<label title='{k}' style='--sw:{light};--swd:{dark}'><input type='radio' name='color' value='{'' if k == 'green' else k}'"
                 f"{' checked' if (own.get('color') or 'green') == k else ''}><span></span></label>" for k, (light, dark) in PALETTE.items())
-            + "</div>"
+            + "</div>" + (COLOUR_NOW.replace("PID", str(pid)) if root else "") +
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
             + (auto_balance_fields(root) + tier_fields(root) + turbo_fields(root) if root else "") + f"<button>Save</button></form>")
+
+
+# A colour tapped on a project's page is its colour at once: the page takes it, and the board keeps it, no Save.
+COLOUR_NOW = """<script>document.currentScript.parentNode.querySelectorAll('.swatches input[name=color]').forEach((r) =>
+  r.addEventListener('change', () => { const l = r.closest('label'), dark = matchMedia('(prefers-color-scheme: dark)').matches;
+    const light = l.style.getPropertyValue('--sw'), deep = l.style.getPropertyValue('--swd');
+    document.documentElement.style.setProperty('--accent', dark ? deep : light);
+    const chip = document.querySelector('nav .proj.on'); if (chip) { chip.style.setProperty('--pc', light); chip.style.setProperty('--pcd', deep); }
+    fetch('/project/color', {method: 'POST', body: new URLSearchParams({p: 'PID', color: r.value})}).catch(() => {}); }));</script>"""
 
 
 def turbo_fields(root):
@@ -5618,6 +5632,15 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/project/color":                    # a colour tapped: the project's at once
+            try:
+                project_settings(projects(registry())[int(values.get("p", ["0"])[0])], {"color": values.get("color", [""])[0]})
+            except (KeyError, IndexError, ValueError):
+                return self._send(400, b"no such colour or project")
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/project/pin":                      # pinned above every group, or back to its own
             reg = registry()
             root = str(projects(reg)[int(values.get("p", ["0"])[0])].resolve())
@@ -5908,7 +5931,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .chat details.msg.colony > div { white-space:pre-wrap; padding:4px 0 6px; overflow-wrap:anywhere }
 .swatches { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:6px 0 } .swatches > span { margin-right:4px }
 .swatches label { display:inline-flex; margin:0; cursor:pointer } .swatches input { position:absolute; opacity:0; pointer-events:none }
-.swatches label span { width:28px; height:28px; border-radius:50%; background:var(--sw); border:2px solid var(--card); box-shadow:0 0 0 1px var(--line) }
+.swatches label span { width:30px; height:30px; border-radius:50%; background:var(--sw); border:2px solid var(--card); box-shadow:0 0 0 1px var(--line) }
 .swatches input:checked + span { box-shadow:0 0 0 2px var(--ink) }
 @media (prefers-color-scheme: dark) { .swatches label span { background:var(--swd) } }
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }

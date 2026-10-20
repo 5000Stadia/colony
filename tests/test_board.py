@@ -822,6 +822,8 @@ class ChatTest(BoardBase):
             board.project_settings(self.root, {"color": "chartreuse"})
         board.project_settings(self.root, {"color": ""})
         self.assertNotIn("--accent:#2f5487", board.render(board.registry(), 0, ""), "back to the board's own")
+        self.assertGreaterEqual(len(board.PALETTE), 24, "a wide choice")
+        self.assertIn("fetch('/project/color'", board.project_settings_form(0, {}, root=self.root), "a tap is the choice, no Save")
 
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail
