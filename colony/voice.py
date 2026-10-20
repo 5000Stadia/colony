@@ -109,7 +109,7 @@ def _ask(line):
     return json.loads(w.stdout.readline() or '{"error": "the voice stopped"}')
 
 
-def speak(text, voice=None):
+def speak(text, voice=None, fresh=""):
     """An MP3 of the text in the voice: kept, so the same words again come at once. None where it can't be made."""
     voice = voice if voice in dict(VOICES) else DEFAULT
     text = " ".join(text.split())[:1200]
@@ -117,7 +117,8 @@ def speak(text, voice=None):
         return None
     cache = folder() / "cache"
     cache.mkdir(parents=True, exist_ok=True)
-    out = cache / (hashlib.sha1(f"{voice}\n{text}".encode()).hexdigest() + ".mp3")
+    # fresh: made anew for this one (a benchmark run), not taken from what was made before
+    out = cache / (hashlib.sha1(f"{voice}\n{text}\n{fresh}".encode()).hexdigest() + ".mp3")
     if out.exists():
         return out
     with _lock:                                          # one at a time: the worker reads one line, answers one

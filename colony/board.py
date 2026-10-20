@@ -2347,6 +2347,82 @@ def queue_keys(key, root):
     return getattr(monitor.provider() if key == "steward" else providers.of(root), "queue_keys", None)
 
 
+BENCH_TEXT = """Here is a short test of reading aloud. It runs a few paragraphs, with sentences of different lengths, so each way of breaking it up meets the same text.
+
+Some sentences are brief. Others run on for a while, carrying a thought through a clause or two before they reach their end, the way a reply often does when it explains how something works and why it was built that way.
+
+The measure is simple: how long until the voice begins, and how long it pauses between one clip and the next. A pause between sentences reads as a breath; a long one reads as a stall.
+
+That is all there is to it. Each run is made fresh, so nothing is ready before it starts."""
+
+
+def voice_bench(reg):
+    """A page to time ways of reading aloud on the person's own phone: the same text, made fresh for each run, read
+    in each way; how long until the voice begins and every pause between clips, shown and sent to the board's log."""
+    from . import voice
+    if not voice.ready():
+        return shell(reg, -2, "<h1>Reading aloud, timed</h1><p class='muted'>Kokoro isn't set up here (colony voice --setup).</p>")
+    return shell(reg, -2, "<h1>Reading aloud, timed</h1><p class='muted'>Each way reads the same text, made fresh, at your "
+                 "speed. Tap one, or all (about five minutes), and keep the page open; the phone sends its numbers to the "
+                 f"board.</p><div id='bench' data-voice='{e(_voices()['voice'])}' data-text='{e(BENCH_TEXT)}'>"
+                 "<div class='benchbtns'></div><table class='benchres'><tr><th>Way</th><th>Clips</th><th>Voice began</th>"
+                 "<th>Pauses, all</th><th>Longest</th></tr></table><p class='muted' id='benchnow'></p></div>"
+                 f"<script>{BENCH}</script>")
+
+
+BENCH = """
+(() => {
+  const B = document.getElementById('bench'), TEXT = B.dataset.text, VOICE = B.dataset.voice;
+  let pace = 1.25; try { pace = (+localStorage.getItem('pace') || 1) + 0.25; } catch (e) {}
+  const paras = (t) => t.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean);
+  const sentences = (p) => (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).map((x) => x.trim()).filter(Boolean);
+  const growing = (r) => (text) => { const out = []; let want = 80, heard = 0, made = 0;
+    const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length; want = Math.min(600, Math.max(40, heard / r - made)); };
+    paras(text).forEach((p) => { let cur = '';
+      sentences(p).forEach((x) => { if (!out.length && !cur) { push(x); return; }
+        if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; } cur = cur ? cur + ' ' + x : x; });
+      if (cur) push(cur); });
+    return out; };
+  const WAYS = [
+    {name: 'Now: grows from one sentence', chunks: growing(0.85), ahead: 3, keep: true},
+    {name: 'Bolder growth', chunks: growing(0.7), ahead: 3, keep: true},
+    {name: 'Whole paragraphs', chunks: paras, ahead: 1, keep: true},
+    {name: 'Sentence by sentence', chunks: (t) => paras(t).flatMap(sentences), ahead: 3, keep: true},
+    {name: 'Now, over the network', chunks: growing(0.85), ahead: 3, keep: false}];
+  const player = new Audio(), table = B.querySelector('.benchres'), status = document.getElementById('benchnow');
+  let stop = false;
+  const run = (w) => new Promise((done) => {
+    const nonce = Math.random().toString(36).slice(2, 12), parts = w.chunks(TEXT), kept = {};
+    const url = (p) => '/voice?v=' + encodeURIComponent(VOICE) + '&fresh=' + nonce + '&t=' + encodeURIComponent(p);
+    let k = 1, at = 0, first = null, ended = null, started = false; const gaps = [], t0 = performance.now();
+    const pump = () => { if (k >= parts.length || k - at > w.ahead) { if (k < parts.length) setTimeout(pump, 300); return; }
+      const i = k++; fetch(url(parts[i])).then((r) => r.blob()).then((b) => { if (w.keep) kept[i] = URL.createObjectURL(b); pump(); }).catch(pump); };
+    const play = (i) => { at = i; player.src = (w.keep && kept[i]) || url(parts[i]);
+      player.playbackRate = pace; player.defaultPlaybackRate = pace; player.play().catch(() => {}); };
+    player.onloadeddata = () => { if (!started) { started = true; pump(); } };
+    player.onplaying = () => { const n = performance.now(); if (first === null) first = n - t0; else if (ended !== null) gaps.push(n - ended); ended = null; };
+    player.onended = () => { ended = performance.now();
+      if (!stop && at + 1 < parts.length) return play(at + 1);
+      const r = {way: w.name, clips: parts.length, began: Math.round(first), pauses: Math.round(gaps.reduce((a, b) => a + b, 0)),
+        longest: Math.round(Math.max(0, ...gaps)), each: gaps.map(Math.round)};
+      Object.values(kept).forEach(URL.revokeObjectURL); done(r); };
+    status.textContent = 'Reading: ' + w.name + '…'; play(0); });
+  const show = (r) => { const tr = document.createElement('tr');
+    [r.way, r.clips, (r.began / 1000).toFixed(1) + ' s', (r.pauses / 1000).toFixed(1) + ' s', (r.longest / 1000).toFixed(1) + ' s'].forEach((x) => {
+      const td = document.createElement('td'); td.textContent = x; tr.appendChild(td); }); table.appendChild(tr);
+    fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(Object.assign({when: 'bench', pace}, r))})}).catch(() => {}); };
+  // the first clip starts within the tap itself, which is what lets a phone's page speak
+  const go = async (ways) => { stop = false;
+    for (const w of ways) { if (stop) break; show(await run(w)); await new Promise((ok) => setTimeout(ok, 1500)); }
+    status.textContent = stop ? 'Stopped.' : 'Done: the numbers are on the board too.'; };
+  const btns = B.querySelector('.benchbtns');
+  const add = (label, f) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', f); btns.appendChild(b); };
+  add('Run all', () => go(WAYS)); WAYS.forEach((w) => add(w.name, () => go([w])));
+  add('Stop', () => { stop = true; player.pause(); status.textContent = 'Stopped.'; });
+})();
+"""
+
+
 def chat_page(key, root):
     """Chat: the conversation, kept current, and a box to send into it, as Message does into its console."""
     from . import voice
@@ -2368,7 +2444,8 @@ def chat_page(key, root):
             + (f"<select id='kvoice' aria-label='Voice'>{voice.options(voice_of(key, root)[0])}</select>"
                f"<label class='vpin' title='Keep this voice for this project; unpinned, it uses your voice'>"
                f"<input type='checkbox' id='vpin'{' checked' if voice_of(key, root)[1] else ''}> Pin voice to project</label>" if voice.ready() else "")
-            + "<span class='gap'></span><button type='button' class='shut' aria-label='Close'>✕</button></div>"
+            + "<span class='gap'></span><a class='muted' href='/voice/bench'>Benchmark</a>"
+            "<button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>const ICON = {json.dumps(ICONS)};{CHAT}</script>")
 
@@ -5219,9 +5296,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
+        if url.path == "/voice/bench":                # ways of reading aloud, timed on the person's phone
+            return self._send(200, voice_bench(reg).encode())
         if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
             from . import voice
-            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0])
+            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0], (q.get("fresh") or [""])[0][:16])
             ask = self.headers.get("Range", "")
             voice.heard(ask + (" auto" if q.get("auto") else ""), self.headers.get("User-Agent", ""), bool(clip))
             if not clip:
@@ -6072,6 +6151,9 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .qeditor .qmoves { display:flex; gap:6px; align-self:flex-end } .qeditor .qmoves button { width:34px; height:30px; padding:0;
   border-radius:8px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
 .qeditor .qfoot { display:flex; justify-content:flex-end; gap:8px; margin-top:8px } .qeditor .qfoot button { min-height:36px; padding:4px 16px; border-radius:999px }
+.benchbtns { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 } .benchbtns button { min-height:40px; padding:6px 14px; border-radius:999px }
+table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.benchres td, table.benchres th { padding:6px 4px; text-align:left;
+  border-bottom:1px solid var(--line) }
 .round { margin:0 0 8px; padding:6px 10px; border-left:3px solid var(--line); color:var(--muted) } .round p { margin:4px 0 }
 .round > summary { cursor:pointer } .round.now { border-left-color:var(--accent); color:var(--ink) }
 .chat details.need form .attach { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; margin-right:6px;
