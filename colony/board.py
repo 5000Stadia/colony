@@ -4367,12 +4367,18 @@ def machine_folders(current):
     return "".join(out)
 
 
+def folder_name(text):
+    """A folder's name from what the person typed: letters, digits and a few marks kept, the rest (an emoji) a dash,
+    and none at either end, so "🌈 SnackStand" is SnackStand: a name opening on a dash reads as an option to its program."""
+    return re.sub(r"[^A-Za-z0-9_. -]", "-", text or "").strip("-. ")
+
+
 def clone(url, within, name=""):
     """Clone a repository into a new folder under `within`; its path, or a ValueError saying what went wrong."""
     url = url.strip()
     if not re.match(r"^(https://|git@|ssh://|file://)[^\s]+$", url):
         raise ValueError("That doesn't look like a repository link (https://github.com/owner/repo).")
-    name = re.sub(r"[^A-Za-z0-9_. -]", "-", (name or "").strip()) or re.sub(r"\.git$", "", re.split(r"[/:]", url.rstrip("/"))[-1])
+    name = folder_name(name) or re.sub(r"\.git$", "", re.split(r"[/:]", url.rstrip("/"))[-1])
     dest = Path(within).expanduser() / name
     if dest.exists() and any(dest.iterdir()):
         raise ValueError(f"{dest} already exists and isn't empty: choose another folder name.")
@@ -6276,8 +6282,8 @@ class Handler(BaseHTTPRequestHandler):
                         project_settings(folder, chosen)
                     track(folder)
                     target = f"/?p={projects().index(folder)}"
-            elif path == "/new" and form.get("name", "").strip():
-                new = Path(form.get("within") or reg["new_root"]).expanduser() / re.sub(r"[^A-Za-z0-9_. -]", "-", form["name"].strip())
+            elif path == "/new" and folder_name(form.get("name", "")):
+                new = Path(form.get("within") or reg["new_root"]).expanduser() / folder_name(form["name"])
                 new.mkdir(parents=True, exist_ok=True)
                 if chosen:
                     project_settings(new, chosen)

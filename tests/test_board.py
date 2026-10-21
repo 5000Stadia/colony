@@ -2586,6 +2586,10 @@ class FoldersTest(BoardBase):
             self.assertEqual(board.roadmap(shelf / 'fresh idea')['milestones'], [])
             self.assertIn('first piece of work is a conversation', board.notes(shelf / 'fresh idea')[0]['text'])
             console.stop(shelf / "fresh idea")
+            # an emoji in the name: never a folder opening on a dash, which its program would read as an option
+            self.post(port, "/new", within=str(shelf), name="🌈 Snack Stand")
+            self.assertTrue((shelf / "Snack Stand" / "ROADMAP.md").exists())
+            console.stop(shelf / "Snack Stand")
             self.post(port, "/roots", add=str(shelf))
             self.post(port, "/roots", default=str(shelf))
             self.assertEqual(board.registry()["new_root"], str(shelf))
@@ -2603,6 +2607,7 @@ class SettingsTest(BoardBase):
         saved, console.COMMAND = console.COMMAND, None
         try:
             self.assertEqual(console.command("plants"), "claude --permission-mode bypassPermissions --remote-control plants --model claude-fable-5-1 --effort medium", "Auto resolves both model and effort")
+            self.assertIn("--remote-control plants", console.command("- plants"), "a name opening on a dash isn't read as an option")
             run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                             text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
             self.assertRegex(run("settings").stdout, r"remote +on")

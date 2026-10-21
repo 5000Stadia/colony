@@ -169,7 +169,7 @@ class ClaudeCode:
         if PERMISSIONS.get(s.get("permissions") or "ask"):
             parts += ["--permission-mode", PERMISSIONS[s["permissions"]]]
         if s.get("remote"):
-            parts += ["--remote-control", shlex.quote(label)]
+            parts += ["--remote-control", shlex.quote(label.lstrip("- ") or "colony")]   # "-x" would read as an option
         if s.get("model"):
             parts += ["--model", shlex.quote(s["model"])]
         if s.get("effort"):
