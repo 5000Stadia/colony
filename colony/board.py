@@ -2086,6 +2086,10 @@ LASTPAGE = """
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
 # stays at the left. Only the row scrolls, never the page; the order is the board's own.
 CHIPS = """
+(() => { const nav = document.querySelector('nav'), at = () => {     // what a jump to a place on the page lands below
+  const sticky = nav && getComputedStyle(nav).position === 'sticky';
+  document.documentElement.style.setProperty('--navh', (sticky ? nav.getBoundingClientRect().height : 0) + 'px'); };
+  at(); addEventListener('resize', at); })();
 (() => { const n = document.querySelector('nav .navrow'), jump = document.querySelector('nav .pinjump');
   const pins = n ? [...n.querySelectorAll('.proj.pinchip')] : [];
   if (n && jump && pins.length) {
@@ -6549,6 +6553,7 @@ a.jstop.live .jring { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%,
 .lane { border:1px solid var(--line); border-radius:12px; padding:8px 10px } .lane p { margin:4px 0 }
 .lanebar { height:5px; border-radius:3px; background:var(--line); margin:5px 0; overflow:hidden } .lanebar i { display:block; height:100%; background:var(--accent) }
 .kindnote { margin:12px 0 2px; font-size:12px; text-transform:uppercase; letter-spacing:.05em }
+details[id^='ms-'] { scroll-margin-top:calc(var(--navh, 0px) + 12px) }
 details.item > summary .jd { vertical-align:middle; margin-right:4px } .ititle { font-weight:500 } .iid { font-size:12px }
 .donefold > summary { cursor:pointer } .pieces { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 }
 .piece { font-size:12px; border:1px solid var(--line); border-radius:6px; padding:2px 6px } .piece.done { background:var(--line) }
