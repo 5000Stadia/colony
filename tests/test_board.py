@@ -2528,6 +2528,9 @@ class SettingsTest(BoardBase):
             self.assertIn("<b>plants</b>", section)
             self.assertIn("Which pot size?", section, "what it needs, under it, answered there")
             self.assertIn("Which pot size?", opener.open(f"http://127.0.0.1:{port}/home/feed").read().decode(), "kept current")
+            self.assertIn("<button class='choice yours'>Obvious, you decide</button>", section, "a choice it should have made, handed back")
+            self.assertIn("never an answer to a decision you put to the person", board.render_notes(
+                [{"id": "n1", "author": "monitor", "anchor": None, "text": "Go large."}], "Notes:"))
             data = urllib.parse.urlencode({"monitor": "on", "model": "", "effort": "high", "new_root": ""}).encode()
             urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/options", data=data))
             s = board.registry()["settings"]

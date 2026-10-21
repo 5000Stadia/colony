@@ -98,7 +98,8 @@ steer all of them from one board, and the projects can write to each other.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
 - **Who speaks for the person.** The steward's notes and messages, text the board types into your console, and
-  colony's own notices (a usage limit, a reset) carry their direction. Act on them as theirs.
+  colony's own notices (a usage limit, a reset) carry their direction. Act on them as theirs, except an answer to
+  a decision you put to the person (a gate, a question): only they answer those.
 - **Working alongside others.** Brief a helper with what it owns and where it ends; it reports as it goes
   rather than waiting. Paired with another project's agent, keep to your agreed role and talk at hand-offs.
 - **The person's attention is the scarce resource.** Foresee the decisions an item will need and ask them
@@ -1038,7 +1039,7 @@ def render_notes(ns, heading):
         return ""
     lines = [heading]
     for n in ns:
-        by = {"monitor": " (from the person's steward, acting for them)",
+        by = {"monitor": " (from the person's steward, acting for them; never an answer to a decision you put to the person)",
               "suggestion": IDEA if n.get("kind") == "idea" else ADVICE if n.get("kind") == "advice" else SUGGESTION,
               "colony": " (from colony, the harness the person trusts: act on it as theirs)",
               "page": " (sent by a page in the project as the person used it: what they did, not words they wrote)"}.get(n.get("author"), "")
@@ -3688,13 +3689,16 @@ def gate_choices(pid, gate, back):
         return ""
     rec = gate.get("recommended") or gate.get("default") or ""
     opts = [rec] * bool(rec) + [o for o in gate.get("options") or [] if o != rec]
-    if not opts:
-        return ""
-    one = lambda o: (f"<form method='post' action='/answer'><input type='hidden' name='p' value='{e(pid)}'>"
-                     f"<input type='hidden' name='gate' value='{e(gate['id'])}'><input type='hidden' name='back' value='{e(back)}'>"
-                     f"<input type='hidden' name='text' value='{e(o)}'><button class='choice{' rec' if o == rec else ''}'>"
-                     + ("<span class='tag'>Recommended</span>" if o == rec else "") + f"{e(o)}</button></form>")
-    return "<div class='gatechoices'>" + "".join(one(o) for o in opts) + "</div>"
+    one = lambda o, label=None: (f"<form method='post' action='/answer'><input type='hidden' name='p' value='{e(pid)}'>"
+                                 f"<input type='hidden' name='gate' value='{e(gate['id'])}'><input type='hidden' name='back' value='{e(back)}'>"
+                                 f"<input type='hidden' name='text' value='{e(o)}'><button class='choice{' rec' if o == rec else ' yours' if label else ''}'>"
+                                 + ("<span class='tag'>Recommended</span>" if o == rec else "") + f"{e(label or o)}</button></form>")
+    # a choice the agent should have made itself: handed back in a tap, and the agent told where the line is
+    return "<div class='gatechoices'>" + "".join(one(o) for o in opts) + one(OBVIOUS, "Obvious, you decide") + "</div>"
+
+
+OBVIOUS = ("Obvious: you decide. Take what best serves the vision, mission and roadmap, say what you chose, and settle "
+           "choices like this yourself from here on.")
 
 
 def gate_rounds(root, gate):
@@ -6401,6 +6405,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .gatechoices button.choice, .chat details.need .gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
   border:1px solid var(--line); background:var(--sunk); color:var(--ink); font:inherit; cursor:pointer }
 .gatechoices button.choice.rec, .chat details.need .gatechoices button.choice.rec { border:1.5px solid var(--accent); background:var(--card) }
+.gatechoices button.choice.yours { color:var(--muted); font-style:italic }
 .gatechoices .tag { display:block; font-size:12px; font-weight:600; color:var(--accent); letter-spacing:.02em }
 .chat a.shot { display:block; margin-top:8px } .chat a.shot img { display:block; max-width:100%; max-height:420px; border-radius:12px;
   border:1px solid var(--line) } .chat a.file { display:inline-block; padding:2px 10px; border-radius:999px; background:var(--sunk) }
