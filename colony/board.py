@@ -1756,6 +1756,23 @@ def e(text):
     return html.escape(str(text), quote=True)
 
 
+STEER = {"next": "Do this next.", "later": "Leave this for later."}
+
+
+def steer_row(pid, it):
+    """Steering from the plan, one tap: do this item next, or leave it for later. Each reaches the agent as the
+    person's note on the item, and waits among their notes not yet acted on until the agent has."""
+    if it["state"] not in ("todo", "doing"):
+        return ""
+    back = f"/?p={pid}&view=roadmap"
+    form = lambda text, label: (f"<form method='post' action='/note'><input type='hidden' name='p' value='{pid}'>"
+                                f"<input type='hidden' name='back' value='{e(back)}'><input type='hidden' name='kind' value='item'>"
+                                f"<input type='hidden' name='ref' value='{e(it['id'])}'><input type='hidden' name='text' value='{e(text)}'>"
+                                f"<button class='quiet'>{label}</button></form>")
+    return ("<div class='steer'>" + (form(STEER["next"], "Do this next") if it["state"] == "todo" else "")
+            + form(STEER["later"], "Leave for later") + "</div>")
+
+
 def note_box(pid, kind, ref, hint, back=None):
     back = back or f"/?p={pid}"
     return (f"<form class='add' method='post' action='/note'><input type='hidden' name='p' value='{pid}'>"
@@ -3249,7 +3266,7 @@ def render(reg, pid, view="overview", show_all=""):
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
                         + (f" {timer(times[it['id']])}" if it["id"] in times else "")
-                        + f"</summary><div class='body'><p>{e(it['desc'] or 'No description yet.')}</p>"
+                        + f"</summary><div class='body'>{steer_row(pid, it)}<p>{e(it['desc'] or 'No description yet.')}</p>"
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
@@ -6190,6 +6207,7 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
+.steer { display:flex; gap:8px; margin:4px 0 8px } .steer form { margin:0 }
 .measures .measure { padding:6px 0; border-bottom:1px solid var(--line) } .measures .measure:last-child { border-bottom:0 }
 .measures .mname { margin-right:6px } .measures .spark { letter-spacing:1px; color:var(--accent) } .flag { color:var(--flag) }
 .small { font-size:13px }

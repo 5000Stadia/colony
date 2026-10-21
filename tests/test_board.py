@@ -1036,6 +1036,11 @@ class ChatTest(BoardBase):
         self.assertIn("<b>body</b> <span class='muted'>1/1</span>", lanes)
         menu = board.part_body(ms["M2"], {"R4": "<row R4>", "R3": "<row R3>"})
         self.assertLess(menu.index("<row R4>"), menu.index("To come, in any order · 1"), "what's being done first")
+        row = board.steer_row(0, its["R3"])
+        self.assertIn("value='Do this next.'", row)
+        self.assertIn("<button class='quiet'>Leave for later</button>", row)
+        self.assertNotIn("Do this next", board.steer_row(0, its["R4"]), "already being done")
+        self.assertEqual(board.steer_row(0, its["R6"]), "", "nothing to steer once done")
         unlabelled = board.roadmap(None, "## M1 — Build\n- [ ] R1 a\n- [ ] R2 b\n")
         self.assertEqual(board.items(unlabelled)["R2"]["after"], ["R1"], "a plan that names no kinds is read as before")
 
