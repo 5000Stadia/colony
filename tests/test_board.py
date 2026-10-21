@@ -1172,24 +1172,31 @@ class LibraryTest(BoardBase):
 
 
 class HintTest(BoardBase):
-    def test_a_finished_milestone_brings_the_agent_the_plans_shape_hints_once_by_rule(self):
+    def test_a_finished_milestone_brings_the_agent_the_plans_open_shape_hints_once_as_plain_facts(self):
         from colony import hints
         board.track(self.root)
-        plan = ("## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n## M6 — Later\n- [x] R3 c\n- [x] R4 d\n- [x] R5 e\n")
+        plan = ("## Vision\nGrow plants well.\n\n## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n- [ ] R6 f\n"
+                "## M6 — Later\n- [x] R3 c\n- [x] R4 d\n- [x] R5 e\n")
         (self.root / "ROADMAP.md").write_text(plan)
         hints.check(self.root)
-        self.assertEqual([n for n in board.notes(self.root) if "shape" in n["text"]], [], "the first look tells nothing")
-        found = hints.hints(self.root)
-        self.assertIn("M6 — Later holds 3 finished items", " ".join(t for _, t in found))
-        (self.root / "ROADMAP.md").write_text(plan.replace("- [ ] R2 b", "- [x] R2 b"))
+        self.assertEqual([n for n in board.notes(self.root) if "Shape hints" in n["text"]], [], "the first look tells nothing")
+        self.assertEqual([(k, t) for k, _, t in hints.hints(self.root)], [("later-done:M6", "M6 — Later: 3 finished items.")])
+        (self.root / "ROADMAP.md").write_text(plan.replace("- [ ] R2 b", "- [x] R2 b").replace("- [ ] R6 f", "- [x] R6 f"))
         hints.check(self.root)
         hints.check(self.root)
-        told = [n for n in board.notes(self.root) if "shape" in n["text"]]
+        told = [n for n in board.notes(self.root) if "Shape hints" in n["text"]]
         self.assertEqual(len(told), 1, "once, as M1 finishes")
         self.assertTrue(told[0]["quiet"])
-        self.assertIn("M1 finished", told[0]["text"])
-        self.assertIn("nothing here is the person's", told[0]["text"])
-        self.assertIn("<h3>Shape hints</h3>", board.render(board.registry(), 0, "roadmap"))
+        self.assertIn("- later-done:M6: M6 — Later: 3 finished items.", told[0]["text"], "a plain fact, no leading question")
+        self.assertNotIn("?", told[0]["text"].split("\n", 1)[1])
+        self.assertIn("<h3>Shape hints</h3><span class='muted'>1</span>", board.render(board.registry(), 0, "roadmap"))
+        hints.keep(self.root, "later-done:M6", "Later is our record of what was set aside and then done; it stays")
+        self.assertEqual(hints.open_hints(self.root), [], "settled with its reasoning")
+        page = board.render(board.registry(), 0, "roadmap")
+        self.assertIn("<h3>Shape hints</h3><span class='muted'>0</span>", page)
+        self.assertIn("Later is our record of what was set aside", page, "the reasoning shows beside it")
+        (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace("Grow plants well.", "Grow plants and sell them."))
+        self.assertEqual([k for k, _, _ in hints.open_hints(self.root)], ["later-done:M6"], "a new vision: open again")
 
 
 class GlanceTest(BoardBase):

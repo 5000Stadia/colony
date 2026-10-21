@@ -1,9 +1,10 @@
-"""Shape hints: where a plan has drifted from how its work behaves, read from the plan and its history, by rule.
+"""Shape hints: where a plan may have drifted from how its work behaves, read from the plan and its history, by rule.
 
-No model reads anything: a milestone written as a sequence that keeps being reordered (a menu?), finished work left
-under Later, an item in progress far longer than this project's items usually take (a raised hand), a measure that
-failed or was never taken. Shown as a hint on the Roadmap tab; when a milestone finishes, the agent hears the ones
-that apply once, quietly. The agent judges; the person sees them only if it brings them up.
+No model reads anything, and each hint is a plain fact: a milestone written as a sequence that keeps being reordered,
+finished work left under Later, an item marked in progress far longer than this project's usual, a measure that
+failed. Shown on the Roadmap tab; when a milestone finishes, the agent hears the open ones once, quietly. A hint the
+agent judges and keeps (colony hint keep KEY "why") is not raised again, its reasoning kept beside it, until the
+vision changes: the shape that served one vision may not serve the next.
 """
 import json
 import statistics
@@ -58,20 +59,20 @@ def cached(root):
 
 
 def hints(root):
-    """The plan's shape hints now: [(milestone or None, text)]."""
+    """The plan's shape hints now, each a plain fact: [(key, milestone or None, text)]. The key stays the same while
+    the same thing holds, so a hint the agent has settled is known again."""
     from . import measures
     road = board.roadmap(root)
     out = []
     moved = reorders(root)
     for m in road["milestones"]:
-        if m.get("kind", "sequence") == "sequence" and moved.get(m["id"], 0) >= REORDERS and not m["id"].lower().startswith("later"):
-            out.append((m["id"], f"{m['id']} is written as a sequence but was reordered {moved[m['id']]} times this month: "
-                                 "its items may be a menu (any order), or lanes."))
         later = "later" in (m["id"] + " " + m["title"]).lower()
+        if m.get("kind", "sequence") == "sequence" and moved.get(m["id"], 0) >= REORDERS and not later:
+            out.append((f"reordered:{m['id']}", m["id"], f"{m['id']}: a sequence reordered {moved[m['id']]} times this month."))
         done = sum(i["state"] == "done" for i in m["items"])
         if later and done >= LATER_DONE:
-            out.append((m["id"], f"{m['id']}{' — ' + m['title'] if m['title'] else ''} holds {done} finished items: "
-                                 "finished work belongs with the milestone it served, or folds away."))
+            out.append((f"later-done:{m['id']}", m["id"], f"{m['id']}{' — ' + m['title'] if m['title'] else ''}: "
+                                                         f"{done} finished items."))
     times = board.item_times(root)
     worked = [r.get("worked") for r in times.values() if r.get("state") == "done" and r.get("worked")]
     usual = statistics.median(worked) if len(worked) >= 5 else None
@@ -82,20 +83,45 @@ def hints(root):
             continue
         took = (r.get("worked") or 0) + now - board.epoch(r["since"])
         if took > max(STUCK_FLOOR, STUCK_TIMES * (usual or 0)):
-            out.append((its[iid]["milestone"], f"{iid} has been marked in progress for {took / 86400:.0f} days"
-                        + (f", against {usual / 3600:.0f} h for this project's usual item" if usual else "")
-                        + ": stuck, or bigger than one item?"))
+            out.append((f"long:{iid}", its[iid]["milestone"], f"{iid}: marked in progress {took / 86400:.0f} days"
+                        + (f" (usual: {usual / 3600:.0f} h)." if usual else ".")))
     for x in measures.summary(root):
         last = x["last"]
         if last and last["value"] is None:
-            out.append((x["part"], f"The measure '{x['name']}' couldn't be taken last time ({(last['error'] or '')[:80]}): "
-                                   "its method may need fixing."))
+            out.append((f"measure:{x['name']}", x["part"], f"Measure '{x['name']}' failed last time: {(last['error'] or '')[:80]}"))
     return out
 
 
+def vision_mark(root):
+    """Which vision a settled hint was settled under: when the vision changes, settled hints are open again."""
+    import hashlib
+    road = board.roadmap(root)
+    return hashlib.sha1(" ".join((road["vision"] or road["goal"] or "").split()).encode()).hexdigest()[:12]
+
+
+def settled(root):
+    """Hints the agent settled under the present vision, each with its reasoning: {key: {"why", "at"}}."""
+    mark, out = vision_mark(root), {}
+    for e in board.read(root, "hints-kept.jsonl"):
+        if e.get("vision") == mark:
+            out[e["key"]] = e
+    return out
+
+
+def keep(root, key, why):
+    """The agent's reasoned judgement that a hint's shape is right: not raised again until the vision changes."""
+    board.append(root, "hints-kept.jsonl", {"type": "keep", "key": key, "why": why.strip(), "at": board.now(),
+                                            "vision": vision_mark(root)})
+
+
+def open_hints(root, every=None):
+    kept = settled(root)
+    return [h for h in (every if every is not None else hints(root)) if h[0] not in kept]
+
+
 def check(root):
-    """Called every few seconds per project: when a milestone has newly finished, the agent hears the plan's shape
-    hints once, quietly (nothing when there are none)."""
+    """Called every few seconds per project: when a milestone has newly finished, the agent hears the plan's open
+    shape hints once, quietly, as plain facts (nothing when there are none, or all are settled)."""
     path = Path(root) / ".board" / "hints.json"
     road = board.roadmap(root)
     finished = sorted(m["id"] for m in road["milestones"] if m["items"] and all(i["state"] == "done" for i in m["items"]))
@@ -106,13 +132,13 @@ def check(root):
         path.write_text(json.dumps({"finished": finished}))      # first look: what was finished before isn't news
         return
     new = [m for m in finished if m not in told.get("finished", [])]
+    if told.get("finished") != finished:
+        path.write_text(json.dumps({"finished": finished}))
     if not new:
-        if told.get("finished") != finished:
-            path.write_text(json.dumps({"finished": finished}))
         return
-    path.write_text(json.dumps({"finished": finished}))
-    found = hints(root)
+    found = open_hints(root)
     if found:
-        board.add_note(root, None, f"{', '.join(new)} finished. The plan's shape, as colony reads it from the plan and "
-                       "its history (yours to judge; nothing here is the person's):\n" + "\n".join(f"- {t}" for _, t in found),
+        board.add_note(root, None, f"{', '.join(new)} finished. Shape hints, read by rule from the plan (yours to judge; "
+                       "skip any that don't fit, or settle one with colony hint keep KEY \"why\" and it stays quiet "
+                       "until the vision changes):\n" + "\n".join(f"- {k}: {t}" for k, _, t in found),
                        author="colony", quiet=True)

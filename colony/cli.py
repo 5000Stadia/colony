@@ -580,6 +580,22 @@ def cmd_show(a):
     return 0
 
 
+def cmd_hint(a):
+    """The plan's shape hints: the open ones, or settle one with your reasoning (quiet until the vision changes)."""
+    from . import board, hints
+    root = board.root_of()
+    if a.action == "keep":
+        if not a.key or not a.why:
+            print('usage: colony hint keep KEY "why its shape stays"', file=sys.stderr)
+            return 2
+        hints.keep(root, a.key, a.why)
+        print(f"settled {a.key}: not raised again until the vision changes")
+        return 0
+    for key, _, text in hints.open_hints(root):
+        print(f"{key}: {text}")
+    return 0
+
+
 def cmd_regroup(a):
     """Organize the Library: one entry under a heading, or every entry under one heading renamed to another."""
     from . import board, pins
@@ -1540,6 +1556,9 @@ def main(argv=None):
     p = sub.add_parser("pin", help="keep a file in the project or a URL in its Library, for the person and you")
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why")
     p.add_argument("--group", help="the Library heading it goes under"); p.set_defaults(fn=cmd_pin)
+    p = sub.add_parser("hint", help="the plan's shape hints; keep KEY \"why\" settles one until the vision changes")
+    p.add_argument("action", nargs="?", choices=("keep",)); p.add_argument("key", nargs="?"); p.add_argument("why", nargs="?")
+    p.set_defaults(fn=cmd_hint)
     p = sub.add_parser("regroup", help="organize the Library: an entry under a heading, or --rename a heading")
     p.add_argument("target", help="an entry's id, or with --rename the heading to rename"); p.add_argument("heading")
     p.add_argument("--rename", action="store_true"); p.set_defaults(fn=cmd_regroup)
