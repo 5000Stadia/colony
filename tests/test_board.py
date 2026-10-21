@@ -1056,11 +1056,46 @@ class ChatTest(BoardBase):
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(r.status, 204)
             pasted.assert_called_once_with("s", "Ship it")
-        with patch.object(board.console, "ensure", return_value="s"), patch.object(board.console, "paste_into", return_value=False):
+        with patch.object(board.console, "ensure", return_value="s"), patch.object(board.console, "paste_into", return_value=False), \
+                patch.object(board.console, "live", return_value=True):
             with self.assertRaises(urllib.error.HTTPError) as held:
                 urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=x",
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
+
+    def test_an_agent_that_dies_as_it_starts_says_why_and_a_message_to_it_says_so(self):
+        # SnackStand: Claude Code read its own name as an option and left at once; the person saw only "the board
+        # could not be reached", and the board had answered with a crash
+        board.track(self.root)
+        console.stop(self.root)
+        console.COMMAND = "sh -c \"echo 'error: unknown option -SnackStand'; exit 1\""   # prints, and leaves at once
+        name = console.ensure(self.root)
+        for _ in range(40):
+            if not console.live(self.root):
+                break
+            time.sleep(0.05)
+        self.assertFalse(console.live(self.root), "a program that has ended is not running, though its screen stayed")
+        self.assertFalse(console.running(name))
+        self.assertEqual(console.died(name)["status"], 1)
+        snap = console.snapshot(self.root)
+        self.assertEqual(snap["state"], "off")
+        self.assertEqual(snap["lines"], ["Its agent stopped with an error (exit 1). Its last words:",
+                                         "error: unknown option -SnackStand"])
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host = f"127.0.0.1:{server.server_address[1]}"
+        with self.assertRaises(urllib.error.HTTPError) as gone:   # sending starts it again, and it dies again
+            urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=hello",
+                                                          headers={"Host": host, "Origin": f"http://{host}"}))
+        self.assertEqual(gone.exception.code, 503)
+        self.assertIn("its agent isn't running; it stopped with an error (exit 1), its last words: error: unknown option "
+                      "-SnackStand", gone.exception.read().decode())
+        self.assertIn("r.status === 503 ? await r.text()", board.CHAT)
+        console.COMMAND = "true"
+        console.ensure(self.root, settle=2)
+        self.assertIsNone(console.died(name), "ended without an error (a /exit): nothing to explain")
 
     def test_a_milestone_names_its_kind_and_only_a_sequence_implies_an_order(self):
         road = board.roadmap(None, "## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n## M2 — Concepts · menu\n- [ ] R3 c\n- [~] R4 d (after R1)\n"
@@ -2395,7 +2430,7 @@ class MonitorTest(BoardBase):
         run("decided", "plants", "Approved the formatter's permission prompt: routine, within direction.")
         self.assertIn("formatter", monitor.decisions(self.root)[0]["text"])
         saved = (console.ensure, console.snapshot)
-        console.ensure = lambda root, name=None, label=None: name
+        console.ensure = lambda root, name=None, label=None, settle=0: name
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": [], "activity": {}}
         try:
             helm_tab = board.monitor_page(board.registry(), "helm")
@@ -2412,7 +2447,7 @@ class MonitorTest(BoardBase):
         typed = []
         saved = (console.type_into, console.ensure, console.snapshot)
         console.type_into = hearing(typed)
-        console.ensure = lambda root, name=None, label=None: "s"
+        console.ensure = lambda root, name=None, label=None, settle=0: "s"
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         try:
             from colony import cli
@@ -2817,7 +2852,7 @@ class MessagingTest(BoardBase):
         typed = []
         saved = (console.type_into, console.ensure)
         console.type_into = lambda name, text: typed.append((name, text)) or True
-        console.ensure = lambda root, name=None, label=None: console.session_name(root)
+        console.ensure = lambda root, name=None, label=None, settle=0: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         try:
@@ -2849,7 +2884,7 @@ class MessagingTest(BoardBase):
         saved = (console.type_into, console.paste_into, console.ensure)
         console.type_into = hearing(typed)
         console.paste_into = lambda name, text: pasted.append((name, text)) or True
-        console.ensure = lambda root, name=None, label=None: console.session_name(root)
+        console.ensure = lambda root, name=None, label=None, settle=0: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         def send(**fields):
@@ -2941,7 +2976,7 @@ class MailWakeTest(BoardBase):
         self.typed, self.started, self.state = [], [], {"state": "idle"}
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}
         console.type_into = hearing(self.typed)
-        console.ensure = lambda root, name=None, label=None: self.started.append(root)
+        console.ensure = lambda root, name=None, label=None, settle=0: self.started.append(root)
         monitor.snapshot = lambda: {"state": "working", "lines": []}
 
     def tearDown(self):
@@ -3559,7 +3594,7 @@ class ClearTest(BoardBase):
         console.snapshot = lambda root, lines=6, name=None: {"state": state["state"], "lines": ["x"]}
         console.screen = lambda name: NeedsYouTest.CHOICE
         console.type_into = hearing(typed)
-        console.ensure = lambda root, name=None, label=None: None
+        console.ensure = lambda root, name=None, label=None, settle=0: None
         try:
             (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
             board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(), "question": "Ship it?"})

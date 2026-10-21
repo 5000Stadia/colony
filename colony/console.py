@@ -85,6 +85,12 @@ def last_conversation(root):
     return c["conversation"] if c and Path(c["transcript"]).exists() else None
 
 
+def lingers(cmd):
+    """The command, its shell staying half a second after it ends: a program that prints its error and leaves at once
+    can be gone before tmux has read what it printed, and then the error is lost with it."""
+    return f"{cmd}\ns=$?; sleep 0.5; exit $s"
+
+
 def contained(cmd):
     """Run a console in its own systemd scope that carries on when the kernel kills one of its processes for
     memory: by default systemd stops the whole unit, which once took a project's session down with the one
@@ -115,11 +121,43 @@ def live(root):
 
 
 def running(name):
-    return subprocess.run(["tmux", "has-session", "-t", name], capture_output=True).returncode == 0
+    """Whether its program is there. One that has exited stays on its screen (remain-on-exit) until looked at here:
+    its last words are kept, then the session closed, so a console that dies as it starts can say why."""
+    # list-panes, not display-message: that answers for the client it runs in when the session is gone
+    r = subprocess.run(["tmux", "list-panes", "-t", name, "-F", "#{pane_dead} #{pane_dead_status}"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return False
+    dead, _, status = (r.stdout.splitlines() or [""])[0].strip().partition(" ")
+    if dead != "1":
+        return True
+    # from its history too: as the pane dies, tmux moves what was on the screen up into it
+    shown = subprocess.run(["tmux", "capture-pane", "-p", "-S", "-200", "-t", name], capture_output=True, text=True).stdout
+    words = [l.rstrip() for l in shown.splitlines() if l.strip() and not l.startswith("Pane is dead")]  # tmux's own
+    path = _died_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"at": time.time(), "status": int(status or 0), "lines": words[-12:]}))
+    subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+    return False
 
 
-def ensure(root, name=None, label=None):
-    """Start the session if it is not running: the provider's CLI, in the project, as its settings say."""
+def _died_path(name):
+    from . import board
+    return board.home() / "consoles" / f"{name}.died.json"
+
+
+def died(name):
+    """How its program last ended, where it ended in an error: {"at", "status", "lines"}, or None."""
+    try:
+        d = json.loads(_died_path(name).read_text())
+    except (OSError, ValueError):
+        return None
+    return d if d.get("status") else None
+
+
+def ensure(root, name=None, label=None, settle=0):
+    """Start the session if it is not running: the provider's CLI, in the project, as its settings say. settle: when
+    it had to be started, seconds to watch that it stays (a message for it waits that long rather than be lost)."""
     name = name or session_name(root)
     if not running(name):
         from . import board, providers
@@ -129,11 +167,17 @@ def ensure(root, name=None, label=None):
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
                         "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
-                        contained(command(label or Path(root).name, None if label else root, folder=root if label else None))],
+                        contained(lingers(command(label or Path(root).name, None if label else root, folder=root if label else None))),
+                        # in the same breath, before the program can end: if it does, its screen stays to be read
+                        ";", "set-option", "-w", "-t", name, "remain-on-exit", "on"],
                        check=True)
+        _died_path(name).unlink(missing_ok=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
         _started(name, fingerprint(root, label))
         scrollable(name, providers_of(root, label))
+        until = time.time() + settle
+        while time.time() < until and running(name):
+            time.sleep(0.1)
     return name
 
 
@@ -332,10 +376,13 @@ def type_into(name, text):
     # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
     # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
-    subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
-    time.sleep(getattr(provider(name), "enter_after", 0.3))   # typing that arrives at once can read as a paste
-    subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-    return _sent(name, text)
+    try:
+        subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
+        time.sleep(getattr(provider(name), "enter_after", 0.3))   # typing that arrives at once can read as a paste
+        subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
+        return _sent(name, text)
+    except subprocess.CalledProcessError:              # its program ended as the keys went in
+        return False
 
 
 def paste_into(name, text):
@@ -345,11 +392,14 @@ def paste_into(name, text):
         return type_into(name, text)
     unscroll(name)
     buf = f"colony-{secrets.token_hex(4)}"
-    subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
-    subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
-    time.sleep(max(0.3, getattr(provider(name), "enter_after", 0)))    # the paste lands before its Enter
-    subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-    return True
+    try:
+        subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
+        subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
+        time.sleep(max(0.3, getattr(provider(name), "enter_after", 0)))    # the paste lands before its Enter
+        subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
+        return True
+    except subprocess.CalledProcessError:              # its program ended as it was pasted
+        return False
 
 
 def queue(name, action, msgs=()):
@@ -421,7 +471,11 @@ def snapshot(root, lines=6, name=None):
     if not running(name):
         from . import providers
         p = providers.of(root)
-        return {"state": "off", "lines": [] if providers.installed(p) else [providers.missing(p)]}
+        if not providers.installed(p):
+            return {"state": "off", "lines": [providers.missing(p)]}
+        end = died(name)
+        return {"state": "off", "lines": [f"Its agent stopped with an error (exit {end['status']}). Its last words:"]
+                + end["lines"][-max(lines - 1, 3):] if end else []}
     now = screen(name)
     shown = [l for l in (BORDER.sub("", l) for l in now.splitlines()) if l.strip()]
     from . import providers

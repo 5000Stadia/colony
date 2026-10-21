@@ -2336,12 +2336,24 @@ def tabs(pid, view, root=None):
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
 
 
-def held(who, back):
-    """What the person sees when what they sent was not typed: someone's draft was in the way."""
+SETTLE = 2                   # seconds a console started for a message is watched first: one that dies at once says why
+
+
+def stopped(root):
+    """Why nothing could be sent, where the project's agent isn't running: in its last words, where it ended in an error."""
+    end = console.died(console.session_name(root))
+    return ("Not sent: its agent isn't running" + (f"; it stopped with an error (exit {end['status']}), its last words: "
+            + " / ".join(end["lines"][-3:]) if end else ".") + " Tell colony's agent, or open its Console to see.")
+
+
+def held(who, back, root=None):
+    """What the person sees when what they sent was not typed: someone's draft was in the way, or its agent isn't there."""
+    why = (e(stopped(root)) if root and not console.live(root) else
+           f"Not sent: {e(who)} has something half-typed in its console, and your message would have landed on it "
+           f"and sent it. Send or clear it there, then send this again.")
     return (f"<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<style>body{{font:15px system-ui;margin:24px;max-width:36em;line-height:1.5}}</style>"
-            f"<p>Not sent: {e(who)} has something half-typed in its console, and your message would have landed on it "
-            f"and sent it. Send or clear it there, then send this again.</p>"
+            f"<p>{why}</p>"
             f"<p><a href='javascript:history.back()'>Back to what you wrote</a> · <a href='{e(back)}'>Back to the board</a></p>")
 
 
@@ -2777,7 +2789,8 @@ CHAT = """
     if (fs.length) { try { const dt = new DataTransfer(); [...fs, ...file.files].forEach((x) => dt.items.add(x)); file.files = dt.files; } catch (e) {} }
     grow(); chosen(); busy();
     held.hidden = false;
-    held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.' : 'Not sent: the board could not be reached.';
+    held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.'
+      : r && r.status === 503 ? await r.text() : r ? 'Not sent: the board could not hand it over (' + r.status + ').' : 'Not sent: the board could not be reached.';
   });
   // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
   const talk = window.speechSynthesis, aloud = document.getElementById('aloud');
@@ -6205,10 +6218,10 @@ class Handler(BaseHTTPRequestHandler):
                     files.append(str(dst / pins.save_upload(dst, *upload)))
                 if files:
                     text = "\n".join(f"Attached: {f}" for f in files) + (f"\n\n{text}" if text else "")
-                sent = not text or (console.paste_into(console.ensure(src), text) if dst == src
-                                    else console.type_into(console.ensure(src), mail.instruction(mail.address(dst), text)))
+                sent = not text or (console.paste_into(console.ensure(src, settle=SETTLE), text) if dst == src
+                                    else console.type_into(console.ensure(src, settle=SETTLE), mail.instruction(mail.address(dst), text)))
                 if not sent:
-                    return self._send(409, held(src.name, f"/?p={form.get('p', '0')}").encode())
+                    return self._send(409, held(src.name, f"/?p={form.get('p', '0')}", src).encode())
                 if text and dst == src:
                     answer_asks(src, "in the console")
                 if text:                                   # the project's Messages keep what was sent
@@ -6393,10 +6406,12 @@ class Handler(BaseHTTPRequestHandler):
                 sent = not text or console.paste_into(monitor.ensure(), text)
             else:
                 src = projects(registry())[int(key)]
-                sent = not text or console.paste_into(console.ensure(src), text)
+                sent = not text or console.paste_into(console.ensure(src, settle=SETTLE), text)
                 if sent and text:
                     answer_asks(src, "in the console")
                     append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text, "to": "console"})
+                if not sent and not console.live(src):        # not a draft in the way: its agent isn't there
+                    return self._send(503, stopped(src).encode())
             self.send_response(204 if sent else 409)
             self.send_header("Content-Length", "0")
             self.end_headers()
