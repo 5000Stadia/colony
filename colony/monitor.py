@@ -548,6 +548,8 @@ class Watcher:
             try:
                 from . import measures
                 measures.check(p)               # its measures, taken by colony at each push and milestone finished
+                from . import hints
+                hints.check(p)                  # a milestone finished: the plan's shape hints, once, quietly
             except Exception:
                 pass
             snap = console.snapshot(p, lines=4)

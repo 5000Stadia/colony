@@ -3262,6 +3262,12 @@ def render(reg, pid, view="overview", show_all=""):
         out.append(measures_html(root))
         # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
         out.append("<h2 id='roadmap'>Roadmap</h2>")
+        from . import hints
+        found = hints.cached(root)
+        if found:                       # where the plan has drifted from its work, read by rule: the agent's to judge
+            out.append(f"<details class='card fold hints'><summary><h3>Shape hints</h3><span class='muted'>{len(found)}</span>"
+                       f"</summary><ul>{''.join(f'<li>{e(t)}</li>' for _, t in found)}</ul><p class='muted small'>Read from the plan "
+                       f"and its history, by rule; the agent hears them when a milestone finishes.</p></details>")
         if road["milestones"]:
             its = items(road)
             order = list(its)

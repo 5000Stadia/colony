@@ -1171,6 +1171,27 @@ class LibraryTest(BoardBase):
         self.assertEqual(no.exception.code, 403, "another file can't borrow this page's address")
 
 
+class HintTest(BoardBase):
+    def test_a_finished_milestone_brings_the_agent_the_plans_shape_hints_once_by_rule(self):
+        from colony import hints
+        board.track(self.root)
+        plan = ("## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n## M6 — Later\n- [x] R3 c\n- [x] R4 d\n- [x] R5 e\n")
+        (self.root / "ROADMAP.md").write_text(plan)
+        hints.check(self.root)
+        self.assertEqual([n for n in board.notes(self.root) if "shape" in n["text"]], [], "the first look tells nothing")
+        found = hints.hints(self.root)
+        self.assertIn("M6 — Later holds 3 finished items", " ".join(t for _, t in found))
+        (self.root / "ROADMAP.md").write_text(plan.replace("- [ ] R2 b", "- [x] R2 b"))
+        hints.check(self.root)
+        hints.check(self.root)
+        told = [n for n in board.notes(self.root) if "shape" in n["text"]]
+        self.assertEqual(len(told), 1, "once, as M1 finishes")
+        self.assertTrue(told[0]["quiet"])
+        self.assertIn("M1 finished", told[0]["text"])
+        self.assertIn("nothing here is the person's", told[0]["text"])
+        self.assertIn("<h3>Shape hints</h3>", board.render(board.registry(), 0, "roadmap"))
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)
