@@ -28,6 +28,12 @@ from . import console, hours, pins, providers, showcase
 MILESTONE = re.compile(r"^##\s+(M\d+(?:\.\d+)?)\s*[—–-]+\s*(.+?)\s*$")      # M3, and M3.5 between M3 and M4
 ITEM = re.compile(r"^\s*-\s*\[( |x|X|~|\?)\]\s*(R\d+)\s+(.+?)(?:\s*\(after\s+([R\d,\s]+)\))?\s*$")
 STATE = {" ": "todo", "~": "doing", "?": "verify", "x": "done", "X": "done"}
+# A milestone may say what kind of part it is, after its title (`## M4 — Concepts to develop · menu`): its items in
+# order (a sequence, unsaid), options in any order (menu), roads side by side (lanes, each item's `(lane: hair)`),
+# questions answered by experiment (findings), or pieces of one whole (sections). Only a sequence implies an order.
+KINDS = ("sequence", "menu", "lanes", "findings", "sections")
+KIND = re.compile(r"^(.*?)\s*·\s*(" + "|".join(KINDS) + r")\s*$", re.I)
+LANE = re.compile(r"\s*\(lane:\s*([^)]+?)\s*\)")
 LABEL = {"todo": "todo", "doing": "doing", "verify": "to verify", "done": "done"}
 
 PROTOCOL = """
@@ -640,9 +646,12 @@ def roadmap(root, text=None):
     heading = None
     for line in text.splitlines():
         if m := MILESTONE.match(line):
-            current = {"id": m.group(1), "title": m.group(2), "items": []}
+            title, kind = (k.group(1), k.group(2).lower()) if (k := KIND.match(m.group(2))) else (m.group(2), "sequence")
+            current = {"id": m.group(1), "title": title, "kind": kind, "items": []}
             milestones.append(current)
             last = heading = None
+            if kind != "sequence":
+                prev = None                     # a menu or lanes leaves no last step for the next part to follow
         elif line.startswith("## "):
             # Any other heading (## Later) is its own section, never part of the milestone above it.
             current, last, heading = None, None, line[3:].strip()
@@ -650,17 +659,20 @@ def roadmap(root, text=None):
             if current is None:
                 if heading is None:
                     continue
-                current = {"id": heading, "title": "", "items": []}
+                current = {"id": heading, "title": "", "kind": "sequence", "items": []}
                 milestones.append(current)
-            # An item builds on the one before it unless it says otherwise: `(after R2, R3)` branches.
+            # In a sequence an item builds on the one before it unless it says otherwise: `(after R2, R3)` branches.
+            # In a menu, lanes, findings or sections nothing waits on anything it doesn't name, so they may run at once.
             links = re.findall(r"R\d+", m.group(4) or "")
-            after = links or ([prev] if prev else [])
-            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": m.group(3), "after": after, "links": links,
-                    "desc": "", "milestone": current["id"]}
+            seq = current.get("kind", "sequence") == "sequence"
+            after = links or ([prev] if prev and seq else [])
+            lane = LANE.search(m.group(3))
+            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": LANE.sub("", m.group(3)).strip(), "after": after,
+                    "links": links, "desc": "", "milestone": current["id"], "lane": lane.group(1) if lane else None}
             if shared:
                 last['owner'] = shared['owners'].get(last['id']) or shared['lead']
             current["items"].append(last)
-            prev = last["id"]
+            prev = last["id"] if seq else None
         elif last is not None and line.startswith(("  ", "\t")) and line.strip():
             last["desc"] = (last["desc"] + " " + line.strip()).strip()     # indented lines describe the item
         elif not line.strip():
@@ -3172,7 +3184,7 @@ def render(reg, pid, view="overview", show_all=""):
         if road["milestones"]:
             its = items(road)
             order = list(its)
-            branched = any(it["after"] != ([order[i - 1]] if i else []) for i, it in enumerate(its.values()))
+            branched = any(it["links"] for it in its.values())          # only what the plan says waits on what
             out.append(f"<details class='mapbox'{' open' if branched else ''}><summary>Map of the roadmap"
                        f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
             # Every milestone loads folded. The one where work last started comes first, and within each, what is in
@@ -3198,17 +3210,16 @@ def render(reg, pid, view="overview", show_all=""):
                            f"<span class='muted'>{done_m}/{len(m['items'])} {elapsed([times.get(i['id'], {}) for i in m['items']], finished(m))}</span></summary>")
                 doing = sorted((i for i in m["items"] if i["state"] == "doing"), key=when, reverse=True)
                 done_i = sorted((i for i in m["items"] if i["state"] == "done"), key=when, reverse=True)
+                drawn = {}
                 for it in doing + [i for i in m["items"] if i["state"] not in ("doing", "done")] + done_i:
-                    i = order.index(it["id"])
-                    default = [order[i - 1]] if i else []
                     ns = by("item", it["id"])
                     waiting = sum(1 for g in gs if g.get("item") == it["id"] and due(g))
                     unlocks = [x for x, y in its.items() if it["id"] in y["after"]]
-                    out.append(
+                    drawn[it["id"]] = (
                         f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
                         f"<b>{e(it['id'])}</b> {e(it['text'])}"
                         + (f" <span class='muted'>primary: {e(Path(it['owner']).name)}</span>" if lead_is_shared(root) else '')
-                        + (f" <span class='muted'>after {e(', '.join(it['after']))}</span>" if it["after"] != default else "")
+                        + (f" <span class='muted'>after {e(', '.join(it['links']))}</span>" if it["links"] else "")
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
                         + (f" {timer(times[it['id']])}" if it["id"] in times else "")
@@ -3217,7 +3228,7 @@ def render(reg, pid, view="overview", show_all=""):
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
                         + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
-                out.append("</details>")
+                out.append(part_body(m, drawn) + "</details>")
             if done_ms:
                 out.append("</details>")
             out.append(f"<script>{TICK}</script>")
@@ -3366,6 +3377,44 @@ def queue_html(pid, root):
 
 
 W, H, GX, GY = 172, 56, 38, 16
+
+
+def part_body(m, drawn):
+    """A milestone's items drawn as its kind: a sequence or menu as a list (in progress, then to come in the agent's
+    order, then done); lanes side by side, each with its progress and what it is on; findings as what runs, what is
+    still open, and what was established (with what was found); sections as the pieces of the whole, each its state.
+    drawn: each item's own row, in that list's order."""
+    its = {i["id"]: i for i in m["items"]}
+    rows = lambda ids: "".join(drawn[i] for i in ids)
+    order = list(drawn)
+    kind = m.get("kind", "sequence")
+    if kind == "menu":
+        rest = [i for i in order if its[i]["state"] not in ("doing", "done")]
+        return (rows(i for i in order if its[i]["state"] == "doing")
+                + (f"<p class='kindnote muted'>To come, in any order · {len(rest)}</p>" + rows(rest) if rest else "")
+                + rows(i for i in order if its[i]["state"] == "done"))
+    if kind == "lanes":
+        lanes = {}
+        for i in order:
+            lanes.setdefault(its[i]["lane"] or "Other", []).append(i)
+        out = "<div class='lanes'>"
+        for name, ids in lanes.items():
+            done = sum(its[i]["state"] == "done" for i in ids)
+            on = next((its[i]["text"] for i in ids if its[i]["state"] == "doing"), None)
+            out += (f"<div class='lane'><b>{e(name)}</b> <span class='muted'>{done}/{len(ids)}</span>"
+                    f"<div class='lanebar'><i style='width:{round(100 * done / len(ids))}%'></i></div>"
+                    + (f"<p class='muted'>On: {e(short(on, 70))}</p>" if on else "") + rows(ids) + "</div>")
+        return out + "</div>"
+    if kind == "findings":
+        groups = (("Running", [i for i in order if its[i]["state"] == "doing"]),
+                  ("Still open", [i for i in order if its[i]["state"] in ("todo", "verify")]),
+                  ("Established", [i for i in order if its[i]["state"] == "done"]))
+        return "".join(f"<p class='kindnote muted'>{name} · {len(ids)}</p>" + rows(ids) for name, ids in groups if ids)
+    if kind == "sections":
+        cells = "".join(f"<span class='piece {its[i]['state']}' title='{e(its[i]['text'])}'>{e(short(its[i]['text'], 28))}</span>"
+                        for i in its)
+        return f"<div class='pieces'>{cells}</div>" + rows(order)
+    return rows(order)
 
 
 def roadmap_map(road, pid, all_notes, gs):
@@ -6092,6 +6141,12 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
+.lanes { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:8px 0 }
+.lane { border:1px solid var(--line); border-radius:12px; padding:8px 10px } .lane p { margin:4px 0 }
+.lanebar { height:5px; border-radius:3px; background:var(--line); margin:5px 0; overflow:hidden } .lanebar i { display:block; height:100%; background:var(--accent) }
+.kindnote { margin:10px 0 2px; font-size:13px } .pieces { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 }
+.piece { font-size:12px; border:1px solid var(--line); border-radius:6px; padding:2px 6px } .piece.done { background:var(--line) }
+.piece.doing { border-color:var(--accent) }
 .mdtable { overflow-x:auto; margin:10px 0 } .mdtable table { border-collapse:collapse; font-size:14px; line-height:1.4 }
 .mdtable th, .mdtable td { border-bottom:1px solid var(--line); padding:6px 10px 6px 0; text-align:left; vertical-align:top }
 .mdtable th { font-weight:600; border-bottom-width:2px } .mdtable td code { white-space:nowrap }

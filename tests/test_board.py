@@ -1017,6 +1017,28 @@ class ChatTest(BoardBase):
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
 
+    def test_a_milestone_names_its_kind_and_only_a_sequence_implies_an_order(self):
+        road = board.roadmap(None, "## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n## M2 — Concepts · menu\n- [ ] R3 c\n- [~] R4 d (after R1)\n"
+                                   "## M3 — The look · lanes\n- [ ] R5 hair one (lane: hair)\n- [x] R6 body one (lane: body)\n"
+                                   "## M4 — Next\n- [ ] R7 e\n- [ ] R8 f\n")
+        ms = {m["id"]: m for m in road["milestones"]}
+        self.assertEqual([ms[k]["kind"] for k in ms], ["sequence", "menu", "lanes", "sequence"])
+        self.assertEqual(ms["M2"]["title"], "Concepts", "the kind is not part of its name")
+        its = board.items(road)
+        self.assertEqual(its["R2"]["after"], ["R1"], "a sequence keeps its order")
+        self.assertEqual(its["R3"]["after"], [], "a menu's options wait on nothing they don't name")
+        self.assertEqual(its["R4"]["after"], ["R1"])
+        self.assertEqual(its["R7"]["after"], [], "nor does the part after a menu follow its last option")
+        self.assertEqual((its["R5"]["lane"], its["R5"]["text"]), ("hair", "hair one"))
+        drawn = {i: f"<row {i}>" for i in ("R5", "R6")}
+        lanes = board.part_body(ms["M3"], drawn)
+        self.assertIn("<b>hair</b> <span class='muted'>0/1</span>", lanes)
+        self.assertIn("<b>body</b> <span class='muted'>1/1</span>", lanes)
+        menu = board.part_body(ms["M2"], {"R4": "<row R4>", "R3": "<row R3>"})
+        self.assertLess(menu.index("<row R4>"), menu.index("To come, in any order · 1"), "what's being done first")
+        unlabelled = board.roadmap(None, "## M1 — Build\n- [ ] R1 a\n- [ ] R2 b\n")
+        self.assertEqual(board.items(unlabelled)["R2"]["after"], ["R1"], "a plan that names no kinds is read as before")
+
     def test_a_markdown_table_and_a_quote_in_a_reply_show_as_such(self):
         said = board.chat_prose("Here:\n\n| Project | Who takes it |\n|---|---|\n| Novel | `wc -w` **count** |\n\n> 31,200 words\n\nAfter.")
         self.assertIn("<div class='mdtable'><table><tr><th>Project</th><th>Who takes it</th></tr>"
