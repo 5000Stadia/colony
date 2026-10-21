@@ -1195,10 +1195,8 @@ def finish_closing(root):
 
 def archive_note(why):
     said = f' Their reason, in their words: "{why.strip()}".' if why and why.strip() else ""
-    return ("The person is archiving this project." + said + " Before it comes off the board, package where it stands so "
-            "it can be picked up again: write ARCHIVE.md at the project's root (where things stand, what's done and "
-            "half-done, what you'd do next and why, open questions, and whatever a future agent needs that the roadmap "
-            "and commits don't already say) and commit it. " + CLOSE_NOTE.replace("The person is closing this project. ", ""))
+    return ("The person is archiving this project." + said + " " + CLOSE_NOTE.replace("The person is closing this project. ", "")
+            .replace("putting the folder back on the board (colony track)", "bringing it back from the Archived shelf"))
 
 
 def _archived(root=None, value=None, drop=False):
@@ -1244,18 +1242,12 @@ def close_project(root, cancel=False, why="", archive=False, together=()):
                          if Path(m) != root.resolve()) + "; colony close doesn't close one seat of a shared project")
     if archive:
         _archived(root, {"at": now(), "why": (why or "").strip()})
-    if console.snapshot(root, lines=1)["state"] == "off" and at_rest(root):
-        if not archive:
-            finish_closing(root)
-            return "closed"
-        console.ensure(root)              # archiving: its agent gets a moment to package where it stands first
+    # off, or (archiving) sitting idle: nothing in flight, so it comes off at once, asked for nothing; at work, it
+    # lands that turn first
+    if console.snapshot(root, lines=1)["state"] in (("off", "idle") if archive else ("off",)) and at_rest(root):
+        finish_closing(root)
+        return "closed"
     row = rows.get(str(root))
-    was = row and next((n for n in notes(root) if n["id"] == row["note"]), None)
-    if row and archive and not row.get("archive") and not (was and was["text"].startswith("The person is archiving")):
-        # closing already, now archived: the packaging is asked for too, and the project waits for that turn to end
-        if was and not was["delivered_at"]:             # the plain close not yet heard: this one goes in its place
-            append(root, "notes.jsonl", {"type": "addressed", "of": was["id"], "at": now(), "text": "archiving instead"})
-        row = None
     if not row:
         note = add_note(root, None, archive_note(why) if archive else CLOSE_NOTE, author="colony", kind="close")
         rows[str(root)] = {"at": now(), "note": note["id"], "archive": bool(archive)}
@@ -1289,8 +1281,8 @@ def at_rest(root):
 
 def archive_together(roots, why=""):
     """Archive projects at once (a whole group): a shared project's seats go with each other, since they keep one plan.
-    Each packages where it stands, then comes off the board and the steward's watch, files and conversation kept, until
-    brought back. Returns {name: "closing" | "closed" | the reason it can't}."""
+    Each idle one comes off the board and the steward's watch at once, one at work once it has landed that turn; files
+    and conversation kept, until brought back. Returns {name: "closing" | "closed" | the reason it can't}."""
     from . import lead
     on = {str(p.resolve()): p for p in projects()}
     keep = {str(Path(r).resolve()): on[str(Path(r).resolve())] for r in roots if str(Path(r).resolve()) in on}
@@ -1308,9 +1300,16 @@ def archive_together(roots, why=""):
 
 
 def archived_off():
-    """Archived projects now off the board (packaged and landed), each with when and why: {path: row}."""
+    """Projects now off the board that can come back, each with when and why: archived, and those closed or taken off
+    before there was an Archived shelf. {path: row}"""
     on = {str(p.resolve()) for p in projects()}
-    return {k: v for k, v in _archived().items() if str(Path(k).resolve()) not in on}
+    try:
+        closed = json.loads(_closed_path().read_text())
+    except (OSError, ValueError):
+        closed = []
+    out = {k: {"at": "", "why": ""} for k in [*registry()["hidden"], *closed] if Path(k).is_dir()}
+    out.update(_archived())
+    return {k: v for k, v in out.items() if str(Path(k).resolve()) not in on}
 
 
 def bring_back(roots):
@@ -1344,7 +1343,7 @@ def archived_shelf(link=False):
     for name, items in sorted(groups.items(), key=lambda g: (g[0] == "", g[0].lower())):
         singles = [[x] for x in items] if not name else [items]
         for it in singles:
-            when = on_day(max(v["at"] for _, v in it))
+            when = on_day(max(v["at"] for _, v in it)) or "earlier"
             why = next((v["why"] for _, v in it if v.get("why")), "")
             what = (f"<input type='hidden' name='nest' value='{e(name)}'>" if name else
                     f"<input type='hidden' name='path' value='{e(it[0][0])}'>")
@@ -1354,8 +1353,7 @@ def archived_shelf(link=False):
                         + (f"<div class='who'>“{e(why)}”</div>" if why else "")
                         + f"</div><form method='post' action='/bring-back'>{what}<button class='quiet'>Bring back</button></form></div>")
     return (f"<h2 id='archived'>Archived</h2><div class='card'>{''.join(rows)}<p class='muted'>Off the board and the steward's "
-            "watch, nothing waking them. Brought back, each is where it was, in the same conversation, and its agent reads "
-            "where it stood (ARCHIVE.md).</p></div>")
+            "watch, nothing waking them. Brought back, each is where it was, in the same conversation: ask it anything.</p></div>")
 
 
 def show_project(root):
@@ -2079,7 +2077,7 @@ def sidebar(reg, pid):
             # its screen read once: its dot, and what waits on the person
             snap = console.snapshot(p, lines=4) if p.exists() else {"state": "off", "lines": []}
             waiting = len(moments(p, snap)) if p.exists() else 0
-            total, waits = total + waiting, waits + waiting
+            total, waits = total + (waiting if p.exists() and monitor.involved(p) else 0), waits + waiting
             badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
             states.append(snap["state"])
             # its line says what it is at, from its roadmap: never its console's footer or spinner words
@@ -2107,7 +2105,7 @@ def sidebar(reg, pid):
     # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
-                   f"<span id='badge-all' class='badge gate' title='waiting on you, in all projects'{'' if total else ' hidden'}>{total}</span></span>"
+                   f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'{'' if total else ' hidden'}>{total}</span></span>"
                    f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>")
     from . import providers as pv, usage
     for k, prov in pv.PROVIDERS.items():
@@ -2249,7 +2247,7 @@ async function poll() {
     const r = await fetch('/status', {cache: 'no-store'}); const st = await r.json();
     const md = document.getElementById('dot-m'); if (md) md.className = 'sdot ' + st.monitor.state.replace(' ', '-');
     const all = document.getElementById('badge-all');
-    if (all) { const n = st.projects.reduce((k, s) => k + (s.waiting || 0), 0); all.hidden = !n; all.textContent = n; }
+    if (all) { const n = st.projects.reduce((k, s) => k + (s.followed ? s.waiting || 0 : 0), 0); all.hidden = !n; all.textContent = n; }
     st.projects.forEach((s, i) => {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
@@ -3326,13 +3324,11 @@ def render(reg, pid, view="overview", show_all=""):
     settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
                 f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
                 f"{remote_line(root)}{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
+                f"<p class='muted'>Archive takes it off the board and the steward's watch (at work, it finishes that turn "
+                f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
                 f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
-                f"<input name='why' placeholder='Why it is being archived (its agent reads this if it reopens)'>"
+                f"<input name='why' placeholder='Why (optional; its agent reads it when it comes back)'>"
                 f"<button class='quiet'>Archive</button></form>"
-                f"<form method='post' action='/project/close' onsubmit=\"return confirm('Close {e(root.name)}? Its agent lands its work, then it comes off the board; its files and conversation stay, and colony track reopens it.')\">"
-                f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Close</button></form>"
-                f"<form method='post' action='/project/remove' onsubmit=\"return confirm('Take {e(root.name)} off the board? Its session stops; its files stay where they are.')\">"
-                f"<input type='hidden' name='p' value='{pid}'><button class='quiet'>Remove from board</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
     # Message sits on the title's line too, where a phone reaches it (its console is full screen)
@@ -4547,9 +4543,8 @@ def nest_page(reg, name):
         out.append(f"<details class='more'><summary>Archive the group</summary><form method='post' action='/nest/archive' "
                    f"class='nestadd'><input type='hidden' name='name' value='{e(name)}'><input name='why' placeholder="
                    f"'Why (optional; its agents read it when it comes back)'><button class='quiet'>Archive the group</button></form>"
-                   "<p class='muted'>Each agent writes down where it stands and lands its work; then the group comes off the "
-                   "board and the steward's watch, nothing waking it. All projects → Archived brings it back, each in the "
-                   "same conversation.</p></details>")
+                   "<p class='muted'>Off the board and the steward's watch at once (an agent at work finishes that turn "
+                   "first), nothing waking it. All projects → Archived brings it back, each in the same conversation.</p></details>")
     out.append("</div>")
     links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
     new_tab, icons = " target='_blank' rel='noopener'", {"url": "🔗", "upload": "📎"}
@@ -5075,8 +5070,14 @@ def needs_you(reg):
     order, each numbered as its own page numbers it: a project's first few decisions, the rest folded, its box for
     answering them by number, then the rest. And the supports the steward has brought them."""
     choices = model_changes(pending_only=True)
+    from . import monitor
     rows = ([choices] if choices else []) + support_rows()
+    aside = []                                         # the projects the person left out of the steward's: named, not listed
     for pid, p, _ in arranged(projects(reg)):
+        if p.exists() and not monitor.involved(p):
+            n = len(moments(p))
+            aside += [f"<a href='/?p={pid}'>{e(p.name)}</a> ({n})"] if n else []
+            continue
         decided, box, others = waiting_parts(pid, p, "/steward", label=False, day=True) if p.exists() else ([], "", [])
         if not decided and not others:
             continue
@@ -5086,7 +5087,8 @@ def needs_you(reg):
         rows.append(f"<section class='ngroup'><h3 class='nhead'><a href='/?p={pid}'>{e(p.name)}</a>"
                     f"<span class='badge gate' title='waiting on you'>{len(decided) + len(others)}</span></h3>"
                     f"{''.join(decided[:NEEDS_SHOWN])}{fold}{box}{''.join(others)}</section>")
-    return "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
+    out = "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
+    return out + (f"<p class='muted'>Also waiting, in projects the steward doesn't follow: {', '.join(aside)}.</p>" if aside else "")
 
 
 def models_page(reg):
@@ -5549,7 +5551,7 @@ def settings_page(reg):
                 card(f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>"
                      f"{''.join(rows) or '<li class=muted>none</li>'}</ul><p><a href='/add?for=root'>+ Add a folder of projects</a></p>",
                      f"<h3>Added one by one</h3><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>"
-                     + (f"<h3>Hidden from the board</h3><ul class='folders'>{hidden}</ul>" if hidden else "")
+                     + ("<p class='muted'><a href='/projects#archived'>Archived and hidden projects: All projects → Archived</a></p>" if hidden else "")
                      + "<p><a href='/add'>+ Add a project folder</a></p><p class='muted'>Removing leaves every file where "
                        "it is; the project just leaves the board.</p>")),
         section("bench", "Benchmark data", "Artificial Analysis: " + ("connected" if st["connected"] else "not connected"), card(keybox)),
@@ -5910,8 +5912,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/status":
             from . import monitor
             body = json.dumps({"board": str(home()), "projects": [
-                dict(console.snapshot(p), waiting=len(moments(p)), work=at_work(p)) if p.exists()
-                else {"state": "off", "lines": [], "waiting": 0, "work": ""} for p in plist], "monitor": monitor.snapshot()}).encode()
+                dict(console.snapshot(p), waiting=len(moments(p)), work=at_work(p), followed=monitor.involved(p)) if p.exists()
+                else {"state": "off", "lines": [], "waiting": 0, "work": "", "followed": False} for p in plist], "monitor": monitor.snapshot()}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

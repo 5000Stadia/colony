@@ -515,42 +515,43 @@ class PageTest(BoardBase):
 
 
 class ArchiveAndListTest(BoardBase):
-    def test_an_archived_project_packages_where_it_stands_and_hears_why_when_it_reopens(self):
+    def test_an_archived_project_at_rest_goes_at_once_and_hears_why_when_it_comes_back(self):
         board.track(self.root)
-        self.assertEqual(board.close_project(self.root, why="Parked until the engine settles", archive=True), "closing")
-        note = [n for n in board.notes(self.root) if n.get("kind") == "close"][-1]
-        self.assertIn("ARCHIVE.md", note["text"])
-        self.assertIn('"Parked until the engine settles"', note["text"])
-        self.assertTrue(console.live(self.root))                    # off, it was started to get its moment to package
-        board.finish_closing(self.root)
-        board.track(self.root)
+        self.assertEqual(board.close_project(self.root, why="Done for now", archive=True), "closed", "asked for nothing")
+        self.assertEqual(board.projects(), [])
+        self.assertFalse(console.live(self.root))
+        self.assertIn("“Done for now”", board.archived_shelf())
+        self.assertEqual(board.bring_back([self.root]), ["plants"])
         back = [n for n in board.notes(self.root) if "is open again" in n["text"]]
         self.assertEqual(len(back), 1)
-        self.assertIn("Parked until the engine settles", back[0]["text"])
+        self.assertIn("Done for now", back[0]["text"])
         board.track(self.root)
         self.assertEqual(len([n for n in board.notes(self.root) if "is open again" in n["text"]]), 1)   # said once
 
-    def test_a_project_already_closing_is_still_asked_to_package_when_it_is_archived(self):
+    def test_one_at_work_lands_that_turn_first_and_archiving_one_already_closing_asks_nothing_more(self):
         board.track(self.root)
         console.ensure(self.root)
-        self.assertEqual(board.close_project(self.root), "closing")
-        board.deliver(self.root)                                     # the plain close was heard
-        board.close_project(self.root, why="Parked", archive=True)
-        row = board.closing()[str(self.root)]
-        now = next(n for n in board.notes(self.root) if n["id"] == row["note"])
-        self.assertIn("ARCHIVE.md", now["text"], "it waits on the packaging turn, not the close already heard")
-        self.assertFalse(now["delivered_at"])
-        board.close_project(self.root, archive=True)
-        self.assertEqual(len([n for n in board.notes(self.root) if "ARCHIVE.md" in n["text"]]), 1, "asked once")
-        other = Path(self.tmp.name) / "photonic"
-        other.mkdir()
-        (other / "ROADMAP.md").write_text(ROADMAP)
-        board.track(other)
-        console.ensure(other)
-        board.close_project(other)
-        board.close_project(other, archive=True)                     # the close not yet heard: replaced, not doubled
-        waiting = [n["text"][:30] for n in board.open_notes(other) if n.get("kind") == "close"]
-        self.assertEqual(waiting, ["The person is archiving this p"])
+        working = dict(console.snapshot(self.root), state="working")
+        with patch("colony.console.snapshot", return_value=working):
+            self.assertEqual(board.close_project(self.root, why="Parked", archive=True), "closing")
+            note = [n for n in board.notes(self.root) if n.get("kind") == "close"][-1]
+            self.assertIn("The person is archiving this project.", note["text"])
+            self.assertIn("Archived shelf", note["text"])
+            self.assertNotIn("ARCHIVE.md", note["text"])
+            other = self.photonic()
+            console.ensure(other)
+            self.assertEqual(board.close_project(other), "closing")
+            board.close_project(other, archive=True)
+        self.assertEqual(len([n for n in board.notes(other) if n.get("kind") == "close"]), 1, "the close it has does")
+        board.finish_closing(other)
+        self.assertIn("photonic", board.archived_shelf())
+
+    def test_a_project_taken_off_before_the_shelf_is_on_it_too(self):
+        board.track(self.root)
+        board.close_project(self.root)                               # closed, not archived: off the board all the same
+        self.assertIn("<b>plants</b>", board.archived_shelf())
+        board.bring_back([self.root])
+        self.assertEqual([p.name for p in board.projects()], ["plants"])
 
     def photonic(self):
         other = Path(self.tmp.name) / "photonic"
@@ -565,10 +566,7 @@ class ArchiveAndListTest(BoardBase):
         other = self.photonic()
         nest.join(self.root, "holodeck")
         nest.join(other, "holodeck")
-        self.assertEqual(set(board.archive_together([self.root, other], why="Back after the launch").values()), {"closing"})
-        self.assertEqual(board.archived_shelf(), "", "still landing its work: on the board till then")
-        board.finish_closing(self.root)
-        board.finish_closing(other)
+        self.assertEqual(set(board.archive_together([self.root, other], why="Back after the launch").values()), {"closed"})
         reg = board.registry()
         self.assertEqual(board.projects(reg), [])
         shelf = board.archived_shelf()
@@ -598,8 +596,6 @@ class ArchiveAndListTest(BoardBase):
             with self.assertRaises(ValueError):
                 board.close_project(self.root, archive=True)          # one seat alone: still refused
             self.assertEqual(set(board.archive_together([self.root])), {"plants", "photonic"})
-            board.finish_closing(self.root)
-            board.finish_closing(other)
             self.assertEqual(board.bring_back([other]), ["photonic", "plants"])
         self.assertEqual({p.name for p in board.projects()}, {"plants", "photonic"})
 
@@ -653,6 +649,23 @@ class ArchiveAndListTest(BoardBase):
 
 
 class StewardPageTest(BoardBase):
+    def test_the_stewards_count_and_needs_cover_only_the_projects_it_follows(self):
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        board.add_gate(self.root, "Which pot size?")
+        board.add_gate(other, "Which lamp?")
+        count = lambda: re.search(r"id='badge-all'[^>]*>(\d+)<", board.sidebar(board.registry(), -1)).group(1)
+        self.assertEqual(count(), "2")
+        monitor.set_posture(other, steward=False)
+        self.assertEqual(count(), "1", "left out of the steward's, out of its count")
+        needs = board.needs_you(board.registry())
+        self.assertIn("Which pot size?", needs)
+        self.assertNotIn("Which lamp?", needs)
+        self.assertIn("projects the steward doesn't follow: <a href='/?p=", needs)
+
     def test_the_steward_page_shows_its_last_word_and_follows_only_the_projects_left_checked(self):
         board.track(self.root)
         other = Path(self.tmp.name) / "photonic"

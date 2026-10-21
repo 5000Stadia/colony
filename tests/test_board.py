@@ -5328,7 +5328,7 @@ class PhonePageTest(HoursBase):
         with self.clock(14):
             side, page = board.sidebar(board.registry(), 1), board.render(board.registry(), 1)
         self.assertLess(side.index(">plants<"), side.index(">shop<"), "the board's order: what last went to work first")
-        self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in all projects'>1</span>", side)
+        self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>1</span>", side)
         self.assertIn(board.CHIPS, page, "a page opens with its own chip in view")
         # the steward is no project: a bar of its own above the row of projects, which scrolls without it
         self.assertLess(side.index("proj monitor"), side.index("<div class='navrow'>"), "the steward, with the count, above the row")

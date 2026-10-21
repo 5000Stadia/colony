@@ -1377,8 +1377,8 @@ def cmd_archive(a):
         print(e)
         return 1
     for name, state in out.items():
-        print(f"{name} is packaging where it stands (ARCHIVE.md) and landing its work; then it comes off the board, its "
-              "files and conversation kept. All projects → Archived brings it back, and its agent hears why it was archived."
+        print(f"{name} is landing the turn it's in; then it comes off the board, its files and conversation kept. "
+              "All projects → Archived brings it back, and its agent hears why it was archived."
               if state == "closing" else f"{name} is archived" if state == "closed" else f"{name}: {state}")
     return 0 if all(v in ("closing", "closed") for v in out.values()) else 1
 
