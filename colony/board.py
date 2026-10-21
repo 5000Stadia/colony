@@ -4955,8 +4955,8 @@ def model_changes(pending_only=False):
                    f"<input type='hidden' name='proposal' value='{e(proposal['id'])}'>"
                    f"<button name='action' value='approve'>{'Keep this model' if proposal.get('emergency') else 'Switch to this model'}</button> "
                    "<button name='action' value='reject'>Not this one</button></form>")
-    if not pending_only:
-        out.append('<h3>Recent choices</h3>')
+    if not pending_only and state['history']:
+        out.append(f"<details class='more'><summary>Recent choices ({min(len(state['history']), 30)})</summary>")
         for event in reversed(state['history'][-30:]):
             out.append('<ul>' + row(selection.role_label(event['role']), event['before'], event['after'], event['prices']) + '</ul>'
                        + f"<p class='muted'>{e(event['reason'])} · {e(event['at'])}</p>")
@@ -4964,6 +4964,7 @@ def model_changes(pending_only=False):
                 out.append("<form method='post' action='/model-decision'><input type='hidden' name='action' value='rollback'>"
                            f"<input type='hidden' name='event' value='{e(event['id'])}'>"
                            "<button>Return to previous choice</button></form>")
+        out.append("</details>")
     out.append("<p class='muted'>Benchmark task costs and token rates are separate evidence; actual project spend varies. "
                "Changes take effect when a console reloads while idle.</p></section>")
     return ''.join(out)
@@ -5171,9 +5172,11 @@ def codex_pairing_options(reg):
                        + ("<button>Yes, pair now</button> <button formaction='/codex-pair/defer' class='quiet'>Not now</button>" if offered else
                           "<button>Pair with ChatGPT</button>") + "</form>" if ready else
                        "<span class='muted'>Open its console with Remote Control on to pair it.</span>") + '</li>')
-    return ("<h3 id='codex-pairing'>Codex in ChatGPT</h3><p>Pair each project once with your ChatGPT app. "
+    offered = any(codex_remote.pairing_choice(root) == 'offered' for root in roots)
+    return (f"<details class='more' id='codex-pairing'{' open' if offered else ''}><summary>Codex in ChatGPT "
+            f"<span class='muted'>({len(roots)} project{'s' * (len(roots) != 1)})</span></summary><p>Pair each project once with your ChatGPT app. "
             "Sign in to the same account as Codex. When you are ready, get a fresh code and open Codex → Add manually in the app. "
-            "You can pair another device here later.</p><ul class='folders'>" + ''.join(rows) + '</ul>')
+            "You can pair another device here later.</p><ul class='folders'>" + ''.join(rows) + '</ul></details>')
 
 
 def codex_pairing_page(reg, root, result):
@@ -5230,6 +5233,32 @@ def codex_pairing_page(reg, root, result):
     return shell(reg, -2, body)
 
 
+PERMISSION_LABELS = [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")]
+
+# Settings opens where the person left it: the sections they had open, and the one a link names
+SETTINGS_FOLDS = """<script>
+(() => {
+  const all = [...document.querySelectorAll('details.setsec')];
+  let open = []; try { open = JSON.parse(localStorage.getItem('setsec') || '[]'); } catch (e) {}
+  for (const d of all) if (open.includes(d.id)) d.open = true;
+  // a link to a place inside (a section, a fold in it) opens its way there
+  for (let d = location.hash && document.getElementById(location.hash.slice(1)); d; d = d.parentElement)
+    if (d.tagName === 'DETAILS') d.open = true;
+  for (const d of all) d.addEventListener('toggle', () => {
+    try { localStorage.setItem('setsec', JSON.stringify(all.filter(x => x.open).map(x => x.id))); } catch (e) {}
+  });
+})();
+</script>"""
+
+
+def intelligence_label(n):
+    from . import intelligence
+    try:
+        return intelligence.POSITIONS[int(n)]
+    except (ValueError, IndexError, TypeError):
+        return str(n)
+
+
 def settings_page(reg):
     from . import selection
     selection.migrate()
@@ -5261,13 +5290,13 @@ def settings_page(reg):
         freshness = catalog_freshness.info(p)
         fresh = " · ".join(f"{e(label)}: {e(value)}" for label, value in freshness['fields'])
         fresh += (". <strong>" + e('; '.join(freshness['warnings'])) + "</strong>" if freshness['warnings'] else "")
-        fresh = "<p class='muted' style='margin:0 0 8px 26px'>Model list: " + fresh.lstrip('. ') + ". Re-read at the program's next session start.</p>"
+        fresh = "<p class='muted'>Model list: " + fresh.lstrip('. ') + ". Re-read at the program's next session start.</p>"
         remote_info = ''
         if k == 'codex':                         # PROVIDER: each Codex project owns its app-server process
             from . import codex_remote
             hosts = codex_remote.statuses()
             count = sum(h['running'] for h in hosts)
-            remote_info = f"<p class='muted' style='margin:0 0 8px 26px'>{count} project daemon{'s' if count != 1 else ''} running"
+            remote_info = f"<p class='muted'>{count} project daemon{'s' if count != 1 else ''} running"
             if hosts:
                 remote_info += ': ' + '; '.join(e(Path(h.get('project', h['home'])).name) + ' — '
                                                + e(h.get('mode', 'not started'))
@@ -5275,44 +5304,51 @@ def settings_page(reg):
             remote_info += '. ChatGPT shows the machine name as host; each conversation carries its project name.</p>'
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
                 f"<span class='muted'>({state}{also})</span></label>"
-                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + pace + fresh + remote_info)
+                + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + pace
+                + f"<details class='more' style='margin:0 0 8px 26px'><summary class='muted'>Details{' · <b>model list stale</b>' if freshness['warnings'] else ''}</summary>"
+                  f"{fresh}{remote_info}</details>")
     programs = (f"<form method='post' action='/providers' class='options'>"
                 + "".join(program(k, p) for k, p in pv.PROVIDERS.items())
                 + "<p class='muted'>Colony offers the ones ticked for new projects and its default. Projects already on one "
                   "you untick keep running. At least one stays on.</p><button>Save</button></form>")
-    options = (f"<form method='post' action='/options' class='options'>"
-               + "".join(f"<label><input type='checkbox' name='remote_{k}' value='on'"
-                         f"{' checked' if reg['settings']['remote_by'].get(k, reg['settings']['remote']) else ''}> "
-                         f"New {e(p.label)} projects are reachable from {'ChatGPT' if k == 'codex' else 'the Claude app'} "
-                         "<span class='muted'>(each project can turn it off)</span></label>"
-                         for k, p in pv.PROVIDERS.items() if pv.usable(p)) +
-               "".join(f"<label><input type='checkbox' name='turbo_{k}' value='on'"
-                       f"{' checked' if reg['settings']['turbo_by'].get(k, True) else ''}> Turbo for {e(p.label)} "
-                       "<span class='muted'>(when its weekly use runs behind pace, its projects with queued work are "
-                       "turned up as each ticks in its own Settings)</span></label>"
-                       for k, p in pv.PROVIDERS.items() if pv.usable(p)) +
-               f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the steward with the board</label>"
-               f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
-               f"<span class='muted'>(after colony restart)</span></label>"
-               f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
-               f"<span class='muted'>(one inbox per project)</span></label>"
-               f"<label><input type='checkbox' name='auto_update' value='on'{check('auto_update')}> Keep Claude Code and Codex updated "
-               f"<span class='muted'>(daily; a console moves to the new version once it sits idle, in the same conversation)</span></label>"
-               f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Answer a new console's start-up questions "
-               f"<span class='muted'>(folder trust, permission mode, Remote Control, hooks: so it runs as set up)</span></label>"
-               f"<label>Permissions for new sessions <select name='permissions'>"
-               + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in
-                         [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")])
-               + "</select></label>"
-               + provider_fields(s["provider"], s["model"], s["effort"], "the provider's default") +
-               f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> % "
-               f"of a program's 5-hour or weekly limit <span class='muted'>(its projects land what's in flight, save their "
-               f"work and tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset)</span></label>"
-               f"<label>Active hours <input name='active_hours' value='{e(s['active_hours'])}' size='11'> "
-               f"<span class='muted'>(when you're around, as 07:30-23:45 on this machine's clock, or off: outside them agents "
-               f"keep working and hold their questions, which reach you together when your hours begin)</span></label>"
-               + auto_balance_fields() + f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>"
-               f"<button>Save</button><p class='muted'>Provider, model, effort and Remote Control apply to new projects' sessions and to consoles started from now on.</p></form>")
+    # one form, its fields placed in the sections they belong to (form='opts'): a save in any section keeps the rest
+    own = lambda html: "<div class='optset'>" + re.sub(r"<(input|select|textarea)\b", r"<\1 form='opts'", html) + "</div>"
+    save = "<button form='opts'>Save</button>"
+    hours_fields = own(
+        f"<label>Active hours <input name='active_hours' value='{e(s['active_hours'])}' size='11'></label>"
+        f"<p class='muted'>When you're around, as 07:30-23:45 on this machine's clock, or off. Outside them agents keep "
+        f"working, take what doesn't need you, and hold their questions, which reach you together when your hours begin.</p>"
+        f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> %</label>"
+        f"<p class='muted'>Of a program's 5-hour or weekly limit: its projects land what's in flight, save their work and "
+        f"tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset.</p>") + save
+    session_fields = own(
+        provider_fields(s["provider"], s["model"], s["effort"], "the provider's default")
+        + f"<label>Permissions <select name='permissions'>"
+        + "".join(f"<option value='{k}'{' selected' if s['permissions'] == k else ''}>{label}</option>" for k, label in PERMISSION_LABELS)
+        + "</select></label>"
+        + f"<label><input type='checkbox' name='trust' value='on'{check('trust')}> Answer a new console's start-up questions "
+          f"<span class='muted'>(folder trust, permission mode, Remote Control, hooks: so it runs as set up)</span></label>"
+        + "".join(f"<label><input type='checkbox' name='remote_{k}' value='on'"
+                  f"{' checked' if s['remote_by'].get(k, s['remote']) else ''}> "
+                  f"New {e(p.label)} projects are reachable from {'ChatGPT' if k == 'codex' else 'the Claude app'} "
+                  "<span class='muted'>(each project can turn it off)</span></label>"
+                  for k, p in pv.PROVIDERS.items() if pv.usable(p))
+        + "".join(f"<label><input type='checkbox' name='turbo_{k}' value='on'"
+                  f"{' checked' if s['turbo_by'].get(k, True) else ''}> Turbo for {e(p.label)} "
+                  "<span class='muted'>(when its weekly use runs behind pace, its projects with queued work are "
+                  "turned up as each ticks in its own Settings)</span></label>"
+                  for k, p in pv.PROVIDERS.items() if pv.usable(p))
+        + f"<label>New projects go in <input name='new_root' value='{e(reg['new_root'])}'></label>") + save + (
+        "<p class='muted'>These apply to new projects' sessions and to consoles started from now on.</p>")
+    board_fields = own(
+        f"<label><input type='checkbox' name='lan' value='on'{check('lan')}> Open from other devices on your network "
+        f"<span class='muted'>(after colony restart)</span></label>"
+        f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
+        f"<span class='muted'>(one inbox per project)</span></label>"
+        f"<label><input type='checkbox' name='auto_update' value='on'{check('auto_update')}> Keep Claude Code and Codex updated "
+        f"<span class='muted'>(daily; a console moves to the new version once it sits idle, in the same conversation)</span></label>") + save
+    steward_on = own(f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the steward with the board</label>") + save
+    balance = own(auto_balance_fields()) + save
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
     from . import bench
@@ -5371,20 +5407,58 @@ def settings_page(reg):
     if pv.installed(claude) and pv.enabled(claude):
         tok, failed = claude.token(), signin_result()
         steps_ = "".join(f"<li>{e(t)}</li>" for t, _ in claude.TOKEN_STEPS)
-        signin = (f"<h2>Claude Code sign-in</h2><div class='card'><p>{'Long-lived sign-in connected: Claude Code consoles use it, so they are not signed out every week or so.' if tok else 'Using the regular sign-in, which expires every week or so. A long-lived one keeps every console signed in.'}</p>"
+        signin = (f"<h3>Claude Code sign-in</h3><p>{'Long-lived sign-in connected: Claude Code consoles use it, so they are not signed out every week or so.' if tok else 'Using the regular sign-in, which expires every week or so. A long-lived one keeps every console signed in.'}</p>"
                   + (f"<p class='muted'>That token didn't work: {e(failed)}</p>" if failed else "")
                   + f"<ol class='steps'>{steps_}</ol><form method='post' action='/claude-token' class='options'>"
                   f"<label>Token <input type='password' name='token' autocomplete='off' placeholder='{'Paste a new token to replace it' if tok else 'Paste the token'}'></label>"
                   f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
-                  + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></div>")
-    body = (f"<header><h1>Settings</h1></header><h2>Agent programs</h2><div class='card'>{programs}{codex_pairing_options(reg)}</div>{signin}"
-            f"{model_changes()}{global_role_fields()}<h2>Benchmark data</h2><div class='card'>{keybox}</div><h2>Consulting</h2><div class='card'>{consulting}</div><h2>Steward</h2><div class='card'>{monitor_card}</div><h2>Open this board</h2><div class='card'><ul class='folders'>{where}</ul>"
-            f"<p class='muted'>Each project, and the steward, is also in the Claude app when Remote Control is on.</p></div><h2>Options</h2><div class='card'>{options}</div><h2>Project folders</h2><div class='card'>"
-            f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>{''.join(rows) or '<li class=muted>none</li>'}</ul>"
-            f"<p><a href='/add?for=root'>+ Add a folder of projects</a></p></div>"
-            f"<h2>Projects added one by one</h2><div class='card'><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>{('<h3>Hidden from the board</h3><ul class=folders>' + ''.join(f"<li><code class='path'>{e(h)}</code><div class='folderacts'><form method='post' action='/roots'><input type='hidden' name='show' value='{e(h)}'><button class='quiet'>Show again</button></form></div></li>" for h in reg['hidden']) + '</ul>') if reg['hidden'] else ''}"
-            f"<p><a href='/add'>+ Add a project folder</a></p></div>"
-            f"<p class='muted'>Removing leaves every file where it is; the project just leaves the board.</p>")
+                  + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form>")
+    from . import selection
+    pending = model_changes(pending_only=True)
+    on = [p.label for k, p in pv.PROVIDERS.items() if pv.usable(p) and pv.enabled(p)]
+    out = list(signed_out())
+    hidden = "".join(f"<li><code class='path'>{e(h)}</code><div class='folderacts'><form method='post' action='/roots'>"
+                     f"<input type='hidden' name='show' value='{e(h)}'><button class='quiet'>Show again</button></form></div></li>"
+                     for h in reg['hidden'])
+    pairing = codex_pairing_options(reg)
+    card = lambda *parts: "".join(f"<div class='card'>{x}</div>" for x in parts if x)
+
+    def section(key, title, summary, inner):
+        """A part of Settings, folded to its name and where it stands; it opens where it was left open."""
+        return (f"<details class='setsec' id='set-{key}'><summary><span class='sttl'>{title}</span>"
+                f"<span class='ssum'>{summary}</span></summary>{inner}</details>")
+    sections = [
+        section("hours", "Your hours", e(f"{s['active_hours'] or 'off'} · safe pause "
+                                           f"{str(s['safe_pause']) + '%' if s['safe_pause'] else 'off'}"), card(hours_fields)),
+        section("programs", "Agent programs", e(", ".join(on) or "none on") + (
+            " · <b class='warn'>ChatGPT pairing waits</b>" if "id='codex-pairing' open" in pairing else "") + (
+            f" · <b class='warn'>{e(', '.join(pv.get(k).label for k in out))} signed out</b>" if out else ""),
+            card(programs + pairing, signin)),
+        section("sessions", "New sessions", e(f"{pv.get(s['provider']).label} · {dict(PERMISSION_LABELS).get(s['permissions'], s['permissions'])}"),
+                card(session_fields)),
+        section("models", "Models", e(f"{'New models switch in automatically' if s.get('model_adoption', 'automatic') == 'automatic' else 'New models: ask me'} "
+                                     f"· {intelligence_label(s.get('auto_balance', 3))}"),
+                card(balance) + global_role_fields() + model_changes()),
+        section("consulting", "Consulting", "On: two fresh views at costly decisions" if s["consult"] else "Off", card(consulting)),
+        section("steward", "Steward", ("Runs with the board" if s["monitor"] else "Off") + e(f" · {mm or 'its default'}"),
+                card(steward_on, monitor_card)),
+        section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
+                                         f"{'open on your network' if s['lan'] else 'this machine only'}"),
+                card(f"<ul class='folders'>{where}</ul><p class='muted'>Each project, and the steward, is also in the Claude "
+                     f"app when Remote Control is on.</p>", board_fields)),
+        section("projects", "Project folders", e(f"{len(reg['roots'])} folder{'s' * (len(reg['roots']) != 1)} · "
+                                                 f"{len(reg['projects'])} added one by one"
+                                                 + (f" · {len(reg['hidden'])} hidden" if reg['hidden'] else "")),
+                card(f"<p class='muted'>Every subfolder of these is a project on the board.</p><ul class='folders'>"
+                     f"{''.join(rows) or '<li class=muted>none</li>'}</ul><p><a href='/add?for=root'>+ Add a folder of projects</a></p>",
+                     f"<h3>Added one by one</h3><ul class='folders'>{single or '<li class=muted>none</li>'}</ul>"
+                     + (f"<h3>Hidden from the board</h3><ul class='folders'>{hidden}</ul>" if hidden else "")
+                     + "<p><a href='/add'>+ Add a project folder</a></p><p class='muted'>Removing leaves every file where "
+                       "it is; the project just leaves the board.</p>")),
+        section("bench", "Benchmark data", "Artificial Analysis: " + ("connected" if st["connected"] else "not connected"), card(keybox)),
+    ]
+    body = (f"<header><h1>Settings</h1></header><form id='opts' method='post' action='/options'></form>{pending}"
+            + "".join(sections) + SETTINGS_FOLDS)
     return shell(reg, -2, body)
 
 
@@ -6702,10 +6776,22 @@ ul.folders .path { display:block; overflow-wrap:anywhere } .folderacts { display
 .folderacts form { margin:0 } .dangers { display:flex; gap:8px; flex-wrap:wrap } .dangers form { margin:0 } button.danger { background:#b3261e; color:#fff } .folderacts b { margin-right:auto; font-size:13px }
 form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit; padding:6px 9px; border-radius:7px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); flex:1 }
-form.options { display:flex; flex-direction:column; gap:10px } form.options label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
-.provider-fields { display:contents }
-form.options input[type=text], form.options input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
-  border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% } form.options button { align-self:flex-start }
+:is(form.options, div.optset) { display:flex; flex-direction:column; gap:10px }
+:is(form.options, div.optset) label { display:flex; gap:6px 10px; align-items:center; flex-wrap:wrap }
+.provider-fields { display:contents } div.optset p.muted { margin:-6px 0 0 }
+:is(form.options, div.optset) input[type=text], :is(form.options, div.optset) input:not([type]) { font:inherit; padding:5px 8px; border-radius:7px;
+  border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% }
+:is(form.options, div.optset) button { align-self:flex-start }
+/* Settings: each part folded to its name and where it stands */
+details.setsec { margin:0 0 10px; border:1px solid var(--line); border-radius:12px; background:var(--card); max-width:760px }
+details.setsec > summary { display:flex; flex-direction:column; gap:3px; padding:14px 40px 14px 16px; cursor:pointer;
+  list-style:none; position:relative } details.setsec > summary::-webkit-details-marker { display:none }
+details.setsec > summary::after { content:'›'; position:absolute; right:16px; top:50%; transform:translateY(-50%);
+  font-size:22px; color:var(--muted); transition:transform .15s } details.setsec[open] > summary::after { transform:translateY(-50%) rotate(90deg) }
+.sttl { font-weight:600; font-size:16px } .ssum { color:var(--muted); font-size:13px; overflow-wrap:anywhere } .ssum .warn { color:var(--flag) }
+details.setsec > .card, details.setsec > .card + h2 + .card { border:0; border-top:1px solid var(--line); border-radius:0; margin:0;
+  background:transparent } details.setsec > h2 { margin:0; padding:14px 16px 0; border-top:1px solid var(--line) }
+details.setsec > section.card h2 { margin-top:0 }
 form.options textarea.short { min-height:44px }
 .vision { margin:18px 0; max-width:900px } .vision details { margin:12px 0 }
 .vision > summary { cursor:pointer; overflow:hidden; text-overflow:ellipsis } .vision[open] > summary { margin-bottom:8px }
@@ -6886,8 +6972,11 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   /* nothing is wider than the phone: a table's words wrap, and what still can't fit scrolls in its own box */
   table.bench { display:block; max-width:100%; overflow-x:auto } table.bench td { white-space:normal; overflow-wrap:anywhere }
   .console-bar { flex-wrap:wrap } .console-bar > span { flex:1 1 220px; min-width:0; overflow-wrap:anywhere }
-  .navfoot { flex-direction:row; margin:0 0 0 auto; padding:0; border:0; gap:2px; font-size:16px }
-  .navfoot a { padding:4px 9px } .navfoot .long { display:none } .navfoot .short { display:inline }
+  /* All projects, Add, Models and Settings ride at the right of the steward's bar, always in reach */
+  .navfoot { position:absolute; top:0; right:4px; flex-direction:row; align-items:center; margin:0; padding:0; border:0;
+    gap:0; font-size:17px; z-index:3 } nav .proj.monitor { padding-right:176px }
+  .navfoot a { padding:0 8px; min-height:38px; display:inline-flex; align-items:center; justify-content:center }
+  .navfoot .long { display:none } .navfoot .short { display:inline }
   nav { position:sticky; top:0; z-index:40 }
   /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
   input, textarea, select { font-size:16px }

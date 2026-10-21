@@ -1614,7 +1614,11 @@ class GlanceTest(BoardBase):
         r = self.cli("new", "garden", "--provider", "codex", "--in", self.tmp.name)
         self.assertIn("Codex is off in colony's Settings", r.stderr)
         page = board.settings_page(board.registry())
-        self.assertIn("<h2>Agent programs</h2>", page)
+        self.assertIn("<span class='sttl'>Agent programs</span>", page)
+        # Settings is folded into parts; one form's fields sit in the parts they belong to, so a save anywhere keeps the rest
+        self.assertIn("<form id='opts' method='post' action='/options'></form>", page)
+        for field in ("active_hours", "permissions", "lan", "monitor", "auto_balance"):
+            self.assertRegex(page, f"form='opts'[^>]* name='{field}'")
         self.assertIn("name='on' value='claude' checked", page)
         self.assertIn("off, but 1 project still run on it (plants)", page, "unticking breaks nothing that runs")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
