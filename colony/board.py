@@ -3313,6 +3313,7 @@ def render(reg, pid, view="overview", show_all=""):
         # waiting on you, first: the same as this project's part of Needs you, kept current like it (what the agent
         # settles meanwhile drops out, except while being typed in). With nothing waiting, the section is out of the
         # way, and comes back by itself when something does.
+        out.append(measures_html(root))           # the numbers it steers by, as colony took them, before all else
         rows = waiting_html(pid, root)
         out.append(f"<section id='waitingbox'{'' if rows else ' hidden'}><h2>Waiting on you (<span id='wcount'>{waiting}</span>)</h2>"
                    f"<div class='card' id='waiting'>{rows}</div></section>"
