@@ -115,7 +115,10 @@ steer all of them from one board, and the projects can write to each other.
   Work outside the milestone's purpose goes under `## Later`. Commit each finished piece.
   A milestone may name its kind after its title (`## M4 — Concepts · menu`): `menu` (options in any order), `lanes`
   (roads side by side; each item says `(lane: name)`), `findings` (questions answered by experiment), `sections` (the
-  pieces of one whole); unnamed, it is a sequence, done in order.
+  pieces of one whole); unnamed, it is a sequence, done in order. A number the work steers by goes on its own line
+  in the part (or above the first milestone), with how colony takes it: `Measure: words / 80000 · count: wc -w
+  chapters/*.md` (a command; the first number on its last line) or `· judge: what to read` (a small separate model
+  reads it); colony takes it at each push and finished milestone and shows it, so it is never your own report.
 - An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
@@ -3182,6 +3185,7 @@ def render(reg, pid, view="overview", show_all=""):
                        + "".join(f"<div class='note'><span class='who'>{e(where(n))} · {e(n['at'][:10])}</span>"
                                  f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>" for n in mine)
                        + "</div>")
+        out.append(measures_html(root))
         # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
         out.append("<h2 id='roadmap'>Roadmap</h2>")
         if road["milestones"]:
@@ -3380,6 +3384,29 @@ def queue_html(pid, root):
 
 
 W, H, GX, GY = 172, 56, 38, 16
+
+
+def measures_html(root):
+    """The plan's measures, as colony took them: each its latest value against its target, its trend, when and at
+    which commit, or that it couldn't be taken. Nothing when the plan has none."""
+    from . import measures
+    rows = []
+    for m in measures.summary(root):
+        last = m["last"]
+        target = f" / {measures.fmt(m['target'])}" if m["target"] is not None else ""
+        how = {"count": "counted", "run": "run", "judge": "judged"}[m["how"]]
+        if not last:
+            value = "<span class='muted'>not taken yet: at the next push</span>"
+        elif last["value"] is None:
+            value = f"<span class='flag'>couldn't measure</span> <span class='muted'>{e(short(last['error'] or '', 90))}</span>"
+        else:
+            value = (f"<b>{measures.fmt(last['value'])}</b>{target} <span class='spark'>{measures.spark(m['values'])}</span>"
+                     + (" <span class='muted'>(method changed)</span>" if m["changed"] else ""))
+        when = (f" · {how} at {e(last['commit'][:7])}, {e(last['at'][:10])}" if last else "")
+        why = f"<div class='muted small'>{e(last['reason'])}</div>" if last and last.get("reason") else ""
+        rows.append(f"<div class='measure'><span class='mname'>{e(m['name'])}</span> {value}"
+                    f"<div class='muted small' title='{e(m['what'])}'>{e(m['part'] or 'the whole plan')}{when}</div>{why}</div>")
+    return f"<div class='card measures'>{''.join(rows)}</div>" if rows else ""
 
 
 def part_body(m, drawn):
@@ -6144,6 +6171,9 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
+.measures .measure { padding:6px 0; border-bottom:1px solid var(--line) } .measures .measure:last-child { border-bottom:0 }
+.measures .mname { margin-right:6px } .measures .spark { letter-spacing:1px; color:var(--accent) } .flag { color:var(--flag) }
+.small { font-size:13px }
 .lanes { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:8px 0 }
 .lane { border:1px solid var(--line); border-radius:12px; padding:8px 10px } .lane p { margin:4px 0 }
 .lanebar { height:5px; border-radius:3px; background:var(--line); margin:5px 0; overflow:hidden } .lanebar i { display:block; height:100%; background:var(--accent) }

@@ -1062,6 +1062,39 @@ class ChatTest(BoardBase):
             self.assertNotIn(gone, feed, "the request, the tags, and reading it aloud are left out")
 
 
+class MeasureTest(BoardBase):
+    def test_a_measure_is_taken_by_colony_at_the_commit_never_from_the_agent(self):
+        from colony import measures
+        import subprocess
+        git = lambda *a: subprocess.run(["git", "-C", str(self.root), *a], capture_output=True, text=True, check=True)
+        (self.root / "chapters").mkdir()
+        (self.root / "chapters" / "one.md").write_text("one two three four\n")
+        plan = (self.root / "ROADMAP.md").read_text() + (
+            "\n## M9 — The draft · sections\nMeasure: words / 80000 · count: cat chapters/*.md | wc -w\n"
+            "Measure: chapters revised / 24 · judge: each chapter against its outline\n- [ ] R90 Chapter one\n")
+        (self.root / "ROADMAP.md").write_text(plan)
+        git("init", "-q"); git("add", "-A"); git("-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "draft")
+        tip = git("rev-parse", "HEAD").stdout.strip()
+        wanted = measures.read(plan)
+        self.assertEqual([(w["name"], w["target"], w["how"], w["part"]) for w in wanted],
+                         [("words", 80000, "count", "M9"), ("chapters revised", 24, "judge", "M9")])
+        (self.root / "chapters" / "one.md").write_text("an agent's uncommitted edit " * 50)
+        got = measures.take(self.root, tip, wanted, judge=lambda root, at, w: (3, "three chapters match their outline", None))
+        self.assertEqual(got[0]["value"], 4, "the words as committed, not the folder mid-edit")
+        self.assertEqual((got[1]["value"], got[1]["reason"]), (3, "three chapters match their outline"))
+        page = board.measures_html(self.root)
+        self.assertIn("<span class='mname'>words</span> <b>4</b> / 80,000", page)
+        self.assertIn("judged at " + tip[:7], page)
+        self.assertIn("three chapters match their outline", page)
+        measures.take(self.root, tip, [dict(wanted[0], what="false")])
+        self.assertIn("<span class='mname'>words</span> <span class='flag'>couldn't measure</span>", board.measures_html(self.root),
+                      "a failure shows as one, never the old value")
+        (self.root / "ROADMAP.md").write_text(plan.replace("cat chapters/*.md | wc -w", "echo 7"))
+        measures.take(self.root, tip, measures.read((self.root / "ROADMAP.md").read_text())[:1])
+        self.assertIn("<b>7</b> / 80,000 <span class='spark'></span> <span class='muted'>(method changed)</span>",
+                      board.measures_html(self.root), "a new method starts its own trend")
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)

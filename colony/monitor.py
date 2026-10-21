@@ -543,6 +543,11 @@ class Watcher:
             if not p.exists():
                 continue
             board.item_times(p)                 # when each roadmap item reached its state: the Roadmap tab orders by it
+            try:
+                from . import measures
+                measures.check(p)               # its measures, taken by colony at each push and milestone finished
+            except Exception:
+                pass
             snap = console.snapshot(p, lines=4)
             if snap["state"] == "needs you" and board.registry()["settings"]["trust"]:
                 # the person put it on the board as it is set up: a new session's start-up questions (its folder's
