@@ -1,6 +1,6 @@
 """Measures: a number a project steers by, taken by colony, never reported by the agent doing the work.
 
-A part of the plan (or the plan above its first milestone) may carry a line
+A part of the plan (or its `## Measures`, for the whole) may carry a line
 
   Measure: words / 80000 · count: wc -w chapters/*.md
   Measure: fidelity / 0.95 · run: python evals/fidelity.py
@@ -41,11 +41,7 @@ def number(text):
 
 
 def read(text):
-    """The plan's measures, in order: [{name, target, how, what, part}], outside its Vision."""
-    from . import vision
-    part = vision.section(text)
-    if part['start'] is not None:
-        text = text[:part['start']] + text[part['end']:]
+    """The plan's measures, in order, wherever they are written: [{name, target, how, what, part}]."""
     out, where = [], None
     for line in text.splitlines():
         if m := board.MILESTONE.match(line):

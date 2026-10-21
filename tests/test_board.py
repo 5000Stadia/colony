@@ -1078,6 +1078,9 @@ class MeasureTest(BoardBase):
         wanted = measures.read(plan)
         self.assertEqual([(w["name"], w["target"], w["how"], w["part"]) for w in wanted],
                          [("words", 80000, "count", "M9"), ("chapters revised", 24, "judge", "M9")])
+        self.assertEqual([(w["name"], w["part"]) for w in measures.read("## Vision\nTo run it.\n\n## Measures\n"
+                                                                         "Measure: longest run km / 21.1 · count: cat runs\n")],
+                         [("longest run km", "Measures")], "the whole plan's measures, under their own heading")
         (self.root / "chapters" / "one.md").write_text("an agent's uncommitted edit " * 50)
         got = measures.take(self.root, tip, wanted, judge=lambda root, at, w: (3, "three chapters match their outline", None))
         self.assertEqual(got[0]["value"], 4, "the words as committed, not the folder mid-edit")
