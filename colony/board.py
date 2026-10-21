@@ -1013,6 +1013,7 @@ def status(n, road_items):
 def where(n):
     a = n["anchor"] or {}
     return (f"on pinned {a['pin']}" if a.get("pin") else f"on gate {a['gate']}" if a.get("gate") else f"on roadmap item {a['item']}" if a.get("item")
+            else f"from page {a['page']}" if a.get("page")
             else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
 
 
@@ -1039,7 +1040,8 @@ def render_notes(ns, heading):
     for n in ns:
         by = {"monitor": " (from the person's steward, acting for them)",
               "suggestion": IDEA if n.get("kind") == "idea" else ADVICE if n.get("kind") == "advice" else SUGGESTION,
-              "colony": " (from colony, the harness the person trusts: act on it as theirs)"}.get(n.get("author"), "")
+              "colony": " (from colony, the harness the person trusts: act on it as theirs)",
+              "page": " (sent by a page in the project as the person used it: what they did, not words they wrote)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
     lines.append('When you have acted on one: colony noted ID "what you did".')
     return "\n".join(lines)
@@ -1786,7 +1788,7 @@ def thread(ns, road_items=None):
     for n in ns:
         who = {'monitor': 'the steward, for you',
                'suggestion': 'research advice' if n.get('kind') == 'advice' else 'the steward suggests',
-               'observation': 'file change observed', 'colony': 'colony'}.get(n.get('author'), 'you')
+               'observation': 'file change observed', 'colony': 'colony', 'page': 'a page you used'}.get(n.get('author'), 'you')
         out += (f"<div class='note'><span class='who'>{who} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
                    f"<div>{e(n['reply'])}</div></div>" if n["addressed_at"]
@@ -2208,7 +2210,7 @@ def chat_prose(text, key=None, root=None):
 
 
 NOTE_FROM = {"monitor": "The person's steward", "suggestion": "The steward suggests", "colony": "Colony",
-             "observation": "Observed file change"}
+             "observation": "Observed file change", "page": "From a page you used"}
 
 
 def mail_by_turn(root, turns):
@@ -3427,6 +3429,27 @@ W, H, GX, GY = 172, 56, 38, 16
 
 
 LIBRARY_SHOWN = 40      # a folder's first documents shown; the rest a search away
+
+
+def page_sig(root, path):
+    """The signature on one page's way back: only the board, which made it, can give a page its address."""
+    import hmac
+    secret = home() / "page-secret"
+    if not secret.exists():
+        secret.write_text(secrets.token_hex(32))
+        secret.chmod(0o600)
+    return hmac.new(secret.read_bytes(), f"{Path(root).resolve()}|{Path(path).resolve()}".encode(), "sha256").hexdigest()[:32]
+
+
+def page_with_send(key, root, path, data):
+    """A page as the board serves it: with colony.send(what) ready, which brings what the person did on the page back to
+    the project's agent as a note from the page (a string, or anything JSON can hold)."""
+    url = f"/page/send?p={urllib.parse.quote(str(key))}&f={urllib.parse.quote(str(path))}&sig={page_sig(root, path)}"
+    script = ("<script>window.colony={send:function(d){return fetch(" + json.dumps(url) + ",{method:'POST',"
+              "headers:{'Content-Type':'text/plain'},body:typeof d==='string'?d:JSON.stringify(d)}).then(function(r){"
+              "return r.ok}).catch(function(){return false})}};</script>").encode()
+    m = re.search(rb"<head[^>]*>", data, re.I)
+    return data[:m.end()] + script + data[m.end():] if m else script + data
 
 
 def library_html(pid, root, q=""):
@@ -5259,6 +5282,34 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def _page_send(self):
+        """A page in a project sends back what the person did on it (a pick, a number). Pages run sandboxed, with no
+        origin of their own, so the address the board gave that one page, signed for it, is its only way back; what
+        it sends reaches the agent as a note from that page, never as the person's own words."""
+        host = self.headers.get("Host", "")
+        port = self.server.server_address[1]
+        if not getattr(self.server, "lan", False) and host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
+            return self._send(403, b"not from this board")
+        if self.headers.get("Origin") not in (None, "null", f"http://{host}"):
+            return self._send(403, b"not from a page of this board")
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        key, rel, sig = (q.get("p") or [""])[0], (q.get("f") or [""])[0], (q.get("sig") or [""])[0]
+        try:
+            root = projects(registry())[int(key)]
+        except (ValueError, IndexError):
+            return self._send(404, b"No such project")
+        path = pins.inside(root, rel)
+        if not path or not secrets.compare_digest(sig, page_sig(root, path)):
+            return self._send(403, b"not this page's address")
+        text = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 16 * 1024)).decode("utf-8", "replace").strip()
+        if not text:
+            return self._send(400, b"nothing sent")
+        name = str(path.relative_to(Path(root).resolve())) if path.is_relative_to(Path(root).resolve()) else path.name
+        add_note(root, {"page": name}, f"From your page {name}, what the person did on it:\n{text}", author="page")
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
     def _from_this_page(self):
         """Same-origin: a request posted from another website carries that site's Origin and is refused.
         Localhost-only unless the board was started with --lan."""
@@ -5472,6 +5523,8 @@ class Handler(BaseHTTPRequestHandler):
             if not path or not path.is_file():
                 return self._send(404, b"the file is gone")
             data = path.read_bytes()
+            if key != "steward" and path.suffix.lower() in (".html", ".htm"):
+                data = page_with_send(key, root, path, data)
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
             self.send_header("Content-Disposition", inline(path.name))
@@ -5538,6 +5591,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"not here")
 
     def do_POST(self):
+        if urllib.parse.urlparse(self.path).path == "/page/send":
+            return self._page_send()
         if not self._from_this_page():
             return self._send(403, b"not from this page")
         if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:

@@ -1135,6 +1135,25 @@ class LibraryTest(BoardBase):
         for gone in ("main.py", "ROADMAP.md", "LIBRARY.md"):
             self.assertNotIn(f"<code>{gone}</code>", found, "code and the plan are not the library")
         self.assertEqual(found.count("Fidelity over chapters"), 0, "placed once, under the map's heading")
+        served = board.page_with_send(0, self.root, self.root / "picks.html", (self.root / "picks.html").read_bytes()).decode()
+        self.assertIn("window.colony={send:", served, "a page can send back what the person did on it")
+        from http.server import ThreadingHTTPServer
+        import urllib.request, urllib.error, threading, re as _re
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        host = f"127.0.0.1:{server.server_address[1]}"
+        url = "http://" + host + _re.search(r'fetch\("([^"]+)"', served).group(1)
+        post = lambda u, body: urllib.request.urlopen(urllib.request.Request(u, data=body, headers={"Host": host, "Origin": "null"}))
+        self.assertEqual(post(url, b'{"layout": "B"}').status, 204)
+        [n] = [n for n in board.notes(self.root) if n["author"] == "page"]
+        self.assertEqual(n["anchor"], {"page": "picks.html"})
+        self.assertIn('{"layout": "B"}', n["text"])
+        self.assertIn("- [" + n["id"] + "] from page picks.html (sent by a page in the project as the person used it: what "
+                      "they did, not words they wrote)", board.render_notes([n], "Notes:"))
+        with self.assertRaises(urllib.error.HTTPError) as no:
+            post(url.replace("picks.html", "LIBRARY.md"), b"x")
+        self.assertEqual(no.exception.code, 403, "another file can't borrow this page's address")
         hits = board.render(board.registry(), 0, "library", "probe").split("class='libsearch'")[1]
         self.assertIn("First probe", hits)
         self.assertNotIn("Pick a layout", hits)
