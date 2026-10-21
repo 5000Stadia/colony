@@ -1890,6 +1890,34 @@ def project_list(plist, sub=None, fold="list"):
     return "".join(out)
 
 
+def home_list(reg):
+    """Every project, those waiting on the person first: each its line (state, what it is at), its measures, and
+    under it what waits on the person, answered right there; then the quiet ones, a line each. And colony's own
+    asks of them (model choices, the steward's supports) above all."""
+    plist = projects(reg)
+    choices = model_changes(pending_only=True)
+    waiting, quiet = [], []
+    for i, p, _ in arranged(plist):
+        if not p.exists():
+            continue
+        decided, box, others = waiting_parts(i, p, "/", label=False, day=True)
+        needs = "".join(decided) + box + "".join(others)
+        if needs:
+            waiting.append(f"<section class='hproj'>{project_row(i, p)}{measures_html(p)}<div class='hneeds'>{needs}</div></section>")
+        else:
+            quiet.append(f"<section class='hproj quiet'>{project_row(i, p)}{measures_html(p)}</section>")
+    top = "".join([choices] if choices else []) + "".join(support_rows())
+    return (top + "".join(waiting)
+            + (f"<h2>Nothing waiting on you</h2>" if waiting and quiet else "") + "".join(quiet)
+            + ("" if plist else "<p class='muted'>No projects yet.</p>"))
+
+
+def home_page(reg):
+    """The board's front page: every project and what each needs of the person, answered where it shows."""
+    return shell(reg, -2, "<h1>Projects</h1><div id='home'>" + home_list(reg) + "</div>"
+                 f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('home'), '/home/feed');</script>")
+
+
 def all_projects_page(reg):
     """Every project at a glance, under its nest: what it's doing, what waits on the person, what it's for."""
     plist = projects(reg)
@@ -5406,12 +5434,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             return self.wfile.write(body)
-        if url.path == "/" and "p" not in q and reg["settings"]["monitor"]:
-            self.send_response(303)                    # the steward is the front page; projects are a click away
-            self.send_header("Location", "/steward")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
+        if url.path == "/" and "p" not in q:          # the front page: every project and what each needs of the person
+            return self._send(200, home_page(reg).encode())
         if url.path == "/":
             view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
             return self._send(200, render(reg, pid, view, (q.get("all") or [""])[0]).encode())
@@ -5564,6 +5588,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, all_projects_page(reg).encode())
         if url.path == "/nest":
             return self._send(200, nest_page(reg, (q.get("n") or [""])[0]).encode())
+        if url.path == "/home/feed":
+            return self._send(200, home_list(reg).encode())
         if url.path == "/needs":
             if "p" in q:                                   # one project's Waiting on you
                 return self._send(200, waiting_html(pid, plist[pid]).encode())
@@ -6329,6 +6355,9 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .libgroup { border-bottom:1px solid var(--line); padding:4px 0 } .libgroup > summary { cursor:pointer; padding:8px 0; font-weight:600 }
 .libgroup.d2 { margin-left:12px } .libgroup.d3 { margin-left:24px } .libitem { padding:6px 0 6px 4px }
 .libitem code { font-size:12px; word-break:break-all }
+.hproj { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:6px 12px; margin:10px 0 }
+.hproj.quiet { padding:2px 12px; margin:6px 0 } .hproj .measures { border:0; margin:0; padding:0 0 4px }
+.hneeds { border-top:1px solid var(--line); margin-top:4px } .hneeds .need:first-child { border-top:0 }
 .steer { display:flex; gap:8px; margin:4px 0 8px } .steer form { margin:0 }
 .measures .measure { padding:6px 0; border-bottom:1px solid var(--line) } .measures .measure:last-child { border-bottom:0 }
 .measures .mname { margin-right:6px } .measures .spark { letter-spacing:1px; color:var(--accent) } .flag { color:var(--flag) }

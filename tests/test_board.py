@@ -2513,16 +2513,21 @@ class SettingsTest(BoardBase):
         finally:
             console.COMMAND = saved
 
-    def test_the_front_page_is_the_monitor_and_settings_save_from_the_page(self):
+    def test_the_front_page_is_every_project_with_what_it_needs_and_settings_save_from_the_page(self):
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         port = httpd.server_address[1]
         opener = urllib.request.build_opener(type("NoRedirect", (urllib.request.HTTPRedirectHandler,),
                                                   {"redirect_request": lambda *a: None}))
         try:
-            with self.assertRaises(urllib.error.HTTPError) as r:
-                opener.open(f"http://127.0.0.1:{port}/")
-            self.assertEqual(r.exception.headers["Location"], "/steward")
+            board.track(self.root)
+            board.add_gate(self.root, "Which pot size?", options=["small", "large"], recommended="large")
+            page = opener.open(f"http://127.0.0.1:{port}/").read().decode()
+            self.assertIn("<h1>Projects</h1>", page, "every project, the steward or not")
+            section = page.split("class='hproj'")[1]
+            self.assertIn("<b>plants</b>", section)
+            self.assertIn("Which pot size?", section, "what it needs, under it, answered there")
+            self.assertIn("Which pot size?", opener.open(f"http://127.0.0.1:{port}/home/feed").read().decode(), "kept current")
             data = urllib.parse.urlencode({"monitor": "on", "model": "", "effort": "high", "new_root": ""}).encode()
             urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/options", data=data))
             s = board.registry()["settings"]
