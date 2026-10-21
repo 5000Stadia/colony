@@ -2053,9 +2053,16 @@ def own_colour(reg, pid):
     return (f":root {{ --accent:{c[0]} }} @media (prefers-color-scheme: dark) {{ :root {{ --accent:{c[1]} }} }}" if c else "")
 
 
+def css_version():
+    """The board's styling, as one file a phone keeps: fetched once per version, never again with every page."""
+    import hashlib
+    return hashlib.sha1(CSS.encode()).hexdigest()[:10]
+
+
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
-            f"<title>Projects — board</title><style>{CSS}{own_colour(reg, pid)}</style></head><body><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
+            f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
+            f"<style>{own_colour(reg, pid)}</style></head><body><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}</script></body></html>")
 
 
@@ -5611,6 +5618,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, all_projects_page(reg).encode())
         if url.path == "/nest":
             return self._send(200, nest_page(reg, (q.get("n") or [""])[0]).encode())
+        if url.path == "/static/board.css":
+            data = CSS.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/css; charset=utf-8")
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")   # its address changes with it
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
         if url.path == "/home/feed":
             return self._send(200, home_list(reg).encode())
         if url.path == "/needs":

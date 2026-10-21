@@ -5287,7 +5287,8 @@ class PhonePageTest(HoursBase):
         # the steward is no project: a bar of its own above the row of projects, which scrolls without it
         self.assertLess(side.index("proj monitor"), side.index("<div class='navrow'>"), "the steward, with the count, above the row")
         self.assertNotIn("proj monitor", side.split("<div class='navrow'>")[1])
-        self.assertIn("nav .navrow { display:flex", page)
+        self.assertIn(f"<link rel='stylesheet' href='/static/board.css?v={board.css_version()}'>", page, "styling, fetched once")
+        self.assertIn("nav .navrow { display:flex", board.CSS)
 
     def test_the_status_says_what_the_project_is_at_never_its_consoles_spinner_or_footer(self):
         console.snapshot = lambda root, lines=6, name=None: {
