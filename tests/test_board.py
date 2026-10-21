@@ -1114,6 +1114,32 @@ class MeasureTest(BoardBase):
                       board.measures_html(self.root), "a new method starts its own trend")
 
 
+class LibraryTest(BoardBase):
+    def test_the_library_finds_documents_and_pages_under_the_maps_headings_and_their_folders(self):
+        import subprocess
+        board.track(self.root)
+        (self.root / "research").mkdir()
+        (self.root / "research" / "fidelity.md").write_text("# Fidelity over chapters\n\nIt holds to chapter nine. Then slips.\n")
+        (self.root / "research" / "probe.md").write_text("---\ndescription: the first look\n---\n# First probe\n")
+        (self.root / "picks.html").write_text("<title>Pick a layout</title><script>1</script>")
+        (self.root / "main.py").write_text("print(1)\n")
+        (self.root / "LIBRARY.md").write_text("## Findings\n- [Fidelity](research/fidelity.md) — what holds, and where it slips\n")
+        subprocess.run(["git", "-C", str(self.root), "init", "-q"]); subprocess.run(["git", "-C", str(self.root), "add", "-A"])
+        page = board.render(board.registry(), 0, "library")
+        self.assertIn("view=library'>Library</a>", page)
+        found = page.split("class='libsearch'")[1]
+        self.assertIn("<summary>Findings</summary>", found)
+        self.assertIn(">Fidelity</a><div class='muted small'>what holds, and where it slips", found, "the map's own words")
+        self.assertIn(">First probe</a><div class='muted small'>the first look", found, "its own title and line, unplaced, by folder")
+        self.assertIn(">Pick a layout</a> <span class='badge'>page</span>", found)
+        for gone in ("main.py", "ROADMAP.md", "LIBRARY.md"):
+            self.assertNotIn(f"<code>{gone}</code>", found, "code and the plan are not the library")
+        self.assertEqual(found.count("Fidelity over chapters"), 0, "placed once, under the map's heading")
+        hits = board.render(board.registry(), 0, "library", "probe").split("class='libsearch'")[1]
+        self.assertIn("First probe", hits)
+        self.assertNotIn("Pick a layout", hits)
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)

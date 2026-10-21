@@ -2154,6 +2154,7 @@ def tabs(pid, view, root=None):
     shown = root is None or view == "showcase" or showcase.entries(root)
     return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview")
             + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
+            + tab("library", "Library", f"/?p={pid}&view=library")
             + (tab("showcase", "Showcase", f"/?p={pid}&view=showcase") if shown else "")
             + tab("chat", "Chat", f"/?p={pid}&view=chat")
             + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
@@ -3158,7 +3159,7 @@ def render(reg, pid, view="overview", show_all=""):
     out = []
     if not plist:
         return shell(reg, pid, "")
-    view = view if view in ("roadmap", "showcase", "console", "chat") else "overview"     # Today is Overview now
+    view = view if view in ("roadmap", "library", "showcase", "console", "chat") else "overview"     # Today is Overview now
     if view == "chat":
         root = plist[pid]
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}</header>"
@@ -3211,6 +3212,8 @@ def render(reg, pid, view="overview", show_all=""):
                + lead_status + f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
+    elif view == "library":                 # what the project knows and has made, found where it is
+        out.append(library_html(pid, root, show_all))
     elif view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         out.append(progress_panel(root, pid))       # a shared plan's versions, while one runs or waits to start
         # the person's own notes the agent has not acted on yet, wherever they were left
@@ -3421,6 +3424,65 @@ def queue_html(pid, root):
 
 
 W, H, GX, GY = 172, 56, 38, 16
+
+
+LIBRARY_SHOWN = 40      # a folder's first documents shown; the rest a search away
+
+
+def library_html(pid, root, q=""):
+    """The Library tab: the map's headings (LIBRARY.md) with what it places, then what it doesn't, by folder (and
+    subfolder), then uploads; each document by its title and line, opening as it is (a page runs). A search finds
+    anything in it by title, line or path."""
+    from . import library
+    sections, rest, ups = library.shape(root)
+    q = (q or "").strip().lower()
+
+    def row(rel, title=None, line=None):
+        t, l, kind, changed = library.about(root, rel)
+        title, line = title or t, line or l
+        if q and q not in f"{title} {line} {rel}".lower():
+            return ""
+        url = chat_file(pid, root, rel)
+        name = f"<a href='{url}' target='_blank' rel='noopener'>{e(title)}</a>" if url else f"{e(title)} <span class='muted'>(missing)</span>"
+        badge = "" if kind == "doc" else f" <span class='badge'>{kind}</span>"
+        return (f"<div class='libitem'>{name}{badge}<div class='muted small'>{e(line) + ' · ' if line else ''}"
+                f"<code>{e(rel)}</code> · {changed}</div></div>")
+
+    def group(title, rels, depth=1, open_=False):
+        rows = [r for r in (row(x) for x in rels) if r]
+        if not rows:
+            return ""
+        cap = LIBRARY_SHOWN * 3 if q else LIBRARY_SHOWN
+        more = max(0, len(rows) - cap)
+        return (f"<details class='libgroup d{depth}'{' open' if open_ or q else ''}><summary>{e(title)} "
+                f"<span class='muted'>{len(rows)}</span></summary>{''.join(rows[:cap])}"
+                + (f"<p class='muted small'>{more} more: {'narrow the search' if q else 'search to find one'}.</p>" if more else "")
+                + "</details>")
+
+    out = [f"<form class='libsearch' method='get' action='/'><input type='hidden' name='p' value='{pid}'>"
+           f"<input type='hidden' name='view' value='library'><input type='search' name='all' value='{e(q)}' "
+           f"placeholder='Find in the library'></form>"]
+    for s in sections:
+        rows = "".join(row(p, t, l) for p, t, l in s["entries"])
+        if rows or not q:
+            out.append(f"<details class='libgroup d{s['depth']}' open><summary>{e(s['title'])}</summary>{rows}</details>")
+    for top in sorted(rest, key=lambda k: (k == "", k.lower())):
+        rels = rest[top]
+        subs = {}
+        for rel in rels:
+            parts = Path(rel).parts
+            subs.setdefault(parts[1] if len(parts) > 2 else "", []).append(rel)
+        if len(rels) > LIBRARY_SHOWN and len(subs) > 1:
+            inner = "".join(group(k or "(in the folder itself)", v, 2) for k, v in sorted(subs.items()))
+            if inner:
+                out.append(f"<details class='libgroup d1'{' open' if q else ''}><summary>{e(top)} <span class='muted'>"
+                           f"{len(rels)}</span></summary>{inner}</details>")
+        else:
+            out.append(group(top or "In the project's folder", rels, 1, open_=not sections and top == ""))
+    out.append(group("Uploaded", ups))
+    body = "".join(x for x in out[1:] if x)
+    return out[0] + (body or ("<p class='muted'>Nothing matches.</p>" if q else
+                              "<p class='muted'>Nothing here yet: documents and pages the project keeps show here.</p>"))
 
 
 def measures_html(root):
@@ -6208,6 +6270,10 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
+.libsearch input { width:100%; font-size:16px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); margin:6px 0 10px }
+.libgroup { border-bottom:1px solid var(--line); padding:4px 0 } .libgroup > summary { cursor:pointer; padding:8px 0; font-weight:600 }
+.libgroup.d2 { margin-left:12px } .libgroup.d3 { margin-left:24px } .libitem { padding:6px 0 6px 4px }
+.libitem code { font-size:12px; word-break:break-all }
 .steer { display:flex; gap:8px; margin:4px 0 8px } .steer form { margin:0 }
 .measures .measure { padding:6px 0; border-bottom:1px solid var(--line) } .measures .measure:last-child { border-bottom:0 }
 .measures .mname { margin-right:6px } .measures .spark { letter-spacing:1px; color:var(--accent) } .flag { color:var(--flag) }
