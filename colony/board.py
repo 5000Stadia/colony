@@ -2043,7 +2043,9 @@ def sidebar(reg, pid):
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
     # on a phone the steward is a bar of its own above the projects' row, which scrolls alone
-    return side[0] + "<div class='navrow'>" + "".join(side[1:]) + "</div>"
+    # scrolled past the pinned chips, a 📌 floats at the row's left: a tap brings them back
+    return (side[0] + "<div class='navrow'>" + "".join(side[1:]) + "</div>"
+            + "<button type='button' class='pinjump' hidden aria-label='Back to the pinned'>📌</button>")
 
 
 def own_colour(reg, pid):
@@ -2084,6 +2086,14 @@ LASTPAGE = """
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
 # stays at the left. Only the row scrolls, never the page; the order is the board's own.
 CHIPS = """
+(() => { const n = document.querySelector('nav .navrow'), jump = document.querySelector('nav .pinjump');
+  const pins = n ? [...n.querySelectorAll('.proj.pinchip')] : [];
+  if (n && jump && pins.length) {
+    const past = () => { const last = pins[pins.length - 1];
+      jump.hidden = n.scrollLeft < last.offsetLeft - n.offsetLeft + last.offsetWidth - 12; };
+    n.addEventListener('scroll', past, {passive: true}); past();
+    jump.addEventListener('click', () => n.scrollTo({left: 0, behavior: 'smooth'}));
+  } })();
 (() => { const n = document.querySelector('nav .navrow'), on = n && n.querySelector('.proj.on');
   if (!on || n.scrollWidth <= n.clientWidth) return;
   n.scrollLeft = Math.max(0, on.offsetLeft - n.offsetLeft - (n.clientWidth - on.offsetWidth) / 2); })();
@@ -6406,6 +6416,7 @@ CSS = """
 * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink); display:flex; min-height:100vh;
   font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif }
 nav { width:220px; flex:none; border-right:1px solid var(--line); padding:16px 10px; background:var(--card) }
+nav .pinjump { display:none }
 nav .proj { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; color:var(--ink); text-decoration:none }
 nav .proj.on { background:var(--sunk); font-weight:600 } main { flex:1; min-width:0; max-width:1240px; padding:8px 24px 60px }
 header h1 { margin:14px 0 4px; font-size:21px } header p { margin:0 0 4px }
@@ -6795,6 +6806,9 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 @media (max-width: 700px) { body { display:block }
   nav { width:auto; border-right:0; border-bottom:1px solid var(--line); padding:0; white-space:nowrap }
   nav .navrow { display:flex; align-items:center; gap:6px; padding:8px 10px; overflow-x:auto }
+  nav .pinjump:not([hidden]) { display:flex; position:absolute; left:6px; bottom:9px; z-index:2; width:34px; height:34px;
+    align-items:center; justify-content:center; border-radius:50%; border:1px solid var(--line); background:var(--card);
+    box-shadow:0 2px 8px rgba(0,0,0,.18); font-size:15px; padding:0; cursor:pointer }
   nav span.nestgroup { display:inline-flex; flex:none; align-items:center; gap:4px; margin:0; padding:3px; border-radius:999px }
   nav span.nestgroup .nestchip { background:transparent; font-weight:600 }
   nav span.nestgroup .members .proj { min-height:32px; padding:2px 10px; font-size:14px }
