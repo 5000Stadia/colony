@@ -1219,7 +1219,7 @@ def _archived(root=None, value=None, drop=False):
     return row
 
 
-def close_project(root, cancel=False, why="", archive=False):
+def close_project(root, cancel=False, why="", archive=False, together=()):
     """Close a project safely: its agent is told to land its work, and once that turn has ended with nothing running,
     the project comes off the board (remove_project), its files and conversation kept. One whose console isn't
     running has nothing in flight, so it comes off at once. Returns "closing", "closed" or "kept" (cancelled)."""
@@ -1237,7 +1237,7 @@ def close_project(root, cancel=False, why="", archive=False):
         return "kept"
     from . import lead
     shared = lead.group(root)
-    if shared and len(shared["members"]) > 1:
+    if shared and len(shared["members"]) > 1 and not (archive and {str(Path(m).resolve()) for m in shared["members"]} <= set(together)):
         # Its seats share one roadmap and lead record: one alone coming off leaves the others' work and assignments
         # pointing at it. Closing them together is a step of its own, not built.
         raise ValueError(f"{root.name} shares its roadmap with " + ", ".join(Path(m).name for m in shared["members"]
@@ -1285,6 +1285,77 @@ def at_rest(root):
     from . import providers
     prov = providers.of(root)
     return prov.at_rest(root) if hasattr(prov, "at_rest") else True
+
+
+def archive_together(roots, why=""):
+    """Archive projects at once (a whole group): a shared project's seats go with each other, since they keep one plan.
+    Each packages where it stands, then comes off the board and the steward's watch, files and conversation kept, until
+    brought back. Returns {name: "closing" | "closed" | the reason it can't}."""
+    from . import lead
+    on = {str(p.resolve()): p for p in projects()}
+    keep = {str(Path(r).resolve()): on[str(Path(r).resolve())] for r in roots if str(Path(r).resolve()) in on}
+    for r in list(keep.values()):
+        for m in (lead.group(r) or {}).get("members", []):
+            if str(Path(m).resolve()) in on:
+                keep.setdefault(str(Path(m).resolve()), on[str(Path(m).resolve())])
+    out = {}
+    for r in keep.values():
+        try:
+            out[r.name] = close_project(r, why=why, archive=True, together=set(keep))
+        except ValueError as err:
+            out[r.name] = str(err)
+    return out
+
+
+def archived_off():
+    """Archived projects now off the board (packaged and landed), each with when and why: {path: row}."""
+    on = {str(p.resolve()) for p in projects()}
+    return {k: v for k, v in _archived().items() if str(Path(k).resolve()) not in on}
+
+
+def bring_back(roots):
+    """Archived projects back on the board, each where it was (its group, its conversation): a shared project's
+    archived seats come back with it. Its agent hears it is open again, and why it was archived."""
+    from . import lead
+    off = {str(Path(k).resolve()): k for k in archived_off()}
+    back = [off[str(Path(r).resolve())] for r in roots if str(Path(r).resolve()) in off]
+    for k in list(back):
+        back += [off[str(Path(m).resolve())] for m in (lead.group(k) or {}).get("members", [])
+                 if str(Path(m).resolve()) in off and off[str(Path(m).resolve())] not in back]
+    for k in back:
+        if Path(k).is_dir():
+            track(Path(k))
+    return [Path(k).name for k in back]
+
+
+def archived_shelf(link=False):
+    """The Archived shelf: each group archived as one row, each project archived alone as its own, a tap bringing it
+    back. With link, only a line saying what's there, pointing to All projects."""
+    from . import nest
+    groups = {}
+    for k, v in archived_off().items():
+        groups.setdefault(nest.nest_of(k) or "", []).append((k, v))
+    if not groups:
+        return ""
+    if link:
+        what = [f"{g} ({len(x)})" for g, x in groups.items() if g] + [Path(k).name for k, _ in groups.get("", [])]
+        return f"<p class='archline'><a href='/projects#archived'>Archived: {e(', '.join(what))} →</a></p>"
+    rows = []
+    for name, items in sorted(groups.items(), key=lambda g: (g[0] == "", g[0].lower())):
+        singles = [[x] for x in items] if not name else [items]
+        for it in singles:
+            when = on_day(max(v["at"] for _, v in it))
+            why = next((v["why"] for _, v in it if v.get("why")), "")
+            what = (f"<input type='hidden' name='nest' value='{e(name)}'>" if name else
+                    f"<input type='hidden' name='path' value='{e(it[0][0])}'>")
+            rows.append(f"<div class='archrow'><div><b>{e(name or Path(it[0][0]).name)}</b> <span class='muted'>"
+                        + (f"group · {len(it)} project{'s' * (len(it) != 1)} · " if name else "") + f"archived {e(when)}</span>"
+                        + (f"<div class='who'>{e(', '.join(Path(k).name for k, _ in it))}</div>" if name else "")
+                        + (f"<div class='who'>“{e(why)}”</div>" if why else "")
+                        + f"</div><form method='post' action='/bring-back'>{what}<button class='quiet'>Bring back</button></form></div>")
+    return (f"<h2 id='archived'>Archived</h2><div class='card'>{''.join(rows)}<p class='muted'>Off the board and the steward's "
+            "watch, nothing waking them. Brought back, each is where it was, in the same conversation, and its agent reads "
+            "where it stood (ARCHIVE.md).</p></div>")
 
 
 def show_project(root):
@@ -1933,7 +2004,7 @@ def all_projects_page(reg):
     plist = projects(reg)
     goal = lambda p: first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"])
     return shell(reg, -2, "<h1>All projects</h1>" + (f"<div class='card plist'>{project_list(plist, goal)}</div>" if plist
-                                                      else "<p class='muted'>No projects yet.</p>"))
+                                                      else "<p class='muted'>No projects yet.</p>") + archived_shelf())
 
 
 def woke(root):
@@ -2031,7 +2102,8 @@ def sidebar(reg, pid):
                     f"<span class='pname'><span class='sdot {state.replace(' ', '-')}'></span>{e(here)} <span class='nestcount'>"
                     f"{len(members)}</span><span class='badge gate'{'' if waits else ' hidden'}>{waits}</span></span>"
                     f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); location.href='/nest?n={q}'\">"
-                    f"→</span></span></a><span class='members'>{''.join(chips)}</span></span>")
+                    f"→</span></span></a><span class='members'>{''.join(chips)}<a class='proj nestset' href='/nest?n={q}' "
+                    f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙</a></span></span>")
     # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
@@ -4374,7 +4446,8 @@ def monitor_page(reg, view="overview"):
               f"<p class='muted'>Unchecked, the steward leaves a project out: it doesn't wake for it, report on it or scout for it, "
               f"and hears of it only when you bring it up.</p>{follows}<button>Save</button></form></details>") if plist else ""
     body = (head + said + "<div class='listtop'><h2>Projects</h2><a href='/projects'>All projects →</a></div>"
-            + (f"<div class='card plist'>{project_list(plist, fold='steward')}</div>{follow}" if plist else "<p class='muted'>No projects yet.</p>")
+            + (f"<div class='card plist'>{project_list(plist, fold='steward')}</div>" if plist else "<p class='muted'>No projects yet.</p>")
+            + archived_shelf(link=True) + follow
             + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
             f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
             + (f"<details class='card fold'><summary><h3>What the steward decided</h3><span class='muted'>{len(made)}"
@@ -4453,6 +4526,30 @@ def nest_page(reg, name):
            "<h2>Projects</h2><div class='card plist'>"]
     for i, p in members:
         out.append(project_row(i, p, first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"]) if p.exists() else ""))
+    back = f"<input type='hidden' name='back' value='/nest?n={e(urllib.parse.quote(name))}'>"
+    others = [(i, p) for i, p in enumerate(plist) if str(p.resolve()) not in n.get("members", [])]
+    out.append("<details class='more'><summary>Add or take out projects</summary><ul class='folders'>"
+               + "".join(f"<li><b>{e(p.name)}</b><div class='folderacts'><form method='post' action='/nest/leave'>{back}"
+                         f"<input type='hidden' name='p' value='{i}'><button class='quiet'>Take out</button></form></div></li>"
+                         for i, p in members)
+               + "</ul>" + (f"<form method='post' action='/nest/join' class='nestadd'>{back}<input type='hidden' name='name' "
+                            f"value='{e(name)}'><select name='p'>" + "".join(
+                                f"<option value='{i}'>{e(p.name)}{' (in ' + e(nest.nest_of(p)) + ')' if nest.nest_of(p) else ''}</option>"
+                                for i, p in others) + "</select><button>Add to this group</button></form>" if others else "")
+               + "<p class='muted'>A project is in one group at a time: adding one from another group moves it here. A group "
+                 "with no projects left keeps its shared vision, if it has one.</p></details>")
+    away = [k for k in archived_off() if nest.nest_of(k) == name]
+    if away:
+        out.append(f"<div class='archrow'><div class='muted'>Archived: {e(', '.join(Path(k).name for k in away))}</div>"
+                   f"<form method='post' action='/bring-back'><input type='hidden' name='nest' value='{e(name)}'>"
+                   f"<button class='quiet'>Bring back</button></form></div>")
+    if members:
+        out.append(f"<details class='more'><summary>Archive the group</summary><form method='post' action='/nest/archive' "
+                   f"class='nestadd'><input type='hidden' name='name' value='{e(name)}'><input name='why' placeholder="
+                   f"'Why (optional; its agents read it when it comes back)'><button class='quiet'>Archive the group</button></form>"
+                   "<p class='muted'>Each agent writes down where it stands and lands its work; then the group comes off the "
+                   "board and the steward's watch, nothing waking it. All projects → Archived brings it back, each in the "
+                   "same conversation.</p></details>")
     out.append("</div>")
     links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
     new_tab, icons = " target='_blank' rel='noopener'", {"url": "🔗", "upload": "📎"}
@@ -6247,6 +6344,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path in ("/nest/archive", "/bring-back"):
+            from . import nest
+            name = form.get("name") or form.get("nest") or ""
+            members = [m for m in nest.nests().get(name, {}).get("members", [])] if name else []
+            if path == "/nest/archive":
+                archive_together(members, why=form.get("why", ""))
+            else:
+                bring_back(members if name else [form.get("path", "")])
+            self.send_response(303)
+            self.send_header("Location", f"/nest?n={urllib.parse.quote(name)}" if name else "/projects")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/nests/order":                       # the person moved the groups: their order, everywhere
             reg = registry()
             reg["settings"]["nest_order"] = list(dict.fromkeys(values.get("n", [])))
@@ -6407,16 +6517,16 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     pass
             elif path == "/project/archive":
-                try:
-                    close_project(root, why=form.get("why", ""), archive=True)
-                except ValueError:
-                    pass
+                archive_together([root], why=form.get("why", ""))
             elif path == "/nest/join" and form.get("name", "").strip():
                 nest.join(root, form["name"])
             elif path == "/nest/leave":
                 nest.leave(root)
+            back = form.get("back", "")
+            if back.startswith("/nest?n=") and urllib.parse.unquote(back[8:]) not in nest.nests():
+                back = "/"                                   # its last project taken out, and nothing else kept it
             self.send_response(303)
-            self.send_header("Location", f"/?p={pid}")
+            self.send_header("Location", back if back.startswith("/nest?n=") else f"/?p={pid}")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -6744,6 +6854,8 @@ body.typing .toend { top:calc(var(--kbtop, 100vh) - 124px); bottom:auto; transfo
 .pinbtn { flex:none; display:inline-flex; align-items:center; justify-content:center; width:36px; height:32px; margin:-6px -6px -6px 0;
   font-size:15px; opacity:.25; filter:grayscale(1); cursor:pointer } .pinbtn.on { opacity:1; filter:none }
 a.proj.pinchip .pname::before { content:'📌'; font-size:11px; margin-right:2px }
+.archrow { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 0; border-bottom:1px solid var(--line) }
+.archrow > div { min-width:0; overflow-wrap:anywhere } .archrow form { flex:none } .archline { margin:6px 0 14px } .nestset { display:none } form.nestadd { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0 }
 .nestchip .nestcount { color:var(--muted); font-weight:400 } .nestopen { cursor:pointer; padding:0 6px; font-size:16px; color:var(--accent) }
 .saidlast { display:block; margin:12px 0; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--card);
   color:var(--ink); text-decoration:none } .saidlast .said { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
@@ -6860,6 +6972,7 @@ details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
 .pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.pin > a.pintitle { display:block }
 .pinmore { position:relative } .pinmore summary { list-style:none; cursor:pointer; padding:0 8px; color:var(--muted) }
 .pinmore summary::-webkit-details-marker { display:none }
 .pinmenu { position:absolute; right:0; z-index:10; width:min(360px, calc(100vw - 32px)); padding:10px; border-radius:10px;
@@ -6956,6 +7069,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
     box-shadow:0 2px 8px rgba(0,0,0,.18); font-size:15px; padding:0; cursor:pointer }
   nav span.nestgroup { display:inline-flex; flex:none; align-items:center; gap:4px; margin:0; padding:3px; border-radius:999px }
   nav span.nestgroup .nestchip { background:transparent; font-weight:600 }
+  nav span.nestgroup .members .proj.nestset { display:inline-flex; background:transparent; padding:2px 10px; font-size:17px; color:var(--accent) }
   nav span.nestgroup .members .proj { min-height:32px; padding:2px 10px; font-size:14px }
   nav .proj { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
     border-radius:999px; background:var(--sunk) }

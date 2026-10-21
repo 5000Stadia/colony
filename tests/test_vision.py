@@ -552,6 +552,57 @@ class ArchiveAndListTest(BoardBase):
         waiting = [n["text"][:30] for n in board.open_notes(other) if n.get("kind") == "close"]
         self.assertEqual(waiting, ["The person is archiving this p"])
 
+    def photonic(self):
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        return other
+
+    def test_a_group_is_archived_together_and_comes_back_together_from_the_shelf(self):
+        from colony import nest
+        board.track(self.root)
+        other = self.photonic()
+        nest.join(self.root, "holodeck")
+        nest.join(other, "holodeck")
+        self.assertEqual(set(board.archive_together([self.root, other], why="Back after the launch").values()), {"closing"})
+        self.assertEqual(board.archived_shelf(), "", "still landing its work: on the board till then")
+        board.finish_closing(self.root)
+        board.finish_closing(other)
+        reg = board.registry()
+        self.assertEqual(board.projects(reg), [])
+        shelf = board.archived_shelf()
+        self.assertIn("<b>holodeck</b> <span class='muted'>group · 2 projects", shelf)
+        self.assertIn("“Back after the launch”", shelf)
+        self.assertIn("Archived: holodeck (2) →", board.archived_shelf(link=True))
+        self.assertIn("id='archived'", board.all_projects_page(reg))
+        self.assertIn("action='/bring-back'", board.nest_page(reg, "holodeck"), "and on the group's own page")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/bring-back",
+                                                          data=b"nest=holodeck"))
+        finally:
+            httpd.shutdown()
+        self.assertEqual({p.name for p in board.projects()}, {"plants", "photonic"}, "the group's row brings all of it back")
+        self.assertEqual(nest.nest_of(other), "holodeck")
+        self.assertEqual(board.archived_shelf(), "")
+        self.assertEqual(len([n for n in board.notes(other) if "is open again" in n["text"]]), 1)
+
+    def test_a_shared_projects_seats_are_archived_and_brought_back_with_each_other(self):
+        board.track(self.root)
+        other = self.photonic()
+        seats = dict(id="x", canonical=str(self.root.resolve()), members=[str(self.root.resolve()), str(other.resolve())],
+                     lead=str(self.root.resolve()), generation=1, owners={}, assignments={}, checkpoints=[], goals={}, paused=False)
+        with patch("colony.lead.group", return_value=seats):
+            with self.assertRaises(ValueError):
+                board.close_project(self.root, archive=True)          # one seat alone: still refused
+            self.assertEqual(set(board.archive_together([self.root])), {"plants", "photonic"})
+            board.finish_closing(self.root)
+            board.finish_closing(other)
+            self.assertEqual(board.bring_back([other]), ["photonic", "plants"])
+        self.assertEqual({p.name for p in board.projects()}, {"plants", "photonic"})
+
     def test_all_projects_are_listed_under_their_nests_and_a_project_can_join_or_leave_one_from_its_page(self):
         from colony import nest
         board.track(self.root)
@@ -568,6 +619,37 @@ class ArchiveAndListTest(BoardBase):
                       "the nests there are, listed to join with a tap")
         self.assertIn("Take it out", board.nest_form(1, other))
         self.assertIn("href='/projects'", board.sidebar(board.registry(), 0))
+
+    def test_a_nests_page_is_a_tap_from_its_chip_and_adds_or_takes_out_its_projects(self):
+        import threading, urllib.request
+        from http.server import ThreadingHTTPServer
+        from colony import nest
+        board.track(self.root)
+        other = Path(self.tmp.name) / "photonic"
+        other.mkdir()
+        (other / "ROADMAP.md").write_text(ROADMAP)
+        board.track(other)
+        nest.join(other, "holodeck")
+        reg = board.registry()
+        mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
+        self.assertIn("class='proj nestset' href='/nest?n=holodeck'", board.sidebar(reg, mine), "the chip's way to its page")
+        page = board.nest_page(reg, "holodeck")
+        self.assertIn("Add or take out projects", page)
+        self.assertIn(f"<option value='{1 - mine}'>plants</option>", page, "a project outside it, to add")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            post = lambda path, data: urllib.request.urlopen(urllib.request.Request(
+                f"http://127.0.0.1:{httpd.server_address[1]}{path}", data=data.encode()))
+            r = post("/nest/join", f"p={1 - mine}&name=holodeck&back=/nest?n=holodeck")
+            self.assertTrue(r.url.endswith("/nest?n=holodeck"), "back on the nest's page")
+            self.assertEqual(nest.nest_of(self.root), "holodeck")
+            post("/nest/leave", f"p={1 - mine}&back=/nest?n=holodeck")
+            r = post("/nest/leave", f"p={mine}&back=/nest?n=holodeck")
+            self.assertNotIn("/nest", r.url, "its last project out, the nest is gone: not its page")
+            self.assertIsNone(nest.nest_of(other))
+        finally:
+            httpd.shutdown()
 
 
 class StewardPageTest(BoardBase):

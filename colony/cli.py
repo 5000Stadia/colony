@@ -1372,14 +1372,15 @@ def cmd_nest(a):
 def cmd_archive(a):
     from . import board
     try:
-        out = board.close_project(_project(a.name), why=a.why or "", archive=True)
+        out = board.archive_together([_project(a.name)], why=a.why or "")
     except ValueError as e:
         print(e)
         return 1
-    print(f"{a.name} is packaging where it stands (ARCHIVE.md) and landing its work; then it comes off the board, its "
-          "files and conversation kept. colony track reopens it, and its agent hears why it was archived."
-          if out == "closing" else f"{a.name} is archived")
-    return 0
+    for name, state in out.items():
+        print(f"{name} is packaging where it stands (ARCHIVE.md) and landing its work; then it comes off the board, its "
+              "files and conversation kept. All projects → Archived brings it back, and its agent hears why it was archived."
+              if state == "closing" else f"{name} is archived" if state == "closed" else f"{name}: {state}")
+    return 0 if all(v in ("closing", "closed") for v in out.values()) else 1
 
 
 def cmd_delete(a):
