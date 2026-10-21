@@ -824,9 +824,11 @@ def items(road):
 # ---------------------------------------------------------------- questions the agent asked in its console
 
 def asks_question(text):
-    """A sentence ending in "?", outside code: the agent is asking the person something."""
+    """The turn ends asking the person something: a sentence ending in "?", outside code, in its last paragraph (or
+    its last list). A question earlier in it is talk, or one the agent put to itself (what it is checking)."""
     prose = re.sub(r"```.*?```|`[^`]*`|https?://\S+", " ", text, flags=re.S)
-    return bool(re.search(r"\?(?=[\s)*_\"'»]|$)", prose))
+    blocks = [b for b in re.split(r"\n\s*\n", prose) if b.strip()]
+    return bool(blocks) and bool(re.search(r"\?(?=[\s)*_\"'»]|$)", blocks[-1]))
 
 
 def asks(root):

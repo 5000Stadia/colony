@@ -2003,6 +2003,11 @@ class MonitorTest(BoardBase):
         self.assertEqual(len(sent), 1)
         self.assertIn("asked you: Which format", sent[0])
         self.assertNotIn("finished a turn", sent[0])
+        self.assertFalse(board.asks_question("Two agents are writing plans. I'm checking:\n- Do they measure the long run?\n"
+                                             "- Do they leave the CLI alone?\n\nIt ships if they do."),
+                         "questions it put to itself, mid-turn, ask the person nothing")
+        self.assertTrue(board.asks_question("Shipped.\n\nWant me to start the Library, or finish the glance first?"))
+        self.assertTrue(board.asks_question("Two ways:\n\n- the menu?\n- or lanes?"), "a last list of questions asks")
 
     def test_a_folder_trust_question_is_answered_yes_unless_the_person_turns_it_off(self):
         claude, codex = providers.get("claude"), providers.get("codex")
