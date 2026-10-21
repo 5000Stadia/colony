@@ -117,7 +117,7 @@ def speak(text, voice=None):
         return None
     cache = folder() / "cache"
     cache.mkdir(parents=True, exist_ok=True)
-    out = cache / (hashlib.sha1(f"{voice}\n{text}\n".encode()).hexdigest() + ".mp3")
+    out = cache / (hashlib.sha1(f"{voice}\n{text}\nlead\n".encode()).hexdigest() + ".mp3")
     if out.exists():
         return out
     with _lock:                                          # one at a time: the worker reads one line, answers one

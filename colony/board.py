@@ -2059,19 +2059,37 @@ def at_work(root, n=70):
     return f"next {nxt['id']} {short(plain(nxt['text']), n)}" if nxt else ""
 
 
-def sidebar(reg, pid):
-    from . import monitor
-    plist = projects(reg)
-    ms = monitor.snapshot()
-    helm = "at the helm" if monitor.helm() else "helm with you"
-    side, total, groups = [], 0, []
-    # the top menu follows activity: a nest comes forward whole, open or shut as it was, led by the project that moved it
+def nav_groups(plist):
+    """The top menu's order, [(group, [(index, project)])]: it follows activity, a nest coming forward whole, led by
+    the project that moved it."""
+    groups = []
     for i, p, here in arranged(plist, theirs=False):
         if here and groups and groups[-1][0] == here:
             groups[-1][1].append((i, p))
         else:
             groups.append((here, [(i, p)]))
-    for here, members in groups:
+    return groups
+
+
+def nav_order(plist):
+    """nav_groups as the poll sends it, so an open page moves its chips when a project stirs: ["p", index] for a
+    chip of its own, ["n", nest, [index, ...]] for a nest's."""
+    out = []
+    for here, members in nav_groups(plist):
+        if not here or here == PINNED:
+            out += [["p", i] for i, _ in members]
+        else:
+            out.append(["n", here, [i for i, _ in members]])
+    return out
+
+
+def sidebar(reg, pid):
+    from . import monitor
+    plist = projects(reg)
+    ms = monitor.snapshot()
+    helm = "at the helm" if monitor.helm() else "helm with you"
+    side, total = [], 0
+    for here, members in nav_groups(plist):
         chips, states, waits = [], [], 0
         for i, p in members:
             # its screen read once: its dot, and what waits on the person
@@ -2272,9 +2290,36 @@ async function poll() {
       const badge = document.getElementById('badge-' + i);
       if (badge) { badge.hidden = !s.waiting; badge.textContent = s.waiting; }
     });
+    reorder(st.nav);
   } catch (e) {}
 }
 setInterval(poll, 2500);
+// A project that stirs comes forward in the top menu then and there, as a reload would put it; where the menu has
+// changed shape (a project added, a nest formed), it waits for the next page.
+function reorder(nav) {
+  const row = document.querySelector('nav .navrow'); if (!row || !nav) return;
+  if (!row.dataset.watched) {           // never under a finger: a chip doesn't move while the row is touched or scrolled
+    row.dataset.watched = 1;
+    ['pointerdown', 'scroll', 'touchstart'].forEach((t) => row.addEventListener(t, () => { row.dataset.touched = Date.now(); }, {passive: true}));
+  }
+  if (Date.now() - (+row.dataset.touched || 0) < 5000) return;
+  const chip = (i) => { const d = document.getElementById('dot-' + i); return d && d.closest('a.proj'); };
+  const nests = [...row.querySelectorAll(':scope > .nestgroup')];
+  const els = nav.map(([k, v]) => k === 'p' ? chip(v) : nests.find((g) => g.dataset.fold === 'nav:' + v));
+  if (els.some((x) => !x || x.parentNode !== row)) return;
+  nav.forEach(([k, v, members], n) => {
+    if (k !== 'n') return;
+    const box = els[n].querySelector('.members'), set = box && box.querySelector('.nestset');
+    const mine = (members || []).map(chip);
+    if (!box || mine.some((c) => !c || c.parentNode !== box)) return;
+    const now = [...box.children].filter((c) => mine.includes(c));
+    if (now.some((c, j) => c !== mine[j])) mine.forEach((c) => box.insertBefore(c, set));
+  });
+  const now = [...row.children].filter((x) => els.includes(x));
+  if (now.every((x, j) => x === els[j])) return;
+  const end = row.querySelector(':scope > div.sline, :scope > .navfoot');
+  els.forEach((x) => row.insertBefore(x, end));
+}
 """
 
 
@@ -2572,8 +2617,10 @@ CHAT = """
   const ta = form.querySelector('textarea'), held = document.getElementById('chatheld');
   // At the end: what is really visible reaches it. With the keyboard up the page's own height still counts the part
   // behind it, so the visible part is read off the visual viewport.
-  const atEnd = () => { const vv = window.visualViewport;
-    const seen = window.scrollY + (vv ? vv.offsetTop + vv.height : window.innerHeight);
+  // An iPhone counts the keyboard's pan in its scrollY and other browsers don't; the visual viewport's pageTop is the
+  // same on both, so the visible part is read off it alone.
+  const shownTo = () => { const v = window.visualViewport; return v ? v.pageTop + v.height : window.scrollY + window.innerHeight; };
+  const atEnd = () => { const seen = shownTo();
     return typingNow() ? seen - form.offsetHeight >= lastBottom() - 40 : seen >= document.body.scrollHeight - 80; };
   // It follows new messages only while the person is at the end; scrolled up, it stays where they are.
   let stick = true;
@@ -2583,11 +2630,11 @@ CHAT = """
   const typingNow = () => document.body.classList.contains('typing');
   const lastBottom = () => { const el = box.lastElementChild; return el ? el.getBoundingClientRect().bottom + window.scrollY : 0; };
   const toEnd = () => { if (!typingNow()) return window.scrollTo(0, document.body.scrollHeight);
-    const v = window.visualViewport, shown = v ? v.offsetTop + v.height : window.innerHeight;
-    const to = Math.max(0, lastBottom() - shown + form.offsetHeight + 24);
+    const by = lastBottom() + form.offsetHeight + 24 - shownTo();
     // a scroll the phone makes while its keyboard is up shifts the whole page for a moment (the bar at the top slips
-    // away and back): only a real move is made
-    if (Math.abs(to - window.scrollY) > 4) window.scrollTo(0, to); };
+    // away and back): only a real move is made, by what it needs from where the eye is (counting the keyboard's pan
+    // twice swung it back and forth at each look, the bar with it)
+    if (Math.abs(by) > 4) window.scrollBy(0, Math.max(by, -window.scrollY)); };
   toEnd();
   let last = box.innerHTML, pending = [];
   // what was just sent shows at once, faded, until the conversation has it (a busy agent takes it up mid-turn)
@@ -2676,7 +2723,7 @@ CHAT = """
   function measure(when) {
     if (measured++ > 4) return;
     const r = form.getBoundingClientRect(), v = window.visualViewport;
-    const m = {when, inner: innerHeight, vvh: v && v.height, vvtop: v && v.offsetTop, scroll: scrollY, page: document.body.scrollHeight,
+    const m = {when, inner: innerHeight, vvh: v && v.height, vvtop: v && v.offsetTop, vvpage: v && v.pageTop, scroll: scrollY, page: document.body.scrollHeight,
       boxTop: Math.round(r.top), boxBottom: Math.round(r.bottom), kbtop: getComputedStyle(document.documentElement).getPropertyValue('--kbtop'),
       typing: document.body.classList.contains('typing')};
     fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {});
@@ -5913,7 +5960,8 @@ class Handler(BaseHTTPRequestHandler):
             from . import monitor
             body = json.dumps({"board": str(home()), "projects": [
                 dict(console.snapshot(p), waiting=len(moments(p)), work=at_work(p), followed=monitor.involved(p)) if p.exists()
-                else {"state": "off", "lines": [], "waiting": 0, "work": "", "followed": False} for p in plist], "monitor": monitor.snapshot()}).encode()
+                else {"state": "off", "lines": [], "waiting": 0, "work": "", "followed": False} for p in plist], "monitor": monitor.snapshot(),
+                "nav": nav_order(plist)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

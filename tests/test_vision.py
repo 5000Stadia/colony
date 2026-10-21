@@ -512,6 +512,12 @@ class PageTest(BoardBase):
         self.assertEqual(names()[0], "photonic")
         board.woke(self.root)
         self.assertEqual(names()[0], "plants")
+        # an open page hears the order with each poll, and moves its chips to it
+        plist = board.projects()
+        self.assertEqual(board.nav_order(plist)[0], ["p", plist.index(self.root)])
+        board.save_json(board.home() / "woke.json", {str(other.resolve()): "2099-01-01T00:00:00Z"})
+        self.assertEqual(board.nav_order(plist)[0], ["p", plist.index(other)])
+        self.assertIn("reorder(st.nav)", board.POLL)
 
 
 class ArchiveAndListTest(BoardBase):
