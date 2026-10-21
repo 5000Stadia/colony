@@ -1,4 +1,7 @@
-"""Pinned: what the person and the agent show each other, kept at the top of the project's page.
+"""The Library: what the person and the agent keep to refer to, on purpose, each with why it is kept and under a
+heading either of them may set (a world bible's places and people, a policy set, research they build on, a page they
+work on together). It starts empty and holds only what keeps its value: what is done goes to its archive, folded,
+kept, and never read to the agent.
 
 A pin is a file in the project, a link, or a file the person uploaded. Either side pins; the agent hears of
 the person's pins, edits and comments as notes: quietly (on its next turn, without waking it) for a pin
@@ -17,19 +20,42 @@ TEXT = {".md", ".txt", ".markdown", ".text"}             # opened into an editor
 UPLOAD_LIMIT = 25 * 1024 * 1024
 
 
-def pins(root):
-    """The pins in place, newest first."""
+def _all(root):
     out = {}
     for e in board.read(root, FILE):
         if e["type"] == "pin":
             out[e["id"]] = e
         elif e["type"] == "unpin":
             out.pop(e["of"], None)
+        elif e["type"] == "group" and e["of"] in out:
+            out[e["of"]] = dict(out[e["of"]], group=e["group"])
+        elif e["type"] == "archive" and e["of"] in out:
+            out[e["of"]] = dict(out[e["of"]], archived=e)
+        elif e["type"] == "restore" and e["of"] in out:
+            out[e["of"]] = {k: v for k, v in out[e["of"]].items() if k != "archived"}
     return sorted(out.values(), key=lambda p: p["at"], reverse=True)
 
 
+def pins(root):
+    """What the Library holds now, newest first."""
+    return [p for p in _all(root) if "archived" not in p]
+
+
+def archived(root):
+    """What was put away when its part of the work was done: kept, folded, never read to the agent; newest first."""
+    return sorted((p for p in _all(root) if "archived" in p), key=lambda p: p["archived"]["at"], reverse=True)
+
+
+def archive(root, pin_id, why="", by="person"):
+    board.append(root, FILE, {"type": "archive", "of": pin_id, "why": why.strip(), "by": by, "at": board.now()})
+
+
+def restore(root, pin_id):
+    board.append(root, FILE, {"type": "restore", "of": pin_id, "at": board.now()})
+
+
 def get(root, pin_id):
-    return next((p for p in pins(root) if p["id"] == pin_id), None)
+    return next((p for p in _all(root) if p["id"] == pin_id), None)
 
 
 def inside(root, rel):
@@ -43,7 +69,7 @@ def inside(root, rel):
     return path
 
 
-def add(root, target, title="", why="", by="person", kind=None):
+def add(root, target, title="", why="", by="person", kind=None, group=""):
     """Pin a file in the project (a path relative to it), a link, or an upload already saved."""
     kind = kind or ("url" if re.match(r"^[a-z][a-z0-9+.-]*://", target, re.I) else "file")
     if kind in ("file", "upload"):
@@ -52,13 +78,15 @@ def add(root, target, title="", why="", by="person", kind=None):
             raise FileNotFoundError(target)
         target = str(path.relative_to(Path(root).resolve()))
     pin = {"type": "pin", "id": "p" + secrets.token_hex(3), "at": board.now(), "by": by, "kind": kind,
-           "target": target, "title": (title or Path(target).name or target).strip(), "why": why.strip()}
+           "target": target, "title": (title or Path(target).name or target).strip(), "why": why.strip(),
+           **({"group": group.strip()} if group.strip() else {})}
     board.append(root, FILE, pin)
     return pin
 
 
-def remove(root, pin_id):
-    board.append(root, FILE, {"type": "unpin", "of": pin_id, "at": board.now()})
+def regroup(root, pin_id, group):
+    """Under another heading (empty: none)."""
+    board.append(root, FILE, {"type": "group", "of": pin_id, "group": group.strip(), "at": board.now()})
 
 
 def save_upload(root, filename, data):

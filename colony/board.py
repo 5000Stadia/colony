@@ -130,7 +130,11 @@ steer all of them from one board, and the projects can write to each other.
 - Fresh views: `colony consult R4 "the decision" --digest FILE` (sourced facts, your plan left out); its output
   says what comes next. If consulting is off, go on.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
-- What the person will keep opening: `colony pin PATH-or-URL --title "..." --why "..."`.
+- The Library holds what you and the person will keep referring to (a world's places and people, a policy set,
+  research you build on, a page you work on together): `colony pin PATH-or-URL --title "..." --why "..." --group
+  "heading"`. It starts empty; when one's part of the work is done, `colony unpin ID --why "..."` folds it into the archive.
+  Organize it as best serves the work (`colony regroup ID "heading"`, `colony regroup --rename OLD NEW`); when the
+  person reorganizes it, that is their preference showing: follow it, and settle the shape with them.
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
 - A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
@@ -3457,7 +3461,65 @@ def queue_html(pid, root):
 W, H, GX, GY = 172, 56, 38, 16
 
 
-LIBRARY_SHOWN = 40      # a folder's first documents shown; the rest a search away
+def library_html(pid, root, q=""):
+    """The Library tab: what the person and the agent keep to refer to, under their headings, each opening as it is
+    (a text one to edit together, a page to run). It starts empty. Finding a file in the project is only a way to
+    add one: a search, its results each with Add."""
+    from . import library
+    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=library'>"
+    groups = {}
+    for x in sorted(pins.pins(root), key=lambda x: x["at"]):
+        groups.setdefault(x.get("group") or "", []).append(x)
+    heads = [g for g in groups if g] + [""] * ("" in groups)
+    known = "".join(f"<option value='{e(g)}'>" for g in heads if g)
+    out = [f"<div class='pinhead'><h2>Library</h2><a href='/pins/add?p={pid}'>+ Add</a></div>"]
+    for g in heads:
+        rows = []
+        for x in reversed(groups[g]):
+            row = pin_row(pid, x)
+            move = (f"<form class='add regroup' method='post' action='/pin/group'>{hidden}<input type='hidden' name='id' value='{e(x['id'])}'>"
+                    f"<input name='group' list='libheads-{pid}' value='{e(x.get('group') or '')}' placeholder='Heading'>"
+                    f"<button class='quiet'>Move</button></form>")
+            rows.append(row.replace("<div class='pinmenu'>", "<div class='pinmenu'>" + move, 1))
+        rename = (f"<details class='renamehead'><summary>Rename</summary><form class='add regroup' method='post' action='/pin/rename'>"
+                  f"{hidden}<input type='hidden' name='old' value='{e(g)}'><input name='new' value='{e(g)}' placeholder='Heading'>"
+                  f"<button class='quiet'>Rename</button></form></details>")
+        out.append(f"<details class='libgroup d1' open><summary>{e(g or 'Not under a heading')} <span class='muted'>{len(rows)}</span>"
+                   f"</summary>{rename}{''.join(rows)}</details>")
+    if not groups:
+        out.append("<div class='card muted'>Empty, and ready for what you'll both keep returning to: a world's places and people, "
+                   "a set of policies, research you build on, a page you work on together. Add one, or the agent will when "
+                   "something earns a place. Only what keeps its value stays: unpin what no longer does.</div>")
+    out.append(f"<datalist id='libheads-{pid}'>{known}</datalist>")
+    gone = pins.archived(root)
+    if gone:                            # folded, and never read to the agent: what's done costs nothing to keep
+        out.append(f"<details class='libgroup d1 archive'><summary>Archive <span class='muted'>{len(gone)}</span></summary>" + "".join(
+            f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(x['id'])}' target='_blank' "
+            f"rel='noopener'>{e(x['title'])}</a><form method='post' action='/pin/restore'>{hidden}<input type='hidden' name='id' "
+            f"value='{e(x['id'])}'><button class='quiet'>Restore</button></form></div><div class='who'>"
+            f"archived {e(x['archived']['at'][:10])}{' by the agent' if x['archived'].get('by') == 'agent' else ''}"
+            + (f" · {e(x['archived']['why'])}" if x["archived"].get("why") else "") + "</div></div>" for x in gone) + "</details>")
+    # adding a file from the project: found by a search, never listed by itself
+    q = (q or "").strip().lower()
+    hits = []
+    if q:
+        kept = {x["target"] for x in pins.pins(root)}
+        for rel in library.files(root):
+            title, line, kind, changed = library.about(root, rel)
+            if q in f"{title} {line} {rel}".lower() and rel not in kept:
+                hits.append(f"<div class='libitem'><a href='{chat_file(pid, root, rel)}' target='_blank' rel='noopener'>{e(title)}</a>"
+                            f"<div class='muted small'>{e(line) + ' · ' if line else ''}<code>{e(rel)}</code></div>"
+                            f"<form class='add' method='post' action='/pin'>{hidden}<input type='hidden' name='target' value='{e(rel)}'>"
+                            f"<input type='hidden' name='title' value='{e(title)}'><input name='group' list='libheads-{pid}' "
+                            f"placeholder='Heading (optional)'><button class='quiet'>Add to the Library</button></form></div>")
+                if len(hits) >= 40:
+                    break
+    out.append(f"<details class='libgroup d1'{' open' if q else ''}><summary>Add a file from the project</summary>"
+               f"<form class='libsearch' method='get' action='/'><input type='hidden' name='p' value='{pid}'>"
+               f"<input type='hidden' name='view' value='library'><input type='search' name='all' value='{e(q)}' "
+               f"placeholder='Find a file by its name or title'></form>"
+               + ("".join(hits) or ("<p class='muted'>No file matches.</p>" if q else "")) + "</details>")
+    return "".join(out)
 
 
 def page_sig(root, path):
@@ -3479,62 +3541,6 @@ def page_with_send(key, root, path, data):
               "return r.ok}).catch(function(){return false})}};</script>").encode()
     m = re.search(rb"<head[^>]*>", data, re.I)
     return data[:m.end()] + script + data[m.end():] if m else script + data
-
-
-def library_html(pid, root, q=""):
-    """The Library tab: the map's headings (LIBRARY.md) with what it places, then what it doesn't, by folder (and
-    subfolder), then uploads; each document by its title and line, opening as it is (a page runs). A search finds
-    anything in it by title, line or path."""
-    from . import library
-    sections, rest, ups = library.shape(root)
-    q = (q or "").strip().lower()
-
-    def row(rel, title=None, line=None):
-        t, l, kind, changed = library.about(root, rel)
-        title, line = title or t, line or l
-        if q and q not in f"{title} {line} {rel}".lower():
-            return ""
-        url = chat_file(pid, root, rel)
-        name = f"<a href='{url}' target='_blank' rel='noopener'>{e(title)}</a>" if url else f"{e(title)} <span class='muted'>(missing)</span>"
-        badge = "" if kind == "doc" else f" <span class='badge'>{kind}</span>"
-        return (f"<div class='libitem'>{name}{badge}<div class='muted small'>{e(line) + ' · ' if line else ''}"
-                f"<code>{e(rel)}</code> · {changed}</div></div>")
-
-    def group(title, rels, depth=1, open_=False):
-        rows = [r for r in (row(x) for x in rels) if r]
-        if not rows:
-            return ""
-        cap = LIBRARY_SHOWN * 3 if q else LIBRARY_SHOWN
-        more = max(0, len(rows) - cap)
-        return (f"<details class='libgroup d{depth}'{' open' if open_ or q else ''}><summary>{e(title)} "
-                f"<span class='muted'>{len(rows)}</span></summary>{''.join(rows[:cap])}"
-                + (f"<p class='muted small'>{more} more: {'narrow the search' if q else 'search to find one'}.</p>" if more else "")
-                + "</details>")
-
-    out = [f"<form class='libsearch' method='get' action='/'><input type='hidden' name='p' value='{pid}'>"
-           f"<input type='hidden' name='view' value='library'><input type='search' name='all' value='{e(q)}' "
-           f"placeholder='Find in the library'></form>"]
-    for s in sections:
-        rows = "".join(row(p, t, l) for p, t, l in s["entries"])
-        if rows or not q:
-            out.append(f"<details class='libgroup d{s['depth']}' open><summary>{e(s['title'])}</summary>{rows}</details>")
-    for top in sorted(rest, key=lambda k: (k == "", k.lower())):
-        rels = rest[top]
-        subs = {}
-        for rel in rels:
-            parts = Path(rel).parts
-            subs.setdefault(parts[1] if len(parts) > 2 else "", []).append(rel)
-        if len(rels) > LIBRARY_SHOWN and len(subs) > 1:
-            inner = "".join(group(k or "(in the folder itself)", v, 2) for k, v in sorted(subs.items()))
-            if inner:
-                out.append(f"<details class='libgroup d1'{' open' if q else ''}><summary>{e(top)} <span class='muted'>"
-                           f"{len(rels)}</span></summary>{inner}</details>")
-        else:
-            out.append(group(top or "In the project's folder", rels, 1, open_=not sections and top == ""))
-    out.append(group("Uploaded", ups))
-    body = "".join(x for x in out[1:] if x)
-    return out[0] + (body or ("<p class='muted'>Nothing matches.</p>" if q else
-                              "<p class='muted'>Nothing here yet: documents and pages the project keeps show here.</p>"))
 
 
 def measures_html(root):
@@ -4350,28 +4356,30 @@ def nest_page(reg, name):
     return shell(reg, -2, "".join(out))
 
 
+def pin_row(pid, p):
+    """One thing in the Library: tap to open (a text file opens to edit), comment to the agent about it, or unpin it."""
+    icon = {"url": "🔗", "upload": "📎"}.get(p["kind"], "📄")
+    new_tab = "" if pins.is_text(p) else " target='_blank' rel='noopener'"
+    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='id' value='{e(p['id'])}'>"
+    return (f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(p['id'])}'{new_tab}>"
+            f"{icon} {e(p['title'])}</a><details class='pinmore'><summary>⋯</summary><div class='pinmenu'>"
+            f"<form class='add' method='post' action='/pin/comment'>{hidden}"
+            f"<textarea name='text' placeholder='Comment to the agent about this'></textarea><button>Send</button></form>"
+            f"<form class='add regroup' method='post' action='/unpin'>{hidden}<input name='why' placeholder='Why it is done (optional)'>"
+            f"<button class='quiet'>Archive</button></form></div></details></div>"
+            f"<div class='who'>{'by the agent · ' if p['by'] == 'agent' else ''}"
+            + (f"{e(p['why'])} · " if p.get("why") else "")
+            + f"{e(p['target'] if p['kind'] != 'url' else p['target'][:60])}</div></div>")
+
+
 def pinned_section(pid, root):
-    """What the person and the agent show each other: tap to open (a text file opens to edit), comment to the
-    agent about it, or unpin it."""
-    rows = []
-    for p in pins.pins(root):
-        icon = {"url": "🔗", "upload": "📎"}.get(p["kind"], "📄")
-        new_tab = "" if pins.is_text(p) else " target='_blank' rel='noopener'"
-        hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='id' value='{e(p['id'])}'>"
-        rows.append(f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(p['id'])}'{new_tab}>"
-                    f"{icon} {e(p['title'])}</a><details class='pinmore'><summary>⋯</summary><div class='pinmenu'>"
-                    f"<form class='add' method='post' action='/pin/comment'>{hidden}"
-                    f"<textarea name='text' placeholder='Comment to the agent about this'></textarea><button>Send</button></form>"
-                    f"<form method='post' action='/unpin'>{hidden}<button class='quiet'>Unpin</button></form></div></details></div>"
-                    f"<div class='who'>{'by the agent · ' if p['by'] == 'agent' else ''}{e(p['target'] if p['kind'] != 'url' else p['target'][:60])}"
-                    + (f" · {e(p['why'])}" if p.get("why") else "") + "</div></div>")
+    """The Library's newest few, at the top of the Overview, the rest a tap away."""
+    rows = [pin_row(pid, p) for p in pins.pins(root)]
     if not rows:
-        return ""                          # nothing pinned, no section: pinning is also under Message, at the top
-    rest = rows[PINS_SHOWN:]
-    return (f"<div class='pinned' id='pinned'><div class='pinhead'><h2>Pinned</h2><a href='/pins/add?p={pid}'>+ Pin</a></div>"
-            + "".join(rows[:PINS_SHOWN])
-            + (f"<details class='morepins'><summary>{len(rest)} more</summary>{''.join(rest)}</details>" if rest else "")
-            + "</div>")
+        return ""                          # nothing kept, no section: adding is also under Message, at the top
+    return (f"<div class='pinned' id='pinned'><div class='pinhead'><h2>Library</h2><a href='/?p={pid}&view=library'>"
+            f"{'All ' + str(len(rows)) + ' →' if len(rows) > PINS_SHOWN else 'Open →'}</a></div>"
+            + "".join(rows[:PINS_SHOWN]) + "</div>")
 
 
 PINS_SHOWN = 5           # the newest pins shown; the rest fold
@@ -6217,14 +6225,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        elif path == "/pin/group" and form.get("id"):
+            pin = pins.get(root, form["id"])
+            if pin and (pin.get("group") or "") != form.get("group", "").strip():
+                pins.regroup(root, pin["id"], form.get("group", ""))
+                add_note(root, {"pin": pin["id"]}, f"The person moved {pins.describe(pin)} in the Library from "
+                         f"'{pin.get('group') or 'no heading'}' to '{form.get('group', '').strip() or 'no heading'}'.",
+                         author='person', quiet=True)
+        elif path == "/pin/rename" and form.get("old") is not None and form.get("new", "").strip():
+            moved = [x for x in pins.pins(root) if (x.get("group") or "") == form["old"]]
+            for x in moved:
+                pins.regroup(root, x["id"], form["new"])
+            if moved:
+                add_note(root, None, f"The person renamed the Library heading '{form['old'] or 'no heading'}' to "
+                         f"'{form['new'].strip()}'.", author='person', quiet=True)
         elif path == "/pin" and form.get("target", "").strip():
             try:
-                pin = pins.add(root, form["target"].strip(), form.get("title", ""), kind=form.get("kind"))
+                pin = pins.add(root, form["target"].strip(), form.get("title", ""), kind=form.get("kind"), group=form.get("group", ""))
                 tell_pinned(root, pin, form.get("comment", "").strip())
             except FileNotFoundError:
                 pass
         elif path == "/unpin" and form.get("id"):
-            pins.remove(root, form["id"])
+            pin = pins.get(root, form["id"])
+            if pin:
+                pins.archive(root, pin["id"], form.get("why", ""))
+                add_note(root, {"pin": pin["id"]}, f"The person archived {pins.describe(pin)} from the Library"
+                         + (f": {form['why'].strip()}" if form.get("why", "").strip() else "") + ".", author='colony', quiet=True)
+        elif path == "/pin/restore" and form.get("id"):
+            pin = pins.get(root, form["id"])
+            if pin:
+                pins.restore(root, pin["id"])
+                add_note(root, {"pin": pin["id"]}, f"The person brought {pins.describe(pin)} back into the Library.",
+                         author='colony', quiet=True)
         elif path == "/showcase/rate" and form.get("id") and form.get("stars", "").isdigit():
             showcase.rate(root, form["id"], int(form["stars"]))
         elif path == "/showcase/comment" and text and form.get("id"):
@@ -6357,6 +6389,8 @@ nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--s
 nav.noproj .proj[style]:not(.on) { background:var(--sunk) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
+.renamehead { margin:0 0 4px } .renamehead > summary { font-size:12px; color:var(--muted); cursor:pointer }
+.pinmenu .regroup input { flex:1; min-width:0 } .pinmenu .regroup { display:flex; gap:6px }
 .libsearch input { width:100%; font-size:16px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); margin:6px 0 10px }
 .libgroup { border-bottom:1px solid var(--line); padding:4px 0 } .libgroup > summary { cursor:pointer; padding:8px 0; font-weight:600 }
 .libgroup.d2 { margin-left:12px } .libgroup.d3 { margin-left:24px } .libitem { padding:6px 0 6px 4px }

@@ -556,7 +556,7 @@ def cmd_pin(a):
     from . import board, pins
     root = board.root_of()
     try:
-        pin = pins.add(root, a.target, a.title or "", a.why or "", by="agent")
+        pin = pins.add(root, a.target, a.title or "", a.why or "", by="agent", group=a.group or "")
     except FileNotFoundError:
         print(f"no file {a.target} in this project", file=sys.stderr)
         return 2
@@ -580,14 +580,32 @@ def cmd_show(a):
     return 0
 
 
+def cmd_regroup(a):
+    """Organize the Library: one entry under a heading, or every entry under one heading renamed to another."""
+    from . import board, pins
+    root = board.root_of()
+    if a.rename:
+        moved = [p for p in pins.pins(root) if (p.get("group") or "") == a.target]
+        for p in moved:
+            pins.regroup(root, p["id"], a.heading)
+        print(f"renamed '{a.target}' to '{a.heading}' ({len(moved)} entries)")
+        return 0
+    if not pins.get(root, a.target):
+        print(f"no Library entry {a.target}", file=sys.stderr)
+        return 2
+    pins.regroup(root, a.target, a.heading)
+    print(f"{a.target} is now under '{a.heading}'")
+    return 0
+
+
 def cmd_unpin(a):
     from . import board, pins
     root = board.root_of()
     if not pins.get(root, a.id):
         print(f"no pin {a.id}", file=sys.stderr)
         return 2
-    pins.remove(root, a.id)
-    print(f"unpinned {a.id}")
+    pins.archive(root, a.id, a.why or "", by="agent")
+    print(f"archived {a.id}: folded away in the Library's archive, out of your context")
     return 0
 
 
@@ -1519,9 +1537,14 @@ def main(argv=None):
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
     p.set_defaults(fn=cmd_peek)
     p = sub.add_parser("tell"); p.add_argument("name"); p.add_argument("text"); p.set_defaults(fn=cmd_tell)
-    p = sub.add_parser("pin", help="pin a file in the project or a URL for the person")
-    p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why"); p.set_defaults(fn=cmd_pin)
-    p = sub.add_parser("unpin"); p.add_argument("id"); p.set_defaults(fn=cmd_unpin)
+    p = sub.add_parser("pin", help="keep a file in the project or a URL in its Library, for the person and you")
+    p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why")
+    p.add_argument("--group", help="the Library heading it goes under"); p.set_defaults(fn=cmd_pin)
+    p = sub.add_parser("regroup", help="organize the Library: an entry under a heading, or --rename a heading")
+    p.add_argument("target", help="an entry's id, or with --rename the heading to rename"); p.add_argument("heading")
+    p.add_argument("--rename", action="store_true"); p.set_defaults(fn=cmd_regroup)
+    p = sub.add_parser("unpin", help="put a Library entry in its archive: its part of the work is done")
+    p.add_argument("id"); p.add_argument("--why"); p.set_defaults(fn=cmd_unpin)
     sub.add_parser("pins", help="what is pinned for the person").set_defaults(fn=cmd_pins)
     p = sub.add_parser("show", help="put a deliverable worth seeing in the project's showcase")
     p.add_argument("title"); p.add_argument("--what", required=True, help="what it is, plainly")

@@ -1115,26 +1115,41 @@ class MeasureTest(BoardBase):
 
 
 class LibraryTest(BoardBase):
-    def test_the_library_finds_documents_and_pages_under_the_maps_headings_and_their_folders(self):
+    def test_the_library_starts_empty_and_holds_what_is_kept_on_purpose_under_headings(self):
         import subprocess
         board.track(self.root)
-        (self.root / "research").mkdir()
-        (self.root / "research" / "fidelity.md").write_text("# Fidelity over chapters\n\nIt holds to chapter nine. Then slips.\n")
-        (self.root / "research" / "probe.md").write_text("---\ndescription: the first look\n---\n# First probe\n")
+        (self.root / "world").mkdir()
+        (self.root / "world" / "places.md").write_text("# The places of the valley\n\nThe mill, the ford, the high farm.\n")
         (self.root / "picks.html").write_text("<title>Pick a layout</title><script>1</script>")
         (self.root / "main.py").write_text("print(1)\n")
-        (self.root / "LIBRARY.md").write_text("## Findings\n- [Fidelity](research/fidelity.md) — what holds, and where it slips\n")
         subprocess.run(["git", "-C", str(self.root), "init", "-q"]); subprocess.run(["git", "-C", str(self.root), "add", "-A"])
         page = board.render(board.registry(), 0, "library")
         self.assertIn("view=library'>Library</a>", page)
-        found = page.split("class='libsearch'")[1]
-        self.assertIn("<summary>Findings</summary>", found)
-        self.assertIn(">Fidelity</a><div class='muted small'>what holds, and where it slips", found, "the map's own words")
-        self.assertIn(">First probe</a><div class='muted small'>the first look", found, "its own title and line, unplaced, by folder")
-        self.assertIn(">Pick a layout</a> <span class='badge'>page</span>", found)
-        for gone in ("main.py", "ROADMAP.md", "LIBRARY.md"):
-            self.assertNotIn(f"<code>{gone}</code>", found, "code and the plan are not the library")
-        self.assertEqual(found.count("Fidelity over chapters"), 0, "placed once, under the map's heading")
+        self.assertIn("Empty, and ready", page, "nothing is found by itself: the shelf starts empty")
+        self.assertNotIn("The places of the valley", page)
+        found = board.render(board.registry(), 0, "library", "valley")
+        self.assertIn("The places of the valley", found, "a search finds a file to add")
+        self.assertIn("Add to the Library", found)
+        self.assertNotIn("main.py", board.render(board.registry(), 0, "library", "main"), "code is not the library")
+        from colony import pins
+        x = pins.add(self.root, "world/places.md", "Places", "the map every chapter is checked against", by="agent", group="World")
+        pins.add(self.root, "picks.html", "Pick a layout")
+        page = board.render(board.registry(), 0, "library")
+        self.assertIn("<summary>World <span class='muted'>1</span>", page)
+        self.assertIn("by the agent · the map every chapter is checked against · world/places.md", page)
+        self.assertIn("<summary>Not under a heading <span class='muted'>1</span>", page)
+        pins.regroup(self.root, x["id"], "Places")
+        self.assertIn("<summary>Places <span class='muted'>1</span>", board.render(board.registry(), 0, "library"), "either of them moves it")
+        self.assertIn("<h2>Library</h2>", board.render(board.registry(), 0, "overview"), "its newest few lead the Overview")
+        pins.archive(self.root, x["id"], "the valley chapters are done", by="agent")
+        page = board.render(board.registry(), 0, "library")
+        self.assertNotIn("<summary>Places", page)
+        self.assertIn("<summary>Archive <span class='muted'>1</span>", page, "folded away, still there")
+        self.assertIn("archived " , page.split("class='libgroup d1 archive'")[1])
+        self.assertIn("the valley chapters are done", page)
+        self.assertNotIn("Places", "".join(n["text"] for n in board.notes(self.root)), "the agent is told nothing of what it archived")
+        pins.restore(self.root, x["id"])
+        self.assertIn("<summary>Places", board.render(board.registry(), 0, "library"))
         served = board.page_with_send(0, self.root, self.root / "picks.html", (self.root / "picks.html").read_bytes()).decode()
         self.assertIn("window.colony={send:", served, "a page can send back what the person did on it")
         from http.server import ThreadingHTTPServer
@@ -1154,9 +1169,6 @@ class LibraryTest(BoardBase):
         with self.assertRaises(urllib.error.HTTPError) as no:
             post(url.replace("picks.html", "LIBRARY.md"), b"x")
         self.assertEqual(no.exception.code, 403, "another file can't borrow this page's address")
-        hits = board.render(board.registry(), 0, "library", "probe").split("class='libsearch'")[1]
-        self.assertIn("First probe", hits)
-        self.assertNotIn("Pick a layout", hits)
 
 
 class GlanceTest(BoardBase):
@@ -3293,7 +3305,7 @@ class PinTest(BoardBase):
             told = {n["text"][:40]: n.get("quiet", False) for n in board.notes(self.root)}
             self.assertEqual(sorted(told.values()), [False, True], "a comment is a message; a plain pin is quiet")
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
-            self.assertIn("Pinned", page)
+            self.assertIn("<h2>Library</h2>", page)
             self.assertIn("The app", page)
             editor = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['Chapter 2']['id']}").read().decode()
             self.assertIn("# Chapter 2", editor, "a text file opens to edit")
@@ -5299,7 +5311,7 @@ class PhonePageTest(HoursBase):
         self.assertLess(page.index("<summary>Settings</summary>"), remote, "how it is reached is one of its settings")
         self.assertLess(remote, page.index("<div class='dangers'>"))
         self.assertEqual(page.count("Remote Control: on"), 1)
-        for empty in ("<h2>Pinned</h2>", "Nothing pinned yet", "Since you were last here", "Nothing is waiting on you",
+        for empty in ("<h2>Library</h2>", "Nothing pinned yet", "Since you were last here", "Nothing is waiting on you",
                       ">Showcase<", "Completed versions"):
             self.assertNotIn(empty, page)
         self.assertIn("<section id='waitingbox' hidden>", page, "out of the way, and back by itself when something waits")
@@ -5311,8 +5323,8 @@ class PhonePageTest(HoursBase):
         showcase.add(self.root, "The app", "It runs on a phone.")
         with self.clock(15):
             page = board.render(board.registry(), 0)
-        self.assertLess(page.index("Waiting on you"), page.index("<h2>Pinned</h2>"), "what waits comes before pins")
-        self.assertIn("<summary>2 more</summary>", page, "past the newest five, the rest fold")
+        self.assertLess(page.index("Waiting on you"), page.index("<h2>Library</h2>"), "what waits comes before pins")
+        self.assertIn("view=library'>All 7 →</a>", page, "past the newest five, the rest are a tap away in the Library")
         self.assertIn(">Showcase</a>", page)
 
     def test_nothing_that_closes_a_decision_unanswered_sits_first_under_a_thumb(self):
