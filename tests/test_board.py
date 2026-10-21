@@ -533,7 +533,7 @@ class BoardTest(BoardBase):
             self.assertIn(part, html_)
         self.assertNotIn("History", html_, "the plan and its record are on the Roadmap tab")
         plan = board.render(board.registry(), 0, "roadmap")
-        for part in ("R3", "History", "Map of the roadmap"):
+        for part in ("R3", "History", "<div class='journey'>"):
             self.assertIn(part, plan)
         self.assertNotIn("Since you were last here", plan)
 
@@ -550,7 +550,11 @@ class BoardTest(BoardBase):
         walk("- [ ] R5", "- [~] R5"); tick()
         walk("- [~] R2", "- [x] R2"); tick()
         page = board.render(board.registry(), 0, "roadmap")
-        heads = re.findall(r"<details class='([^']*ms[^']*)'[^>]*><summary>(<span class='sdot msdot[^>]*></span>)?<h3>([^<]*)", page)
+        heads = re.findall(r"<details (?:id='[^']*' )?class='([^']*ms[^']*)'[^>]*><summary>(<span class='sdot msdot[^>]*></span>)?<h3>([^<]*)", page)
+        stops = re.findall(r"<a class='jstop[^']*' href='#ms-([^']+)'.*?<b>(\d+)</b><small>/(\d+)</small>", page)
+        self.assertEqual(stops, [("M1", "2", "3"), ("M2", "0", "2")], "the journey: each open milestone a stop, in the plan's order")
+        self.assertIn("M0 <span class='muted'>· 1 milestone, 1 items done", page)
+        self.assertIn("A tool for my plants.", page.split("class='jdest'")[1], "heading for the vision")
         self.assertEqual([h[2].split(" —")[0] for h in heads], ["M2", "M1", "Completed", "M0"],
                          "where work last started first; finished last, folded together")
         self.assertNotIn(" open><summary><h3>M", page, "every milestone loads folded")

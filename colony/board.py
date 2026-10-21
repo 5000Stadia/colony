@@ -3284,7 +3284,9 @@ def render(reg, pid, view="overview", show_all=""):
             its = items(road)
             order = list(its)
             branched = any(it["links"] for it in its.values())          # only what the plan says waits on what
-            out.append(f"<details class='mapbox'{' open' if branched else ''}><summary>Map of the roadmap"
+            out.append(journey_html(road, item_times(root)))
+            if branched:                   # the map only where the plan itself says what waits on what
+                out.append(f"<details class='mapbox'><summary>Map of the roadmap"
                        f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
             # Every milestone loads folded. The one where work last started comes first, and within each, what is in
             # progress (newest first), then what's to come, then what's done (newest first). Finished milestones
@@ -3305,7 +3307,7 @@ def render(reg, pid, view="overview", show_all=""):
                 dot = (f"<span class='sdot msdot {live}' data-p='{pid}' title='In progress; its agent is {e(live.replace('-', ' '))}'></span>"
                        if started(m) is not None else "")
                 done_m = sum(1 for i in m["items"] if i["state"] == "done")
-                out.append(f"<details class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3>"
+                out.append(f"<details id='ms-{e(m['id'])}' class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3>"
                            f"<span class='muted'>{done_m}/{len(m['items'])} {elapsed([times.get(i['id'], {}) for i in m['items']], finished(m))}</span></summary>")
                 doing = sorted((i for i in m["items"] if i["state"] == "doing"), key=when, reverse=True)
                 done_i = sorted((i for i in m["items"] if i["state"] == "done"), key=when, reverse=True)
@@ -3582,6 +3584,54 @@ def measures_html(root):
         rows.append(f"<div class='measure'><span class='mname'>{e(m['name'])}</span> {value}"
                     f"<div class='muted small' title='{e(m['what'])}'>{e(m['part'] if m['part'] not in (None, 'Vision', 'Measures') else 'the whole plan')}{when}</div>{why}</div>")
     return f"<div class='card measures'>{''.join(rows)}</div>" if rows else ""
+
+
+KIND_MARK = {"menu": "☰ menu", "lanes": "‖ lanes", "findings": "? findings", "sections": "▦ sections"}
+
+
+def lead_clause(text, n=70):
+    """An item's opening clause, its title: items run long, with the person's words and decisions after it."""
+    head = re.split(r"(?<=[a-z0-9)])[.:;](?:\s|$)| — | \(", text, maxsplit=1)[0].strip()
+    return short(head, n)
+
+
+def journey_html(road, times=None):
+    """The roadmap as a journey down the page: what's finished in one line, each open milestone a stop (a ring of its
+    progress, its kind, a dot per item: filled when done, glowing while in progress, hollow to come; lanes as rows
+    of their own), what is being worked on now, and at the end the vision it all heads for. A stop opens its list."""
+    ms = road["milestones"]
+    done = lambda m: m["items"] and all(i["state"] == "done" for i in m["items"])
+    finished, open_ = [m for m in ms if done(m)], [m for m in ms if not done(m) and m["items"]]
+    dot = lambda i: f"<i class='jd {i['state']}' title='{e(i['id'])} · {e(lead_clause(i['text'], 80))}'></i>"
+    out = ["<div class='journey'>"]
+    if finished:
+        n = sum(len(m["items"]) for m in finished)
+        out.append(f"<div class='jdone'><span class='jtick'>✓</span><span>{' · '.join(e(m['id']) for m in finished)}"
+                   f" <span class='muted'>· {len(finished)} milestone{'s' * (len(finished) != 1)}, {n} items done</span></span></div>")
+    for m in open_:
+        its = m["items"]
+        d = sum(i["state"] == "done" for i in its)
+        doing = [i for i in its if i["state"] == "doing"]
+        kind = m.get("kind", "sequence")
+        if kind == "lanes":
+            lanes = {}
+            for i in its:
+                lanes.setdefault(i.get("lane") or "other", []).append(i)
+            dots = "".join(f"<span class='jlane'><span class='jlname'>{e(k)}</span>{''.join(dot(i) for i in v)}</span>" for k, v in lanes.items())
+        else:
+            dots = f"<span class='jdots'>{''.join(dot(i) for i in its)}</span>"
+        later = "later" in (m["id"] + " " + m["title"]).lower()
+        now = (f"<span class='jnow'>Now: {e(lead_clause(doing[0]['text']))}" + (f" <span class='muted'>+{len(doing) - 1}</span>" if len(doing) > 1 else "")
+               + "</span>") if doing else ""
+        out.append(f"<a class='jstop{' live' if doing else ''}{' later' if later else ''}' href='#ms-{e(m['id'])}' "
+                   f"onclick=\"var d=document.getElementById('ms-{e(m['id'])}'); if (d) d.open=true\">"
+                   f"<span class='jring' style='--p:{round(100 * d / len(its))}'><b>{d}</b><small>/{len(its)}</small></span>"
+                   f"<span class='jbody'><span class='jtitle'><b>{e(m['id'])}</b> {e(short(m['title'], 70))}"
+                   f"<span class='jkind' title='{e(kind)}'>{KIND_MARK.get(kind, '')}</span></span>{dots}{now}</span></a>")
+    vision = first_sentence_of(road.get("vision") or road.get("goal") or "")
+    if vision:
+        out.append(f"<div class='jdest'><span class='jflag'>⚑</span><span>{e(vision)}</span></div>")
+    return "".join(out) + "</div>"
 
 
 def part_body(m, drawn):
@@ -6421,6 +6471,30 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .libgroup { border-bottom:1px solid var(--line); padding:4px 0 } .libgroup > summary { cursor:pointer; padding:8px 0; font-weight:600 }
 .libgroup.d2 { margin-left:12px } .libgroup.d3 { margin-left:24px } .libitem { padding:6px 0 6px 4px }
 .libitem code { font-size:12px; word-break:break-all }
+/* the roadmap as a journey: stops down a line, each a ring of its progress and a dot per item */
+.journey { position:relative; margin:6px 0 18px; padding-left:4px }
+.journey::before { content:''; position:absolute; left:27px; top:18px; bottom:18px; width:2px; background:var(--line) }
+.jdone, .jdest { position:relative; display:flex; gap:12px; align-items:center; padding:8px 0; font-size:14px }
+.jtick, .jflag { flex:none; width:48px; height:32px; display:flex; align-items:center; justify-content:center; z-index:1 }
+.jtick { color:var(--accent); font-weight:700 } .jflag { font-size:20px; color:var(--accent) }
+.jtick::before, .jflag::before { content:''; position:absolute; left:14px; width:28px; height:28px; border-radius:50%; background:var(--bg); z-index:-1 }
+.jdest span:last-child { font-weight:600 }
+a.jstop { position:relative; display:flex; gap:12px; align-items:flex-start; padding:10px 8px 10px 0; color:var(--ink); text-decoration:none;
+  border-radius:12px }
+a.jstop:hover { background:var(--sunk) } a.jstop.later { opacity:.65 }
+.jring { flex:none; z-index:1; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  background:conic-gradient(var(--accent) calc(var(--p) * 1%), var(--line) 0); position:relative; font-size:13px }
+.jring::after { content:''; position:absolute; inset:5px; border-radius:50%; background:var(--bg) }
+.jring b, .jring small { position:relative; z-index:1 } .jring small { color:var(--muted); font-size:10px }
+a.jstop.live .jring { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent) }
+.jbody { display:flex; flex-direction:column; gap:5px; min-width:0; padding-top:2px }
+.jtitle { font-size:15px; line-height:1.3 } .jkind { margin-left:6px; color:var(--muted); font-size:12px }
+.jdots, .jlane { display:flex; flex-wrap:wrap; gap:4px; align-items:center }
+.jlname { font-size:11px; color:var(--muted); min-width:56px; margin-right:4px }
+.jd { width:9px; height:9px; border-radius:50%; border:1.5px solid var(--muted); display:inline-block }
+.jd.done { background:var(--accent); border-color:var(--accent) } .jd.verify { border-color:var(--flag); background:var(--flag-bg) }
+.jd.doing { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 35%, transparent); animation:beat 1.6s ease-in-out infinite }
+.jnow { font-size:13px; color:var(--muted) }
 .hproj { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:6px 12px; margin:10px 0 }
 .hproj.quiet { padding:2px 12px; margin:6px 0 } .hproj .measures { border:0; margin:0; padding:0 0 4px }
 .hneeds { border-top:1px solid var(--line); margin-top:4px } .hneeds .need:first-child { border-top:0 }
