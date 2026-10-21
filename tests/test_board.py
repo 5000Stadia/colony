@@ -1253,7 +1253,7 @@ class CarryOnTest(BoardBase):
         board.track(self.root)
         (self.root / "ROADMAP.md").write_text("## Vision\nPlants.\n\n## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n- [ ] R3 c\n"
                                               "## M2 — Ideas · menu\n- [ ] R9 d\n## Later\n- [ ] R8 e\n")
-        carryon._idle.clear(); carryon._woke.clear()
+        carryon._idle.clear()
         typed = []
         with patch.object(carryon.board, "projects", return_value=[self.root]), \
                 patch.object(carryon.console, "running", return_value=True), \
@@ -1278,6 +1278,31 @@ class CarryOnTest(BoardBase):
             self.assertFalse(carryon.wanted(self.root), "turned off for this project")
             board.project_settings(self.root, {"carry_on": ""})
             self.assertNotIn("R2", carryon.startable(self.root), "a decision open on it: not startable")
+
+    def test_a_restart_of_the_board_does_not_wake_it_again_and_an_item_the_person_parked_is_not_work_to_start(self):
+        from colony import carryon
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text(
+            "## Vision\nPlants.\n\n## M1 — Build\n- [ ] R2 b\n## M2 — Ideas · menu\n"
+            "- [ ] R5 fixes from live use. Parked 2026-10-16: no plan to use it now (\"indefinitely parked\")\n- [ ] R9 d\n"
+            "- [ ] R6 e\n  On hold until the person says.\n- [ ] R7 unparked jobs resume\n")
+        self.assertEqual(carryon.startable(self.root), ["R2", "R9", "R7"], "parked and on hold, in the person's words: not startable")
+        typed = []
+        with patch.object(carryon.board, "projects", return_value=[self.root]), \
+                patch.object(carryon.console, "running", return_value=True), \
+                patch.object(carryon.console, "snapshot", return_value={"state": "idle", "lines": []}), \
+                patch.object(carryon.console, "drafting", return_value=False), \
+                patch.object(carryon.console, "attached", return_value=False), \
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True), \
+                patch("colony.hours.active", return_value=True):
+            for restart in range(3):
+                carryon._idle.clear(); vars(carryon).get("_woke", {}).clear()       # the board restarted: memory in the process is gone
+                carryon.tick(now=1000 * (restart + 1)); carryon.tick(now=1000 * (restart + 1) + carryon.IDLE + 1)
+            self.assertEqual(len(typed), 1, "woken once, though the board restarted twice with nothing changed")
+            (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace("- [ ] R2 b", "- [x] R2 b"))
+            carryon._idle.clear()
+            carryon.tick(now=9000); carryon.tick(now=9000 + carryon.IDLE + 1)
+            self.assertEqual(len(typed), 2, "the plan changed: told again")
 
 
 class GlanceTest(BoardBase):

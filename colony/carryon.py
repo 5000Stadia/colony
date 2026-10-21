@@ -6,8 +6,11 @@ itself), its program not at a usage limit, and roadmap items it owns that can st
 nothing they wait on unfinished, no decision about them open), colony types one short wake into its console: those
 items, and to carry on with the smartest next one or say what holds it. Outside the person's active hours it adds
 that they're away, so it takes what doesn't need them. Once per stretch: it is woken again only after something
-has changed (a commit, the plan, the person's words). A project can turn it off (its carry_on setting).
+has changed (a commit, the plan, the person's words); that memory is the project's own carryon.jsonl, so a restart of
+the board forgets nothing. An item the person parked (its text says so) is not work to start. A project can turn it
+off (its carry_on setting).
 """
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -16,7 +19,10 @@ from . import board, console
 
 IDLE = 10 * 60               # seconds idle before a wake
 TALKING = 15 * 60            # the person spoke to it this recently: they're in a conversation, leave it to them
-_idle, _woke = {}, {}
+# The roadmap has no mark for "the person parked this", only their words in the item, so those are read; reading one
+# wrongly only leaves out a nudge, which costs less than waking an agent for work it was told to leave.
+PARKED = re.compile(r"\b(?:parked|on hold)\b", re.I)
+_idle = {}
 
 
 def startable(root):
@@ -33,6 +39,8 @@ def startable(root):
         for it in m["items"]:
             if it["state"] not in ("todo", "doing") or it["id"] in open_gates:
                 continue
+            if PARKED.search(it["text"] + " " + it["desc"]):
+                continue
             if shared and Path(lead.owner(root, it["id"])).resolve() != Path(root).resolve():
                 continue
             if all(its.get(a, {}).get("state") in (None, "done", "verify") for a in it["after"]):
@@ -47,6 +55,12 @@ def signature(root):
     plan = lead.plan_path(root)
     said = board.read(root, "said.jsonl")
     return (head, plan.stat().st_mtime if plan.exists() else 0, len(said))
+
+
+def woke(root):
+    """The signature the last wake was sent under, from the log (a list, as it was written), or None."""
+    sent = [r for r in board.read(root, "carryon.jsonl") if r.get("sig")]
+    return sent[-1]["sig"] if sent else None
 
 
 def wanted(root):
@@ -89,7 +103,7 @@ def tick(now=None):
             continue
         try:
             sig = signature(root)
-            if _woke.get(key) == sig or not wanted(root):
+            if woke(root) == list(sig) or not wanted(root):
                 continue
             items = startable(root)
         except Exception:
@@ -103,6 +117,5 @@ def tick(now=None):
                 f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision, "
                 f"or say what holds you.{away}")
         if console.type_into(name, text):
-            _woke[key] = sig
             _idle.pop(key, None)
-            board.append(root, "carryon.jsonl", {"at": board.now(), "items": items[:6]})
+            board.append(root, "carryon.jsonl", {"at": board.now(), "items": items[:6], "sig": list(sig)})
