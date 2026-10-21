@@ -553,7 +553,8 @@ class BoardTest(BoardBase):
         heads = re.findall(r"<details (?:id='[^']*' )?class='([^']*ms[^']*)'[^>]*><summary>(<span class='sdot msdot[^>]*></span>)?<h3>([^<]*)", page)
         stops = re.findall(r"<a class='jstop[^']*' href='#ms-([^']+)'.*?<b>(\d+)</b><small>/(\d+)</small>", page)
         self.assertEqual(stops, [("M1", "2", "3"), ("M2", "0", "2")], "the journey: each open milestone a stop, in the plan's order")
-        self.assertIn("M0 <span class='muted'>· 1 milestone, 1 items done", page)
+        self.assertIn("<span class='jseal'>✓</span><b>M0</b><span class='jmname'>setup</span>", page, "what's done, as a medal")
+        self.assertIn("<span>Done</span><span class='muted'>1 milestone · 1 items</span>", page)
         self.assertIn("A tool for my plants.", page.split("class='jdest'")[1], "heading for the vision")
         self.assertEqual([h[2].split(" —")[0] for h in heads], ["M2", "M1", "Completed", "M0"],
                          "where work last started first; finished last, folded together")

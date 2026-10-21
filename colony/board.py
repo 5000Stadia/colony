@@ -3613,11 +3613,21 @@ def journey_html(road, times=None):
     done = lambda m: m["items"] and all(i["state"] == "done" for i in m["items"])
     finished, open_ = [m for m in ms if done(m)], [m for m in ms if not done(m) and m["items"]]
     dot = lambda i: f"<i class='jd {i['state']}' title='{e(i['id'])} · {e(lead_clause(i['text'], 80))}'></i>"
-    out = ["<div class='journey'>"]
+    out = []
     if finished:
+        # what's been done, as medals: each milestone finished, its items, and when it was won; a tap opens it
+        times = times or {}
+        when = lambda m: max((times.get(i["id"], {}).get("since") or "" for i in m["items"]), default="")
+        medals = sorted(finished, key=when)
         n = sum(len(m["items"]) for m in finished)
-        out.append(f"<div class='jdone'><span class='jtick'>✓</span><span>{' · '.join(e(m['id']) for m in finished)}"
-                   f" <span class='muted'>· {len(finished)} milestone{'s' * (len(finished) != 1)}, {n} items done</span></span></div>")
+        out.append(f"<div class='jmedals-head'><span>Done</span><span class='muted'>{len(finished)} milestone"
+                   f"{'s' * (len(finished) != 1)} · {n} items</span></div><div class='jmedals'>" + "".join(
+                       f"<a class='jmedal' href='#ms-{e(m['id'])}' onclick=\"var d=document.getElementById('ms-{e(m['id'])}');"
+                       f" if (d) {{ d.open=true; var g=d.closest('details.done-group'); if (g) g.open=true }}\">"
+                       f"<span class='jseal'>✓</span><b>{e(m['id'])}</b><span class='jmname'>{e(short(m['title'], 48))}</span>"
+                       f"<span class='muted'>{len(m['items'])} items{' · ' + e(on_day(when(m)) or when(m)[:10]) if when(m) else ''}</span></a>"
+                       for m in medals) + "</div>")
+    out.append("<div class='journey'>")
     for m in open_:
         its = m["items"]
         d = sum(i["state"] == "done" for i in its)
@@ -6482,6 +6492,18 @@ nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark)
 .libgroup { border-bottom:1px solid var(--line); padding:4px 0 } .libgroup > summary { cursor:pointer; padding:8px 0; font-weight:600 }
 .libgroup.d2 { margin-left:12px } .libgroup.d3 { margin-left:24px } .libitem { padding:6px 0 6px 4px }
 .libitem code { font-size:12px; word-break:break-all }
+/* what's been done, as medals: a row that scrolls sideways on a phone */
+.jmedals-head { display:flex; gap:10px; align-items:baseline; margin:4px 0 6px; font-size:13px; font-weight:600;
+  text-transform:uppercase; letter-spacing:.05em; color:var(--muted) }
+.jmedals { display:flex; gap:10px; overflow-x:auto; padding:4px 2px 12px; scroll-snap-type:x proximity }
+a.jmedal { flex:none; width:118px; scroll-snap-align:start; display:flex; flex-direction:column; align-items:center; gap:3px;
+  padding:12px 8px 10px; border-radius:14px; text-decoration:none; color:var(--ink); text-align:center; font-size:12px;
+  background:linear-gradient(160deg, color-mix(in srgb, var(--accent) 16%, var(--card)), var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)) }
+.jseal { width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px;
+  font-weight:700; color:var(--card); background:radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--accent) 70%, #fff), var(--accent));
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); margin-bottom:3px }
+.jmname { line-height:1.25; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:2.5em }
 /* the roadmap as a journey: stops down a line, each a ring of its progress and a dot per item */
 .journey { position:relative; margin:6px 0 18px; padding-left:4px }
 .journey::before { content:''; position:absolute; left:27px; top:18px; bottom:18px; width:2px; background:var(--line) }
