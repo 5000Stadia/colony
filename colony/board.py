@@ -113,6 +113,9 @@ steer all of them from one board, and the projects can write to each other.
   A deliverable worth their seeing: `colony show "title" --what "what it is" --try "how to see it" --link URL-or-file
   --item R4`; their rating or comment arrives as a note.
   Work outside the milestone's purpose goes under `## Later`. Commit each finished piece.
+  A milestone may name its kind after its title (`## M4 — Concepts · menu`): `menu` (options in any order), `lanes`
+  (roads side by side; each item says `(lane: name)`), `findings` (questions answered by experiment), `sections` (the
+  pieces of one whole); unnamed, it is a sequence, done in order.
 - An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
