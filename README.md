@@ -60,7 +60,8 @@ where things stand; `colony remote --off` puts it back as it was.
   the session's own transcript, so it costs nothing, and the Console tab is a tap away. Under each reply, copy and
   play: play reads everything since your message aloud (Auto-speak reads each new reply as it arrives), at the
   speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
-  nothing leaves it); without it, the phone's own voice reads.
+  nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
+  without it, the phone's own voice reads.
 - **The front page:** every project, those waiting on you first, each with its line (working, idle, what it's on),
   its measures, and what it needs of you right under it, answered there with a tap or a reply.
 - **Waiting on you:** decisions a project put to you (gates, each with tap answers and **Obvious, you decide**,
@@ -75,6 +76,9 @@ where things stand; `colony remote --off` puts it back as it was.
   later** reaches the agent in a tap. Shape hints, read by rule from the plan and its history, flag drift (a
   sequence often reordered, an item stuck for weeks); the agent hears them as a milestone finishes and can settle
   one with its reasoning until the vision changes.
+- **A weakened test is caught:** a commit that takes assertions or tests out, puts a skip or a forced pass in,
+  or deletes a test file, and says nothing of it, is put to its agent by rule: restore them or say why. Until it
+  answers, it shows with the project's open notes.
 - **Measures:** a number that shows the vision coming true (a novel's words, a model's fidelity, the longest run),
   with how it's taken: a command, or a small separate model's judgement. Colony takes it at each push and finished
   milestone, in its own copy of the project, never from the agent's say-so, and shows it against its target with

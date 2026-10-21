@@ -821,3 +821,42 @@ class PinTest(BoardBase):
         title = board.render(board.registry(), 0).split("<div class='titlerow'>")[1].split("</div>")[0]
         self.assertIn("pinProject(event, 0, 0)'>", title)
         self.assertIn("Unpin</a>", title)
+
+
+class WeakenedTest(BoardBase):
+    def test_a_commit_that_weakens_its_tests_without_saying_why_is_put_to_the_agent_once(self):
+        from colony import weakened
+        test = self.root / "tests" / "test_pots.py"
+        test.parent.mkdir()
+        test.write_text("import pytest\n\ndef test_size():\n    assert size(1) == 2\n    assert size(2) == 4\n\n"
+                        "def test_glaze():\n    assert glaze() == 'blue'\n")
+        (self.root / "tests" / "test_old.py").write_text("def test_old():\n    assert True\n")
+        self.commit("tests for pots")
+        weakened.check(self.root)
+        self.assertEqual(board.notes(self.root), [], "the first look tells nothing: what came before isn't news")
+        test.write_text(test.read_text().replace("    assert size(2) == 4\n", ""))
+        self.commit("Pots size right")                                   # an assertion out, not a word on it
+        test.write_text(test.read_text().replace("def test_glaze", "@pytest.mark.skip\ndef test_glaze"))
+        self.commit("Glaze done")
+        test.write_text(test.read_text() + "\ndef test_more():\n    assert size(3) == 6\n")
+        self.commit("More sizes")                                       # tests only added: nothing
+        test.write_text(test.read_text().replace("    assert size(3) == 6\n", "    assert size(3) in (6, 7)\n"))
+        self.commit("Sizes may round")                                  # a rewrite in place: one out, one in
+        (self.root / "tests" / "test_old.py").unlink()
+        self.commit("Drop the old tests: the old pots are gone")       # it says why
+        weakened.check(self.root)
+        weakened.check(self.root)
+        told = [n["text"] for n in board.notes(self.root)]
+        self.assertEqual(len(told), 2, told)
+        self.assertIn("(Pots size right) weakened its tests and its message gives no reason: 1 assertion taken out.", told[0])
+        self.assertIn("(Glaze done) weakened its tests and its message gives no reason: 1 skip put in.", told[1])
+        self.assertIn("say why with colony noted", told[1])
+        board.track(self.root)
+        self.assertIn("(Glaze done) weakened its tests", board.render(board.registry(), 0, "roadmap"),
+                      "the person sees it beside the project until the agent answers")
+        self.assertIn("weakened.check(p)", Path(monitor.__file__).read_text(), "the monitor reads each project's commits")
+        self.assertEqual(weakened.weakened(self.root, self.git("rev-parse", "HEAD").strip()), ["deleted tests/test_old.py"])
+        (self.root / "tests" / "test_new.py").write_text("def test_n():\n    assert 1\n")
+        test.unlink()
+        self.commit("Tests moved")
+        self.assertIn("deleted tests/test_pots.py", weakened.weakened(self.root, "HEAD"))

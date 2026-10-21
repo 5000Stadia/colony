@@ -550,6 +550,8 @@ class Watcher:
                 measures.check(p)               # its measures, taken by colony at each push and milestone finished
                 from . import hints
                 hints.check(p)                  # a milestone finished: the plan's shape hints, once, quietly
+                from . import weakened
+                weakened.check(p)               # a commit that weakens its tests without saying why, put to its agent
             except Exception:
                 pass
             snap = console.snapshot(p, lines=4)
