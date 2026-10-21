@@ -3605,7 +3605,10 @@ def measures_html(root):
         elif last["value"] is None:
             value = f"<span class='flag'>couldn't measure</span> <span class='muted'>{e(short(last['error'] or '', 90))}</span>"
         else:
-            value = (f"<b>{measures.fmt(last['value'])}</b>{target} <span class='spark'>{measures.spark(m['values'])}</span>"
+            reached = m["target"] is not None and m["values"] and len(m["values"]) and (
+                m["values"][-1] >= m["target"] if (m["values"][0] <= m["target"]) else m["values"][-1] <= m["target"])
+            value = (f"<b>{measures.fmt(last['value'])}</b>{target}{' <span class=reached>✓ reached</span>' if reached else ''} "
+                     f"<span class='spark'>{measures.spark(m['values'])}</span>"
                      + (" <span class='muted'>(method changed)</span>" if m["changed"] else ""))
         when = (f" · {how} at {e(last['commit'][:7])}, {e(last['at'][:10])}" if last else "")
         why = f"<div class='muted small'>{e(last['reason'])}</div>" if last and last.get("reason") else ""
@@ -6562,7 +6565,7 @@ a.jstop.live .jring { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%,
 .hneeds { border-top:1px solid var(--line); margin-top:4px } .hneeds .need:first-child { border-top:0 }
 .steer { display:flex; gap:8px; margin:4px 0 8px } .steer form { margin:0 }
 .measures .measure { padding:6px 0; border-bottom:1px solid var(--line) } .measures .measure:last-child { border-bottom:0 }
-.measures .mname { margin-right:6px } .measures .spark { letter-spacing:1px; color:var(--accent) } .flag { color:var(--flag) }
+.measures .mname { margin-right:6px } .measures .reached { color:var(--accent); font-weight:600 } .measures .spark { letter-spacing:1px; color:var(--accent) } .flag { color:var(--flag) }
 .small { font-size:13px }
 .lanes { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:8px 0 }
 .lane { border:1px solid var(--line); border-radius:12px; padding:8px 10px } .lane p { margin:4px 0 }

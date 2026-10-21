@@ -1116,7 +1116,10 @@ class MeasureTest(BoardBase):
                       "a failure shows as one, never the old value")
         (self.root / "ROADMAP.md").write_text(plan.replace("cat chapters/*.md | wc -w", "echo 7"))
         measures.take(self.root, tip, measures.read((self.root / "ROADMAP.md").read_text())[:1])
-        self.assertIn("<b>7</b> / 80,000 <span class='spark'></span> <span class='muted'>(method changed)</span>",
+        from colony import hints
+        measures.take(self.root, tip, measures.read((self.root / "ROADMAP.md").read_text())[:1], run=lambda *a, **k: type("R", (), {"stdout": "3\n", "stderr": "", "returncode": 0})())
+        self.assertIn("Measure 'words' moved away from its target: 7 → 3 (target 80,000).", " ".join(t for _, _, t in hints.hints(self.root)))
+        self.assertIn("<b>3</b> / 80,000 <span class='spark'>█▁</span> <span class='muted'>(method changed)</span>",
                       board.measures_html(self.root), "a new method starts its own trend")
 
 

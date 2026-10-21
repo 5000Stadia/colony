@@ -2,7 +2,7 @@
 
 No model reads anything, and each hint is a plain fact: a milestone written as a sequence that keeps being reordered,
 finished work left under Later, an item marked in progress far longer than this project's usual, a measure that
-failed. Shown on the Roadmap tab; when a milestone finishes, the agent hears the open ones once, quietly. A hint the
+failed or moved away from its target. Shown on the Roadmap tab; when a milestone finishes, the agent hears the open ones once, quietly. A hint the
 agent judges and keeps (colony hint keep KEY "why") is not raised again, its reasoning kept beside it, until the
 vision changes: the shape that served one vision may not serve the next.
 """
@@ -89,6 +89,11 @@ def hints(root):
         last = x["last"]
         if last and last["value"] is None:
             out.append((f"measure:{x['name']}", x["part"], f"Measure '{x['name']}' failed last time: {(last['error'] or '')[:80]}"))
+        elif x["target"] is not None and len(x["values"]) >= 2:
+            before, now_ = x["values"][-2], x["values"][-1]
+            if abs(now_ - x["target"]) > abs(before - x["target"]):   # it moved away from what the vision asks
+                out.append((f"away:{x['name']}:{last['commit']}", x["part"], f"Measure '{x['name']}' moved away from its target: "
+                            f"{measures.fmt(before)} → {measures.fmt(now_)} (target {measures.fmt(x['target'])})."))
     return out
 
 
