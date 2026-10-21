@@ -2802,7 +2802,8 @@ CHAT = """
     const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length;
       want = Math.min(600, Math.max(40, heard / 0.85 - made)); };
     text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).forEach((p) => {
-      const sents = (p.match(/[^.!?]+[.!?]*\\s*/g) || [p]).map((x) => x.trim()).filter(Boolean);
+      // a sentence ends at a stop followed by a space, so $1.50, 3.14 and board.py stay whole, as do Dr. and e.g.
+      const sents = (p.match(/.+?(?:(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)|$)/g) || [p]).map((x) => x.trim()).filter(Boolean);
       let cur = '';
       sents.forEach((x) => {
         // the first sentence, alone, for a quick start; one under four words ("Done.") takes the next with it

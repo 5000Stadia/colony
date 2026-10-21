@@ -1001,6 +1001,23 @@ class ChatTest(BoardBase):
             r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host}))
             self.assertEqual((r.status, r.read(), r.headers["Content-Type"]), (200, b"ID3mp3", "audio/mpeg"))
 
+    def test_the_voice_says_money_times_and_symbols_as_spoken(self):
+        from colony import voice
+        said = {"It costs $100.": "It costs 100 dollars.", "About $1.50 each.": "About 1 dollar and 50 cents each.",
+                "$0.50": "50 cents", "We raised $2.5M.": "We raised 2 point 5 million dollars.",
+                "£40 or €35": "40 pounds or 35 euros", "$100/month": "100 dollars per month",
+                "Up 12.5% today": "Up 12 point 5% today", "Version 2.1.3": "Version 2 point 1 point 3",
+                "Range 10-20 items": "Range 10 to 20 items", "Call 555-123-4567": "Call 555-123-4567",
+                "Active 1d 1h 32m": "Active 1 day 1 hour 32 minutes", "Took 250 ms": "Took 250 milliseconds",
+                "Back at 7:30 AM": "Back at 7 30 AM", "7:00 PM": "7 PM", "Due 2026-10-21.": "Due October 21st, 2026.",
+                "Since Oct 21": "Since October 21st", "Uses 16GB": "Uses 16 gigabytes", "72°F": "72 degrees Fahrenheit",
+                "About 3x faster": "About 3 times faster", "Go A -> B": "Go A to B", "e.g. this": "for example this",
+                "Open board.py now.": "Open board dot py now.", "Visit https://example.com/page. Then": "Visit example dot com. Then",
+                "Great work 🎉 done ✅.": "Great work done.", "in the 90s": "in the 90s", "See the README.": "See the README."}
+        self.assertEqual({t: voice.spoken(t) for t in said}, said)
+        self.assertIn("(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)", board.CHAT,
+                      "a sentence ends at a stop and a space: $1.50 and Dr. are not broken into two clips")
+
     def test_a_codex_rollout_reads_the_same_way(self):
         from colony import chat
         item = lambda p: {"type": "response_item", "timestamp": "2026-10-19T10:00:00Z", "payload": p}
