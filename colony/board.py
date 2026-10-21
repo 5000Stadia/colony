@@ -7093,6 +7093,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
     gap:0; font-size:17px; z-index:3 } nav .proj.monitor { padding-right:176px }
   .navfoot a { padding:0 8px; min-height:38px; display:inline-flex; align-items:center; justify-content:center }
   .navfoot .long { display:none } .navfoot .short { display:inline }
+  nav .proj.monitor.on ~ .navrow .navfoot a { color:var(--card) }   /* on the steward's own page its bar is the accent */
   nav { position:sticky; top:0; z-index:40 }
   /* iPhone zooms in on a box typed in below 16px, and zoomed in, the bottom bar sits mid-screen: no box is below 16px */
   input, textarea, select { font-size:16px }
