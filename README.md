@@ -61,14 +61,28 @@ where things stand; `colony remote --off` puts it back as it was.
   play: play reads everything since your message aloud (Auto-speak reads each new reply as it arrives), at the
   speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
   nothing leaves it); without it, the phone's own voice reads.
-- **Waiting on you:** what each project needs from you, in one list. That covers decisions it put to
-  you (gates), questions it asked, choices on its screen, and work ready for your OK (Approve / Not
-  yet). The sidebar counts them.
+- **The front page:** every project, those waiting on you first, each with its line (working, idle, what it's on),
+  its measures, and what it needs of you right under it, answered there with a tap or a reply.
+- **Waiting on you:** decisions a project put to you (gates, each with tap answers and **Obvious, you decide**,
+  which hands it back and tells the agent where your line is), a question its agent says it is asking
+  (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
 - **Message**, at the top of every project: type or paste into its console as if you were there,
   or have its agent write to another project. Attach a file from your device or the project.
-- **The roadmap**, kept by the agent in `ROADMAP.md`: milestones fold away as they finish, the
-  latest work comes first, and every item and milestone shows its time in progress. The overview reads
-  `Roadmap: 16/43 · Active: 6d 15h`, where Active counts only the time its agent was actually working.
+- **The roadmap**, kept by the agent in `ROADMAP.md`, drawn as a journey: finished milestones as medals, each open
+  one a stop with a ring of its progress, a dot per item and what's being worked on now, and the vision at the end.
+  A milestone can name its kind (menu, lanes, findings, sections) and is drawn as one; only a sequence implies an
+  order. Open a milestone for its items by title, grouped Doing, To come and Done; **Do this next** or **Leave for
+  later** reaches the agent in a tap. Shape hints, read by rule from the plan and its history, flag drift (a
+  sequence often reordered, an item stuck for weeks); the agent hears them as a milestone finishes and can settle
+  one with its reasoning until the vision changes.
+- **Measures:** a number that shows the vision coming true (a novel's words, a model's fidelity, the longest run),
+  with how it's taken: a command, or a small separate model's judgement. Colony takes it at each push and finished
+  milestone, in its own copy of the project, never from the agent's say-so, and shows it against its target with
+  its trend.
+- **The Library:** what you and the agent keep referring to on purpose (a world's places and people, a policy
+  set, research you build on, a page you work on together), each with why it's kept, under headings either of you
+  sets; text opens to edit together, a page runs. It starts empty; what's done folds into an archive that costs the
+  agent nothing. A page in a project can send back what you did on it (`colony.send`) as a note to the agent.
 - **The shared vision**, above the roadmap: what the finished work is, and also why you want it, where it
   lands (who uses it, how many, how they find it, on what terms), the edge you bring, and what using it should
   feel like. It directs the work, with you as its guide: a request that drifts from it is named, and one that
@@ -84,10 +98,10 @@ where things stand; `colony remote --off` puts it back as it was.
   see or try it, with older ones kept as its history. Rate or comment if you like; it reaches the agent, and
   nothing waits on you. How hands-on you are is yours to set.
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
-- **The steward**, one more session at the top of the sidebar. It tells you when a project needs you
+- **The steward**, one more session at the top of the sidebar, optional. It tells you when a project needs you
   or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
   routine questions within the direction you set for each project, and brings back anything about scope,
-  cost or that can't be undone. It never polls: a watcher reads every screen every few seconds for
+  cost or that can't be undone; a decision a project put to you is never its to answer. It never polls: a watcher reads every screen every few seconds for
   free and wakes it only when something waits on you or work was completed (a roadmap item done, a showcase
   entry), never just because a turn ended, and it stays silent when there's nothing new for you. Colony's own words reach it through an inbox
   its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
@@ -96,7 +110,9 @@ where things stand; `colony remote --off` puts it back as it was.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.
-- **Work keeps going without you:** when a network drop stops an agent or its helpers, colony tells it to
+- **Work keeps going without you:** an agent idle a while with roadmap work it can start, and nothing of its own
+  waiting on you, is told so once, by rule, at any hour (outside yours, to take what doesn't need you); a project
+  can turn it off. When a network drop stops an agent or its helpers, colony tells it to
   carry on once the network is back. A console frozen mid-work (its working timer unchanged for 15 minutes)
   is restarted in the same conversation and told to carry on, up to 3 times a day; after that, you hear of it.
 - **Projects talk to each other:** `colony send NAME "…"` (`--ask` for an answer), `colony reply`,
