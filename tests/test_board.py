@@ -754,6 +754,28 @@ class ChatTest(BoardBase):
             {"type": "assistant", "message": {"content": [{"type": "thinking", "thinking": "private reasoning"}]}}]))
         self.assertEqual(chat.turns(chat.events("claude", path))[0]["items"], [("say", "Renaming it to Cancel now.")])
 
+    def test_time_at_work_leaves_out_a_session_resumed_days_later(self):
+        import os, re
+        from unittest import mock
+        from colony import providers
+        home = Path(self.tmp.name) / "claudehome"
+        folder = home / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(board.workdir(self.root).resolve()))
+        folder.mkdir(parents=True)
+        at = lambda s: f"2026-08-{s}Z"
+        (folder / "s.jsonl").write_text("\n".join(json.dumps(l) for l in [
+            {"type": "user", "message": {"content": "Go"}, "timestamp": at("21T04:00:00")},
+            {"type": "system", "subtype": "turn_duration", "durationMs": 60000, "timestamp": at("21T04:01:00")},
+            {"type": "user", "message": {"content": "<command-name>/rename</command-name>"}, "timestamp": at("21T04:03:00")},
+            {"type": "assistant", "message": {"content": "No response requested."}, "timestamp": at("21T04:03:30")},
+            {"type": "queue-operation", "timestamp": at("27T00:00:00")},
+            {"type": "assistant", "message": {"content": "Back, eleven days on"}, "timestamp": at("31T09:00:00")},
+            {"type": "user", "message": {"content": [{"type": "tool_result"}]}, "timestamp": at("31T09:00:20")}]) + "\n")
+        prov = providers.of(self.root)
+        with mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(home)}):
+            prov._turns.clear()
+            self.assertEqual(prov.active_seconds(self.root), 60 + 30 + 20, "the closed turn, then only the open one's own stretches")
+        prov._turns.clear()
+
     def test_pictures_and_files_in_the_project_show_in_the_chat_and_nothing_outside_it(self):
         board.track(self.root)
         shot = self.root / ".board" / "uploads" / "gap.png"

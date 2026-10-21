@@ -431,9 +431,9 @@ class ClaudeCode:
 
     def active_seconds(self, root):
         """Time at work in this folder, all told: Claude Code closes each turn with its length (turn_duration) in
-        the transcript; a turn still open counts from its prompt to the latest thing written in it. Transcripts
-        only grow, so each is read on from where the last look stopped. PROVIDER: reads Claude Code's own
-        transcripts."""
+        the transcript. A turn not closed (still running, interrupted, only a /command) counts the time between its
+        own lines, leaving out any gap over IDLE_GAP: a session resumed days later, not work. Transcripts only grow,
+        so each is read on from where the last look stopped. PROVIDER: reads Claude Code's own transcripts."""
         import re
         from datetime import datetime
         stamp = lambda e: datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
@@ -441,10 +441,10 @@ class ClaudeCode:
         folder = self.config_home() / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(workdir(root).resolve()))
         total = 0.0
         for f in folder.glob("*.jsonl"):
-            at, ms, opened, last = self._turns.get(f, (0, 0, None, None))
+            at, ms, open_, last = self._turns.get(f, (0, 0, 0.0, None))
             size = f.stat().st_size
             if size < at:
-                at, ms, opened, last = 0, 0, None, None           # rewritten: read it afresh
+                at, ms, open_, last = 0, 0, 0.0, None              # rewritten: read it afresh
             if size > at:
                 with f.open("rb") as fh:
                     fh.seek(at)
@@ -453,23 +453,21 @@ class ClaudeCode:
                 for line in whole.splitlines():
                     try:
                         if b'"turn_duration"' in line:
-                            ms, opened = ms + json.loads(line).get("durationMs", 0), None
-                        elif opened is None and re.search(rb'"type":\s*"user"', line):
-                            opened = stamp(json.loads(line))          # a turn begins
-                        if opened is not None and b'"timestamp"' in line:
-                            last = line                               # parsed once, below
+                            ms, open_, last = ms + json.loads(line).get("durationMs", 0), 0.0, None
+                        elif re.search(rb'"type":\s*"(user|assistant)"', line):
+                            found = re.findall(rb'"timestamp":"([^"]+)"', line)   # the line's own is its last
+                            t = stamp({"timestamp": found[-1].decode()} if found else json.loads(line))
+                            if last is not None and 0 < t - last <= self.IDLE_GAP:
+                                open_ += t - last
+                            last = t if last is None else max(last, t)
                     except (ValueError, KeyError):
                         pass
-                if isinstance(last, bytes):
-                    try:
-                        last = stamp(json.loads(last))
-                    except (ValueError, KeyError):
-                        last = None
                 at += len(whole)
-                self._turns[f] = (at, ms, opened, last)
-            total += ms / 1000 + (max(0, last - opened) if opened and last else 0)
+                self._turns[f] = (at, ms, open_, last)
+            total += ms / 1000 + open_
         return total
 
+    IDLE_GAP = 60 * 60          # a step can run long (a helper, a long test); a session resumed later is hours or days on
     _turns = {}                                   # transcript -> (bytes read, ms of turns ended, open turn's start, its latest)
 
     def history_text(self, root, limit=200_000):
