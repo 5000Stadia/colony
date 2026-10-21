@@ -112,12 +112,16 @@ def claude_events(path):
                 # kept as thinking: a response may hold only these, so they are what was said to the person
                 elif c.get("type") == "thinking" and e.get("thinkingDisplay") == "updates" and (c.get("thinking") or "").strip():
                     out.append(("say", c["thinking"].strip(), at))
-                elif c.get("type") == "tool_use":
+                elif c.get("type") == "tool_use" and not NEEDS_YOU.match(str((c.get("input") or {}).get("command") or "")):
                     inp = c.get("input") or {}
                     arg = inp.get("description") or inp.get("command") or inp.get("file_path") or inp.get("pattern") \
                         or inp.get("prompt") or next((v for v in inp.values() if isinstance(v, str)), "")
                     out.append(("step", _step(c.get("name", "tool"), arg), at))
     return out + [("queued", q.strip(), "") for q in queued if q.strip()]
+
+
+# `colony needs-you`: the agent telling the board its turn asks the person; plumbing, never shown as work
+NEEDS_YOU = re.compile(r"^\s*(?:\S*/)?colony\s+needs-you\s*$")
 
 
 def codex_events(path):
@@ -142,6 +146,8 @@ def codex_events(path):
         elif kind in ("custom_tool_call", "function_call"):
             raw = p.get("input") or p.get("arguments") or ""
             cmd = re.search(r'cmd:\s*"((?:[^"\\]|\\.)*)"', raw) or re.search(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+            if cmd and NEEDS_YOU.match(cmd.group(1)):
+                continue
             out.append(("step", _step(p.get("name", "tool"), cmd.group(1).replace("\\n", " ") if cmd else raw), at))
         elif kind == "agent_message":
             text = "\n".join(c.get("text", "") for c in p.get("content") or [] if isinstance(c, dict))

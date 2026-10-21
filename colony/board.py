@@ -132,8 +132,8 @@ steer all of them from one board, and the projects can write to each other.
 - What the person will keep opening: `colony pin PATH-or-URL --title "..." --why "..."`.
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
-- A turn that ends with a question waits for the person on the board; if they ask you something first, answer
-  it and ask yours again.
+- A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
+  then it waits for them on the board. If they ask you something first, answer it and ask yours again.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
 - How long work goes well, from colony's measured runs: `GUIDE_PATH`. Read it at a project's start, and again
   when weighing structure (helpers, review, tests, memory).
@@ -858,6 +858,22 @@ def restates_gate(question, root):
     words = lambda t: {w for w in re.findall(r"[a-z0-9][a-z0-9.'-]*[a-z0-9]", t.lower()) if len(w) > 3}
     mine = words(question)
     return bool(mine) and any(len(mine & words(g["question"])) >= 0.6 * len(mine) for g in gates(root) if not g["answer"])
+
+
+def mark_needs_you(root):
+    """`colony needs-you`: the turn now running asks the person something."""
+    path = Path(root) / ".board" / "needs-you"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(now())
+
+
+def take_needs_you(root):
+    """Whether the turn just ended said it asks the person; said once, for that turn."""
+    path = Path(root) / ".board" / "needs-you"
+    if not path.exists():
+        return False
+    path.unlink(missing_ok=True)
+    return True
 
 
 def record_ask(root, key, text, explicit=False):

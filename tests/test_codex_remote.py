@@ -152,6 +152,7 @@ class NativeRemoteTest(unittest.TestCase):
             with self.native(root, settings) as (client, config, home):
                 tid = remote.attach(client, root, config, None)
                 ids.append(tid)
+                board.mark_needs_you(root)              # its turn asks the person (colony needs-you)
                 self.turn(client, tid, 'App words for ' + root.name)
                 self.assertEqual(board.read(root, 'said.jsonl')[0]['text'], 'App words for ' + root.name)
                 self.assertIn('probe passed', board.read(root, 'said.jsonl')[-1]['reply'])

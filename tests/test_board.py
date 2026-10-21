@@ -1046,6 +1046,17 @@ class ChatTest(BoardBase):
         self.assertIn("<blockquote><p>31,200 words</p></blockquote><p>After.</p>", said)
         self.assertNotIn("|", said)
 
+    def test_saying_the_turn_needs_the_person_never_shows_as_work_in_chat(self):
+        from colony import chat
+        path = Path(self.tmp.name) / "n.jsonl"
+        path.write_text("".join(json.dumps(x) + "\n" for x in [
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "colony needs-you"}},
+                                                          {"type": "tool_use", "name": "Bash", "input": {"command": "ls"}},
+                                                          {"type": "text", "text": "Which one?"}]}}]))
+        steps = [t for k, t, _ in chat.claude_events(str(path)) if k == "step"]
+        self.assertEqual(len(steps), 1, "only the real work")
+        self.assertNotIn("needs-you", " ".join(steps))
+
     def test_a_context_carry_over_shows_in_chat_as_one_folded_line(self):
         board.track(self.root)
         path = Path(self.tmp.name) / "t.jsonl"
@@ -1286,6 +1297,7 @@ class GlanceTest(BoardBase):
         board.add_note(self.root, {}, "Use clay pots.", author='person')
         self.assertIn("Use clay pots.", run("UserPromptSubmit", prompt="[colony] Notes arrived"))
         final = {"turn_id": "turn-1", "last_assistant_message": "Ready. Which pot size do you want?"}
+        board.mark_needs_you(self.root)                      # the agent said its turn asks (colony needs-you)
         self.assertEqual(json.loads(run("Stop", **final)), {})
         run("Stop", **final)
         self.assertEqual(len(board.asks(self.root)), 1, "a duplicate Stop cannot duplicate the question")
@@ -1378,6 +1390,7 @@ class GlanceTest(BoardBase):
         self.assertIn("Private note for plants-codex", result.stdout)
         self.assertIn("Private mail for plants-codex", result.stdout)
         self.assertEqual(board.asks(twin), [])
+        board.mark_needs_you(twin)
         hook(["turn", "--console", "codex"], markers, turn_id="own", last_assistant_message="What color?")
         self.assertEqual(board.asks(twin)[0]["text"], "What color?")
         self.assertEqual(snapshot(self.root), original, "the other agent's records remain untouched")
@@ -3386,6 +3399,9 @@ class AskTest(BoardBase):
                                            {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}]),
                             ("user", [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}]),
                             ("assistant", "Two options. Keep the old column? Or drop it?"))
+        self.hook("turn", payload=t)
+        self.assertEqual(board.asks(self.root), [], "a question mark alone asks nothing: the agent says so")
+        self.assertIn("will wait on the person", self.hook("needs-you").stdout)
         self.hook("turn", payload=t)
         self.hook("turn", payload=t)                                   # the same turn again: no second entry
         [a] = board.asks(self.root)

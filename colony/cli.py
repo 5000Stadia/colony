@@ -764,7 +764,9 @@ def cmd_turn(a):
     from . import monitor
     if Path(root).resolve() == monitor.home().resolve() and text.strip():
         monitor.said_last(text)                     # the steward's last word, at the top of its page
-    board.record_ask(root, key, text)
+    # the turn asks the person when its agent said so (colony needs-you); the steward's, when it ends asking
+    if board.take_needs_you(root) or (Path(root).resolve() == monitor.home().resolve() and board.asks_question(text)):
+        board.record_ask(root, key, text, explicit=True)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     from . import continuation
     continuation.after_turn(root)
@@ -895,6 +897,14 @@ MADE = ("[colony]", "<task-notification>", "<agent-message", "<system-reminder>"
 def _persons(prompt):
     """Whether a prompt is the person's own words."""
     return bool(prompt) and not prompt.lstrip().startswith(MADE)
+
+
+def cmd_needs_you(a):
+    """The agent says its turn asks the person something: when the turn ends, it waits on their list."""
+    from . import board
+    board.mark_needs_you(board.root_of())
+    print("This turn will wait on the person when it ends: ask your question in it.")
+    return 0
 
 
 def cmd_noted(a):
@@ -1497,6 +1507,7 @@ def main(argv=None):
     p = sub.add_parser("said", help="(steward) what the person said to a project directly since you last caught up")
     p.add_argument("name"); p.set_defaults(fn=cmd_said)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
+    sub.add_parser("needs-you", help="this turn asks the person something: it waits on their list when it ends").set_defaults(fn=cmd_needs_you)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
     p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")
     p.add_argument("--ask", action="store_true", help="it expects an answer")
