@@ -2051,7 +2051,7 @@ def own_colour(reg, pid):
 
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
-            f"<title>Projects — board</title><style>{CSS}{own_colour(reg, pid)}</style></head><body><nav>{sidebar(reg, pid)}</nav>"
+            f"<title>Projects — board</title><style>{CSS}{own_colour(reg, pid)}</style></head><body><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}</script></body></html>")
 
 
@@ -6353,6 +6353,8 @@ div.nestgroup .members a.prow { display:flex; flex-direction:column; justify-con
 .swatches input:checked + span { box-shadow:0 0 0 2px var(--ink) }
 @media (prefers-color-scheme: dark) { .swatches label span { background:var(--swd) } }
 nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--sunk)) }
+/* off any project (the steward, the front page), no project's chip is tinted: none reads as the one you're in */
+nav.noproj .proj[style]:not(.on) { background:var(--sunk) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
 .libsearch input { width:100%; font-size:16px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); margin:6px 0 10px }
