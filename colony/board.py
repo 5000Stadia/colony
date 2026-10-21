@@ -3327,14 +3327,16 @@ def render(reg, pid, view="overview", show_all=""):
                     waiting = sum(1 for g in gs if g.get("item") == it["id"] and due(g))
                     unlocks = [x for x, y in its.items() if it["id"] in y["after"]]
                     drawn[it["id"]] = (
-                        f"<details class='item {it['state']}'><summary><span class='st {it['state']}'>{LABEL[it['state']]}</span> "
-                        f"<b>{e(it['id'])}</b> {e(it['text'])}"
+                        f"<details class='item {it['state']}'><summary><i class='jd {it['state']}' title='{LABEL[it['state']]}'></i> "
+                        f"<span class='ititle'>{e(lead_clause(it['text'], 90))}</span> <span class='muted iid'>{e(it['id'])}</span>"
                         + (f" <span class='muted'>primary: {e(Path(it['owner']).name)}</span>" if lead_is_shared(root) else '')
                         + (f" <span class='muted'>after {e(', '.join(it['links']))}</span>" if it["links"] else "")
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
                         + (f" {timer(times[it['id']])}" if it["id"] in times else "")
-                        + f"</summary><div class='body'>{steer_row(pid, it)}<p>{e(it['desc'] or 'No description yet.')}</p>"
+                        + f"</summary><div class='body'>{steer_row(pid, it)}"
+                        + (f"<p>{e(it['text'])}</p>" if lead_clause(it['text'], 90) != it['text'] else "")
+                        + f"<p>{e(it['desc'] or ('' if lead_clause(it['text'], 90) != it['text'] else 'No description yet.'))}</p>"
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
@@ -3689,7 +3691,15 @@ def part_body(m, drawn):
         cells = "".join(f"<span class='piece {its[i]['state']}' title='{e(its[i]['text'])}'>{e(short(its[i]['text'], 28))}</span>"
                         for i in its)
         return f"<div class='pieces'>{cells}</div>" + rows(order)
-    return rows(order)
+    # a sequence: what is being done (latest started first), what is to come (in order), what is done (latest first,
+    # folded once it runs long), each a line by its title
+    doing = [i for i in order if its[i]["state"] in ("doing", "verify")]
+    todo = [i for i in order if its[i]["state"] == "todo"]
+    done = [i for i in order if its[i]["state"] == "done"]
+    head = lambda name, ids: f"<p class='kindnote muted'>{name} · {len(ids)}</p>"
+    return ((head("Doing", doing) + rows(doing) if doing else "") + (head("To come", todo) + rows(todo) if todo else "")
+            + ((f"<details class='donefold'><summary class='kindnote muted'>Done · {len(done)}</summary>{rows(done)}</details>"
+                if len(done) > 6 else head("Done", done) + rows(done)) if done else ""))
 
 
 def roadmap_map(road, pid, all_notes, gs):
@@ -6538,7 +6548,9 @@ a.jstop.live .jring { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%,
 .lanes { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:8px 0 }
 .lane { border:1px solid var(--line); border-radius:12px; padding:8px 10px } .lane p { margin:4px 0 }
 .lanebar { height:5px; border-radius:3px; background:var(--line); margin:5px 0; overflow:hidden } .lanebar i { display:block; height:100%; background:var(--accent) }
-.kindnote { margin:10px 0 2px; font-size:13px } .pieces { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 }
+.kindnote { margin:12px 0 2px; font-size:12px; text-transform:uppercase; letter-spacing:.05em }
+details.item > summary .jd { vertical-align:middle; margin-right:4px } .ititle { font-weight:500 } .iid { font-size:12px }
+.donefold > summary { cursor:pointer } .pieces { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 }
 .piece { font-size:12px; border:1px solid var(--line); border-radius:6px; padding:2px 6px } .piece.done { background:var(--line) }
 .piece.doing { border-color:var(--accent) }
 .mdtable { overflow-x:auto; margin:10px 0 } .mdtable table { border-collapse:collapse; font-size:14px; line-height:1.4 }
@@ -6700,6 +6712,8 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
   border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:10px; height:10px; border-radius:50%; flex:none; background:transparent; border:2px solid var(--line); box-sizing:border-box }
 .sdot.off { opacity:.55 }
+/* in the bar, a project's dot is in its own colour, whichever project's page is open */
+nav .proj[style] .sdot { --accent:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style] .sdot { --accent:var(--pcd) } }
 .sdot.idle { border-color:var(--accent) }
 .sdot.working { border-color:var(--accent); border-top-color:transparent; animation:spin .8s linear infinite }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag); animation:beat 1.1s ease-in-out infinite }

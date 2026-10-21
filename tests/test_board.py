@@ -561,12 +561,13 @@ class BoardTest(BoardBase):
         self.assertNotIn(" open><summary><h3>M", page, "every milestone loads folded")
         self.assertTrue(heads[0][1] and heads[1][1], "in progress: a dot that says whether its agent is at work")
         m1 = page[page.index("<h3>M1 — v1"):page.index("Completed")]
-        self.assertEqual(re.findall(r"<b>(R\d)</b>", m1), ["R3", "R2", "R1"], "in progress, to come, then the latest done first")
+        self.assertEqual(re.findall(r"<span class='muted iid'>(R\d)</span>", m1), ["R3", "R2", "R1"], "in progress, to come, then the latest done first")
+        self.assertLess(m1.index("Doing · 1"), m1.index("Done · 2"), "grouped, each by its title")
         m2 = page[page.index("<h3>M2 — v2"):page.index("<h3>M1")]
-        self.assertEqual(re.findall(r"<b>(R\d)</b>", m2), ["R5", "R4"], "what started last goes to the top")
+        self.assertEqual(re.findall(r"<span class='muted iid'>(R\d)</span>", m2), ["R5", "R4"], "what started last goes to the top")
         self.assertIn("<span class='muted'>2/3 <span class='timer running'", m1, "done of all, then the time since it began, counting on")
-        self.assertIn("<b>R2</b> water log <span class='timer' data-base='", m1, "done: its time holds")
-        self.assertNotIn("<b>R1</b> add plants <span class='timer", m1, "done before the board looked: no time to show")
+        self.assertIn("<span class='ititle'>water log</span> <span class='muted iid'>R2</span> <span class='timer' data-base='", m1, "done: its time holds")
+        self.assertNotIn("<span class='muted iid'>R1</span> <span class='timer", m1, "done before the board looked: no time to show")
         self.assertIn("<script>", page[page.index("Completed"):], "timers count on in the page")
         self.assertEqual([board.took(x) for x in (30, 60 * 12, 60 * 130, 86400 + 3 * 3600)], ["<1m", "12m", "2h 10m", "1d 3h"])
 
