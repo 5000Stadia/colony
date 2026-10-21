@@ -853,6 +853,11 @@ class Watcher:
         continuation.tick_all()
         self.freshen()
         self.close()                                # a project being closed comes off once it has landed its work
+        try:
+            from . import carryon
+            carryon.tick()                          # idle with work it can start: told so, by rule, steward or not
+        except Exception:
+            pass
         if not self.enabled or muted():
             self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:

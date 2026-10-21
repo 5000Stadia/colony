@@ -1205,6 +1205,39 @@ class HintTest(BoardBase):
         self.assertEqual([k for k, _, _ in hints.open_hints(self.root)], ["later-done:M6"], "a new vision: open again")
 
 
+class CarryOnTest(BoardBase):
+    def test_an_idle_agent_with_work_it_can_start_is_told_once_until_something_changes(self):
+        from colony import carryon
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text("## Vision\nPlants.\n\n## M1 — Build\n- [x] R1 a\n- [ ] R2 b\n- [ ] R3 c\n"
+                                              "## M2 — Ideas · menu\n- [ ] R9 d\n## Later\n- [ ] R8 e\n")
+        carryon._idle.clear(); carryon._woke.clear()
+        typed = []
+        with patch.object(carryon.board, "projects", return_value=[self.root]), \
+                patch.object(carryon.console, "running", return_value=True), \
+                patch.object(carryon.console, "snapshot", return_value={"state": "idle", "lines": []}), \
+                patch.object(carryon.console, "drafting", return_value=False), \
+                patch.object(carryon.console, "attached", return_value=False), \
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True), \
+                patch.object(carryon.hours, "active", return_value=True) if hasattr(carryon, "hours") else patch("colony.hours.active", return_value=True):
+            carryon.tick(now=1000)
+            self.assertEqual(typed, [], "not yet: idle a while first")
+            carryon.tick(now=1000 + carryon.IDLE + 1)
+            self.assertEqual(len(typed), 1)
+            self.assertIn("roadmap items that can start: R2, R9.", typed[0], "not R3 (after R2 in its sequence), not Later's")
+            carryon.tick(now=1000 + 3 * carryon.IDLE)
+            self.assertEqual(len(typed), 1, "once: nothing has changed")
+            board.said(self.root, "carry on with R9 please")
+            carryon._idle.clear()
+            carryon.tick(now=5000); carryon.tick(now=5000 + carryon.IDLE + 1)
+            self.assertEqual(len(typed), 1, "the person is talking with it: theirs to lead")
+            board.add_gate(self.root, "Which pot?", item="R2")
+            board.project_settings(self.root, {"carry_on": "off"})
+            self.assertFalse(carryon.wanted(self.root), "turned off for this project")
+            board.project_settings(self.root, {"carry_on": ""})
+            self.assertNotIn("R2", carryon.startable(self.root), "a decision open on it: not startable")
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)

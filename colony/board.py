@@ -374,7 +374,7 @@ def set_setting(key, value):
 # What turbo means for a project, as it ticks it (colony/turbo.py): stronger models, going deeper on its queued
 # work, research on a topic it names. Never part of how its console starts.
 TURBO = {"turbo_models": True, "turbo_deeper": True, "turbo_research": False, "turbo_topic": ""}
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", "color", *TURBO)
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", "color", "carry_on", *TURBO)
 # A project's own colour, the person's to choose: its accent in light and dark, which every tint on its page comes
 # from (the bars, the chosen chip, buttons), and a light wash on its chip in the menu. Green is the board's own.
 PALETTE = {"green": ("#2f5d50", "#7fb5a2"), "forest": ("#2e5a2e", "#8fc48f"), "sage": ("#566f50", "#aac4a2"),
@@ -428,6 +428,11 @@ def project_settings(root, changes=None):
                     own.pop(k)                         # as colony starts it: nothing of the project's own
             elif k == "remote":
                 own[k] = str(v).lower() in ("on", "true", "yes", "1")
+            elif k == "carry_on":                          # on as colony starts it: only off is kept
+                if str(v).lower() in ("off", "false", "no", "0"):
+                    own[k] = "off"
+                else:
+                    own.pop(k, None)
             elif k == "permissions" and v not in PERMISSIONS:
                 raise KeyError(k)
             elif k == "provider" and v not in __import__("colony.providers").providers.PROVIDERS:
@@ -2572,7 +2577,14 @@ CHAT = """
   const where = () => { down.hidden = atEnd(); };
   window.addEventListener('scroll', where, {passive: true});
   down.addEventListener('click', () => window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'}));
-  const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; };
+  // Grown by a line while typing, the box is placed again at once and the cursor re-seated: a phone otherwise draws
+  // the cursor where the box was before it grew (never while dictated or composed words are still being formed)
+  let composing = false;
+  ta.addEventListener('compositionstart', () => { composing = true; });
+  ta.addEventListener('compositionend', () => { composing = false; });
+  const grow = () => { const was = ta.style.height; ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
+    if (ta.style.height === was || composing || !document.body.classList.contains('typing')) return;
+    onKeys(); requestAnimationFrame(() => { if (composing) return; const a = ta.selectionStart, z = ta.selectionEnd; ta.setSelectionRange(a, z); }); };
   // Typing on a phone: the box sits on the keyboard, the tabs step aside, and the latest stays just above it.
   // The keyboard covers the bottom of the page without resizing it, so its top is read off the visible part.
   const vv = window.visualViewport;
@@ -4056,6 +4068,9 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
             + "</div>" + (COLOUR_NOW.replace("PID", str(pid)) if root else "") +
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
+            + (f"<label><input type='checkbox' name='carry_on' value='on'{'' if own.get('carry_on') == 'off' else ' checked'}>"
+               "<input type='hidden' name='carry_on' value='off'> Carry on by itself: idle with roadmap work it can start, "
+               "it is told so <span class='muted'>(once, until something changes)</span></label>" if root else "")
             + (auto_balance_fields(root) + tier_fields(root) + turbo_fields(root) if root else "") + f"<button>Save</button></form>")
 
 
