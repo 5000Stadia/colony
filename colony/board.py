@@ -7184,8 +7184,10 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   body.typing .voicesheet { top:calc(var(--kbtop, 100vh) - 118px); bottom:auto; transform:translate(-50%, -100%) }
   .tabs { position:fixed; left:0; right:0; bottom:0; z-index:40; margin:0; gap:0; background:var(--card);
     border-top:1px solid var(--line); padding:4px 6px calc(4px + env(safe-area-inset-bottom)) }
-  .tabs a { flex:1 1 0; min-width:0; text-align:center; padding:10px 0 9px; border-radius:0; color:var(--muted);
-    font-size:clamp(11px, 3.7vw, 15px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis } main { padding-bottom:78px }
+  /* six tabs fit a 360px phone whole: each as wide as its word, a little air between (at an even split and 3.7vw,
+     Overview, Roadmap and Showcase were cut short and ran together) */
+  .tabs a { flex:1 1 auto; min-width:0; text-align:center; padding:10px 3px 9px; border-radius:0; color:var(--muted);
+    font-size:clamp(11px, 3.3vw, 15px); white-space:nowrap; overflow:hidden; text-overflow:ellipsis } main { padding-bottom:78px }
   /* the tab bar reads as navigation, not as more keys: its own tinted ground, the current tab in the accent */
   .tabs { background:color-mix(in srgb, var(--accent) 12%, var(--bg)); border-top:0; box-shadow:0 -1px 0 var(--line) }
   .tabs a.on { background:transparent; color:var(--accent); font-weight:700; box-shadow:inset 0 3px 0 var(--accent) } }
