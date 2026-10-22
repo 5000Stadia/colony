@@ -4,7 +4,8 @@ Once a project's console has sat idle a while, with nothing typed into it and no
 its own waiting on the person, the person not talking with it lately, no version under way (that carries on by
 itself), its program not at a usage limit, and roadmap items it owns that can start (not done, not under Later,
 nothing they wait on unfinished, no decision about them open), colony types one short wake into its console: those
-items, and to carry on with the smartest next one or say what holds it. Outside the person's active hours it adds
+items, and to carry on with the smartest next one or record what holds it where this rule reads it (a gate on the
+item, or "on hold" in its text), since a reply is read by no one. Outside the person's active hours it adds
 that they're away, so it takes what doesn't need them. Once per stretch: it is woken again only after something
 has changed (a commit, the plan, the person's words); that memory is the project's own carryon.jsonl, so a restart of
 the board forgets nothing. An item the person parked (its text says so) is not work to start. A project can turn it
@@ -114,8 +115,10 @@ def tick(now=None):
         away = "" if hours.active() else (f" The person is away{' until ' + hours.at_day(board.epoch(until)) if until else ''}: "
                                           "take what doesn't need them.")
         text = (f"[colony] Idle, with roadmap items that can start: {', '.join(items[:6])}"
-                f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision, "
-                f"or say what holds you.{away}")
+                f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision. "
+                # a hold said only in the reply is read by no one: the next commit would wake it for the same item
+                f"If something holds one, record it where it lasts: a decision for the person as a gate on it "
+                f"(colony gate ... --item {items[0]}), anything else as \"on hold: why\" in its text.{away}")
         if console.type_into(name, text):
             _idle.pop(key, None)
             board.append(root, "carryon.jsonl", {"at": board.now(), "items": items[:6], "sig": list(sig)})

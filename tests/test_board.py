@@ -1323,6 +1323,8 @@ class CarryOnTest(BoardBase):
             carryon.tick(now=1000 + carryon.IDLE + 1)
             self.assertEqual(len(typed), 1)
             self.assertIn("roadmap items that can start: R2, R9.", typed[0], "not R3 (after R2 in its sequence), not Later's")
+            self.assertIn("a gate on it (colony gate ... --item R2)", typed[0], "a hold only said in reply is asked again")
+            self.assertIn('"on hold: why" in its text', typed[0])
             carryon.tick(now=1000 + 3 * carryon.IDLE)
             self.assertEqual(len(typed), 1, "once: nothing has changed")
             board.said(self.root, "carry on with R9 please")
