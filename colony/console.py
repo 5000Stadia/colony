@@ -69,20 +69,60 @@ def _conversations():
     return board.home() / "conversations.json"     # this machine's, so kept with the board, not in the project
 
 
+def transcript_provider(transcript, fallback=None):
+    """The file's provider, including old bookmarks whose provider was never recorded or was mislabelled."""
+    try:
+        with Path(transcript).open() as handle:
+            first = json.loads(handle.readline(65536))
+        kind = first.get('type')
+        if kind in ('session_meta', 'response_item', 'event_msg'):
+            return 'codex'
+        if kind in ('file-history-snapshot', 'queue-operation') or (kind in ('user', 'assistant') and 'message' in first):
+            return 'claude'
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    if '.claude' in Path(transcript).parts:
+        return 'claude'
+    return fallback
+
+
+def saved_conversation(root, provider=None):
+    """Resume only this provider's own bookmark; a switch never passes another program's session ID."""
+    from . import providers
+    provider = provider or providers.key(providers.of(root))
+    path = _conversations()
+    row = (json.loads(path.read_text()) if path.exists() else {}).get(str(Path(root))) or {}
+    for saved in ((row.get('by_provider') or {}).get(provider), row):
+        if saved and saved.get('transcript') and Path(saved['transcript']).is_file() \
+                and transcript_provider(saved['transcript'], saved.get('provider') or provider) == provider:
+            return {**saved, 'provider': provider}
+    return None
+
+
 def remember(root, conversation, transcript):
-    """The conversation a console is in, recorded by its hooks, so a console that died comes back to it."""
+    """Keep each provider's conversation, so switching back resumes its own history."""
     if conversation and transcript:
+        from . import board, providers
         path = _conversations()
-        rows = json.loads(path.read_text()) if path.exists() else {}
-        rows[str(Path(root))] = {"conversation": conversation, "transcript": transcript}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(rows, indent=1))
+        with board.board_lock('conversations'):
+            rows = json.loads(path.read_text()) if path.exists() else {}
+            old = rows.get(str(Path(root))) or {}
+            history = dict(old.get('by_provider') or {})
+            if old.get('transcript'):
+                family = transcript_provider(old['transcript'], old.get('provider'))
+                if family:
+                    history[family] = {k: old[k] for k in ('conversation', 'transcript')}
+                    history[family]['provider'] = family
+            family = transcript_provider(transcript, providers.key(providers.of(root)))
+            saved = dict(conversation=conversation, transcript=transcript, provider=family)
+            history[family] = saved
+            rows[str(Path(root))] = dict(saved, by_provider=history)
+            board.save_json(path, rows)
 
 
 def last_conversation(root):
-    path = _conversations()
-    c = (json.loads(path.read_text()) if path.exists() else {}).get(str(Path(root)))
-    return c["conversation"] if c and Path(c["transcript"]).exists() else None
+    saved = saved_conversation(root)
+    return saved['conversation'] if saved else None
 
 
 def lingers(cmd):

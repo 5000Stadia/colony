@@ -64,6 +64,8 @@ def scoped(root, key, payload):
     sid = payload.get('session_id')
     if not sid or not payload.get('transcript_path'):
         return False
+    if console.transcript_provider(payload['transcript_path'], key) != key:
+        return False                            # a late hook from the outgoing provider cannot claim the new seat
     if key == 'codex' and not is_monitor(root):
         from . import codex_remote
         expected = codex_remote.read_json(codex_remote.home_for(root) / 'colony-thread.json').get('thread')
@@ -87,12 +89,15 @@ def register(root, key, payload):
 
 def session(root):
     value = read(file(root, 'context-session.json'))
+    wanted = providers.key(program(root))
+    prior = console.saved_conversation(root, wanted)
     if value:
-        return value
+        family = console.transcript_provider(value['path'], value.get('provider'))
+        if family == wanted or not prior:
+            return dict(value, provider=family)
     # Existing project hooks already recorded this exact logical seat before R68.
-    prior = read(console._conversations()).get(str(Path(root)))
     if prior:
-        return dict(provider=providers.key(program(root)), id=prior['conversation'], path=prior['transcript'])
+        return dict(provider=prior['provider'], id=prior['conversation'], path=prior['transcript'])
     return None
 
 
@@ -377,7 +382,8 @@ def safe(root):
 def refreshing(root):
     """Only a live refresh of the current conversation holds continuation; a dropped or finished one never does."""
     s, job = session(root), read(file(root)).get('job') or {}
-    return bool(s and job.get('session') == s['id'] and job.get('phase') in LIVE)
+    return bool(s and s['provider'] == providers.key(program(root))
+                and job.get('session') == s['id'] and job.get('phase') in LIVE)
 
 
 def due(root, st, tokens, window, now):
@@ -391,7 +397,7 @@ def tick(root):
     if is_monitor(root):
         return  # the steward compacts natively, at its cap: nothing typed into the conversation the person reads
     s = session(root)
-    if not s:
+    if not s or s['provider'] != providers.key(program(root)):
         return
     snap = transcript(s)
     tokens, window = occupancy(root, s, snap)
