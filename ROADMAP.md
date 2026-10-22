@@ -108,6 +108,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 ## M5 — Public: anyone can start with it
 
 - [x] R35 Ready to publish: nothing private in the repository or its history, a README with a quick start that works from a fresh clone, then public on the person's word
+- [~] R102 A colony showcase: one page the person can show someone, a visual demo of the board on a phone following one real project (EconomyHumboldt, the one finished end to end) from idea to vision, roadmap, decisions and done, built from colony's own records of it. Private unless the person says otherwise. Check: every screen and quote traces to a record (vision.jsonl, gates, notes, roadmap, git), it reads on a phone, and a fresh reader who has never seen colony can say what it does. The steward's idea; the person, 2026-10-21: "Agree and go on all of them". Agent's reading: a page to hand someone so they get colony in a minute, from a real case rather than a pitch.
 
 ## M7 — Codex as a full option: from install to a project's agent
 
