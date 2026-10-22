@@ -2158,7 +2158,7 @@ def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<style>{own_colour(reg, pid)}</style></head><body><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
@@ -2175,6 +2175,37 @@ LASTPAGE = """
 })();
 """
 
+
+# On a phone the tab bar sits on the bottom edge. An iPhone can go on placing it as though the keyboard were still up
+# after it has gone, and the bar then floats a keyboard's height up the screen with the page showing under it (the
+# person's screenshot, Oct 22). So wherever the visible part of the page ends, the bar is moved to it; and when a box
+# loses the keyboard, the page is nudged a pixel and back, which makes the phone place fixed things afresh. A gap it
+# had to close goes to the board's log, a few a page, so the phone's own numbers say whether this holds.
+BAR = """
+(() => {
+  const vv = window.visualViewport, bar = document.querySelector('.tabs');
+  if (!vv || !bar) return;
+  let shift = 0, told = 0, queued = 0;
+  const seat = () => { queued = 0;
+    if (getComputedStyle(bar).position !== 'fixed' || document.body.classList.contains('typing') || vv.scale > 1.01) {
+      if (shift) { shift = 0; bar.style.transform = ''; } return; }
+    // only a keyboard's worth down: the few pixels a toolbar folding away leaves are the phone's to place
+    const base = bar.getBoundingClientRect().bottom - shift, gap = Math.round(vv.offsetTop + vv.height - base);
+    const want = gap > 60 ? gap : 0;
+    if (Math.abs(want - shift) < 2) return;
+    shift = want; bar.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
+    if (shift && told++ < 3) fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'bar',
+      shift, inner: innerHeight, client: document.documentElement.clientHeight, vvh: vv.height, vvtop: vv.offsetTop,
+      scroll: scrollY, page: document.body.scrollHeight, path: location.pathname + location.search})})}).catch(() => {});
+  };
+  const soon = () => { if (!queued) queued = requestAnimationFrame(seat); };
+  vv.addEventListener('resize', soon); vv.addEventListener('scroll', soon);
+  window.addEventListener('scroll', soon, {passive: true}); window.addEventListener('pageshow', soon);
+  document.addEventListener('focusout', (ev) => { if (!ev.target.matches('input, textarea, select')) return;
+    setTimeout(() => { const y = scrollY; scrollTo(scrollX, y > 0 ? y - 1 : y + 1); scrollTo(scrollX, y); soon(); }, 350); });
+  soon();
+})();
+"""
 
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
 # stays at the left. Only the row scrolls, never the page; the order is the board's own.

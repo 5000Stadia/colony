@@ -790,6 +790,9 @@ class ChatTest(BoardBase):
         self.assertIsNone(board.chat_file(0, self.root, "/etc/hostname"))
         self.assertTrue(board.chat_file(0, self.root, str(self.root / "report.pdf")))
         self.assertIn("LASTPAGE", board.shell.__code__.co_names, "reopened, the board comes back to the last page")
+        page = board.shell(board.registry(), 0, "")
+        self.assertIn("translateY(", page, "the phone's tab bar is moved to the bottom where an iPhone leaves it floating")
+        self.assertIn("gap > 60", page, "only a keyboard's worth: the toolbar's few pixels stay the phone's")
 
     def test_the_stewards_chat_refreshes_and_its_file_links_download(self):
         board.track(self.root)
