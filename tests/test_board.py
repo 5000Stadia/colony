@@ -791,6 +791,27 @@ class ChatTest(BoardBase):
         self.assertTrue(board.chat_file(0, self.root, str(self.root / "report.pdf")))
         self.assertIn("LASTPAGE", board.shell.__code__.co_names, "reopened, the board comes back to the last page")
 
+    def test_the_stewards_chat_refreshes_and_its_file_links_download(self):
+        board.track(self.root)
+        from colony import monitor
+        stew = self.root / "stewhome"
+        (stew / "files").mkdir(parents=True)
+        (stew / "files" / "plan.pdf").write_bytes(b"%PDF-1.4")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        with patch.object(monitor, "home", return_value=stew):
+            link = re.search(r"href='([^']+)'", board.chat_prose(f"[the plan]({stew}/files/plan.pdf)", "steward", stew))[1]
+            got = urllib.request.urlopen(base + html.unescape(link))
+            self.assertEqual(got.read(), b"%PDF-1.4", "p=steward once failed the board's first step: the phone got nothing")
+            self.assertIn("pdf", got.headers["Content-Type"])
+            self.assertIsNone(got.headers["Content-Security-Policy"], "a sandboxed PDF opens blank in a phone's viewer")
+            self.assertEqual(got.headers["X-Content-Type-Options"], "nosniff")
+            self.assertEqual(urllib.request.urlopen(base + "/chat/feed?p=steward").status, 200,
+                             "and the steward's chat never refreshed, so a delivered message stayed queued")
+
     def test_the_board_answers_only_at_this_machines_own_addresses_and_names(self):
         for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765", "100.101.1.2:8765", ""):
             self.assertTrue(board.own_host(host), host)

@@ -5787,7 +5787,10 @@ class Handler(BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(url.query)
         reg = registry()
         plist = projects(reg)
-        pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
+        try:                                           # the steward's chat asks as p=steward: its routes read it themselves
+            pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
+        except ValueError:
+            pid = 0
         if url.path == '/progress/artifact' and plist:
             from . import progress
             c = progress.current(plist[pid])
@@ -5924,7 +5927,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
             self.send_header("Content-Disposition", inline(path.name))
-            self.send_header("Content-Security-Policy", SANDBOX)
+            if path.suffix.lower() != ".pdf":         # a phone's PDF viewer is a plugin, which a sandbox refuses: a blank page
+                self.send_header("Content-Security-Policy", SANDBOX)
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Cache-Control", "private, max-age=300")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
