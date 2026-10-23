@@ -818,31 +818,38 @@ class Watcher:
             turbo.stand_down("turbo ran into trouble", stale=True)
 
     def current(self):
-        """Every two minutes, with no tokens: a console whose program has been updated, or whose settings or helper
-        tiers changed, is reloaded into the same conversation, but only once it has sat idle a few minutes, with
-        nothing typed in it and no one looking at it. Nothing in the middle of work is touched."""
-        if time.time() - self.current_checked < 120 or not board.registry()["settings"]["auto_update"]:
-            return
-        self.current_checked = time.time()
+        """A console set to another program than the one it runs (a switch the person or the steward asked for) is
+        switched at its first safe moment: idle, nothing typed in it, no one looking at it, and nothing of its own still
+        running out of sight (a command or helper it left at work, a turn its program runs elsewhere). Time adds nothing
+        to that. Every two minutes, with no tokens, a console whose program has been updated, or whose settings or helper
+        tiers changed, is reloaded the same way into the same conversation, once it has also sat idle a few minutes:
+        no one is waiting on that, and a reload under someone reading it is a jolt. Nothing in the middle of work is touched."""
+        full = time.time() - self.current_checked >= 120 and board.registry()["settings"]["auto_update"]
+        if full:
+            self.current_checked = time.time()
         seats = [(p, console.session_name(p), None) for p in board.projects() if p.exists()] + [(home(), name(), "monitor")]
         for root, nm, label in seats:
             if not console.running(nm):
                 self.idle_since.pop(nm, None)
+                continue
+            switch = console.switching(root, nm, label)
+            if not (switch or full):
                 continue
             state = console.snapshot(root, lines=1, name=nm)["state"]
             if state != "idle" or console.drafting(nm) or console.attached(nm):
                 self.idle_since.pop(nm, None)
                 continue
             first = self.idle_since.setdefault(nm, time.time())
-            if time.time() - first < RELOAD_AFTER:
+            if not switch and time.time() - first < RELOAD_AFTER:
                 continue
-            why = console.stale(root, nm, label)
-            if why:
-                console.reload(root, nm, label)
-                self.idle_since.pop(nm, None)
-                board.home().mkdir(parents=True, exist_ok=True)
-                with (board.home() / "reloads.jsonl").open("a") as fh:
-                    fh.write(json.dumps({"at": board.now(), "console": nm, "why": why}) + "\n")
+            why = f"switching from {switch[1]} to {switch[0]}" if switch else console.stale(root, nm, label)
+            if not why or console.busy(root, nm, label):
+                continue
+            console.reload(root, nm, label)
+            self.idle_since.pop(nm, None)
+            board.home().mkdir(parents=True, exist_ok=True)
+            with (board.home() / "reloads.jsonl").open("a") as fh:
+                fh.write(json.dumps({"at": board.now(), "console": nm, "why": why}) + "\n")
 
     def freshen(self):
         """Daily and occupancy refreshes preserve each provider conversation."""
@@ -863,6 +870,7 @@ class Watcher:
         if not self.enabled or muted():
             self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:
+            self.current()  # a switch or an update reaches its consoles, steward or not
             self.usage()  # so are the safe pause and its waking at the reset
             self.mail()  # project delivery is independent of the steward agent
             recovery.tick_all()  # so is resuming what a network drop stopped

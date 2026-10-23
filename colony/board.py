@@ -3382,6 +3382,17 @@ def progress_panel(root, pid):
             + "".join(parts) + "</details>")
 
 
+def switch_line(root, name=None, label=None):
+    """While a console runs another program than the one now set for it, said where the person looks: a switch still
+    waiting for its safe moment doesn't read as one that didn't take."""
+    s = console.switching(root, name, label)
+    if not s:
+        return ""
+    want, ran = (providers.PROVIDERS[k].label for k in s)
+    return (f"<p class='muted switching'>Set to {e(want)} · still running {e(ran)}: it switches as soon as nothing is "
+            f"under way there (no turn or background work, nothing typed, no one in its terminal).</p>")
+
+
 def render(reg, pid, view="overview", show_all=""):
     """A project's page: its Overview, Today, Roadmap, Showcase or Console. show_all names a record on the Roadmap tab
     (history, messages, mail) to show in full."""
@@ -3392,7 +3403,7 @@ def render(reg, pid, view="overview", show_all=""):
     view = view if view in ("roadmap", "library", "showcase", "console", "chat") else "overview"     # Today is Overview now
     if view == "chat":
         root = plist[pid]
-        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}</header>"
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}{switch_line(root)}</header>"
                      + chat_page(str(pid), root))
     if view == "console":
         root = plist[pid]
@@ -3401,7 +3412,7 @@ def render(reg, pid, view="overview", show_all=""):
             return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}</header>{vision_box(root, pid)}"
                          f"<div class='card'><p>{e(providers.missing(providers.of(root)))}, so its console can't start.</p>"
                          f"<p class='muted'>Install it, or choose another provider in this project's Settings.</p></div>")
-        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}{message}</header>"
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}{message}{switch_line(root)}</header>"
                      + vision_box(root, pid)
                      + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
@@ -3437,7 +3448,7 @@ def render(reg, pid, view="overview", show_all=""):
     waiting = len(moments(root)) if view == "overview" else 0
     lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
-               + lead_status + f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
+               + switch_line(root) + lead_status + f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
     elif view == "library":                 # what the project knows and has made, found where it is
@@ -4474,8 +4485,8 @@ def monitor_page(reg, view="overview"):
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form>"
             + ("" if on else f"<form method='post' action='/mute' class='helmform'><input type='hidden' name='state' "
                f"value='{'off' if monitor.muted() else 'on'}'><button class='quiet'>{'Unmute' if monitor.muted() else 'Mute'}</button></form>")
-            + "</div>"
-            f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('chat', 'Chat')}{tab('console', 'Console')}</div></header>")
+            + "</div>" + switch_line(monitor.home(), monitor.name(), "monitor")
+            + f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('chat', 'Chat')}{tab('console', 'Console')}</div></header>")
     plist = projects(reg)
     if view == "chat":
         return shell(reg, -1, head + chat_page("steward", monitor.home()))

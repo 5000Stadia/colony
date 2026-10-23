@@ -588,6 +588,26 @@ class ClaudeCode:
             return "needs you"
         return "idle"
 
+    def busy(self, root, name):
+        """A turn can end with work still at work: a command it put in the background, which Claude Code runs through
+        its shell snapshot, or a helper agent, which its footer counts under the box ("· 1 shell", "· 2 agents")."""
+        import re
+        import subprocess
+        from . import console
+        pane = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True).stdout.strip()
+        for pid in console._descendants(int(pane)) if pane.isdigit() else []:
+            try:
+                cmd = open(f"/proc/{pid}/cmdline", "rb").read().decode(errors="replace")
+            except OSError:
+                continue
+            if "/shell-snapshots/snapshot-" in cmd:
+                return "a command it started is still running"
+        lines = console.screen(name).splitlines()
+        box = self._box(lines)
+        foot = "\n".join(lines[box + 1:]) if box is not None else ""
+        m = re.search(r"\b(\d+) (?:background )?(agents?|tasks?|shells?|monitors?)\b", foot)
+        return f"{m.group(1)} {m.group(2)} still at work" if m else None
+
     def elapsed(self, screen):
         """The timer on its live spinner line: "✶ Flowing… (3m 12s · ↓ 1.7k tokens)" gives "3m 12s"."""
         import re
@@ -972,6 +992,11 @@ class Codex:
         path = root / "AGENTS.md"
         have = path.read_text() if path.exists() else ""
         block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY + self.GOAL
+        memory = claude_memory(root)
+        if memory:                                  # the person's rules stay with the project when its program changes
+            block += (f"- The person's standing rules for this project, each with why, are kept in `{memory}` and the "
+                      "files it links (its Claude Code agent keeps them there): read it at the start of a session, "
+                      "follow them, and add a new one there in the same form.\n")
         marker = "## This project is part of a colony"
         if marker in have:
             start = have.index(marker)
@@ -1108,6 +1133,10 @@ class Codex:
         codex_remote.stop_host(root)
         return True
 
+    def busy(self, root, name):
+        """Its turn runs in its app host, whatever its console shows: busy until that host is at rest."""
+        return None if self.at_rest(root) else "its app host is still running a turn"
+
     def at_rest(self, root):
         """Its app host runs turns, and carries on an active goal, whatever its console shows (one that has ended
         leaves them running): at rest only when no host is running, or every thread it has loaded is idle with no
@@ -1189,6 +1218,22 @@ def starting(provider, screen, fresh=True):
 
 
 PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
+
+
+def claude_memory(root):
+    """The index of what Claude Code's agent keeps for a project between conversations (the person's standing rules
+    and why), where there is one: its folder is named after the folder it runs in. None elsewhere."""
+    import re
+    from . import board, lead
+    try:
+        places = [board.workdir(root), Path(root), lead.plan_root(root)]
+    except Exception:
+        places = [Path(root)]
+    for place in places:
+        index = PROVIDERS["claude"].config_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(place)) / "memory" / "MEMORY.md"
+        if index.exists():
+            return index
+    return None
 
 
 # A colony module run as a command inside a project folder: `python -m` would import that folder's own colony first,

@@ -213,8 +213,13 @@ def ensure(root, name=None, label=None, settle=0):
                        check=True)
         _died_path(name).unlink(missing_ok=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
-        _started(name, fingerprint(root, label))
+        _started(name, fingerprint(root, label), providers.key(providers_of(root, label)))
         scrollable(name, providers_of(root, label))
+        if not label:
+            try:
+                catch_up(root)
+            except Exception:
+                pass                                # a note it would have had: never a console that fails to start
         until = time.time() + settle
         while time.time() < until and running(name):
             time.sleep(0.1)
@@ -281,13 +286,103 @@ def _record(change):
         tmp.replace(path)
 
 
-def _started(name, fp):
-    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "at": time.time()}))
+def _started(name, fp, program=None):
+    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "at": time.time(), **({"program": program} if program else {})}))
+
+
+def running_program(name):
+    """Which program a console runs (its provider's key): as colony started it, else from its process's path (Claude
+    Code keeps its versions in versions/, Codex in releases/), else None."""
+    try:
+        was = json.loads(_started_path().read_text()).get(name) or {}
+    except (OSError, ValueError):
+        was = {}
+    if was.get("program"):
+        return was["program"]
+    m = _running_exe(name)
+    return ("claude" if m.group(1) else "codex") if m else None
+
+
+def switching(root, name=None, label=None):
+    """A console set to another program than the one it runs (a switch asked for, not yet made): (set, running), as
+    provider keys, or None."""
+    from . import providers
+    name = name or session_name(root)
+    if not running(name):
+        return None
+    want, ran = providers.key(providers_of(root, label)), running_program(name)
+    return (want, ran) if ran and ran != want else None
+
+
+def busy(root, name=None, label=None):
+    """What still runs for a console that its screen can show as idle (a command or helper it left at work in the
+    background, a turn its program runs elsewhere), or None. PROVIDER: busy(); what can't be read counts as busy."""
+    from . import providers
+    name = name or session_name(root)
+    p = providers.PROVIDERS.get(running_program(name)) or providers_of(root, label)
+    try:
+        return p.busy(root, name) if hasattr(p, "busy") else None
+    except Exception:
+        return "its program couldn't say whether anything still runs"
+
+
+def catch_up(root):
+    """Back on a program after another ran the project, a note of what changed meanwhile: neither program sees the
+    other's conversation, so the returning agent would otherwise know only what it happens to look up. Once a switch."""
+    from . import board, hours, providers
+    want = providers.key(providers.of(root))
+    path = _conversations()
+    by = ((json.loads(path.read_text()) if path.exists() else {}).get(str(Path(root))) or {}).get("by_provider") or {}
+
+    def last(saved):
+        try:
+            return Path(saved["transcript"]).stat().st_mtime
+        except (OSError, KeyError, TypeError):
+            return 0
+    since = last(by.get(want))
+    others = sorted((last(v), k) for k, v in by.items() if k != want and last(v) > since + 60)
+    if not since or not others:
+        return None
+    other_at, other = others[-1]
+    if any(n.get("kind") == "catch-up" and board.epoch(n["at"]) >= int(other_at) for n in board.read(root, "notes.jsonl")):
+        return None
+    where = board.workdir(root)
+    git = lambda *a: subprocess.run(["git", "-C", str(where), *a], capture_output=True, text=True).stdout.strip()
+    commits = git("log", f"--since=@{int(since)}", "--format=%h %s").splitlines()
+    ahead = git("rev-list", "--count", "@{u}..HEAD")
+    loose = [l for l in git("status", "--porcelain").splitlines() if l[3:] not in ("CLAUDE.md", "AGENTS.md")]
+    acted = [r for r in board.read(root, "notes.jsonl") if r.get("type") == "addressed" and board.epoch(r["at"]) > since]
+    words = [r for r in board.read(root, "said.jsonl") if r.get("text") and board.epoch(r["at"]) > since]
+    cut = lambda t, n: t if len(t) <= n else t[:n - 1] + "…"
+    parts = [f"Back on {providers.PROVIDERS[want].label}: {providers.PROVIDERS[other].label} ran this project after your "
+             f"conversation's last turn ({hours.at_day(since)}), "
+             "and you don't see its conversation. What changed meanwhile, to check rather than assume:"]
+    if commits:
+        parts.append(f"{len(commits)} commit{'s' if len(commits) != 1 else ''}: "
+                     + "; ".join(cut(c, 90) for c in commits[:10]) + (" …" if len(commits) > 10 else ""))
+    if ahead.isdigit() and int(ahead):
+        parts.append(f"{ahead} commit{'s' if ahead != '1' else ''} not pushed")
+    if loose:
+        parts.append(f"{len(loose)} file{'s' if len(loose) != 1 else ''} changed and not committed: "
+                     + ", ".join(l[3:] for l in loose[:8]) + (" …" if len(loose) > 8 else ""))
+    if words:
+        parts.append("the person said: " + " | ".join(f"\"{cut(r['text'], 160)}\"" for r in words[-5:]))
+    if acted:
+        parts.append("notes it acted on: " + " | ".join(f"[{r['of']}] {cut(r.get('text', ''), 160)}" for r in acted[-6:]))
+    if len(parts) == 1:
+        parts.append("nothing (no commits, notes or words from the person)")
+    return board.add_note(root, "project", parts[0] + " " + "; ".join(parts[1:]) + ".", author="colony", quiet=True, kind="catch-up")
 
 
 def running_version(name):
     """The version of the program a console runs, from its process: each program keeps its versions side by side
     (Claude Code's versions/2.1.284, Codex's releases/0.154.0-...), so the path says which one is running."""
+    m = _running_exe(name)
+    return (m.group(1) or m.group(2)) if m else None
+
+
+def _running_exe(name):
+    """The program's own path among a console's processes, matched on its versions/ or releases/ folder, or None."""
     r = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True)
     todo, seen = r.stdout.split(), set()
     while todo:
@@ -301,7 +396,7 @@ def running_version(name):
             exe = ""
         m = re.search(r"/versions/(\d[\w.]*)$|/releases/(\d[\d.]*)-", exe)
         if m:
-            return m.group(1) or m.group(2)
+            return m
         todo += subprocess.run(["pgrep", "-P", pid], capture_output=True, text=True).stdout.split()
     return None
 

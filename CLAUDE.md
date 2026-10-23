@@ -1,7 +1,7 @@
 # Colony
 
 This repository is colony: the board (colony/board.py), its consoles, the steward, and `GUIDE.md`, the
-guidance it deploys. Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo`.
+guidance it deploys. Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume`.
 
 ## Building the board you run on
 
@@ -10,7 +10,7 @@ reports what it finds and changes nothing here; the person's improvements come t
 
 - The board is live for the person's other projects while you change it. Run the tests before
   `colony restart`: a restart keeps every console, yours included, but a broken board takes down the page
-  they reach everything through. If one gets through, you are still reachable (tmux, the Claude app): fix,
+  they reach everything through. If one gets through, you are still reachable (tmux, the Claude or ChatGPT app): fix,
   test, restart.
 - Keep mechanisms provider-agnostic; mark what only Claude Code can do with `PROVIDER:` and route it
   through colony/providers.py.

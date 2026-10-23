@@ -109,6 +109,99 @@ class ProviderResumeTest(unittest.TestCase):
             console.command('project', self.root)
         self.assertEqual(launched.call_args.kwargs['resume'], 'codex-id')
 
+    def test_a_switch_is_seen_from_how_the_console_was_started(self):
+        name = console.session_name(self.root)
+        console._started(name, 'fp', 'codex')
+        with patch.object(console, 'running', return_value=True):
+            self.assertEqual(console.switching(self.root), ('claude', 'codex'), "set to Claude, still running Codex")
+            self.choose('codex')
+            self.assertIsNone(console.switching(self.root))
+
+    def test_a_requested_switch_waits_for_nothing_but_a_safe_moment(self):
+        from colony import monitor
+        m = monitor.Watcher(enabled=False)
+        name = console.session_name(self.root)
+        busy = {'why': 'a command it started is still running'}
+        with patch.object(board, 'projects', return_value=[self.root]), \
+                patch.object(monitor, 'name', return_value='steward-seat'), \
+                patch.object(console, 'running', side_effect=lambda n: n == name), \
+                patch.object(console, 'switching', side_effect=lambda r, n, l: ('claude', 'codex') if n == name else None), \
+                patch.object(console, 'snapshot', return_value={'state': 'idle'}), \
+                patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
+                patch.object(console, 'busy', side_effect=lambda *a: busy['why']), \
+                patch.object(console, 'reload') as reload:
+            m.current()
+            reload.assert_not_called()                  # idle on screen, but a background command still runs
+            busy['why'] = None
+            m.current_checked = 0
+            m.current()                                 # no five minutes idle first: the person asked for it
+            reload.assert_called_once()
+        self.assertIn('switching from codex to claude', (board.home() / 'reloads.jsonl').read_text())
+
+    def test_an_update_still_waits_a_few_idle_minutes(self):
+        from colony import monitor
+        m = monitor.Watcher(enabled=False)
+        name = console.session_name(self.root)
+        with patch.object(board, 'projects', return_value=[self.root]), \
+                patch.object(monitor, 'name', return_value='steward-seat'), \
+                patch.object(console, 'running', side_effect=lambda n: n == name), \
+                patch.object(console, 'switching', return_value=None), \
+                patch.object(console, 'snapshot', return_value={'state': 'idle'}), \
+                patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
+                patch.object(console, 'stale', return_value='Claude Code 1 → 2'), patch.object(console, 'busy', return_value=None), \
+                patch.object(console, 'reload') as reload:
+            m.current_checked = 0
+            m.current()
+            reload.assert_not_called()
+            m.idle_since[name] -= monitor.RELOAD_AFTER
+            m.current_checked = 0
+            m.current()
+            reload.assert_called_once()
+
+    def test_claude_counts_helpers_its_footer_shows_as_still_at_work(self):
+        screen = "done\n────────\n❯ \n────────\n  Opus · weekly 0%\n  ⏵⏵ bypass permissions on · 2 agents\n"
+        claude = providers.get('claude')
+        with patch.object(console, 'screen', return_value=screen), \
+                patch('subprocess.run', return_value=type('R', (), {'stdout': ''})()):
+            self.assertEqual(claude.busy(self.root, 'x'), '2 agents still at work')
+        with patch.object(console, 'screen', return_value=screen.replace(' · 2 agents', '')), \
+                patch('subprocess.run', return_value=type('R', (), {'stdout': ''})()):
+            self.assertIsNone(claude.busy(self.root, 'x'))
+
+    def test_back_on_a_program_it_hears_what_the_other_one_did(self):
+        import subprocess
+        import time
+        git = lambda *a: subprocess.run(['git', '-C', str(self.root), *a], capture_output=True, check=True)
+        git('init', '-q')
+        git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'Keep each history')
+        then = time.time() - 3600
+        os.utime(self.claude, (then, then))
+        board.save_json(console._conversations(), {str(self.root): {
+            'conversation': 'codex-id', 'transcript': str(self.codex), 'provider': 'codex',
+            'by_provider': {'claude': {'conversation': 'claude-id', 'transcript': str(self.claude), 'provider': 'claude'},
+                            'codex': {'conversation': 'codex-id', 'transcript': str(self.codex), 'provider': 'codex'}}}})
+        board.said(self.root, 'switch it back please')
+        board.append(self.root, 'notes.jsonl', {'type': 'addressed', 'of': 'n123456', 'at': board.now(), 'text': 'pushed the fix'})
+        with patch.object(board, 'workdir', return_value=self.root):
+            note = console.catch_up(self.root)
+            self.assertEqual(note['kind'], 'catch-up')
+            for part in ('Back on Claude Code: Codex ran', 'Keep each history', '"switch it back please"', '[n123456] pushed the fix'):
+                self.assertIn(part, note['text'])
+            self.assertIsNone(console.catch_up(self.root), "once a switch, not at every restart")
+
+    def test_codex_reads_the_rules_claude_keeps_for_the_project(self):
+        index = Path(self.tmp.name) / 'MEMORY.md'
+        index.write_text('- [Fix bugs](fix.md) — at once\n')
+        with patch.object(providers, 'claude_memory', return_value=index):
+            providers.get('codex').wire(self.root, board.protocol(self.root))
+        self.assertIn(f"standing rules for this project, each with why, are kept in `{index}`", (self.root / 'AGENTS.md').read_text())
+
+    def test_colonys_own_instructions_reach_both_programs(self):
+        here = Path(__file__).resolve().parent.parent
+        part = lambda f: (here / f).read_text().split('## This project is part of a colony')[0]
+        self.assertEqual(part('AGENTS.md'), part('CLAUDE.md'), "Codex works on colony by the same project rules as Claude")
+        self.assertIn('tests.test_provider_resume', part('AGENTS.md'))
+
 
 if __name__ == '__main__':
     unittest.main()
