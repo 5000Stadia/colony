@@ -323,7 +323,11 @@ def scout(text, family=None):
     return f"{report}\n\n{supports.NOTICE}"
 
 
-CONTEXT_CAP = "100k"            # PROVIDER: Claude Code's --autocompact (its only compaction now); Codex compacts on its own
+# PROVIDER: Claude Code's --autocompact (its only compaction now); Codex compacts on its own. It compacts about a third
+# short of the cap, and the steward starts each conversation already carrying its instructions, tools and skills
+# (61k on Oct 24, grown from far less): at 100k that left it some 6k to work in, and it compacted every few minutes
+# until Claude Code stopped it as thrashing. The cap leaves room well past that load.
+CONTEXT_CAP = "200k"
 
 
 def choice():

@@ -4403,7 +4403,7 @@ class MonitorUpkeepTest(BoardBase):
         try:
             with patch.object(bench, "role_pick", lambda k, role, entries=None, **kwargs: {"model": "claude-opus-5-5", "effort": "xhigh", "why": "Goal for the monitor"}):
                 cmd = console.command("monitor", None, folder=monitor.home())
-                self.assertIn("--model claude-opus-5-5 --effort xhigh --autocompact 100k", cmd)
+                self.assertIn("--model claude-opus-5-5 --effort xhigh --autocompact 200k", cmd)
                 self.assertIn("Auto: claude-opus-5-5 at xhigh", board.settings_page(board.registry()))
                 board.set_setting("monitor_model", "claude-sonnet-5:max")
                 self.assertIn("--model claude-sonnet-5 --effort max", console.command("monitor", None, folder=monitor.home()))
