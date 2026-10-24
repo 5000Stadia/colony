@@ -907,6 +907,16 @@ class ChatTest(BoardBase):
             {"type": "queue-operation", "operation": "enqueue", "content": "one"},
             {"type": "queue-operation", "operation": "popAll", "content": "one"}]))
         self.assertEqual([t["from"] for t in chat.turns(chat.events("claude", path))], ["you"], "taken back: no longer queued")
+        # a long message the program took as a paste: the person's words all the same, sent, taken mid-turn, or waiting
+        wrap = lambda t: f'<pasted_content id="7">\n{t}\n</pasted_content id="7">'
+        path.write_text("\n".join(json.dumps(l) for l in [
+            {"type": "user", "message": {"content": "\n\n" + wrap("a long thought")}, "timestamp": "2026-10-20T10:00:00Z"},
+            {"type": "queue-operation", "operation": "enqueue", "content": wrap("more of it")},
+            {"type": "queue-operation", "operation": "remove", "content": wrap("more of it")},
+            {"type": "attachment", "attachment": {"type": "queued_command", "prompt": wrap("more of it")}, "timestamp": "2026-10-20T10:01:00Z"},
+            {"type": "queue-operation", "operation": "enqueue", "content": wrap("still waiting")}]))
+        self.assertEqual([(t["from"], t["text"]) for t in chat.turns(chat.events("claude", path))],
+                         [("you", "a long thought"), ("you", "more of it"), ("queued", "still waiting")])
 
     def test_a_mail_notice_opens_to_the_letters_it_brought(self):
         from colony import mail

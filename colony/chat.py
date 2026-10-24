@@ -59,6 +59,16 @@ def _tail(path, limit=TAIL):
             return list(c["entries"])
 
 
+# PROVIDER: Claude Code takes a long message typed into it as a paste, and keeps it wrapped in its transcript.
+PASTED = re.compile(r'<pasted_content id="[^"]*">\n?(.*?)\n?</pasted_content(?: id="[^"]*")?>', re.S)
+
+
+def _typed(text):
+    """What was typed or sent, unwrapped from the program's paste marker: the person's words, not a notice of its own
+    (notices start "<", and so did a long message, which the chat then never showed and left queued)."""
+    return PASTED.sub(lambda m: m.group(1), text) if isinstance(text, str) else text
+
+
 def _who(text):
     """Who a message into the console came from: colony's own notices and the steward's relays start [colony]."""
     return "colony" if text.lstrip().startswith("[colony]") else "you"
@@ -78,10 +88,11 @@ def claude_events(path):
         at, content = e.get("timestamp", ""), (e.get("message") or {}).get("content")
         # sent mid-turn: queued at once, then taken up within the turn (or as the next one, a user entry then)
         if e.get("type") == "queue-operation":
-            if e.get("operation") == "enqueue" and isinstance(e.get("content"), str) and not e["content"].lstrip().startswith("<"):
-                queued.append(e["content"])
-            elif e.get("operation") == "remove" and e.get("content") in queued:
-                queued.remove(e["content"])
+            sent = _typed(e.get("content"))
+            if e.get("operation") == "enqueue" and isinstance(sent, str) and not sent.lstrip().startswith("<"):
+                queued.append(sent)
+            elif e.get("operation") == "remove" and sent in queued:
+                queued.remove(sent)
             elif e.get("operation") == "dequeue" and queued:
                 queued.pop(0)                             # the oldest, taken up as the next turn
             elif e.get("operation") == "popAll":
@@ -89,9 +100,10 @@ def claude_events(path):
             continue
         if e.get("type") == "attachment":
             a = e.get("attachment") or {}
-            if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str) and a["prompt"].strip() \
-                    and not a["prompt"].lstrip().startswith("<"):
-                out.append((_who(a["prompt"]), a["prompt"].strip(), at))
+            sent = _typed(a.get("prompt"))
+            if a.get("type") == "queued_command" and isinstance(sent, str) and sent.strip() \
+                    and not sent.lstrip().startswith("<"):
+                out.append((_who(sent), sent.strip(), at))
             continue
         if e.get("isCompactSummary"):
             out.append(("compact", "", at))
@@ -99,7 +111,7 @@ def claude_events(path):
         if e.get("type") == "user":
             text = content if isinstance(content, str) else "\n".join(
                 c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text")
-            text = text.strip()
+            text = _typed(text).strip()
             if text and not text.startswith("<") and not text.startswith("Caveat:"):
                 out.append((_who(text), text, at))
         elif e.get("type") == "assistant" and isinstance(content, list):
@@ -136,7 +148,8 @@ def codex_events(path):
             continue
         if kind == "message" and p.get("role") in ("user", "assistant"):
             text = "\n".join(c.get("text", "") for c in p.get("content") or []
-                             if isinstance(c, dict) and c.get("type") in ("input_text", "output_text")).strip()
+                             if isinstance(c, dict) and c.get("type") in ("input_text", "output_text"))
+            text = _typed(text).strip()
             if not text:
                 continue
             if p["role"] == "assistant":
