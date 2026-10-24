@@ -176,6 +176,8 @@ class ClaudeCode:
             parts += ["--effort", shlex.quote(s["effort"])]
         if s.get("autocompact"):
             parts += ["--autocompact", shlex.quote(s["autocompact"])]     # how large its conversation may grow
+        from . import connections                       # the outside services granted it, the person's own denied
+        parts += [shlex.quote(x) for x in connections.claude_args(root)]
         return " ".join(parts)
 
     def wire(self, root, protocol):
@@ -969,6 +971,8 @@ class Codex:
             from .codex_remote import toml
             value = f'hooks.{event}={toml(entries)}'
             parts += ["-c", shlex.quote(value)]
+        from . import connections                       # the outside services granted it
+        parts += [shlex.quote(x) for x in connections.codex_args(root)]
         # Codex runs a hook only once it is trusted: these are colony's own, given in this very command, so with the
         # person's trust setting on (as the app path's trust_hooks requires) they run without a stored trust.
         from .board import registry

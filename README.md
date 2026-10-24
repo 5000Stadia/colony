@@ -131,6 +131,12 @@ where things stand; `colony remote --off` puts it back as it was.
   `colony turbo` shows each program's pace; Settings turns it off per program. When turbo ends (caught up,
   at the limit, or the week turns over), each project it reached gets a note returning it to its usual
   posture, and raised models go back at the next idle moment.
+- **Connections:** outside services your projects reach (an eBay account, a mailbox), each an MCP server colony
+  starts on this machine, with no gateway or outside account in between, and only in the projects you give it
+  (Settings › Connections). Its keys stay in a file only you can read, typed into Settings, never into a chat. A
+  tool it holds (one that sends, lists or spends) waits for your tap on the board; the agent hears how it went.
+  Your own connectors from your Claude sign-in (Gmail, Drive) are given project by project the same way.
+  An agent adds one with `colony connect --add`.
 - **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
   Outside them agents keep working but don't end on a question to you: the decisions they need, and any
   question asked in a console, are held off Waiting on you and arrive together when your hours begin (new

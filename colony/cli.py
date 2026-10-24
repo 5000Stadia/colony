@@ -941,6 +941,35 @@ def cmd_needs_you(a):
     return 0
 
 
+def cmd_connect(a):
+    """Outside services: what is granted here, or (add) a new one the person then gives keys and grants in Settings."""
+    import shlex
+    from . import board, connections
+    if a.add:
+        try:
+            c = connections.add(a.add, a.title, shlex.split(a.command or ""), needs=a.key, hold=a.hold, tools=a.tool,
+                                about=a.about)
+        except ValueError as err:
+            print(err, file=sys.stderr)
+            return 2
+        print(f"connection {a.add} kept: {c['title']}. The person enters its keys ({', '.join(c['keys']) or 'none'}) "
+              f"and grants it to projects in Settings, under Connections; a granted project's console then restarts with it "
+              f"when idle. Holds for their tap: {', '.join(c['hold']) or 'nothing'}.")
+        return 0
+    root, data = board.root_of(), connections.load()
+    mine = connections.granted(root)
+    for n, c in sorted(data["connections"].items()):
+        state = ("granted here" if n in mine else "granted here, keys missing: " + ", ".join(connections.missing(n, c))
+                 if connections._granted(c, root) else "not granted here")
+        print(f"{n} ({c['title']}): {state}; holds for the person's tap: {', '.join(c.get('hold') or ()) or 'nothing'}")
+    for n, c in sorted(data["personal"].items()):
+        print(f"claude.ai {n} (the person's own): {'granted here' if connections._granted(c, root) else 'not granted here'}")
+    if not data["connections"] and not data["personal"]:
+        print("No connections yet.")
+    print("The person grants them in Settings, under Connections.")
+    return 0
+
+
 def cmd_noted(a):
     from . import board
     root = board.root_of()
@@ -1541,6 +1570,13 @@ def main(argv=None):
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
     p = sub.add_parser("said", help="(steward) what the person said to a project directly since you last caught up")
     p.add_argument("name"); p.set_defaults(fn=cmd_said)
+    p = sub.add_parser("connect", help="outside services (an API, a mailbox): what's granted here, or --add one")
+    p.add_argument("--add", metavar="NAME"); p.add_argument("--title", default="")
+    p.add_argument("--command", help="what starts its MCP server, its version pinned")
+    p.add_argument("--key", action="append", default=[], help="a key the person enters in Settings (repeat)")
+    p.add_argument("--hold", action="append", default=[], help="a tool that runs only on the person's tap (repeat)")
+    p.add_argument("--tool", action="append", default=[], help="offer only these tools (repeat)")
+    p.add_argument("--about", default=""); p.set_defaults(fn=cmd_connect)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("needs-you", help="this turn asks the person something: it waits on their list when it ends").set_defaults(fn=cmd_needs_you)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)

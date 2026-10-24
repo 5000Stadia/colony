@@ -57,6 +57,10 @@ class BoardBase(unittest.TestCase):
         refresh = patch.object(intelligence, 'refresh_due', return_value=False)
         refresh.start()
         self.addCleanup(refresh.stop)
+        from colony import connections
+        looking = patch.object(connections, 'refresh_personal')   # never asks the real `claude` for its connectors
+        looking.start()
+        self.addCleanup(looking.stop)
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")

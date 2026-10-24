@@ -143,6 +143,10 @@ steer all of them from one board, and the projects can write to each other.
   person reorganizes it, that is their preference showing: follow it, and settle the shape with them.
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
+- Outside services (an API such as eBay's, a mailbox) reach you as connections the person grants each project (`colony
+  connect` lists them). One the work needs: `colony connect --add NAME --command "…" --key KEY --hold TOOL`, an existing
+  MCP server with its version pinned, holding each tool that sends, lists or spends; the person then enters its keys and
+  grants it in Settings. A held tool waits on their tap, and its outcome arrives as a note.
 - A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
   then it waits for them on the board. If they ask you something first, answer it and ask yours again.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
@@ -1422,14 +1426,14 @@ def gate_lock(root):
 
 
 def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None, options=(),
-             recommended=None, reframes=None, told=""):
+             recommended=None, reframes=None, told="", hold=None):
     with gate_lock(root):
         return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default,
-                         options=options, recommended=recommended, reframes=reframes, told=told)
+                         options=options, recommended=recommended, reframes=reframes, told=told, hold=hold)
 
 
 def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None, options=(), recommended=None,
-              reframes=None, told=""):
+              reframes=None, told="", hold=None):
     """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
     (stand_defaults); one with consultant points never does, since each point needs their decision."""
     default = (default or "").strip()
@@ -1453,6 +1457,8 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
             gate["told"] = told.strip()
     if recommended:
         gate["recommended"] = recommended
+    if hold:                                         # a connection's call that runs only on their tap (connections)
+        gate["hold"] = hold
     until = hours.held_until(epoch(gate["at"]))     # outside the person's active hours: theirs when those begin
     if until:
         gate["held_until"] = until
@@ -1469,7 +1475,12 @@ def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
     """The person's answer to a gate. From the board it reaches the agent the way every other word from the
     person does, as a note; settled in conversation, the agent records it and already knows (tell=False)."""
     with gate_lock(root):
-        return _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
+        before = next((g for g in gates(root) if g["id"] == gate_id), None)
+        answer = _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
+    if tell and before and before.get("hold") and not before["answer"]:
+        from . import connections                    # theirs, from the board, the first answer: a held call runs on yes
+        connections.answered(root, before, text)
+    return answer
 
 
 def _gate_note(root, gate, ident, text, at, *, author, quiet=False):
@@ -4051,6 +4062,8 @@ def gate_choices(pid, gate, back):
                                  f"<input type='hidden' name='gate' value='{e(gate['id'])}'><input type='hidden' name='back' value='{e(back)}'>"
                                  f"<input type='hidden' name='text' value='{e(o)}'><button class='choice{' rec' if o == rec else ' yours' if label else ''}'>"
                                  + ("<span class='tag'>Recommended</span>" if o == rec else "") + f"{e(label or o)}</button></form>")
+    if gate.get("hold"):                             # a connection's call: theirs to release, never handed back
+        return "<div class='gatechoices'>" + "".join(one(o) for o in opts) + "</div>"
     # handed back in a tap: this once (where no answer is recommended, which would be the same tap), or this and every
     # question like it, the agent told where the line is
     return ("<div class='gatechoices'>" + "".join(one(o) for o in opts) + ("" if rec else one(CHOOSE, "Choose for me"))
@@ -5534,6 +5547,61 @@ def intelligence_label(n):
         return str(n)
 
 
+def connections_summary():
+    from . import connections
+    data = connections.load()
+    n, lacking = len(data["connections"]), sum(bool(connections.missing(k, c)) for k, c in data["connections"].items())
+    connections.refresh_personal()                   # their Claude connectors, looked up in the background
+    return (f"{n} service{'s' * (n != 1)}" + (f" · {lacking} waiting for keys" if lacking else "")
+            + (f" · {len(data['personal'])} of your own connectors" if data["personal"] else ""))
+
+
+def connections_settings(reg):
+    """Settings › Connections: each outside service with the keys the person enters and the projects they give it;
+    then their own connectors from their Claude sign-in, given project by project the same way."""
+    from . import connections
+    data, every = connections.load(), [p for p in projects(reg) if p.exists()]
+
+    def grants(name, entry, personal):
+        to = entry.get("projects") or []
+        tick = lambda p: " checked" if to == connections.ALL or str(p.resolve()) in to else ""
+        boxes = "".join(f"<label class='tick'><input type='checkbox' name='project' value='{e(str(p.resolve()))}'{tick(p)}> {e(p.name)}</label>"
+                        for p in every)
+        return (f"<form method='post' action='/connections' class='options'><input type='hidden' name='do' value='grant'>"
+                f"<input type='hidden' name='name' value='{e(name)}'>" + ("<input type='hidden' name='personal' value='1'>" if personal else "")
+                + f"<label class='tick'><input type='checkbox' name='all' value='1'{' checked' if to == connections.ALL else ''}> "
+                f"<b>Every project</b>, new ones too</label>{boxes}<div class='dangers'><button>Save who has it</button></div></form>")
+
+    def given(entry):
+        to = entry.get("projects") or []
+        return "every project" if to == connections.ALL else f"{len(to)} project{'s' * (len(to) != 1)}" if to else "no project"
+
+    out = ["<p class='muted'>Outside services your projects reach: each runs on this machine, only in the projects you give "
+           "it. Keys stay in a file only you can read, never in a chat. Anything a connection holds (sending, listing, "
+           "spending) waits for your tap on the board.</p>"]
+    for name, c in sorted(data["connections"].items()):
+        have, lacking = connections.keys(name), connections.missing(name, c)
+        fields = "".join(f"<label>{e(k)} <input type='password' name='key_{e(k)}' autocomplete='off' "
+                         f"placeholder='{'Kept; paste to replace' if have.get(k) else 'Paste it'}'></label>" for k in c.get("keys") or ())
+        out.append(f"<details class='conn'><summary><b>{e(c['title'])}</b> · {given(c)}"
+                   + (f" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>"
+                   + (f"<p>{e(c['about'])}</p>" if c.get("about") else "")
+                   + f"<p class='muted'>Waits for your tap: {e(', '.join(c.get('hold') or ()) or 'nothing')}</p>"
+                   + (f"<form method='post' action='/connections' class='options'><input type='hidden' name='do' value='keys'>"
+                      f"<input type='hidden' name='name' value='{e(name)}'>{fields}<div class='dangers'><button>Save keys</button></div></form>"
+                      if fields else "")
+                   + grants(name, c, False) + "</details>")
+    if not data["connections"]:
+        out.append("<p class='muted'>None yet. Ask a project's agent for one (an eBay account, a mailbox): it sets it up, "
+                   "and it appears here for your keys and your say on who has it.</p>")
+    if data["personal"]:
+        out.append("<h3>Your own connectors</h3><p class='muted'>From your Claude sign-in. A Claude project has only the ones "
+                   "you give it here (Codex projects aren't sorted yet).</p>")
+        for name, c in sorted(data["personal"].items()):
+            out.append(f"<details class='conn'><summary><b>{e(name)}</b> · {given(c)}</summary>{grants(name, c, True)}</details>")
+    return "".join(out)
+
+
 def settings_page(reg):
     from . import selection
     selection.migrate()
@@ -5717,6 +5785,7 @@ def settings_page(reg):
         section("consulting", "Consulting", "On: two fresh views at costly decisions" if s["consult"] else "Off", card(consulting)),
         section("steward", "Steward", ("Runs with the board" if s["monitor"] else "Off") + e(f" · {mm or 'its default'}"),
                 card(steward_on, monitor_card)),
+        section("connections", "Connections", e(connections_summary()), card(connections_settings(reg))),
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
                                          f"{'open on your network' if s['lan'] else 'this machine only'}"),
                 card(f"<ul class='folders'>{where}</ul><p class='muted'>Each project, and the steward, is also in the Claude "
@@ -6244,6 +6313,25 @@ class Handler(BaseHTTPRequestHandler):
                 signin_result(why if not ok else None)
             self.send_response(303)
             self.send_header("Location", "/settings")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/connections":
+            from . import connections
+            name = form.get("name", "")
+            try:
+                if form.get("do") == "keys":
+                    c = connections.load()["connections"][name]
+                    for k in c.get("keys") or ():
+                        if form.get(f"key_{k}", "").strip():
+                            connections.set_key(name, k, form[f"key_{k}"])
+                elif form.get("do") == "grant":
+                    connections.set_grants(name, connections.ALL if form.get("all") else values.get("project", []),
+                                           personal=bool(form.get("personal")))
+            except KeyError:
+                return self._send(404, b"No such connection.")
+            self.send_response(303)
+            self.send_header("Location", "/settings#set-connections")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -7081,6 +7169,8 @@ form.inline { display:inline; margin-left:8px } input[name=name] { font:inherit;
   border:1px solid var(--line); background:var(--bg); color:var(--ink); min-width:0; flex:1 1 220px; max-width:100% }
 :is(form.options, div.optset) button { align-self:flex-start }
 /* Settings: each part folded to its name and where it stands */
+details.conn { border-top:1px solid var(--line); padding:10px 0 } details.conn > summary { cursor:pointer }
+details.conn label.tick { display:inline-flex; align-items:center; gap:6px; margin:4px 14px 4px 0 }
 details.setsec { margin:0 0 10px; border:1px solid var(--line); border-radius:12px; background:var(--card); max-width:760px }
 details.setsec > summary { display:flex; flex-direction:column; gap:3px; padding:14px 40px 14px 16px; cursor:pointer;
   list-style:none; position:relative } details.setsec > summary::-webkit-details-marker { display:none }
