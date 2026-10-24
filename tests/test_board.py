@@ -1005,6 +1005,8 @@ class ChatTest(BoardBase):
         self.assertIsNone(voice.speak("Hello there."))
         self.assertIn("talk.pause()", board.CHAT, "⏸ between ■ and ⏭ holds the reading, ▷ takes it up")
         self.assertIn("player.pause()", board.CHAT)
+        self.assertIn("said >= 2 && lead.split(' ').length >= 4", board.CHAT,
+                      "the first clip is two sentences: one alone left a hiccup before the second (the person)")
         asked = []
 
         def made(line):

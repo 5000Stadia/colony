@@ -2834,15 +2834,15 @@ CHAT = """
   if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  // A fast start that grows into paragraphs: the first clip is the first sentence alone, so the voice starts in
-  // moments, and each next one a third longer than the last, which the machine makes in less time than the one before
+  // A fast start that grows into paragraphs: the first clip is the first two sentences, so the voice starts in
+  // moments and plays long enough for the second to be made (one alone left a hiccup after it), and each next one a third longer than the last, which the machine makes in less time than the one before
   // it takes to play (all that has played gives it its time), so there is no wait; soon a clip is a whole paragraph. A clip never
   // runs across a paragraph's end, and breaks only between sentences: a pause there reads as a breath, at a comma
   // it reads as a stall (the person's ear).
   const chunks = (text) => {
     // a clip takes about 0.75 of its playing time to make here (measured: 0.74 to 0.80 at the person's speed), so
     // the next may be as long as all that has played lets it be made in time, with a margin: over 0.85
-    const out = []; let want = 80, heard = 0, made = 0, lead = '';
+    const out = []; let want = 80, heard = 0, made = 0, lead = '', said = 0;
     const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length;
       want = Math.min(600, Math.max(40, heard / 0.85 - made)); };
     text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).forEach((p) => {
@@ -2850,8 +2850,9 @@ CHAT = """
       const sents = (p.match(/.+?(?:(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)|$)/g) || [p]).map((x) => x.trim()).filter(Boolean);
       let cur = '';
       sents.forEach((x) => {
-        // the first sentence, alone, for a quick start; one under four words ("Done.") takes the next with it
-        if (!out.length) { lead = lead ? lead + ' ' + x : x; if (lead.split(' ').length >= 4) push(lead); return; }
+        // the first two sentences for a quick start; under four words ("Done. Yes.") they take the next with them
+        if (!out.length) { lead = lead ? lead + ' ' + x : x; said += 1;
+          if (said >= 2 && lead.split(' ').length >= 4) push(lead); return; }
         if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; }
         cur = cur ? cur + ' ' + x : x;                                  // a sentence is never broken, however long
       });
