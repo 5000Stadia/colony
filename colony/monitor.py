@@ -915,7 +915,6 @@ class Watcher:
         for p in board.projects():
             if p.exists():
                 self.at_work(p, console.snapshot(p, lines=1)["state"] == "working")
-        board.working_now(getattr(self, "stirring", {}))
 
     def at_work(self, p, working):
         seen = getattr(self, "stirring", None)
@@ -926,6 +925,7 @@ class Watcher:
             seen[str(p)] = time.time()
         elif not working:
             seen.pop(str(p), None)
+        board.working_now(seen)                       # the steward on or off: written only as it changes, or each minute
 
     def run(self):
         while True:

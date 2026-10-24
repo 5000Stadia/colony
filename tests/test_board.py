@@ -879,6 +879,11 @@ class ChatTest(BoardBase):
                 patch.object(board, "now", return_value="2099-01-01T00:01:00Z"):
             w.stir()
         self.assertEqual(order()[:2], ["photonic", self.root.name], "the one that came in last leads")
+        w2 = monitor.Watcher.__new__(monitor.Watcher)
+        w2.at_work(third, True)
+        self.assertIn(str(third.resolve()), board.at_work_now(), "seen by the steward's own watch too, not only muted")
+        w2.at_work(third, False)
+        self.assertNotIn(str(third.resolve()), board.at_work_now())
         with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "working" if Path(p) in busy else "idle"}), \
                 patch.object(board, "now", return_value="2099-01-01T00:09:00Z"), patch.object(monitor.time, "time", return_value=time.time() + 600):
             w.stir()
