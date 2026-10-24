@@ -793,6 +793,8 @@ class ChatTest(BoardBase):
         page = board.shell(board.registry(), 0, "")
         self.assertIn("translateY(", page, "the phone's tab bar is moved to the bottom where an iPhone leaves it floating")
         self.assertIn("gap > 60", page, "only a keyboard's worth: the toolbar's few pixels stay the phone's")
+        self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
+        self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
 
     def test_the_stewards_chat_refreshes_and_its_file_links_download(self):
         board.track(self.root)
@@ -866,7 +868,37 @@ class ChatTest(BoardBase):
         with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "working" if Path(p) == self.root else "idle"}), \
                 patch.object(board, "now", return_value="2099-01-01T00:00:00Z"):
             w.stir()
-        self.assertEqual([p.name for _, p, _ in board.arranged(board.projects(board.registry()), theirs=False)][0], self.root.name)
+        order = lambda: [p.name for _, p, _ in board.arranged(board.projects(board.registry()), theirs=False)]
+        self.assertEqual(order()[0], self.root.name)
+        # both at work: each keeps the place it came in at, however long it goes on, ahead of one stirred since
+        third = Path(self.tmp.name) / "kiln"
+        third.mkdir()
+        board.track(third)
+        busy = {self.root, other}
+        with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "working" if Path(p) in busy else "idle"}), \
+                patch.object(board, "now", return_value="2099-01-01T00:01:00Z"):
+            w.stir()
+        self.assertEqual(order()[:2], ["photonic", self.root.name], "the one that came in last leads")
+        with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "working" if Path(p) in busy else "idle"}), \
+                patch.object(board, "now", return_value="2099-01-01T00:09:00Z"), patch.object(monitor.time, "time", return_value=time.time() + 600):
+            w.stir()
+        self.assertEqual(order()[:2], ["photonic", self.root.name], "minutes on, no leapfrogging")
+        with patch.object(board, "now", return_value="2099-01-01T00:10:00Z"):
+            board.woke(third)
+        self.assertEqual(order()[:3], ["photonic", self.root.name, "kiln"], "stirred later but idle: behind the ones at work")
+        # a nest moves whole, and a project in no nest moves alone: one stirring passes the nest, the rest stay behind it
+        from colony import nest
+        nest.join(self.root, "Pottery")
+        nest.join(other, "Pottery")
+        lone = Path(self.tmp.name) / "glaze"
+        lone.mkdir()
+        board.track(lone)
+        with patch.object(board, "now", return_value="2098-01-01T00:00:00Z"):
+            board.woke(lone)
+        busy.clear()
+        with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "idle"}):
+            w.stir()
+        self.assertEqual(order(), ["kiln", "photonic", self.root.name, "glaze"], "kiln stirred last; the nest after it, whole")
 
     def test_a_project_has_a_colour_of_its_own_chosen_where_its_settings_are(self):
         board.track(self.root)

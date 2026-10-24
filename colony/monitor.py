@@ -909,17 +909,19 @@ class Watcher:
         self.tell()
 
     def stir(self):
-        """Each project at work comes to the front of the board's lists: noted as it starts working, and again each
-        minute it goes on, so the one working now leads. Apart from the steward's own watch, which muting stops."""
+        """Each project at work comes to the front of the board's lists: noted as it starts working, and kept with
+        those at work while it goes on, each where it came in (stamped again each minute, the ones at work leapfrogged
+        each other, a group jumping back and forth). Apart from the steward's own watch, which muting stops."""
         for p in board.projects():
             if p.exists():
                 self.at_work(p, console.snapshot(p, lines=1)["state"] == "working")
+        board.working_now(getattr(self, "stirring", {}))
 
     def at_work(self, p, working):
         seen = getattr(self, "stirring", None)
         if seen is None:
             seen = self.stirring = {}
-        if working and time.time() - seen.get(str(p), 0) >= 60:
+        if working and str(p) not in seen:
             board.woke(p)
             seen[str(p)] = time.time()
         elif not working:

@@ -1887,21 +1887,29 @@ def arranged(plist, theirs=True):
     """(index, project, group) in the board's order: the projects the person pinned first (group PINNED), then each
     nest's, then the rest; groups as the person moved them, else by activity, and within each, the project that last
     went from idle to working or took up a roadmap item first. The group is "" for a project in no nest, or None
-    when nothing is pinned or nested. Without theirs (the top menu), groups follow activity alone, the pinned still first."""
+    when nothing is pinned or nested. Without theirs (the top menu), groups follow activity alone, the pinned still first.
+    By activity, those at work now come first (a nest whole, for any one of its projects), each where it came in. In
+    the top menu a project in no nest moves alone (its Other projects heading is the lists' alone): as one block, any
+    of them stirring took all of them ahead of a nest, which then fell last."""
     from . import nest
     homes = {p: n for n, v in nest.nests().items() for p in v.get("members", [])}
     pins = set(pinned_projects())
-    rec = stirred()
+    rec, busy = stirred(), at_work_now()
     grp = lambda p: PINNED if str(p.resolve()) in pins else homes.get(str(p.resolve()), "")
-    best = {}
+    # what moves together: a nest, the pinned, and (in the lists) Other projects; in the top menu, each of those alone
+    moves = lambda p: grp(p) or ("" if theirs else "\0" + str(p.resolve()))
+    best, hot = {}, set()
     for p in plist:
-        best[grp(p)] = max(best.get(grp(p), ""), rec.get(str(p.resolve()), ""))
+        best[moves(p)] = max(best.get(moves(p), ""), rec.get(str(p.resolve()), ""))
+        if str(p.resolve()) in busy:
+            hot.add(moves(p))
     # the person's own order of the groups, where they've moved them ("" is Other projects); the rest after, by activity
     mine = [PINNED] + ((registry()["settings"].get("nest_order") or []) if theirs else [])
     place = lambda g: -mine.index(g) if g in mine else -len(mine)
     grouped = bool(homes or any(grp(p) == PINNED for p in plist))
     return [(i, p, grp(p) if grouped else None) for i, p in sorted(enumerate(plist), reverse=True,
-            key=lambda ip: (place(grp(ip[1])), best[grp(ip[1])], grp(ip[1]), rec.get(str(ip[1].resolve()), ""), -ip[0]))]
+            key=lambda ip: (place(grp(ip[1])), moves(ip[1]) in hot, best[moves(ip[1])], moves(ip[1]),
+                            str(ip[1].resolve()) in busy, rec.get(str(ip[1].resolve()), ""), -ip[0]))]
 
 
 def nest_form(pid, root):
@@ -2021,6 +2029,26 @@ def woken():
         return json.loads((home() / "woke.json").read_text())
     except (OSError, ValueError):
         return {}
+
+
+def working_now(roots):
+    """The projects at work, as the steward's watch saw them just now: they lead the board's lists. Written only when
+    it changes, and once a minute besides, so a watch that has stopped is not believed for long."""
+    path, rows = home() / "working.json", sorted(str(Path(r).resolve()) for r in roots)
+    try:
+        was = json.loads(path.read_text())
+    except (OSError, ValueError):
+        was = {}
+    if was.get("roots") != rows or time.time() - was.get("at", 0) > 60:
+        save_json(path, {"at": time.time(), "roots": rows})
+
+
+def at_work_now():
+    try:
+        was = json.loads((home() / "working.json").read_text())
+    except (OSError, ValueError):
+        return set()
+    return set(was.get("roots") or []) if time.time() - was.get("at", 0) < 180 else set()
 
 
 def stirred():
@@ -2157,12 +2185,20 @@ def css_version():
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
-            f"<style>{own_colour(reg, pid)}</style></head><body><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
+            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
 # page (the steward's); a page opened in the same tab, or by a link to it, stays as it is.
+def proj_attr(reg, pid):
+    """The project a page belongs to, by name, for the page's own scripts (its place in the list can change)."""
+    plist = projects(reg)
+    return f" data-project='{e(Path(plist[pid]).name)}'" if 0 <= pid < len(plist) else ""
+
+
+# The board opened afresh goes back to the page last open on this device; and going to a project (its chip, a link to
+# it) goes back to the page last open in that project, unless you came from inside it ("← plants" is its Overview).
 LASTPAGE = """
 (() => {
   try {
@@ -2170,6 +2206,15 @@ LASTPAGE = """
     sessionStorage.setItem('open', '1');
     const was = localStorage.getItem('lastpage');
     if (fresh && was && was !== here && ['/', '/steward'].includes(here)) return location.replace(was);
+    const proj = document.body.dataset.project, q = new URLSearchParams(location.search);
+    if (proj && location.pathname === '/' && [...q.keys()].join() === 'p') {
+      const last = localStorage.getItem('page:' + proj);
+      let from = null; try { from = document.referrer ? new URL(document.referrer) : null; } catch (e) {}
+      const inside = from && from.origin === location.origin && from.searchParams.get('p') === q.get('p');
+      if (last && !inside) { const to = new URL(last, location.href); to.searchParams.set('p', q.get('p'));
+        if (to.pathname + to.search !== here) return location.replace(to.pathname + to.search); }
+    }
+    if (proj) localStorage.setItem('page:' + proj, here);
     localStorage.setItem('lastpage', here);
   } catch (e) {}
 })();
@@ -2977,8 +3022,11 @@ CHAT = """
       // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
       if (i === from) player.addEventListener('loadeddata', () => pipe(t, parts, from + 1), {once: true});
       i += 1;
-      // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again
+      // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again.
+      // Refused for want of a tap on this page (opened by itself, or arrived at by a jump), the phone's voice is refused
+      // too: ▷ again, which a tap plays, rather than ■ over silence.
       player.play().catch((err) => { if (err && err.name === 'AbortError') return;
+        if (err && err.name === 'NotAllowedError' && playing === t) { hush(); playing = null; unlocked = false; mark(); return; }
         if (playing === t && now && now.at === i - 1) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });
     };
     player.onended = next;
@@ -2990,8 +3038,11 @@ CHAT = """
   const sayPhone = (t, parts) => {
     if (!talk) { playing = null; mark(); return; }
     playing = t; mark();
+    // a phone that won't speak before a tap on the page says nothing and starts nothing: ▷ again after a moment
+    let began = false;
+    setTimeout(() => { if (playing === t && !began && !talk.speaking) { talk.cancel(); playing = null; loading = false; mark(); } }, 2500);
     parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
-      u.onstart = () => { now = {t, parts, at: i}; if (loading) { loading = false; mark(); } };
+      u.onstart = () => { began = true; now = {t, parts, at: i}; if (loading) { loading = false; mark(); } };
       if (i === parts.length - 1) u.onend = () => done(t);
       talk.speak(u); });
   };
