@@ -64,8 +64,8 @@ where things stand; `colony remote --off` puts it back as it was.
   without it, the phone's own voice reads.
 - **The front page:** every project, those waiting on you first, each with its line (working, idle, what it's on),
   its measures, and what it needs of you right under it, answered there with a tap or a reply.
-- **Waiting on you:** decisions a project put to you (gates, each with tap answers and **Obvious, you decide**,
-  which hands it back and tells the agent where your line is), a question its agent says it is asking
+- **Waiting on you:** decisions a project put to you (gates, each with tap answers, **Choose for me** where
+  none is recommended, and **Choose for me, now and for questions like this**, which tells the agent where your line is), a question its agent says it is asking
   (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
 - **Message**, at the top of every project: type or paste into its console as if you were there,
   or have its agent write to another project. Attach a file from your device or the project.

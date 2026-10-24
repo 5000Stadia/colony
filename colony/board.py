@@ -3988,12 +3988,15 @@ def gate_choices(pid, gate, back):
                                  f"<input type='hidden' name='gate' value='{e(gate['id'])}'><input type='hidden' name='back' value='{e(back)}'>"
                                  f"<input type='hidden' name='text' value='{e(o)}'><button class='choice{' rec' if o == rec else ' yours' if label else ''}'>"
                                  + ("<span class='tag'>Recommended</span>" if o == rec else "") + f"{e(label or o)}</button></form>")
-    # a choice the agent should have made itself: handed back in a tap, and the agent told where the line is
-    return "<div class='gatechoices'>" + "".join(one(o) for o in opts) + one(OBVIOUS, "Obvious, you decide") + "</div>"
+    # handed back in a tap: this once (where no answer is recommended, which would be the same tap), or this and every
+    # question like it, the agent told where the line is
+    return ("<div class='gatechoices'>" + "".join(one(o) for o in opts) + ("" if rec else one(CHOOSE, "Choose for me"))
+            + one(OBVIOUS, "Choose for me, now and for questions like this") + "</div>")
 
 
-OBVIOUS = ("Obvious: you decide. Take what best serves the vision, mission and roadmap, say what you chose, and settle "
-           "choices like this yourself from here on.")
+CHOOSE = "Choose for me: take what best serves the vision, mission and roadmap, and say what you chose."
+OBVIOUS = ("Choose for me, now and for questions like this: take what best serves the vision, mission and roadmap, say "
+           "what you chose, and settle choices like this yourself from here on.")
 
 
 def gate_rounds(root, gate):

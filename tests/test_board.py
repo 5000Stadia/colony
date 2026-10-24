@@ -2756,7 +2756,12 @@ class SettingsTest(BoardBase):
             self.assertIn("<b>plants</b>", section)
             self.assertIn("Which pot size?", section, "what it needs, under it, answered there")
             self.assertIn("Which pot size?", opener.open(f"http://127.0.0.1:{port}/home/feed").read().decode(), "kept current")
-            self.assertIn("<button class='choice yours'>Obvious, you decide</button>", section, "a choice it should have made, handed back")
+            self.assertIn("<button class='choice yours'>Choose for me, now and for questions like this</button>", section,
+                          "a choice it should have made, handed back with where the line is")
+            self.assertNotIn(">Choose for me</button>", section, "Recommended is that tap already")
+            board.add_gate(self.root, "Which soil?", options=["loam", "peat"])
+            section = opener.open(f"http://127.0.0.1:{port}/").read().decode().split("class='hproj'")[1]
+            self.assertIn("<button class='choice yours'>Choose for me</button>", section, "no recommendation: this once, in a tap")
             self.assertIn("never an answer to a decision you put to the person", board.render_notes(
                 [{"id": "n1", "author": "monitor", "anchor": None, "text": "Go large."}], "Notes:"))
             data = urllib.parse.urlencode({"monitor": "on", "model": "", "effort": "high", "new_root": ""}).encode()
