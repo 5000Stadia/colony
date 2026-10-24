@@ -792,7 +792,7 @@ class ChatTest(BoardBase):
         self.assertIn("LASTPAGE", board.shell.__code__.co_names, "reopened, the board comes back to the last page")
         page = board.shell(board.registry(), 0, "")
         self.assertIn("translateY(", page, "the phone's tab bar is moved to the bottom where an iPhone leaves it floating")
-        self.assertIn("gap > 60", page, "only a keyboard's worth: the toolbar's few pixels stay the phone's")
+        self.assertIn("gap > 60 && gap < innerHeight", page, "a keyboard's worth, never more than a screen")
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
 
@@ -857,6 +857,7 @@ class ChatTest(BoardBase):
             board.add_gate(self.root, "Which pot?", options=["clay"], recommended="glass")
         self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
         self.assertIn("compositionstart", board.CHAT, "dictating into the box pauses reading")
+        self.assertIn("if (document.hidden) away()", board.CHAT, "leaving the page, the box lets go of the keyboard")
 
     def test_the_project_at_work_leads_the_lists_the_steward_muted_or_not(self):
         board.track(self.root)

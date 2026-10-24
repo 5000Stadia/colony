@@ -2242,7 +2242,8 @@ BAR = """
       if (shift) { shift = 0; bar.style.transform = ''; } return; }
     // only a keyboard's worth down: the few pixels a toolbar folding away leaves are the phone's to place
     const base = bar.getBoundingClientRect().bottom - shift, gap = Math.round(vv.offsetTop + vv.height - base);
-    const want = gap > 60 ? gap : 0;
+    // never more than a screen: mid-change a phone reports a page-long gap (41515px), which would send the bar off it
+    const want = gap > 60 && gap < innerHeight ? gap : 0;
     if (Math.abs(want - shift) < 2) return;
     shift = want; bar.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
     if (shift && told++ < 3) fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'bar',
@@ -2838,7 +2839,12 @@ CHAT = """
   const settleBox = () => { if (!document.body.classList.contains('typing')) return;
     onKeys(); setTimeout(() => { onKeys(); const a = ta.selectionStart, b = ta.selectionEnd; ta.setSelectionRange(a, b);
       measured = Math.min(measured, 3); measure('back'); }, 400); };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) settleBox(); });
+  // Leaving the page, the box lets go of the keyboard (its draft kept): a phone could bring the page back with the box
+  // still holding focus and no keyboard, measuring as though one were up, and the box hung where the keyboard's top
+  // had been, the tabs hidden (the person's screenshot, Oct 24). Back, a tap on the box brings the keyboard.
+  const away = () => { if (document.activeElement === ta) ta.blur(); };
+  document.addEventListener('visibilitychange', () => { if (document.hidden) away(); else settleBox(); });
+  window.addEventListener('pagehide', away);
   window.addEventListener('pageshow', settleBox);
   ta.addEventListener('blur', () => { document.body.classList.remove('typing'); document.documentElement.style.removeProperty('--kbtop'); });
   if (vv) { vv.addEventListener('resize', onKeys); vv.addEventListener('scroll', onKeys); }
