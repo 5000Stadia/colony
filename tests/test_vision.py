@@ -346,6 +346,10 @@ class VisionTest(BoardBase):
         for text in (vision.MIGRATION, monitor.ROLE):
             self.assertIn('specifications', text)
         self.assertIn('detail that matters to a few items lives in those items', ' '.join(board.PROTOCOL.split()))
+        flat = ' '.join(board.PROTOCOL.split())
+        self.assertIn("draw its arc with the person, in this order: its end", flat, "a venture's arc: end, peak, climb, foothold")
+        self.assertIn("person paints themselves, in their own words", flat, "the peak is theirs to paint, no draft offered")
+        self.assertIn("never becomes tasks of yours, and stays in this project", flat, "their life explains the work, nothing more")
         self.assertIn('## Vision', board.SKELETON)
 
     def test_http_multiline_save_noop_stale_recovery_and_quiet_update(self):

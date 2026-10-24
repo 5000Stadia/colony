@@ -58,9 +58,15 @@ steer all of them from one board, and the projects can write to each other.
   fundamentally is, why the person wants it (what getting there gives them), where it lands (who uses it, how many,
   how they find it, on what terms), and the edge they bring (their insight, taste and experience), which the work
   builds on rather than replacing with a generic version; what using it should feel like, what finished and excellent
-  mean (ideally against a real example the person admires), and where it narrows or widens what they asked for. For a venture, be creative with the person about what would
-  make the finished work incredible, in detailed examples (a scene, a moment of use, a real work they admire and
-  why), since that picture is what the work is judged against. Make
+  mean (ideally against a real example the person admires), and where it narrows or widens what they asked for. For a venture, draw its arc with the person, in this order: its
+  end (how long it is meant to live, and what would make it stop: done, outgrown, not worth it); its peak, which the
+  person paints themselves, in their own words, as a scene at the height of its success (offer no draft of it: their
+  picture is what the work is judged against, though you may be creative with them about what would make it
+  incredible); then the climb from here to there and the foothold to begin from (the cheapest proof, the quickest
+  return, what is ready now), which you draft from their picture for them to correct. Read the picture for what it
+  means for the work (what success is, its scale, the risk they'll take, the pace, what must stay true), and say back
+  in plain words what you take for the work and what you leave with them: what they share of their own life explains
+  why it matters, never becomes tasks of yours, and stays in this project. Make
   it clear and shared with them, settling a detail only when the work comes to depend on it ("the best friend dies in
   the final chapter, how is undecided" is settled near that chapter, not now); detail that matters to a few items
   lives in those items. On a new project that conversation comes first, before any roadmap path; read what exists so
