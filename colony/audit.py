@@ -217,9 +217,13 @@ files and other programs, and its tools' names and descriptions (what the agent 
 
 1. Is it safe? No if it does anything its purpose doesn't call for: sends its keys, the environment or the person's
    files anywhere but the service it is for; reads files or secrets beyond its job; downloads and runs code; hides
-   what it does (obfuscated or encoded code, a .pth file, install hooks); tool descriptions that tell the agent to do
-   more than the tool (to read other files, to call other tools, to keep something from the person). Ordinary
-   things its job needs (a mail client opening IMAP, sending mail through the account it is given) are fine.
+   what it does (obfuscated or encoded code, a .pth file, install hooks); tool descriptions that steer the agent
+   beyond the tool's own job (to read files or secrets, to use other servers' tools, to keep something from the
+   person). Ordinary things its job needs are fine: a mail client opening IMAP and sending through the account it is
+   given, or a description suggesting which of its own tools to call first.
+   No is for what the code itself does against the person, or a hole the agent can reach through the tools it is
+   offered. A weakness that needs something else to go wrong first (a file that isn't there, a setting not made) is
+   a concern to list, with what would close it, and not a no on its own.
 2. Does it fit? Does the asking project's work, below, call for this service, and is the package what it says it is
    (its name, stated purpose and keys agree with what the code does)?
 
