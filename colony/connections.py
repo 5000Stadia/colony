@@ -349,7 +349,10 @@ def path_for_choice(s, root):
     if root is not None and not any(
             "on" in _own(data[g].get(s.get(k)) or {}, root) for g, k in (("connections", "colony"), ("personal", "claude"))):
         return "inherit"
-    return path_for(s["id"], root) or "off"
+    way = path_for(s["id"], root)
+    if way is None and s.get("colony") and is_on(data["connections"][s["colony"]], root):
+        way = "colony"                               # chosen, waiting for its keys or the person's approval
+    return way or "off"
 
 
 def choose_path(svc, root, how):

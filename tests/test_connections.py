@@ -147,8 +147,14 @@ class ConnectionsTest(BoardBase):
 
     def test_a_project_can_have_its_own_account_and_holds(self):
         connections.set_key("shop", "SHOP_TOKEN", "shared")
-        connections.configure("shop", self.other, own=True)
+        connections.configure("shop", self.other, own=True, on=True)
         self.assertEqual(connections.claude_args(self.other), [], "its own settings, but its own key isn't in yet")
+        board.track(self.other)
+        pid = board.projects(board.registry()).index(self.other)
+        page = board.project_connections(pid, self.other)
+        self.assertIn("name='key_SHOP_TOKEN'", page, "where its own key goes shows before it's in")
+        self.assertIn("value='colony' checked", page, "chosen, not shown as off while it waits")
+        self.assertIn("value='send' checked", page, "an offered tool not yet listed still shows, held")
         connections.set_key("shop", "SHOP_TOKEN", "stall-only", self.other)
         self.assertNotEqual(connections.keys_path("shop", self.other), connections.keys_path("shop"))
         self.assertEqual(self.said(self.agent(self.other)("tools/call", name="look")), "stall-only")

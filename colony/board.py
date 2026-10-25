@@ -5592,9 +5592,11 @@ def _holds_fields(c, held):
     """Which tools wait for the tap: by the server's own marks, or chosen."""
     seen = c.get("seen") or {}
     auto = held is None
+    # what it has listed, and before that what it offers and holds, so saving never lets go of a hold unseen
+    tools = sorted(set(seen) | set(c.get("tools") or ()) | set(held or ()))
     ticks = "".join(f"<label class='tick'><input type='checkbox' name='tool' value='{e(t)}'"
-                    f"{' checked' if (not ro if auto else t in held) else ''}> {e(t)}{' (reads)' if ro else ''}</label>"
-                    for t, ro in sorted(seen.items()))
+                    f"{' checked' if (not seen.get(t) if auto else t in held) else ''}> {e(t)}{' (reads)' if seen.get(t) else ''}</label>"
+                    for t in tools)
     return (f"<label class='tick'><input type='radio' name='mode' value='auto'{' checked' if auto else ''}> Everything but what it "
             f"marks read-only</label><label class='tick'><input type='radio' name='mode' value='chosen'{'' if auto else ' checked'}> "
             f"Only these:</label><div>{ticks or '<span class=muted>its tools show here once a project has used it</span>'}</div>")
@@ -5619,7 +5621,8 @@ def connections_page(reg):
         c = data["connections"].get(s.get("colony")) or {}
         lacking = s.get("colony") and connections.missing(s["colony"], c)
         review = s.get("colony") and not c.get("approved", True)
-        body = ([f"<div class='card gate'><p><b>Added by an agent; it runs nowhere until you approve it.</b> "
+        body = ([f"<div class='card gate'><p><b>Added by an agent; {'it runs nowhere' if c.get('command') else 'no project gets it'} "
+                 f"until you approve it.</b> "
                  + (f"It starts: <code>{e(' '.join(c['command']))}</code>" if c.get("command") else
                     f"It is only keys ({e(', '.join(c.get('keys') or []))}), for projects' own scripts.") + "</p>"
                  + _conn_form("approve", "", "/connections", "Approve", name=s["colony"])
@@ -5662,8 +5665,9 @@ def project_connections(pid, root):
         s["id"] = svc
         c = data["connections"].get(s.get("colony")) or {}
         way, own = connections.path_for(svc, root), connections.has_own(c, root)
+        here = bool(s.get("colony")) and connections.is_on(c, root)     # on here, if not yet usable (keys, approval)
         body = [_conn_form("path", _paths(s, root, inherit=True), back, "Save", svc=svc, p=pid)]
-        if s.get("colony") and way == "colony":
+        if here:
             body.append(_conn_form("own", f"<label class='tick'><input type='checkbox' name='own' value='1'{' checked' if own else ''}> "
                                    f"Its own account{' and holds' if c.get('command') else ''}</label>", back, "Save", name=s["colony"], p=pid))
             if own:
@@ -5673,7 +5677,7 @@ def project_connections(pid, root):
                 if c.get("command"):
                     body.append("<h4>Waits for your tap</h4>" + _conn_form(
                         "holds", _holds_fields(c, connections.holds(c, root)), back, "Save", name=s["colony"], p=pid))
-        lacking = way == "colony" and connections.missing(s["colony"], c, root)
+        lacking = here and connections.missing(s["colony"], c, root)
         out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}{' · own settings' if own else ''}"
                    + (" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>" + "".join(body) + "</details>")
     if len(out) == 1:
