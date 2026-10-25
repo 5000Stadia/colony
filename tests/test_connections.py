@@ -10,8 +10,14 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
-from colony import board, connections
+from colony import audit, board, connections
 from tests.test_board import BoardBase
+
+
+def passed(name):
+    """The steward's audit of a connection as it stands, run and passed (the person may approve it)."""
+    audit._store(name, {"of": audit.fingerprint(connections.load()["connections"][name]), "state": "done", "safe": "yes",
+                        "fits": "yes", "summary": "Fine.", "at": "now", "by": "a test"})
 
 # A stand-in MCP server: it offers three tools (only `look` marked read-only), answers `look` with the key it was
 # started with, and records each `send` it runs in a file beside it.
@@ -50,6 +56,7 @@ class ConnectionsTest(BoardBase):
         self.sent = self.server.parent / "sent.txt"
         connections.add("shop", "The shop", [sys.executable, str(self.server)], needs=["SHOP_TOKEN"],
                         tools=["look", "send"], about="Searches and sends.")
+        passed("shop")
         connections.approve("shop")
         self.other = Path(self.tmp.name) / "stall"
         self.other.mkdir()
@@ -176,6 +183,7 @@ class ConnectionsTest(BoardBase):
         self.assertEqual(deny(connections.claude_args(self.other)), [{"serverUrl": "https://gmailmcp.googleapis.com/mcp/v1"}])
 
         connections.add("mail", "Mail", [sys.executable, str(self.server)], service="gmail")
+        passed("mail")
         connections.approve("mail")
         self.assertEqual(sorted(connections.services()["gmail"]), ["claude", "colony", "title"], "one card, two sources")
         self.assertEqual(connections.path_for("gmail", self.root), "colony", "the one that can wait for a tap wins")
@@ -255,8 +263,9 @@ class ConnectionsTest(BoardBase):
         self.assertIn("shop", connections.granted(self.root))
         connections.add("shop", "The shop", [sys.executable, str(self.server), "--other"], needs=["SHOP_TOKEN"])
         self.assertNotIn("shop", connections.granted(self.root), "its command changed: seen again before it runs")
-        self.assertIn("to approve", board.connections_page(board.registry()))
+        self.assertIn("being audited", board.connections_page(board.registry()))
         self.assertIn("--other", board.connections_page(board.registry()), "the person sees what it would run")
+        passed("shop")
         connections.approve("shop")
         self.assertIn("shop", connections.granted(self.root))
         connections.add("shop", "The shop, renamed", [sys.executable, str(self.server), "--other"], needs=["SHOP_TOKEN"])
@@ -270,6 +279,7 @@ class ConnectionsTest(BoardBase):
         with self.assertRaises(ValueError):
             connections.with_keys("listings", self.root, script)          # not yet approved
         self.assertIn("only keys (APP_ID)", board.connections_page(board.registry()))
+        passed("listings")
         connections.approve("listings")
         out = Path(self.tmp.name) / "out.txt"
         with open(out, "w") as f, patch("sys.stdout", f):

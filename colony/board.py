@@ -5611,11 +5611,40 @@ def _holds_fields(c, held):
             f"Only these:</label><div>{ticks or '<span class=muted>its tools show here once a project has used it</span>'}</div>")
 
 
+def _audit_card(name, c):
+    """The steward's audit on an approval card, and the buttons it allows: none while it runs, Remove alone once it refused."""
+    from . import audit
+    a = audit.current(c) or {}
+    asked = f" (asked for by {e(Path(c['by']).name)})" if c.get("by") else ""
+    remove = _conn_form("remove", "", "/connections", "Remove", name=name)
+    if not a or a.get("state") == "running":
+        return ("<p><b>The steward is auditing it</b>: a fresh model reads its code, without running it, and weighs it "
+                f"against the work of the project that asked for it{asked}. Approve shows here once that's done.</p>" + remove)
+    if a.get("state") in ("unread", "unreviewed"):
+        return (f"<p><b>Not audited:</b> {e(a.get('why', ''))}. Approve it only if you trust where it comes from.</p>"
+                + _conn_form("approve", "", "/connections", "Approve", name=name) + remove)
+    word = {"yes": "yes", "no": "<b class='warn'>no</b>", "unsure": "<b class='warn'>unsure</b>"}
+    facts = [f"from {e(a['file'])}" if a.get("file") else "",
+             f"names these hosts: {e(', '.join(a['hosts']))}" if a.get("hosts") else "",
+             f"depends on (not read): {e(', '.join(a['depends']))}" if a.get("depends") else ""]
+    body = (f"<p><b>{'Refused by the steward' if audit.refused(a) else 'The steward'}'s audit</b>{asked}: safe {word[a['safe']]} · "
+            f"fits the work {word[a['fits']]}. {e(a.get('summary', ''))}</p>"
+            + ("<ul>" + "".join(f"<li>{e(x)}</li>" for x in a["concerns"]) + "</ul>" if a.get("concerns") else "")
+            + f"<details><summary class='muted'>How it was checked</summary><p class='muted'>Read by {e(a.get('by', ''))}, "
+              f"{e(a.get('at', ''))}; {'; '.join(f for f in facts if f) or 'nothing to read but its purpose'}.</p>"
+            + ("<p class='muted'>Plain marks (where to look, not verdicts): " + e("; ".join(a["marks"])) + "</p>" if a.get("marks") else "")
+            + (f"<pre class='report'>{e(a['report'])}</pre>" if a.get("report") else "") + "</details>")
+    if audit.refused(a):
+        return body + "<p class='muted'>It can't be approved; the agent that asked was told why.</p>" + remove
+    return body + _conn_form("approve", "", "/connections", "Approve", name=name) + remove
+
+
 def connections_page(reg):
     """Connections: each service once, whichever sources reach it (colony's own, the person's Claude connector), with
     its colony-wide settings: how projects reach it, its keys, what waits for the tap, and which projects differ."""
-    from . import connections
+    from . import audit, connections
     connections.refresh_personal()
+    audit.kick()                                     # any connection waiting on its audit, started apart from the page
     data, every = connections.load(), [p for p in projects(reg) if p.exists()]
     out = ["<header><h1>Connections</h1></header><p class='muted'>Outside services your projects reach. Every project has "
            "each one unless you switch it off there (on its own Connections page, or as you add it). Through colony, keys "
@@ -5634,8 +5663,7 @@ def connections_page(reg):
                  f"until you approve it.</b> "
                  + (f"It starts: <code>{e(' '.join(c['command']))}</code>" if c.get("command") else
                     f"It is only keys ({e(', '.join(c.get('keys') or []))}), for projects' own scripts.") + "</p>"
-                 + _conn_form("approve", "", "/connections", "Approve", name=s["colony"])
-                 + _conn_form("remove", "", "/connections", "Remove", name=s["colony"]) + "</div>"] if review else [])
+                 + _audit_card(s["colony"], c) + "</div>"] if review else [])
         body += [f"<p class='muted'>Reachable {sources}.</p>" + (f"<p>{e(c['about'])}</p>" if c.get("about") else ""),
                 "<h4>Projects reach it</h4>" + _conn_form("path", _paths(s, None), "/connections", "Save", svc=svc)]
         if s.get("colony"):
@@ -5655,7 +5683,9 @@ def connections_page(reg):
                 + (", own settings" if connections.has_own(c, p) else "") + ")" for p in differ) + "</p>")
         out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}"
                    + (f" · {len(differ)} project{'s' * (len(differ) != 1)} differ" if differ else "")
-                   + (" · <b class='warn'>to approve</b>" if review else " · <b class='warn'>keys missing</b>" if lacking else "")
+                   + ((" · <b class='warn'>refused by the audit</b>" if audit.refused(audit.current(c)) else
+                       " · being audited" if not audit.current(c) or audit.current(c).get("state") == "running" else
+                       " · <b class='warn'>to approve</b>") if review else " · <b class='warn'>keys missing</b>" if lacking else "")
                    + "</summary>" + "".join(body) + "</details>")
     if len(out) == 1:
         out.append("<div class='card'><p class='muted'>None yet.</p></div>")
@@ -6446,7 +6476,10 @@ class Handler(BaseHTTPRequestHandler):
                         if form.get(f"key_{k}", "").strip():
                             connections.set_key(name, k, form[f"key_{k}"], whose)
                 elif do == "approve":
-                    connections.approve(name)
+                    try:
+                        connections.approve(name)
+                    except ValueError as err:
+                        return self._send(409, shell(reg, -2, f"<h1>Connections</h1><p>{e(str(err))}</p>"))
                 elif do == "remove":
                     connections.remove(name)
                 elif do == "holds":

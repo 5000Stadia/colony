@@ -889,6 +889,8 @@ class Watcher:
                 console.press(name(), keys)             # its own start-up questions, as for any project's console
         self.mail()
         recovery.tick_all()                         # work a network drop stopped, once the network is back
+        from . import audit
+        audit.kick()                                # a connection an agent added is audited even when the steward is muted
         if muted():
             self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
             return

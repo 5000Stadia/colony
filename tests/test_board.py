@@ -61,6 +61,10 @@ class BoardBase(unittest.TestCase):
         looking = patch.object(connections, 'refresh_personal')   # never asks the real `claude` for its connectors
         looking.start()
         self.addCleanup(looking.stop)
+        from colony import audit
+        auditing = patch.object(audit, 'start')       # nor starts a real audit (a fetch and a model) apart from it
+        auditing.start()
+        self.addCleanup(auditing.stop)
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")

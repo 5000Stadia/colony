@@ -956,20 +956,40 @@ def cmd_connect(a):
         except ValueError as err:
             print(err, file=sys.stderr)
             return 2
+    if a.audit:
+        from . import audit
+        r = audit.run(a.audit)
+        print(f"{a.audit}: {r['state']} {r.get('safe', '')} {r.get('fits', '')} {r.get('why', '')}".strip())
+        return 0
+    if a.remove:
+        c = connections.load()["connections"].get(a.remove)
+        if not c or c.get("approved", True):
+            print(f"{a.remove} isn't a connection waiting on the person's approval; the person removes approved ones on the board.",
+                  file=sys.stderr)
+            return 2
+        connections.remove(a.remove)
+        print(f"{a.remove} removed.")
+        return 0
     if a.add:
+        from . import audit
         try:
             c = connections.add(a.add, a.title, shlex.split(a.command or ""), needs=a.key, hold=a.hold or None,
-                                tools=a.tool, about=a.about, service=a.service)
+                                tools=a.tool, about=a.about, service=a.service, by=board.root_of())
         except ValueError as err:
             print(err, file=sys.stderr)
             return 2
+        if audit.due(c):
+            audit.start(a.add)
+        checked = (" First the steward audits it (its code read, not run, by a fresh model, and weighed against this "
+                   "project's work); if it refuses it, you hear why. Its --about should say what the work needs it for.")
         if not c["command"]:
-            print(f"{c['title']} kept: keys only ({', '.join(c['keys'])}). Once the person approves it and enters them on the "
-                  f"board's Connections page, run your script with them: colony connect --with {a.add} -- COMMAND (they reach "
-                  f"it as environment variables, and its output comes back with them taken out).")
+            print(f"{c['title']} kept: keys only ({', '.join(c['keys'])}).{checked} Once the person approves it and enters them "
+                  f"on the board's Connections page, run your script with them: colony connect --with {a.add} -- COMMAND (they "
+                  f"reach it as environment variables, and its output comes back with them taken out).")
             return 0
-        print(f"{c['title']} kept. It runs nowhere until the person approves it and enters its keys ({', '.join(c['keys']) or 'none'}) "
-              f"on the board's Connections page; then every project has it, each console from its next idle restart. Waits for their tap: "
+        print(f"{c['title']} kept.{checked} It runs nowhere until the person approves it and enters its keys "
+              f"({', '.join(c['keys']) or 'none'}) on the board's Connections page; then every project has it, each console "
+              f"from its next idle restart. Waits for their tap: "
               f"{', '.join(c['hold']) if c['hold'] else 'everything its server does not mark read-only'}.")
         return 0
     root, data = board.root_of(), connections.load()
@@ -1592,6 +1612,8 @@ def main(argv=None):
     p.add_argument("--add", metavar="NAME"); p.add_argument("--title", default="")
     p.add_argument("--command", help="what starts its MCP server, its version pinned (none: keys for your own script)")
     p.add_argument("--with", dest="with_", metavar="NAME", help="run a command with a keys-only connection's keys: --with NAME -- COMMAND")
+    p.add_argument("--remove", metavar="NAME", help="drop a connection added here that the person hasn't approved")
+    p.add_argument("--audit", metavar="NAME", help=argparse.SUPPRESS)
     p.add_argument("rest", nargs=argparse.REMAINDER)
     p.add_argument("--key", action="append", default=[], help="a key the person enters in Settings (repeat)")
     p.add_argument("--hold", action="append", default=[], help="a tool that runs only on the person's tap (repeat)")

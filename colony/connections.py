@@ -169,10 +169,11 @@ def missing(name, c=None, root=None):
 
 # --- what a connection is and who has it ---------------------------------------------------------------------------
 
-def add(name, title, command, *, needs=(), hold=None, tools=None, about="", service=None):
+def add(name, title, command, *, needs=(), hold=None, tools=None, about="", service=None, by=None):
     """A connection: the MCP server to start (its command, pinned), the keys it needs, the tools that wait for the
     person's tap (None: all but those the server marks read-only), and optionally the only tools it offers. Every
-    project has it once its keys are entered, unless the person switches it off there."""
+    project has it once its keys are entered, unless the person switches it off there. by: the project that asked for
+    it, whose work the steward's audit weighs it against (audit)."""
     if not NAME.fullmatch(name):
         raise ValueError("A connection's name is lowercase letters, digits, - or _, as ebay or snackstand-mail.")
     if not command and not needs:
@@ -187,13 +188,19 @@ def add(name, title, command, *, needs=(), hold=None, tools=None, about="", serv
                                      # what an agent installs is the attack surface); the same command stays approved
                                      "approved": bool(was.get("approved")) and list(was.get("command") or []) == list(command),
                                      "on": was.get("on", True), "projects": was.get("projects") or {},
-                                     "seen": was.get("seen") or {}}
+                                     "seen": was.get("seen") or {}, "audit": was.get("audit"),
+                                     "by": str(by) if by else was.get("by")}
         return data["connections"][name]
     return change(put)
 
 
 def approve(name):
-    """The person's yes to a connection an agent added: its command may run."""
+    """The person's yes to a connection an agent added: its command may run, once the steward's audit has run and not
+    refused it."""
+    from . import audit
+    a = audit.current(load()["connections"][name])
+    if not a or a.get("state") == "running" or audit.refused(a):
+        raise ValueError(f"{name} can't be approved {'while its audit runs' if not audit.refused(a) else 'after its audit refused it'}.")
     configure(name, approved=True)
 
 
