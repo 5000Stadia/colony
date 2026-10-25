@@ -236,9 +236,11 @@ def brief(name, c, root, folder, about, marks, hosts):
              if i["state"] in ("doing", "todo")][:12] if road else []
     lines = [ROLE, "", f"The connection: {name} ({c.get('title') or name})", f"Its command: {' '.join(c.get('command') or [])}",
              f"Keys it is given: {', '.join(c.get('keys') or []) or 'none'}", f"Stated purpose: {c.get('about') or '(none given)'}",
-             f"Tools it says it offers: {', '.join(c.get('tools') or []) or '(not listed)'}",
-             "Colony runs it behind its own proxy: a held tool's call waits for the person's tap on the board, never run "
-             f"on the agent's word. Held here: {', '.join(c['hold']) if c.get('hold') else 'every tool the server does not mark read-only'}.", ""]
+             "Colony runs it behind its own proxy, which the agent reaches it through: "
+             + (f"it offers the agent only these of its tools: {', '.join(c['tools'])}; any other tool the server has is left "
+                "out of its list and refused if called, so judge only these. " if c.get("tools") else "every tool it lists. ")
+             + "A held tool's call waits for the person's tap on the board, never run on the agent's word. Held here: "
+             + (', '.join(c['hold']) if c.get('hold') else 'every tool the server does not mark read-only') + ".", ""]
     if folder:
         lines += [f"Its code, unpacked from {about['file']} (not installed, nothing run): {folder}",
                   f"Its dependencies (not read here): {', '.join(about.get('depends') or []) or 'none'}"]

@@ -337,7 +337,7 @@ class AuditTest(BoardBase):
         return ask
 
     def add(self):
-        return connections.add("mailer", "Mail", ["uvx", "mailer==1.0.0", "stdio"], needs=["PASSWORD"],
+        return connections.add("mailer", "Mail", ["uvx", "mailer==1.0.0", "stdio"], needs=["PASSWORD"], tools=["read", "send"],
                                about="The project's own mailbox for supplier replies.", by=self.root)
 
     def test_the_person_may_approve_only_once_the_audit_has_read_its_code_and_passed_it(self):
@@ -355,6 +355,8 @@ class AuditTest(BoardBase):
         self.assertIn("supplier replies", text)
         self.assertIn("PASSWORD", text)
         self.assertIn("mcp>=1", text, "its dependencies are named, though not read")
+        self.assertIn("only these of its tools: read, send; any other tool the server has is left out of its list and "
+                      "refused if called", text, "the reviewer judges what the agent can reach, not all the server has")
         self.assertFalse(Path(folder).exists(), "what was unpacked is gone once read")
         page = board.connections_page(board.registry())
         self.assertIn("A mail client.", page)
