@@ -4976,6 +4976,35 @@ class ActiveHoursTest(HoursBase):
             httpd.shutdown()
             httpd.server_close()
 
+    def test_the_person_seen_at_night_is_around_for_a_quarter_hour(self):
+        with self.clock(2):
+            held = board.add_gate(self.root, "Which pot?")
+        self.assertIn("held_until", held)
+        with self.clock(3):
+            self.assertTrue(next(g for g in board.gates(self.root) if g["id"] == held["id"])["held"], "still away")
+            hours.seen()                                                # they write to an agent, or open the board
+            self.assertFalse(next(g for g in board.gates(self.root) if g["id"] == held["id"])["held"],
+                             "what was held reaches them now")
+        with self.clock(3, 10):
+            self.assertTrue(hours.active())
+            self.assertEqual(hours.notice(), "", "agents may ask them")
+            self.assertNotIn("held_until", board.add_gate(self.root, "Which soil?"), "asked while they're around: at once")
+        with self.clock(3, 16):
+            self.assertFalse(hours.active(), "a quarter hour on, they're away again")
+            self.assertIn("held_until", board.add_gate(self.root, "Which tray?"))
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+        try:
+            with self.clock(4):
+                urllib.request.urlopen(urllib.request.Request(url, headers={"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"})).read()
+                self.assertFalse(hours.present(), "a page keeping itself current isn't them")
+                urllib.request.urlopen(urllib.request.Request(url, headers={"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"})).read()
+                self.assertTrue(hours.present(), "opening a page is")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
     def test_whether_the_hours_hold_and_when_they_next_begin(self):
         day = "07:30-23:45"
         for (h, m), on in (((3, 0), False), ((7, 29), False), ((7, 30), True), ((12, 0), True), ((23, 44), True),

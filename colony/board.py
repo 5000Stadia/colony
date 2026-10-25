@@ -6054,6 +6054,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._from_this_page():
             return self._send(403, b"not from this page")
+        if self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document":
+            hours.seen()                               # the person opened a page (a page keeping itself current isn't them)
         url = urllib.parse.urlparse(self.path)
         if url.path == "/monitor":                     # the steward's page was once /monitor: old links and bookmarks still work
             url = url._replace(path="/steward")
@@ -6282,6 +6284,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page_send()
         if not self._from_this_page():
             return self._send(403, b"not from this page")
+        if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status",):
+            hours.seen()                               # the person tapped, typed or sent something
         if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:
             return self._send(413, b"that file is too large (25 MB at most)")
         if urllib.parse.urlparse(self.path).path == "/pin/upload":

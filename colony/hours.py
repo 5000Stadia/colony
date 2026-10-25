@@ -3,7 +3,9 @@ always). A question put to them outside those hours only interrupts or waits uns
 what doesn't depend on it, the gates they open are held, and what was held reaches the person together when the
 hours begin. Work goes on at any hour; the person's own words, and colony's safety notices, are never held. Their
 day runs from one start of their hours to the next: it paces each project's page for the day, and when a decision
-they skipped takes its default.
+they skipped takes its default. The person seen at any hour (writing to an agent, tapping or opening the board) is
+around: for a quarter of an hour after, their hours hold whatever the clock says, and what was held reaches them at
+once.
 
     colony settings active_hours 07:30-23:45     a range may cross midnight (22:00-06:00); off: always
 """
@@ -11,6 +13,7 @@ import re
 import time
 
 DEFAULT = "07:30-23:45"
+RECENT = 15 * 60                  # the person seen this long ago is still around
 RANGE = re.compile(r"(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})")
 UNREAD = ("Active hours are a start and an end on a 24-hour clock, HH:MM-HH:MM (07:30-23:45, or 22:00-06:00 across "
           "midnight), or off for always.")
@@ -58,10 +61,42 @@ def clock():
     return time.time()
 
 
-def active(now=None, hours=None):
-    """Whether the person's active hours hold at `now` (a timestamp; this moment unless given). Always, when off."""
+def _stamp():
+    from . import board
+    return board.home() / "person-seen"
+
+
+def last_seen():
+    """When the person was last seen doing something, as a timestamp; None if never."""
+    try:
+        return float(_stamp().read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def present(now=None):
+    """Whether the person was seen within the last quarter hour of `now`."""
+    now = clock() if now is None else now
+    at = last_seen()
+    return at is not None and at <= now < at + RECENT
+
+
+def seen():
+    """The person did something themselves. Seen outside their hours after being away, what was held for them is
+    released now."""
+    now, back = clock(), not present()
+    _stamp().parent.mkdir(parents=True, exist_ok=True)
+    _stamp().write_text(repr(now))
+    if back and not active(now, ignore_presence=True):
+        from . import board
+        board.restamp_held()
+
+
+def active(now=None, hours=None, ignore_presence=False):
+    """Whether the person's active hours hold at `now` (a timestamp; this moment unless given): always when off, and
+    whenever they were seen in the quarter hour before."""
     s = span(hours)
-    if s is None:
+    if s is None or (not ignore_presence and present(now)):
         return True
     t = time.localtime(clock() if now is None else now)
     minute, (start, end) = t.tm_hour * 60 + t.tm_min, s

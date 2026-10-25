@@ -834,6 +834,8 @@ def cmd_notes(a):
             console.remember(root, *seen(payload))
         prompt = str(payload.get("prompt") or "")
         if _persons(prompt):
+            from . import hours
+            hours.seen()                                     # they're around, whatever the clock says
             board.answer_asks(root, "in the console")        # the person answered there themselves
             board.said(root, prompt)                         # their own words, for the steward to catch up on
         from . import bench, monitor as _monitor
