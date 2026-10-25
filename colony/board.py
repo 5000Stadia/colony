@@ -143,9 +143,12 @@ steer all of them from one board, and the projects can write to each other.
   person reorganizes it, that is their preference showing: follow it, and settle the shape with them.
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
-- Outside services (an API, a mailbox) reach you as connections, set by the person per project. One the work needs
-  and you lack: `colony connect --add NAME --command "…" --key KEY`, an existing MCP server with its version pinned
-  (no `--command` for keys your own script uses); they enter its keys on the board, never in a chat.
+- Outside services (an API, a mailbox) reach you as connections, set by the person per project. Whatever needs an
+  account or a key, or sends, posts or spends, goes through one, even for this project alone (it can have its own
+  account there), never wired into the project with its keys in a file; public data needing neither, your own code
+  may fetch. One the work needs and you lack: `colony connect --add NAME --command "…" --key KEY`, an existing MCP
+  server with its version pinned (no `--command` for keys your own script uses); they enter its keys on the board,
+  never in a chat.
 - A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
   then it waits for them on the board. If they ask you something first, answer it and ask yours again.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
@@ -2584,7 +2587,13 @@ def chat_feed(key, root, shown=40):
     line = ""
     if snap["state"] == "working":
         act = (snap.get("activity") or {}).get("line") or "Working"
-        line = f"<span class='sdot working'></span>{e(short(act, 90))}" + (f" <span class='behind'>· {e(behind)}</span>" if behind else "")
+        # two short lines that never wrap: what it's doing, then its parenthesis (time, tokens) and what runs behind
+        head, sep, inner = act.rpartition(" (") if act.endswith(")") else ("", "", "")
+        head, inner = (head, inner[:-1]) if sep else (act, "")
+        inner = " · ".join(x for x in re.split(r"\s+[·•]\s+", inner) if x and "esc to" not in x)   # Stop is on the page
+        second = " · ".join(filter(None, [e(inner), f"<span class='behind'>{e(behind)}</span>" if behind else ""]))
+        line = (f"<span class='sdot working'></span><span class='act'><span>{e(head)}</span>"
+                + (f"<span class='more'>{second}</span>" if second else "") + "</span>")
     elif behind:
         line = f"<span class='sdot working'></span>{e(behind)}"
     busy = " busy" if snap["state"] == "working" else ""
@@ -7212,9 +7221,11 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
   color:var(--muted); font-size:16px }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
-.chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
+.chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
+.chatlive .act { display:flex; flex-direction:column; min-width:0; flex:1; line-height:1.3 }
+.chatlive .act > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .chatlive .act .more { font-size:11.5px }
 details.chatlive { display:block } details.chatlive > summary { display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none }
-details.chatlive > summary::-webkit-details-marker { display:none } details.chatlive > summary .behind { color:var(--accent) }
+details.chatlive > summary::-webkit-details-marker { display:none } details.chatlive .behind { color:var(--accent) }
 .tasklist { margin:8px 0 0; padding:8px 10px; border:1px solid var(--line); border-radius:14px; background:var(--card) }
 .tasklist .th { margin:4px 2px 4px; font-size:13px; color:var(--muted) } .tasklist ul { list-style:none; margin:0 0 6px; padding:0 }
 .tasklist li { display:flex; gap:10px; padding:8px; margin:4px 0; border-radius:10px; background:var(--sunk); color:var(--ink) }
