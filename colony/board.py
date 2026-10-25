@@ -2178,6 +2178,7 @@ def sidebar(reg, pid):
                         + " · ".join(f"{e(w)} {v['used']:g}%" for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly")) + "</div>")
     side.append("<div class='navfoot'><a href='/projects' title='All projects'><span class='long'>All projects</span><span class='short'>☰</span></a>"
                 "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
+                "<a href='/connections' title='Connections'><span class='long'>Connections</span><span class='short'>⇄</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
     # on a phone the steward is a bar of its own above the projects' row, which scrolls alone
@@ -3475,7 +3476,11 @@ def render(reg, pid, view="overview", show_all=""):
     out = []
     if not plist:
         return shell(reg, pid, "")
-    view = view if view in ("roadmap", "library", "showcase", "console", "chat") else "overview"     # Today is Overview now
+    view = view if view in ("roadmap", "library", "showcase", "console", "chat", "connections") else "overview"  # Today is Overview now
+    if view == "connections":                # reached from its Settings: no tab of its own
+        root = plist[pid]
+        return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)} · Connections</h1>{tabs(pid, view, root)}</header>"
+                     + project_connections(pid, root))
     if view == "chat":
         root = plist[pid]
         return shell(reg, pid, f"<header class='slim'><h1>{e(root.name)}</h1>{tabs(pid, view, root)}{switch_line(root)}</header>"
@@ -3501,7 +3506,7 @@ def render(reg, pid, view="overview", show_all=""):
     # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
     settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
                 f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
-                f"{remote_line(root)}{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
+                f"{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
                 f"<p class='muted'>Archive takes it off the board and the steward's watch (at work, it finishes that turn "
                 f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
                 f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
@@ -4436,7 +4441,8 @@ def add_project_page(reg, tab="new", error=""):
     """Add a project three ways, one tab each: a new one, an existing folder, or a clone of a GitHub
     repository. Folders are chosen with Browse…, which starts closed and opens in place."""
     choices = (project_settings_form(0, {}, action="")
-               .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0])
+               .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0]
+               + connection_ticks())
     where = reg["new_root"]
     picker = lambda name, value, placeholder: (
         f"<div class='picker'><div class='chosen'><input name='{name}' value='{e(value)}' placeholder='{e(placeholder)}' readonly>"
@@ -5549,57 +5555,131 @@ def intelligence_label(n):
 
 def connections_summary():
     from . import connections
-    data = connections.load()
-    n, lacking = len(data["connections"]), sum(bool(connections.missing(k, c)) for k, c in data["connections"].items())
     connections.refresh_personal()                   # their Claude connectors, looked up in the background
-    return (f"{n} service{'s' * (n != 1)}" + (f" · {lacking} waiting for keys" if lacking else "")
-            + (f" · {len(data['personal'])} of your own connectors" if data["personal"] else ""))
+    svcs = connections.services()
+    lacking = sum(bool(connections.missing(k, c)) for k, c in connections.load()["connections"].items())
+    return f"{len(svcs)} service{'s' * (len(svcs) != 1)}" + (f" · {lacking} waiting for keys" if lacking else "")
 
 
-def connections_settings(reg):
-    """Settings › Connections: each outside service with the keys the person enters and the projects they give it;
-    then their own connectors from their Claude sign-in, given project by project the same way."""
+VIA = {"colony": "via colony", "claude": "via Claude", "off": "off", None: "off"}
+
+
+def _conn_form(do, fields, back, button, **hidden):
+    return (f"<form method='post' action='/connections' class='options'><input type='hidden' name='do' value='{do}'>"
+            f"<input type='hidden' name='back' value='{e(back)}'>"
+            + "".join(f"<input type='hidden' name='{k}' value='{e(str(v))}'>" for k, v in hidden.items() if v is not None)
+            + f"{fields}<div class='dangers'><button>{button}</button></div></form>")
+
+
+def _paths(s, root, inherit=False):
+    """The ways a service can be reached, as radio choices."""
     from . import connections
+    now = connections.path_for_choice(s, root)
+    ways = [("inherit", f"As colony-wide ({VIA[connections.path_for(s['id'], None)]})")] if inherit else []
+    ways += [(w, VIA[w]) for w in ("colony", "claude") if s.get(w)] + [("off", "Off")]
+    return "".join(f"<label class='tick'><input type='radio' name='how' value='{w}'{' checked' if w == now else ''}> {label}</label>"
+                   for w, label in ways)
+
+
+def _keys_fields(name, c, root):
+    from . import connections
+    have = connections.keys(name, root)
+    return "".join(f"<label>{e(k)} <input type='password' name='key_{e(k)}' autocomplete='off' "
+                   f"placeholder='{'Kept; paste to replace' if have.get(k) else 'Paste it'}'></label>" for k in c.get("keys") or ())
+
+
+def _holds_fields(c, held):
+    """Which tools wait for the tap: by the server's own marks, or chosen."""
+    seen = c.get("seen") or {}
+    auto = held is None
+    ticks = "".join(f"<label class='tick'><input type='checkbox' name='tool' value='{e(t)}'"
+                    f"{' checked' if (not ro if auto else t in held) else ''}> {e(t)}{' (reads)' if ro else ''}</label>"
+                    for t, ro in sorted(seen.items()))
+    return (f"<label class='tick'><input type='radio' name='mode' value='auto'{' checked' if auto else ''}> Everything but what it "
+            f"marks read-only</label><label class='tick'><input type='radio' name='mode' value='chosen'{'' if auto else ' checked'}> "
+            f"Only these:</label><div>{ticks or '<span class=muted>its tools show here once a project has used it</span>'}</div>")
+
+
+def connections_page(reg):
+    """Connections: each service once, whichever sources reach it (colony's own, the person's Claude connector), with
+    its colony-wide settings: how projects reach it, its keys, what waits for the tap, and which projects differ."""
+    from . import connections
+    connections.refresh_personal()
     data, every = connections.load(), [p for p in projects(reg) if p.exists()]
+    out = ["<header><h1>Connections</h1></header><p class='muted'>Outside services your projects reach. Every project has "
+           "each one unless you switch it off there (on its own Connections page, or as you add it). Through colony, keys "
+           "stay in a file only you can read and what sends or spends waits for your tap; through your Claude sign-in, it "
+           "goes straight out.</p>"]
+    for svc, s in connections.services().items():
+        s["id"] = svc
+        way = connections.path_for(svc, None)
+        differ = [p for p in every if connections.path_for(svc, p) != way or connections.has_own(
+            data["connections"].get(s.get("colony"), {}), p)]
+        sources = " or ".join(VIA[w] for w in ("colony", "claude") if s.get(w))
+        c = data["connections"].get(s.get("colony")) or {}
+        lacking = s.get("colony") and connections.missing(s["colony"], c)
+        body = [f"<p class='muted'>Reachable {sources}.</p>" + (f"<p>{e(c['about'])}</p>" if c.get("about") else ""),
+                "<h4>Projects reach it</h4>" + _conn_form("path", _paths(s, None), "/connections", "Save", svc=svc)]
+        if s.get("colony"):
+            fields = _keys_fields(s["colony"], c, None)
+            if fields:
+                body.append("<h4>Keys</h4>" + _conn_form("keys", fields, "/connections", "Save keys", name=s["colony"]))
+            body.append("<h4>Waits for your tap</h4>" + _conn_form("holds", _holds_fields(c, c.get("hold")), "/connections",
+                                                                  "Save", name=s["colony"]))
+        else:
+            body.append(f"<p class='muted'>Its sends go out without asking. For a tap first, or a separate account per "
+                        f"project, ask any project's agent to add {e(s['title'])} through colony.</p>")
+        if differ:
+            body.append("<h4>Projects set their own</h4><p>" + ", ".join(
+                f"<a href='/?p={projects(reg).index(p)}&view=connections'>{e(p.name)}</a> ({VIA[connections.path_for(svc, p)]}"
+                + (", own settings" if connections.has_own(c, p) else "") + ")" for p in differ) + "</p>")
+        out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}"
+                   + (f" · {len(differ)} project{'s' * (len(differ) != 1)} differ" if differ else "")
+                   + (" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>" + "".join(body) + "</details>")
+    if len(out) == 1:
+        out.append("<div class='card'><p class='muted'>None yet.</p></div>")
+    out.append("<p class='muted'>To add a service, ask any project's agent (\"connect our eBay account\"): it sets it up "
+               "and it shows here for your keys.</p>")
+    return shell(reg, -2, "".join(out))
 
-    def grants(name, entry, personal):
-        to = entry.get("projects") or []
-        tick = lambda p: " checked" if to == connections.ALL or str(p.resolve()) in to else ""
-        boxes = "".join(f"<label class='tick'><input type='checkbox' name='project' value='{e(str(p.resolve()))}'{tick(p)}> {e(p.name)}</label>"
-                        for p in every)
-        return (f"<form method='post' action='/connections' class='options'><input type='hidden' name='do' value='grant'>"
-                f"<input type='hidden' name='name' value='{e(name)}'>" + ("<input type='hidden' name='personal' value='1'>" if personal else "")
-                + f"<label class='tick'><input type='checkbox' name='all' value='1'{' checked' if to == connections.ALL else ''}> "
-                f"<b>Every project</b>, new ones too</label>{boxes}<div class='dangers'><button>Save who has it</button></div></form>")
 
-    def given(entry):
-        to = entry.get("projects") or []
-        return "every project" if to == connections.ALL else f"{len(to)} project{'s' * (len(to) != 1)}" if to else "no project"
-
-    out = ["<p class='muted'>Outside services your projects reach: each runs on this machine, only in the projects you give "
-           "it. Keys stay in a file only you can read, never in a chat. Anything a connection holds (sending, listing, "
-           "spending) waits for your tap on the board.</p>"]
-    for name, c in sorted(data["connections"].items()):
-        have, lacking = connections.keys(name), connections.missing(name, c)
-        fields = "".join(f"<label>{e(k)} <input type='password' name='key_{e(k)}' autocomplete='off' "
-                         f"placeholder='{'Kept; paste to replace' if have.get(k) else 'Paste it'}'></label>" for k in c.get("keys") or ())
-        out.append(f"<details class='conn'><summary><b>{e(c['title'])}</b> · {given(c)}"
-                   + (f" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>"
-                   + (f"<p>{e(c['about'])}</p>" if c.get("about") else "")
-                   + f"<p class='muted'>Waits for your tap: {e(', '.join(c.get('hold') or ()) or 'nothing')}</p>"
-                   + (f"<form method='post' action='/connections' class='options'><input type='hidden' name='do' value='keys'>"
-                      f"<input type='hidden' name='name' value='{e(name)}'>{fields}<div class='dangers'><button>Save keys</button></div></form>"
-                      if fields else "")
-                   + grants(name, c, False) + "</details>")
-    if not data["connections"]:
-        out.append("<p class='muted'>None yet. Ask a project's agent for one (an eBay account, a mailbox): it sets it up, "
-                   "and it appears here for your keys and your say on who has it.</p>")
-    if data["personal"]:
-        out.append("<h3>Your own connectors</h3><p class='muted'>From your Claude sign-in. A Claude project has only the ones "
-                   "you give it here (Codex projects aren't sorted yet).</p>")
-        for name, c in sorted(data["personal"].items()):
-            out.append(f"<details class='conn'><summary><b>{e(name)}</b> · {given(c)}</summary>{grants(name, c, True)}</details>")
+def project_connections(pid, root):
+    """A project's Connections: each service as colony-wide, through another source, off, or with its own account
+    and holds."""
+    from . import connections
+    data, back = connections.load(), f"/?p={pid}&view=connections"
+    out = [f"<p class='muted'>Set colony-wide on <a href='/connections'>Connections</a>; here this project can differ.</p>"]
+    for svc, s in connections.services().items():
+        s["id"] = svc
+        c = data["connections"].get(s.get("colony")) or {}
+        way, own = connections.path_for(svc, root), connections.has_own(c, root)
+        body = [_conn_form("path", _paths(s, root, inherit=True), back, "Save", svc=svc, p=pid)]
+        if s.get("colony") and way == "colony":
+            body.append(_conn_form("own", f"<label class='tick'><input type='checkbox' name='own' value='1'{' checked' if own else ''}> "
+                                   f"Its own account and holds</label>", back, "Save", name=s["colony"], p=pid))
+            if own:
+                fields = _keys_fields(s["colony"], c, root)
+                if fields:
+                    body.append("<h4>Its keys</h4>" + _conn_form("keys", fields, back, "Save keys", name=s["colony"], p=pid))
+                body.append("<h4>Waits for your tap</h4>" + _conn_form(
+                    "holds", _holds_fields(c, connections.holds(c, root)), back, "Save", name=s["colony"], p=pid))
+        lacking = way == "colony" and connections.missing(s["colony"], c, root)
+        out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}{' · own settings' if own else ''}"
+                   + (" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>" + "".join(body) + "</details>")
+    if len(out) == 1:
+        out.append("<div class='card'><p class='muted'>No services yet.</p></div>")
     return "".join(out)
+
+
+def connection_ticks():
+    """For a project being added: each service it would have, ticked; untick to leave it out."""
+    from . import connections
+    svcs = [(k, s) for k, s in connections.services().items() if connections.path_for(k, None)]
+    if not svcs:
+        return ""
+    return ("<div class='muted'>Connections it has (untick to leave one out):</div><div>"
+            + "".join(f"<input type='hidden' name='svc_listed' value='{e(k)}'><label class='tick'><input type='checkbox' "
+                      f"name='svc' value='{e(k)}' checked> {e(s['title'])}</label>" for k, s in svcs) + "</div>")
 
 
 def settings_page(reg):
@@ -5785,7 +5865,8 @@ def settings_page(reg):
         section("consulting", "Consulting", "On: two fresh views at costly decisions" if s["consult"] else "Off", card(consulting)),
         section("steward", "Steward", ("Runs with the board" if s["monitor"] else "Off") + e(f" · {mm or 'its default'}"),
                 card(steward_on, monitor_card)),
-        section("connections", "Connections", e(connections_summary()), card(connections_settings(reg))),
+        section("connections", "Connections", e(connections_summary()),
+                card("<p>Outside services your projects reach, and how: <a href='/connections'>Connections →</a></p>")),
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
                                          f"{'open on your network' if s['lan'] else 'this machine only'}"),
                 card(f"<ul class='folders'>{where}</ul><p class='muted'>Each project, and the steward, is also in the Claude "
@@ -6000,6 +6081,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, machine_folders((q.get("dir") or [""])[0]).encode())
         if url.path == "/models":
             return self._send(200, models_page(reg).encode())
+        if url.path == "/connections":
+            return self._send(200, connections_page(reg).encode())
         if url.path == "/settings":
             settings_page.port = self.server.server_address[1]
             return self._send(200, settings_page(reg).encode())
@@ -6318,20 +6401,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/connections":
             from . import connections
-            name = form.get("name", "")
+            name, do = form.get("name", ""), form.get("do")
             try:
-                if form.get("do") == "keys":
+                root = projects(reg)[int(form["p"])] if form.get("p") else None
+            except (ValueError, IndexError):
+                return self._send(404, b"No such project.")
+            try:
+                if do == "path":
+                    if form.get("how") in ("colony", "claude", "off") or (root and form.get("how") == "inherit"):
+                        connections.choose_path(form.get("svc", ""), root, form["how"])
+                elif do == "own" and root:
+                    connections.configure(name, root, own=bool(form.get("own")))
+                elif do == "keys":
                     c = connections.load()["connections"][name]
+                    whose = root if root and connections.has_own(c, root) else None
                     for k in c.get("keys") or ():
                         if form.get(f"key_{k}", "").strip():
-                            connections.set_key(name, k, form[f"key_{k}"])
-                elif form.get("do") == "grant":
-                    connections.set_grants(name, connections.ALL if form.get("all") else values.get("project", []),
-                                           personal=bool(form.get("personal")))
+                            connections.set_key(name, k, form[f"key_{k}"], whose)
+                elif do == "holds":
+                    connections.configure(name, root, hold=None if form.get("mode") != "chosen" else sorted(values.get("tool", [])))
             except KeyError:
                 return self._send(404, b"No such connection.")
+            back = form.get("back", "/connections")
             self.send_response(303)
-            self.send_header("Location", "/settings#set-connections")
+            self.send_header("Location", back if back.startswith("/") and not back.startswith("//") else "/connections")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -6457,6 +6550,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        from . import connections
         if path == "/clone":
             chosen = {k: form.get(k, "") for k in PROJECT_KEYS if form.get(k)}
             try:
@@ -6466,6 +6560,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 if chosen:
                     project_settings(dest, chosen)
+                connections.pick(dest, values.get("svc", []), values.get("svc_listed", []))
                 track(dest)                        # a clone has work of its own: its agent brings the plan over
                 target = f"/?p={projects().index(dest.resolve())}"
             self.send_response(303)
@@ -6496,6 +6591,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     if chosen:
                         project_settings(folder, chosen)
+                    connections.pick(folder, values.get("svc", []), values.get("svc_listed", []))
                     track(folder)
                     target = f"/?p={projects().index(folder)}"
             elif path == "/new" and folder_name(form.get("name", "")):
@@ -6503,6 +6599,7 @@ class Handler(BaseHTTPRequestHandler):
                 new.mkdir(parents=True, exist_ok=True)
                 if chosen:
                     project_settings(new, chosen)
+                connections.pick(new, values.get("svc", []), values.get("svc_listed", []))
                 track(new)
                 console.ensure(new)
                 target = f"/?p={projects().index(new)}"

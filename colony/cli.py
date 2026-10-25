@@ -942,31 +942,30 @@ def cmd_needs_you(a):
 
 
 def cmd_connect(a):
-    """Outside services: what is granted here, or (add) a new one the person then gives keys and grants in Settings."""
+    """Outside services: what this project reaches and how, or (add) a new one the person then gives its keys."""
     import shlex
     from . import board, connections
     if a.add:
         try:
-            c = connections.add(a.add, a.title, shlex.split(a.command or ""), needs=a.key, hold=a.hold, tools=a.tool,
-                                about=a.about)
+            c = connections.add(a.add, a.title, shlex.split(a.command or ""), needs=a.key, hold=a.hold or None,
+                                tools=a.tool, about=a.about, service=a.service)
         except ValueError as err:
             print(err, file=sys.stderr)
             return 2
-        print(f"connection {a.add} kept: {c['title']}. The person enters its keys ({', '.join(c['keys']) or 'none'}) "
-              f"and grants it to projects in Settings, under Connections; a granted project's console then restarts with it "
-              f"when idle. Holds for their tap: {', '.join(c['hold']) or 'nothing'}.")
+        print(f"{c['title']} kept. Every project has it once the person enters its keys ({', '.join(c['keys']) or 'none'}) "
+              f"on the board's Connections page; a console takes it up when it next restarts idle. Waits for their tap: "
+              f"{', '.join(c['hold']) if c['hold'] else 'everything its server does not mark read-only'}.")
         return 0
     root, data = board.root_of(), connections.load()
-    mine = connections.granted(root)
-    for n, c in sorted(data["connections"].items()):
-        state = ("granted here" if n in mine else "granted here, keys missing: " + ", ".join(connections.missing(n, c))
-                 if connections._granted(c, root) else "not granted here")
-        print(f"{n} ({c['title']}): {state}; holds for the person's tap: {', '.join(c.get('hold') or ()) or 'nothing'}")
-    for n, c in sorted(data["personal"].items()):
-        print(f"claude.ai {n} (the person's own): {'granted here' if connections._granted(c, root) else 'not granted here'}")
-    if not data["connections"] and not data["personal"]:
+    for svc, s in connections.services().items():
+        way = connections.path_for(svc, root)
+        c = data["connections"].get(s.get("colony")) or {}
+        why = (" (keys missing)" if s.get("colony") and connections.is_on(c, root) and connections.missing(s["colony"], c, root)
+               else "")
+        print(f"{s['title']}: " + {"colony": "through colony; what it holds waits for the person's tap",
+                                   "claude": "through the person's Claude connector", None: "not here" + why}[way])
+    if not connections.services():
         print("No connections yet.")
-    print("The person grants them in Settings, under Connections.")
     return 0
 
 
@@ -1576,7 +1575,8 @@ def main(argv=None):
     p.add_argument("--key", action="append", default=[], help="a key the person enters in Settings (repeat)")
     p.add_argument("--hold", action="append", default=[], help="a tool that runs only on the person's tap (repeat)")
     p.add_argument("--tool", action="append", default=[], help="offer only these tools (repeat)")
-    p.add_argument("--about", default=""); p.set_defaults(fn=cmd_connect)
+    p.add_argument("--about", default=""); p.add_argument("--service", help="the service it reaches, if not its name (gmail)")
+    p.set_defaults(fn=cmd_connect)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
     sub.add_parser("needs-you", help="this turn asks the person something: it waits on their list when it ends").set_defaults(fn=cmd_needs_you)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
