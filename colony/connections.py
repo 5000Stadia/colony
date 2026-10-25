@@ -12,6 +12,9 @@ with them, and nothing it does waits for the person. A console starts with
 the connections its project has (claude_args, codex_args); `colony connect run` reads the keys as it starts the
 server (run).
 
+One an agent adds runs nowhere until the person approves it, and they are asked only after the steward's audit (audit)
+has read its code and passed it; one the audit refuses can't be approved.
+
 What leaves the person's hands waits on them: a held tool is not run when the agent calls it. It becomes a gate on
 the board with what the agent asked for, and only the person's tap there runs it (release); its outcome reaches the
 agent as a note, and an answer recorded from the command line never runs it. Unless the person lists the holds

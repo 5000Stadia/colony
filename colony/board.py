@@ -5636,6 +5636,9 @@ def _audit_card(name, c):
             + (f"<pre class='report'>{e(a['report'])}</pre>" if a.get("report") else "") + "</details>")
     if audit.refused(a):
         return body + "<p class='muted'>It can't be approved; the agent that asked was told why.</p>" + remove
+    if audit.misfit(a):
+        return (body + "<p class='muted'>The steward doesn't see the work calling for it; what the work needs is yours to "
+                "say, and the agent was told.</p>" + _conn_form("approve", "", "/connections", "Approve anyway", name=name) + remove)
     return body + _conn_form("approve", "", "/connections", "Approve", name=name) + remove
 
 
@@ -5685,6 +5688,7 @@ def connections_page(reg):
                    + (f" · {len(differ)} project{'s' * (len(differ) != 1)} differ" if differ else "")
                    + ((" · <b class='warn'>refused by the audit</b>" if audit.refused(audit.current(c)) else
                        " · being audited" if not audit.current(c) or audit.current(c).get("state") == "running" else
+                       " · <b class='warn'>to approve: not seen to fit the work</b>" if audit.misfit(audit.current(c)) else
                        " · <b class='warn'>to approve</b>") if review else " · <b class='warn'>keys missing</b>" if lacking else "")
                    + "</summary>" + "".join(body) + "</details>")
     if len(out) == 1:

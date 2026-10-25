@@ -225,7 +225,8 @@ files and other programs, and its tools' names and descriptions (what the agent 
 
 Answer each yes, no or unsure (unsure only for what this code can't settle), then a few plain sentences for the person:
 what it does, what it can reach, anything they should know. Last, on its own line, exactly this JSON:
-{"safe": "yes|no|unsure", "fits": "yes|no|unsure", "summary": "two sentences for the person", "concerns": ["…"]}"""
+{"safe": "yes|no|unsure", "fits": "yes|no|unsure", "summary": "two sentences for the person", "concerns": ["…"]}
+If you could not open its files, don't judge it: answer only {"safe": "unsure", "unread": true}."""
 
 
 def brief(name, c, root, folder, about, marks, hosts):
@@ -235,7 +236,9 @@ def brief(name, c, root, folder, about, marks, hosts):
              if i["state"] in ("doing", "todo")][:12] if road else []
     lines = [ROLE, "", f"The connection: {name} ({c.get('title') or name})", f"Its command: {' '.join(c.get('command') or [])}",
              f"Keys it is given: {', '.join(c.get('keys') or []) or 'none'}", f"Stated purpose: {c.get('about') or '(none given)'}",
-             f"Tools it says it offers: {', '.join(c.get('tools') or []) or '(not listed)'}", ""]
+             f"Tools it says it offers: {', '.join(c.get('tools') or []) or '(not listed)'}",
+             "Colony runs it behind its own proxy: a held tool's call waits for the person's tap on the board, never run "
+             f"on the agent's word. Held here: {', '.join(c['hold']) if c.get('hold') else 'every tool the server does not mark read-only'}.", ""]
     if folder:
         lines += [f"Its code, unpacked from {about['file']} (not installed, nothing run): {folder}",
                   f"Its dependencies (not read here): {', '.join(about.get('depends') or []) or 'none'}"]
@@ -263,9 +266,8 @@ def ask(key, text, folder):
     from . import bench, consult
     model, effort, _ = consult.pick(key)
     p = providers.get(key, strict=True)
-    where = folder or tempfile.mkdtemp(prefix="colony-audit-empty-")
-    out = (p.consult(text, model, effort, where) if getattr(p, "reports_cost", True)
-           else p.consult(text, model, effort, where, price=bench.token_price(model)))
+    out = (p.consult(text, model, effort, folder) if getattr(p, "reports_cost", True)
+           else p.consult(text, model, effort, folder, price=bench.token_price(model)))
     return out, model
 
 
@@ -276,6 +278,8 @@ def verdict(text):
         v = json.loads(found[-1])
     except (IndexError, ValueError):
         return None
+    if v.get("unread"):
+        return None                                 # it couldn't open the code: no review, so another is asked
     norm = lambda x: x if x in ("yes", "no", "unsure") else "unsure"
     return {"safe": norm(str(v.get("safe", "")).lower()), "fits": norm(str(v.get("fits", "")).lower()),
             "summary": str(v.get("summary") or "")[:600], "concerns": [str(x)[:300] for x in v.get("concerns") or []][:8]}
@@ -298,7 +302,9 @@ def run(name, opener=None, asker=None):
     of, root = fingerprint(c), Path(c["by"]) if c.get("by") else None
     _store(name, {"of": of, "state": "running", "started": time.time()})
     record = {"of": of, "state": "done", "at": board.now()}
-    with tempfile.TemporaryDirectory(prefix="colony-audit-") as tmp:
+    work = board.home() / "audits"                  # not /tmp: a reviewer's sandbox may give it a /tmp of its own
+    work.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f"{name}-", dir=work) as tmp:
         folder, about, marks, hosts = None, {}, [], []
         if c.get("command"):
             try:
@@ -317,7 +323,7 @@ def run(name, opener=None, asker=None):
         if record["state"] == "done" and "safe" not in record:
             text = brief(name, c, root, folder, about, marks, hosts)
             for key in reviewer(root):
-                out, model = (asker or ask)(key, text, folder)
+                out, model = (asker or ask)(key, text, folder or Path(tmp))     # keys only: an empty folder
                 v = verdict(out.get("text"))
                 if v:
                     record.update(v, by=f"{key} {model}", family=key, report=(out.get("text") or "")[:6000])
@@ -328,21 +334,31 @@ def run(name, opener=None, asker=None):
     now = connections.load()["connections"].get(name)
     if now and fingerprint(now) == of:                  # changed meanwhile: that change has its own audit
         _store(name, record)
-        if refused(record) and root:
+        if (refused(record) or misfit(record)) and root:
             board.add_note(root, None, refusal(name, c, record), author="monitor")
     return record
 
 
 def refused(a):
-    return bool(a) and a.get("state") == "done" and "no" in (a.get("safe"), a.get("fits"))
+    """Found unsafe: it can't be approved. One that seems not to fit the work is the person's to weigh (what the work
+    needs is theirs to say), so it only shows on their card, and the agent hears it."""
+    return bool(a) and a.get("state") == "done" and a.get("safe") == "no"
+
+
+def misfit(a):
+    return bool(a) and a.get("state") == "done" and a.get("fits") == "no" and not refused(a)
 
 
 def refusal(name, c, a):
-    why = "unsafe" if a.get("safe") == "no" else "not what this project's work calls for"
-    return (f"The steward's audit refused the connection {name} you added ({' '.join(c.get('command') or []) or 'keys only'}): "
-            f"{why}. {a.get('summary', '')}" + "".join(f"\n- {x}" for x in a.get("concerns") or [])
-            + f"\nIt can't be approved as it is. If the work still needs this service, find another way to it (another "
-              f"package, or keys only for a script of your own) and add that; `colony connect --remove {name}` drops this one.")
+    what = f"the connection {name} you added ({' '.join(c.get('command') or []) or 'keys only'})"
+    found = f"{a.get('summary', '')}" + "".join(f"\n- {x}" for x in a.get("concerns") or [])
+    if refused(a):
+        return (f"The steward's audit refused {what}: unsafe. {found}\nIt can't be approved. If the work still needs this "
+                f"service, find another way to it (another package, or keys only for a script of your own) and add that; "
+                f"`colony connect --remove {name}` drops this one.")
+    return (f"The steward's audit of {what} finds it doesn't fit this project's work as written. {found}\nThe person "
+            f"sees that beside it and may approve it anyway. If the work does call for it, say why in its --about (add it "
+            f"again with the same command) or bring the need into the plan; if not, `colony connect --remove {name}`.")
 
 
 def kick(every=120):
