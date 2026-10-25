@@ -5784,3 +5784,52 @@ class ResearchTest(BoardBase):
                              today=date(2026, 9, 1))
         self.assertEqual([x["id"] for x in research.look("gmail mcp server")], [r["id"], older["id"]],
                          "the better match first, then the newer")
+
+
+class LessonsTest(BoardBase):
+    """Lessons keyed to colony's actions: proposed from evidence, adopted by the person's tap, shown as the action
+    is taken again."""
+
+    def test_an_adopted_lesson_shows_as_its_action_is_taken_and_only_after_the_persons_tap(self):
+        from colony import lessons
+        board.track(self.root)
+        other = Path(self.tmp.name) / "stall"
+        other.mkdir()
+        board.track(other)
+        with self.assertRaises(ValueError):
+            lessons.propose("deploy", "Never deploy on Fridays.", "x", self.root)        # not one of colony's actions
+        with self.assertRaises(ValueError):
+            lessons.propose("gate", "Ask with a default.", "", self.root)                  # no evidence, no lesson
+        r = lessons.propose("gate", "A gate asked outside their hours carries a --default.", "g1: the person found "
+                            "three gates with no default waiting at 7:30 (SnackStand)", self.root)
+        self.assertEqual(lessons.remind("gate", self.root), "", "nothing shows until the person adopts it")
+        page = board.needs_you(board.registry())
+        self.assertIn("A gate asked outside their hours", page)
+        self.assertIn("value='adopt'", page)
+        lessons.decide(r["id"], "adopt")
+        said = lessons.remind("gate", other)
+        self.assertIn("carries a --default", said, "a colony lesson reaches every project")
+        self.assertEqual(lessons.remind("show", other), "", "only at its own action")
+        own = lessons.propose("show", "Show the phone layout first.", "rated 2/5", self.root, project=self.root)
+        lessons.decide(own["id"], "adopt")
+        self.assertIn("phone layout", lessons.remind("show", self.root))
+        self.assertEqual(lessons.remind("show", other), "", "a project's own lesson stays there")
+        self.assertEqual(next(x for x in lessons.load() if x["id"] == r["id"])["shown"], 1, "each showing counted")
+        lessons.suspect(r["id"], "SnackStand asked one without a default again")
+        self.assertEqual(lessons.remind("gate", other), "", "a suspect lesson is held back until the person keeps it")
+        self.assertIn("Keep it", board.needs_you(board.registry()))
+        lessons.decide(r["id"], "retire")
+        self.assertNotIn("A gate asked outside", board.needs_you(board.registry()))
+        with self.assertRaises(ValueError):
+            lessons.decide(r["id"], "adopt")
+
+    def test_the_command_itself_prints_its_lessons(self):
+        from colony import cli, lessons
+        board.track(self.root)
+        r = lessons.propose("research", "Give --recheck 30 for prices.", "a price list went stale", self.root)
+        lessons.decide(r["id"], "adopt")
+        out = Path(self.tmp.name) / "out.txt"
+        with patch.object(board, "root_of", return_value=self.root), open(out, "w") as f, patch("sys.stdout", f):
+            cli.main(["research", "anything"])
+        self.assertIn("Lessons the person adopted for `colony research`", out.read_text())
+        self.assertIn("--recheck 30", out.read_text())

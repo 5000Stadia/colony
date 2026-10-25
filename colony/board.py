@@ -5152,6 +5152,37 @@ def support_rows():
     return rows
 
 
+def lesson_rows():
+    """Lessons waiting on the person: a proposal (Adopt / Not this) or one the evidence turned against (Keep /
+    Retire), each with what taught it and where it would show."""
+    from . import lessons
+    rows = []
+    for r in lessons.waiting():
+        where = "every project" if r["scope"] == "colony" else Path(r["scope"]).name
+        sus = r["state"] == "suspect"
+        buttons = ("<button name='verdict' value='keep'>Keep it</button><button class='quiet' name='verdict' value='retire'>Retire it</button>"
+                   if sus else "<button name='verdict' value='adopt'>Adopt</button><button class='quiet' name='verdict' value='decline'>Not this</button>")
+        rows.append(f"<div class='need'><div class='who'><span class='kind'>{'a lesson in question' if sus else 'a lesson'}, "
+                    f"from {e(r['by'])} · shown to {e(where)} at <code>colony {e(r['action'])}</code></span></div>"
+                    f"<b>{e(r['text'])}</b><div class='asktext muted'>{'Against it: ' + e(r.get('why', '')) if sus else 'What taught it: ' + e(r['evidence'])}</div>"
+                    f"<form class='verdict' method='post' action='/lesson'><input type='hidden' name='id' value='{e(r['id'])}'>"
+                    f"{buttons}</form></div>")
+    return rows
+
+
+def lessons_kept():
+    """The lessons the person adopted, folded at the foot of Needs you, each retirable with a tap."""
+    from . import lessons
+    kept = [r for r in lessons.load() if r["state"] == "adopted"]
+    if not kept:
+        return ""
+    items = "".join(f"<li><code>colony {e(r['action'])}</code> · {e('every project' if r['scope'] == 'colony' else Path(r['scope']).name)}"
+                    f" · shown {r.get('shown', 0)}: {e(r['text'])}<form class='inline' method='post' action='/lesson'>"
+                    f"<input type='hidden' name='id' value='{e(r['id'])}'><button class='quiet' name='verdict' value='retire'>Retire</button></form></li>"
+                    for r in kept)
+    return f"<details class='more'><summary>Lessons you adopted ({len(kept)})</summary><ul>{items}</ul></details>"
+
+
 # Keeps a list of what waits on the person current without getting in their way: it redraws only when
 # something changed, never while they type or scroll in it, and keeps where they had scrolled to.
 KEEP_CURRENT = """
@@ -5280,7 +5311,7 @@ def needs_you(reg):
     answering them by number, then the rest. And the supports the steward has brought them."""
     choices = model_changes(pending_only=True)
     from . import monitor
-    rows = ([choices] if choices else []) + support_rows()
+    rows = ([choices] if choices else []) + support_rows() + lesson_rows()
     aside = []                                         # the projects the person left out of the steward's: named, not listed
     for pid, p, _ in arranged(projects(reg)):
         if p.exists() and not monitor.involved(p):
@@ -5297,7 +5328,7 @@ def needs_you(reg):
                     f"<span class='badge gate' title='waiting on you'>{len(decided) + len(others)}</span></h3>"
                     f"{''.join(decided[:NEEDS_SHOWN])}{fold}{box}{''.join(others)}</section>")
     out = "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
-    return out + (f"<p class='muted'>Also waiting, in projects the steward doesn't follow: {', '.join(aside)}.</p>" if aside else "")
+    return out + (f"<p class='muted'>Also waiting, in projects the steward doesn't follow: {', '.join(aside)}.</p>" if aside else "") + lessons_kept()
 
 
 def models_page(reg):
@@ -6693,6 +6724,17 @@ class Handler(BaseHTTPRequestHandler):
                 save_registry(reg)
             self.send_response(303)
             self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/lesson":
+            from . import lessons
+            try:
+                lessons.decide(form.get("id", ""), form.get("verdict", ""))
+            except (StopIteration, ValueError):
+                pass                                   # decided already, or not a choice it offers
+            self.send_response(303)
+            self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

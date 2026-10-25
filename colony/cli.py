@@ -747,6 +747,41 @@ def cmd_research(a):
     return 0
 
 
+def cmd_lesson(a):
+    """Lessons: propose one from evidence (steward or agent), mark one suspect, or list them."""
+    from . import board, lessons
+    try:
+        if a.propose:
+            action, text = a.propose
+            project = None
+            if a.project:
+                project = next((p for p in board.projects() if p.name == a.project), None)
+                if project is None:
+                    raise ValueError(f"no project {a.project}")
+            r = lessons.propose(action, text, a.evidence or "", board.root_of(), project)
+            same = [x for x in lessons.standing(action, project, ("adopted", "proposed")) if x["id"] != r["id"]]
+            print(f"Proposed {r['id']} for colony {action} ({'every project' if r['scope'] == 'colony' else Path(r['scope']).name}); "
+                  "it waits for the person's tap on Needs you.")
+            if same:
+                print("Already standing or proposed for that action; if yours repeats or contradicts one, say which "
+                      "should go (colony lesson --suspect ID \"why\"):\n" + "".join(f"- {x['id']} ({x['state']}): {x['text']}\n" for x in same), end="")
+            if len(lessons.standing(action, project)) >= lessons.MOST:
+                print(f"{lessons.MOST} are already adopted for it, and only {lessons.MOST} are shown: merge or retire one first.")
+            return 0
+        if a.suspect:
+            lessons.suspect(a.suspect, a.why or "")
+            print(f"{a.suspect} marked suspect; the person keeps or retires it.")
+            return 0
+    except (ValueError, StopIteration) as err:
+        print(err or "no such lesson", file=sys.stderr)
+        return 2
+    for r in lessons.load():
+        if r["state"] in ("adopted", "proposed", "suspect"):
+            where = "every project" if r["scope"] == "colony" else Path(r["scope"]).name
+            print(f"{r['id']} [{r['state']}] colony {r['action']} · {where} · shown {r.get('shown', 0)}: {r['text']}")
+    return 0
+
+
 def cmd_pins(a):
     from . import board, pins
     for p in pins.pins(board.root_of()):
@@ -1664,6 +1699,12 @@ def main(argv=None):
     p = sub.add_parser("pin", help="keep a file in the project or a URL in its Library, for the person and you")
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why")
     p.add_argument("--group", help="the Library heading it goes under"); p.set_defaults(fn=cmd_pin)
+    p = sub.add_parser("lesson", help="lessons keyed to colony's actions: propose one from evidence, for the person to adopt")
+    p.add_argument("--propose", nargs=2, metavar=("ACTION", "TEXT"), help="the action it rides on (gate, show, ready, connect, ...) and one sentence")
+    p.add_argument("--evidence", help="what happened that taught it, and where (project, note or gate id)")
+    p.add_argument("--project", help="only for this project (default: every project)")
+    p.add_argument("--suspect", metavar="ID"); p.add_argument("--why", help="what recurred, or how the person overrode it")
+    p.set_defaults(fn=cmd_lesson)
     p = sub.add_parser("research", help="the colony's research library: look before researching, add what others may reuse")
     p.add_argument("words", nargs="*", help="what you're looking for (none: the newest)")
     p.add_argument("--add", metavar="FILE", help="keep a report for every project"); p.add_argument("--title")
@@ -1775,4 +1816,14 @@ def main(argv=None):
             return 0
         argv = argv[1:]
     a = ap.parse_args(argv)
-    return a.fn(a)
+    code = a.fn(a)
+    if a.cmd in ("gate", "show", "ready", "connect", "consult", "vision", "send", "reply", "pin", "research",
+                 "needs-you", "progress", "nest", "noted") and not code:
+        try:                                            # what the person adopted for this action, as it is taken
+            from . import board, lessons
+            said = lessons.remind(a.cmd, board.root_of())
+            if said:
+                print("\n" + said, end="")
+        except Exception:
+            pass                                        # a lesson never stands in the way of the action itself
+    return code
