@@ -508,7 +508,12 @@ def muted(value=None):
 
 
 def ensure():
+    path = brief_path()
+    before = path.read_text() if path.exists() else None
     brief()
+    if before is not None and path.read_text() != before:
+        # a running steward read its instructions when its conversation began: an update to colony changed them
+        queue(f"Colony was updated and your instructions changed. Read {path} afresh before you go on.")
     (home() / ".board").mkdir(exist_ok=True)
     if providers.key(provider()) == "claude":
         provider().wire(home(), "")
