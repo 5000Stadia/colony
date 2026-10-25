@@ -6,15 +6,24 @@ One board to follow and steer a person's long projects, each driven by its own a
 ## Vision
 
 Colony is where a person brings ambitious, long projects to an excellent finish with AI agents, from their
-phone as easily as their desk. Each project is driven by its own agent, which holds a shared vision with the
-person, lays the path toward it, and builds each step to fit it and to make the next easier. The person
-steers; the agents carry the work, judging with the smartest models where judgement matters, spending lightly
-where it doesn't, and bringing the person only what truly needs them. A monitor acts for the person across
-the colony, within the helm they give it. Colony works from a fresh install on whichever agent programs are
-there, follows new models on its own, keeps itself current, and never gets in the way of the work.
+phone as easily as their desk: one person, many ambitious works, carried to excellent finishes over years, by
+a colony that remembers why, talks within itself, and gets wiser with every project. Each project is driven by
+its own agent, which holds a shared vision with the person, lays the path toward it, and builds each step to
+fit it and to make the next easier. The person steers; the agents carry the work, judging with the smartest
+models where judgement matters, spending lightly where it doesn't, and bringing the person only what truly
+needs them. A monitor acts for the person across the colony, within the helm they give it. The colony is more
+than projects side by side: they speak to each other, work for each other, carry what one learns to the
+others, and hold together over months and years, so the whole stands as a special and impressive execution of
+many projects as one system. Colony works from a fresh install on whichever agent programs are there, follows
+new models on its own, keeps itself current, and never gets in the way of the work.
 
 - One board: every project, its vision, its path and what waits on the person, readable on a phone.
 - The person's word is never lost: notes, direct conversation and the vision reach the agents and the monitor.
+- One colony, not silos: projects talk directly (asks, replies, nests with a shared vision), one project's
+  output can be another's input, and each stays coherent with the others and with the person's direction over
+  the long run.
+- Wiser with every project: what one project shows works, measured, becomes guidance for all, so each new
+  project starts smarter than the last.
 - Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
   decisions; no extra spend without substantial gain.
 - Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
