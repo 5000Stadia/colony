@@ -719,6 +719,34 @@ def cmd_setup(a):
     return 0
 
 
+def cmd_research(a):
+    """The colony's research library: look before researching; add what others may reuse."""
+    from . import board, research
+    if a.add:
+        try:
+            r = research.add(a.add, a.title or "", a.question or "", board.root_of(), a.recheck, a.tag)
+        except (ValueError, OSError) as err:
+            print(err, file=sys.stderr)
+            return 2
+        print(f"Kept for every project as {r['id']}; look again by {r['recheck']}.")
+        return 0
+    if a.show:
+        try:
+            print(research.show(a.show))
+        except KeyError:
+            print(f"no entry {a.show}", file=sys.stderr)
+            return 2
+        return 0
+    found = research.look(" ".join(a.words)) if a.words else research.entries()[:20]
+    for r in found:
+        print(research.line(r))
+    if not found:
+        print("Nothing in the library on that." if a.words else "The library is empty.")
+    else:
+        print("Read one: colony research --show ID")
+    return 0
+
+
 def cmd_pins(a):
     from . import board, pins
     for p in pins.pins(board.root_of()):
@@ -1636,6 +1664,12 @@ def main(argv=None):
     p = sub.add_parser("pin", help="keep a file in the project or a URL in its Library, for the person and you")
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why")
     p.add_argument("--group", help="the Library heading it goes under"); p.set_defaults(fn=cmd_pin)
+    p = sub.add_parser("research", help="the colony's research library: look before researching, add what others may reuse")
+    p.add_argument("words", nargs="*", help="what you're looking for (none: the newest)")
+    p.add_argument("--add", metavar="FILE", help="keep a report for every project"); p.add_argument("--title")
+    p.add_argument("--question", help="the question it answers, in plain words"); p.add_argument("--tag", action="append", default=[])
+    p.add_argument("--recheck", type=int, default=90, metavar="DAYS", help="when to look again (default 90)")
+    p.add_argument("--show", metavar="ID"); p.set_defaults(fn=cmd_research)
     p = sub.add_parser("hint", help="the plan's shape hints; keep KEY \"why\" settles one until the vision changes")
     p.add_argument("action", nargs="?", choices=("keep",)); p.add_argument("key", nargs="?"); p.add_argument("why", nargs="?")
     p.set_defaults(fn=cmd_hint)

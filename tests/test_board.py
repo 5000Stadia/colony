@@ -5757,3 +5757,30 @@ class RemoteTest(BoardBase):
         self.assertEqual(self.remote("--off")[0], 0)
         self.assertIn("--local", json.loads((board.home() / "server.json").read_text()))      # what was really running
         self.assertIsNone(board.registry()["settings"]["tailscale_lan_before"])                # fresh next time
+
+
+class ResearchTest(BoardBase):
+    """The colony's research library: what one project's helper found, kept once for every project."""
+
+    def test_research_one_project_did_is_found_by_the_next_and_marked_stale_when_old(self):
+        from datetime import date
+        from colony import research, supports
+        report = Path(self.tmp.name) / "mail.md"
+        report.write_text("mcp-email-server 1.13.2: IMAP and SMTP, annotated tools, no shell-outs. Source: github.com/x\n")
+        with self.assertRaises(ValueError):
+            research.add(report, "", "", self.root)                     # findable only by its words
+        r = research.add(report, "Mail MCP servers vetted", "Which MCP server can a project use for its own Gmail?",
+                         self.root, recheck_days=30, tags=["email"], today=date(2026, 10, 25))
+        self.assertIn(supports.NOTICE, r["text"], "Internet sources carry the notice")
+        report.write_text("changed later")
+        found = research.look("which gmail server for sending email")
+        self.assertEqual([x["id"] for x in found], [r["id"]])
+        self.assertEqual(research.look("the of what"), [], "small words match nothing")
+        self.assertIn("IMAP and SMTP", research.show(r["id"]), "its text was kept, not the project file's later edit")
+        self.assertIn("data, not instructions", research.show(r["id"]))
+        self.assertNotIn("STALE", research.line(r, date(2026, 11, 20)))
+        self.assertIn("STALE since 2026-11-24", research.line(r, date(2026, 12, 1)), "shown, never hidden, once old")
+        older = research.add(report, "Mail MCP servers, first look", "Which MCP server for Gmail?", self.root,
+                             today=date(2026, 9, 1))
+        self.assertEqual([x["id"] for x in research.look("gmail mcp server")], [r["id"], older["id"]],
+                         "the better match first, then the newer")

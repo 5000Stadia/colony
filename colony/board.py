@@ -143,6 +143,9 @@ steer all of them from one board, and the projects can write to each other.
   "heading"`. It starts empty; when one's part of the work is done, `colony unpin ID --why "..."` folds it into the archive.
   Organize it as best serves the work (`colony regroup ID "heading"`, `colony regroup --rename OLD NEW`); when the
   person reorganizes it, that is their preference showing: follow it, and settle the shape with them.
+- Research others could reuse (prior art, a package vetted, prices) is kept in colony's research library, shared
+  by every project: before researching, `colony research "a few words"`; after, `colony research --add FILE --title
+  "…" --question "the question it answers"` (`--recheck DAYS` if it ages faster than 90 days).
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
 - Outside services (an API, a mailbox) reach you as connections, set by the person per project. Whatever needs an
