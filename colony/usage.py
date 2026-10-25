@@ -7,6 +7,7 @@ PROVIDER: where each program keeps its limits. Codex writes them into its sessio
 hands them to its status line, which colony wires to record them (colony statusline).
 """
 import json
+import re
 import time
 from pathlib import Path
 
@@ -242,6 +243,78 @@ def check():
         folder().mkdir(parents=True, exist_ok=True)
         (folder() / "paused.json").write_text(json.dumps(now))
     return changed
+
+
+# What a program prints when its limit stops a turn, and when it says the limit lifts. PROVIDER: Claude Code ("You've
+# hit your session limit · resets 3:40pm (America/Los_Angeles)", or "… resets Aug 28, 4pm (…)"); Codex ("You've hit
+# your usage limit. … try again at Sep 13th, 2026 9:15 AM.").
+CUT = re.compile(r"You've hit your [a-z ]*limit\b[^\n]*")
+RESETS = re.compile(r"resets (?:(?P<day>[A-Z][a-z]{2} \d{1,2}), )?(?P<time>\d{1,2}(?::\d{2})?\s?[ap]m) \((?P<tz>[A-Za-z_/+-]+)\)")
+AGAIN = re.compile(r"try again at (?P<when>[A-Z][a-z]{2} \d{1,2}(?:st|nd|rd|th)?, \d{4} \d{1,2}:\d{2} [AP]M)")
+
+
+def lifts(text, seen):
+    """When a limit's message says it lifts (a timestamp), or None if it doesn't say (a monthly spend limit)."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    if m := AGAIN.search(text):
+        when = re.sub(r"(\d)(st|nd|rd|th),", r"\1,", m.group("when"))
+        return datetime.strptime(when, "%b %d, %Y %I:%M %p").timestamp()
+    if not (m := RESETS.search(text)):
+        return None
+    try:
+        zone = ZoneInfo(m.group("tz"))
+    except (KeyError, ValueError):
+        return None
+    clock = m.group("time").replace(" ", "")
+    hour = datetime.strptime(clock, "%I:%M%p" if ":" in clock else "%I%p").time()
+    base = datetime.fromtimestamp(seen, zone)
+    if m.group("day"):
+        day = datetime.strptime(f"{m.group('day')} {base.year}", "%b %d %Y")
+        at = datetime.combine(day.date(), hour, zone)
+        if at.timestamp() < seen - 180 * 86400:
+            at = at.replace(year=base.year + 1)
+        return at.timestamp()
+    at = datetime.combine(base.date(), hour, zone)
+    return (at + timedelta(days=1) if at.timestamp() < seen - 60 else at).timestamp()
+
+
+def cut_off(screens=None, clock=None):
+    """Agents a limit stopped mid-turn, outside any safe pause (it was off for them, or the limit came first): seen by
+    the limit's message on their console, and woken once it lifts to carry on. Returns the projects woken."""
+    from . import console
+    clock = clock or time.time()
+    path = folder() / "cut.json"
+    try:
+        was = json.loads(path.read_text())
+    except (OSError, ValueError):
+        was = {}
+    now, woken, pausing = {}, [], paused()
+    for p in board.projects():
+        if not p.exists():
+            continue
+        k, mine = str(p), was.get(str(p)) or {}
+        name = console.session_name(p)
+        # its whole scrollback, wrapped lines joined: each limit message is one more hit, however alike their words
+        text = (screens or {}).get(k, "") if screens is not None else (console.history(name) if console.running(name) else "")
+        hits = [m.group(0).strip() for m in CUT.finditer(text or "")]
+        if k not in was or len(hits) < mine.get("n", 0):
+            mine = {"n": len(hits)}                     # first seen, or a new console: what's there already is past
+        if len(hits) > mine.get("n", 0):
+            mine = {"n": len(hits)}
+            if k not in pausing:                        # a safe pause wakes its own projects
+                mine.update(line=hits[-1], at=clock, until=lifts(hits[-1], clock))
+        if mine.get("until") and clock >= mine["until"] + 60:
+            board.add_note(p, None, f"A usage limit stopped you mid-work (it said: \"{mine['line']}\"). It has "
+                           "lifted: carry on where you stopped.", author="colony", kind="resume")
+            woken.append(p)
+            mine = {"n": mine["n"]}
+        if mine:
+            now[k] = mine
+    if now != was:
+        folder().mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(now))
+    return woken
 
 
 def twin(root, key):

@@ -812,6 +812,7 @@ class Watcher:
         except Exception:
             turbo.stand_down("the safe pause can't read usage", stale=True)    # turbo never runs past it
             raise
+        usage.cut_off()                             # and those the limit itself stopped mid-turn, woken as it lifts
         if winding:
             queue(f"Winding down at a usage limit: {', '.join(winding)}. Each agent tells the person where things stand "
                   "and their options on its next turn; colony wakes them at the reset.")

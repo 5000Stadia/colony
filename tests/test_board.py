@@ -4161,6 +4161,30 @@ class UsageTest(BoardBase):
         (day / "rollout-x.jsonl").write_text(json.dumps({"type": "session_meta"}) + "\n" + json.dumps(event) + "\n")
         self.assertEqual(usage.codex(Path(self.tmp.name) / "codex")["windows"], {"weekly": {"used": 42.0, "resets_at": 1791201695}})
 
+    def test_an_agent_the_limit_itself_stopped_is_woken_once_it_lifts(self):
+        # the person: "If session limit is hit anything that was active when it does should have a fire reminder"
+        from colony import usage
+        board.track(self.root)
+        k, t0 = str(self.root), 1792900000.0                    # Oct 2026; 3:40pm Los Angeles is ahead of it
+        old = "⎿ You've hit your session limit · resets 9:00am (America/Los_Angeles)\n"
+        self.assertEqual(usage.cut_off({k: old}, t0), [], "what was there before is past")
+        hit = old + "working…\n⎿ You've hit your session limit · resets 3:40pm (America/Los_Angeles)\n> "
+        self.assertEqual(usage.cut_off({k: hit}, t0 + 60), [])
+        lifts = usage.lifts("resets 3:40pm (America/Los_Angeles)", t0 + 60)
+        self.assertEqual(usage.cut_off({k: hit}, lifts - 30), [], "not before it lifts")
+        self.assertEqual(usage.cut_off({k: hit}, lifts + 61), [self.root])
+        note = [n for n in board.notes(self.root) if n.get("kind") == "resume"][-1]
+        self.assertIn("stopped you mid-work", note["text"])
+        self.assertIn("carry on where you stopped", note["text"])
+        self.assertEqual(usage.cut_off({k: hit}, lifts + 3600), [], "woken once")
+        again = hit + "carried on\n⎿ You've hit your session limit · resets 3:40pm (America/Los_Angeles)\n"
+        usage.cut_off({k: again}, lifts + 86000)
+        self.assertEqual(usage.cut_off({k: again}, lifts + 86400 + 61), [self.root], "the same words the next day are a new hit")
+        codex = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 13th, 2026 9:15 AM."
+        self.assertEqual(usage.lifts(codex, t0), __import__("datetime").datetime(2026, 9, 13, 9, 15).timestamp())
+        self.assertIsNone(usage.lifts("You've hit your monthly spend limit · raise it at claude.ai/settings/usage", t0),
+                          "a limit that names no time is the person's to lift")
+
     def test_past_the_threshold_a_project_winds_down_and_at_the_reset_it_is_woken(self):
         from colony import usage
         board.track(self.root)
