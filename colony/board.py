@@ -144,8 +144,8 @@ steer all of them from one board, and the projects can write to each other.
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
 - Outside services (an API, a mailbox) reach you as connections, set by the person per project. One the work needs
-  and you lack: `colony connect --add NAME --command "…" --key KEY`, an existing MCP server with its version pinned;
-  they enter its keys on the board, never in a chat.
+  and you lack: `colony connect --add NAME --command "…" --key KEY`, an existing MCP server with its version pinned
+  (no `--command` for keys your own script uses); they enter its keys on the board, never in a chat.
 - A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
   then it waits for them on the board. If they ask you something first, answer it and ask yours again.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
@@ -5619,8 +5619,9 @@ def connections_page(reg):
         c = data["connections"].get(s.get("colony")) or {}
         lacking = s.get("colony") and connections.missing(s["colony"], c)
         review = s.get("colony") and not c.get("approved", True)
-        body = ([f"<div class='card gate'><p><b>Added by an agent; it runs nowhere until you approve it.</b> It starts: "
-                 f"<code>{e(' '.join(c.get('command') or []))}</code></p>"
+        body = ([f"<div class='card gate'><p><b>Added by an agent; it runs nowhere until you approve it.</b> "
+                 + (f"It starts: <code>{e(' '.join(c['command']))}</code>" if c.get("command") else
+                    f"It is only keys ({e(', '.join(c.get('keys') or []))}), for projects' own scripts.") + "</p>"
                  + _conn_form("approve", "", "/connections", "Approve", name=s["colony"])
                  + _conn_form("remove", "", "/connections", "Remove", name=s["colony"]) + "</div>"] if review else [])
         body += [f"<p class='muted'>Reachable {sources}.</p>" + (f"<p>{e(c['about'])}</p>" if c.get("about") else ""),
@@ -5629,8 +5630,10 @@ def connections_page(reg):
             fields = _keys_fields(s["colony"], c, None)
             if fields:
                 body.append("<h4>Keys</h4>" + _conn_form("keys", fields, "/connections", "Save keys", name=s["colony"]))
-            body.append("<h4>Waits for your tap</h4>" + _conn_form("holds", _holds_fields(c, c.get("hold")), "/connections",
-                                                                  "Save", name=s["colony"]))
+            body.append("<h4>Waits for your tap</h4>" + (_conn_form("holds", _holds_fields(c, c.get("hold")), "/connections",
+                                                                   "Save", name=s["colony"]) if c.get("command") else
+                                                        f"<p class='muted'>Nothing: these keys are for projects' own scripts, "
+                                                        f"which use them without asking.</p>"))
         else:
             body.append(f"<p class='muted'>Its sends go out without asking. For a tap first, or a separate account per "
                         f"project, ask any project's agent to add {e(s['title'])} through colony.</p>")
@@ -5662,13 +5665,14 @@ def project_connections(pid, root):
         body = [_conn_form("path", _paths(s, root, inherit=True), back, "Save", svc=svc, p=pid)]
         if s.get("colony") and way == "colony":
             body.append(_conn_form("own", f"<label class='tick'><input type='checkbox' name='own' value='1'{' checked' if own else ''}> "
-                                   f"Its own account and holds</label>", back, "Save", name=s["colony"], p=pid))
+                                   f"Its own account{' and holds' if c.get('command') else ''}</label>", back, "Save", name=s["colony"], p=pid))
             if own:
                 fields = _keys_fields(s["colony"], c, root)
                 if fields:
                     body.append("<h4>Its keys</h4>" + _conn_form("keys", fields, back, "Save keys", name=s["colony"], p=pid))
-                body.append("<h4>Waits for your tap</h4>" + _conn_form(
-                    "holds", _holds_fields(c, connections.holds(c, root)), back, "Save", name=s["colony"], p=pid))
+                if c.get("command"):
+                    body.append("<h4>Waits for your tap</h4>" + _conn_form(
+                        "holds", _holds_fields(c, connections.holds(c, root)), back, "Save", name=s["colony"], p=pid))
         lacking = way == "colony" and connections.missing(s["colony"], c, root)
         out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}{' · own settings' if own else ''}"
                    + (" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>" + "".join(body) + "</details>")

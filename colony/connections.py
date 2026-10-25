@@ -6,7 +6,9 @@ colony's own between them. It has its colony-wide settings: whether projects hav
 unless switched off there), the person's keys (one file per connection, readable only by them, entered on the
 Connections page and never written into a conversation, a command or git), and which of its tools wait for the
 person's tap. A project inherits those, and can switch the connection off or give it its own: its own account's keys
-and its own holds (SnackStand's own mailbox where every other project shares the person's). A console starts with
+and its own holds (SnackStand's own mailbox where every other project shares the person's). A connection with no
+server is only keys, for a project's own script (an eBay search): `colony connect --with NAME -- COMMAND` runs it
+with them, and nothing it does waits for the person. A console starts with
 the connections its project has (claude_args, codex_args); `colony connect run` reads the keys as it starts the
 server (run).
 
@@ -173,8 +175,8 @@ def add(name, title, command, *, needs=(), hold=None, tools=None, about="", serv
     project has it once its keys are entered, unless the person switches it off there."""
     if not NAME.fullmatch(name):
         raise ValueError("A connection's name is lowercase letters, digits, - or _, as ebay or snackstand-mail.")
-    if not command:
-        raise ValueError("Give the command that starts its MCP server.")
+    if not command and not needs:
+        raise ValueError("Give the command that starts its MCP server, or the keys a script of the project's uses.")
 
     def put(data):
         was = data["connections"].get(name) or {}
@@ -228,6 +230,11 @@ def granted(root):
     needs entered."""
     return {n: c for n, c in sorted(load()["connections"].items())
             if c.get("approved", True) and is_on(c, root) and not missing(n, c, root)}
+
+
+def servers(root):
+    """The granted connections a console starts as MCP servers: all but those that are only keys."""
+    return {n: c for n, c in granted(root).items() if c.get("command")}
 
 
 def holds(c, root):
@@ -291,7 +298,7 @@ def denied(root):
     """The person's own connectors this console is started without: every one off in its project, and every one whose
     service the project reaches through colony instead (one path to a service, so a held send has no unheld twin)."""
     data = load()
-    through_colony = {c.get("service") or n for n, c in granted(root).items()} if root is not None else set()
+    through_colony = {c.get("service") or n for n, c in servers(root).items()} if root is not None else set()
     return [{"serverUrl": c["url"]} for n, c in sorted(data["personal"].items())
             if c.get("url") and (not is_on(c, root) or personal_service(n, c) in through_colony)]
 
@@ -367,10 +374,10 @@ def claude_args(root):
     """Claude Code's launch flags: the granted connections as MCP servers, and the person's own connectors this
     project wasn't given denied."""
     out = []
-    mine = granted(root) if root else {}
+    mine = servers(root) if root else {}
     if mine:
-        servers = {n: {"command": _server(n, root)[0], "args": _server(n, root)[1:]} for n in mine}
-        out += ["--mcp-config", json.dumps({"mcpServers": servers}, sort_keys=True)]
+        started = {n: {"command": _server(n, root)[0], "args": _server(n, root)[1:]} for n in mine}
+        out += ["--mcp-config", json.dumps({"mcpServers": started}, sort_keys=True)]
     deny = denied(root)
     if deny:
         out += ["--settings", json.dumps({"deniedMcpServers": deny}, sort_keys=True)]
@@ -381,7 +388,7 @@ def codex_args(root):
     """Codex's launch overrides: the granted connections as MCP servers."""
     from .codex_remote import toml
     out = []
-    for n in (granted(root) if root else {}):
+    for n in (servers(root) if root else {}):
         cmd = _server(n, root)
         out += ["-c", f"mcp_servers.{n}.command={toml(cmd[0])}", "-c", f"mcp_servers.{n}.args={toml(cmd[1:])}",
                 "-c", f"mcp_servers.{n}.env_vars={toml(['COLONY_BOARD_HOME'])}"]   # Codex passes on only what it's told
@@ -402,6 +409,24 @@ def _start(name, root):
     env = {k: v for k, v in os.environ.items() if k in PLAIN}
     return c, subprocess.Popen(c["command"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                env={**env, **keys(name, _whose(name, root))}, cwd=str(keys_dir()))
+
+
+def with_keys(name, root, command):
+    """A project's own script run with a keys-only connection's keys in its environment, its output passed on with
+    them taken out. A server's keys reach only its server, so what it holds still waits for the person."""
+    c = granted(root).get(name)
+    if not c:
+        raise ValueError(f"{name} isn't here: approved by the person, on in this project, with its keys entered "
+                         f"(colony connect lists what is).")
+    if c.get("command"):
+        raise ValueError(f"{name} is reached through its own tools; its keys go only to its server.")
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+                            env={**os.environ, **keys(name, _whose(name, root))})
+    with proc.stdout:
+        for line in proc.stdout:
+            sys.stdout.write(redact(name, root, line))
+            sys.stdout.flush()
+    return proc.wait()
 
 
 def redact(name, root, text):

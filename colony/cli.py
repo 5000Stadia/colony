@@ -945,6 +945,15 @@ def cmd_connect(a):
     """Outside services: what this project reaches and how, or (add) a new one the person then gives its keys."""
     import shlex
     from . import board, connections
+    if a.with_:
+        command = a.rest[1:] if a.rest[:1] == ["--"] else a.rest
+        if not command:
+            raise SystemExit("colony connect --with NAME -- COMMAND")
+        try:
+            return connections.with_keys(a.with_, board.root_of(), command)
+        except ValueError as err:
+            print(err, file=sys.stderr)
+            return 2
     if a.add:
         try:
             c = connections.add(a.add, a.title, shlex.split(a.command or ""), needs=a.key, hold=a.hold or None,
@@ -952,6 +961,11 @@ def cmd_connect(a):
         except ValueError as err:
             print(err, file=sys.stderr)
             return 2
+        if not c["command"]:
+            print(f"{c['title']} kept: keys only ({', '.join(c['keys'])}). Once the person approves it and enters them on the "
+                  f"board's Connections page, run your script with them: colony connect --with {a.add} -- COMMAND (they reach "
+                  f"it as environment variables, and its output comes back with them taken out).")
+            return 0
         print(f"{c['title']} kept. It runs nowhere until the person approves it and enters its keys ({', '.join(c['keys']) or 'none'}) "
               f"on the board's Connections page; then every project has it, each console from its next idle restart. Waits for their tap: "
               f"{', '.join(c['hold']) if c['hold'] else 'everything its server does not mark read-only'}.")
@@ -962,6 +976,9 @@ def cmd_connect(a):
         c = data["connections"].get(s.get("colony")) or {}
         why = (" (keys missing)" if s.get("colony") and connections.is_on(c, root) and connections.missing(s["colony"], c, root)
                else "")
+        if way == "colony" and not c.get("command"):
+            print(f"{s['title']}: keys for your scripts here: colony connect --with {s['colony']} -- COMMAND")
+            continue
         print(f"{s['title']}: " + {"colony": "through colony; what it holds waits for the person's tap",
                                    "claude": "through the person's Claude connector", None: "not here" + why}[way])
     if not connections.services():
@@ -1571,7 +1588,9 @@ def main(argv=None):
     p.add_argument("name"); p.set_defaults(fn=cmd_said)
     p = sub.add_parser("connect", help="outside services (an API, a mailbox): what's granted here, or --add one")
     p.add_argument("--add", metavar="NAME"); p.add_argument("--title", default="")
-    p.add_argument("--command", help="what starts its MCP server, its version pinned")
+    p.add_argument("--command", help="what starts its MCP server, its version pinned (none: keys for your own script)")
+    p.add_argument("--with", dest="with_", metavar="NAME", help="run a command with a keys-only connection's keys: --with NAME -- COMMAND")
+    p.add_argument("rest", nargs=argparse.REMAINDER)
     p.add_argument("--key", action="append", default=[], help="a key the person enters in Settings (repeat)")
     p.add_argument("--hold", action="append", default=[], help="a tool that runs only on the person's tap (repeat)")
     p.add_argument("--tool", action="append", default=[], help="offer only these tools (repeat)")

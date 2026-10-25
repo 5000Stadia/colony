@@ -255,3 +255,27 @@ class ConnectionsTest(BoardBase):
         self.assertIn("shop", connections.granted(self.root))
         connections.add("shop", "The shop, renamed", [sys.executable, str(self.server), "--other"], needs=["SHOP_TOKEN"])
         self.assertIn("shop", connections.granted(self.root), "the same command stays approved")
+
+    def test_a_connection_of_only_keys_reaches_the_projects_own_script_and_never_its_console(self):
+        connections.set_key("shop", "SHOP_TOKEN", "s3cret")
+        connections.add("listings", "eBay", [], needs=["APP_ID"])
+        connections.set_key("listings", "APP_ID", "app-id-123")
+        script = [sys.executable, "-c", "import os; print('id', os.environ['APP_ID']); raise SystemExit(3)"]
+        with self.assertRaises(ValueError):
+            connections.with_keys("listings", self.root, script)          # not yet approved
+        self.assertIn("only keys (APP_ID)", board.connections_page(board.registry()))
+        connections.approve("listings")
+        out = Path(self.tmp.name) / "out.txt"
+        with open(out, "w") as f, patch("sys.stdout", f):
+            code = connections.with_keys("listings", self.root, script)
+        self.assertEqual((code, out.read_text()), (3, "id •••\n"), "it runs with the keys; they come back taken out")
+        cmd = connections.claude_args(self.root)
+        self.assertEqual(list(json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]), ["shop"])
+        self.assertNotIn("listings", " ".join(connections.codex_args(self.root)))
+        with self.assertRaises(ValueError):
+            connections.with_keys("shop", self.root, script)              # a server's keys go only to its server
+        page = board.project_connections(0, self.root)
+        self.assertIn("Its own account</label>", page)
+        connections.choose_path("listings", self.root, "off")
+        with self.assertRaises(ValueError):
+            connections.with_keys("listings", self.root, script)
