@@ -33,7 +33,8 @@ for line in sys.stdin:
         if name == "send":
             with open(os.path.join(os.path.dirname(sys.argv[0]), "sent.txt"), "a") as f:
                 f.write(args.get("to", "") + "\n")
-        text = os.environ.get("SHOP_TOKEN", "") if name == "look" else f"{name} to {args.get('to')}"
+        text = (os.environ.get("SHOP_TOKEN", "") + os.environ.get("AGENT_SIGNIN", "") if name == "look"
+                else f"{name} to {args.get('to')} with {os.environ.get('SHOP_TOKEN')}")
         out = {"content": [{"type": "text", "text": text}]}
     print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": out}), flush=True)
 '''
@@ -49,6 +50,7 @@ class ConnectionsTest(BoardBase):
         self.sent = self.server.parent / "sent.txt"
         connections.add("shop", "The shop", [sys.executable, str(self.server)], needs=["SHOP_TOKEN"],
                         tools=["look", "send"], about="Searches and sends.")
+        connections.approve("shop")
         self.other = Path(self.tmp.name) / "stall"
         self.other.mkdir()
 
@@ -57,7 +59,7 @@ class ConnectionsTest(BoardBase):
         cmd = connections.claude_args(root or self.root)
         s = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]["shop"]
         proc = subprocess.Popen([s["command"], *s["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                                env=os.environ.copy())
+                                env={**os.environ, "AGENT_SIGNIN": "agent-token"})
         self.addCleanup(lambda: (proc.kill(), proc.wait(), proc.stdin.close(), proc.stdout.close()))
         n = iter(range(1, 100))
 
@@ -65,7 +67,7 @@ class ConnectionsTest(BoardBase):
             proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": next(n), "method": method, "params": params}) + "\n")
             proc.stdin.flush()
             return json.loads(proc.stdout.readline())
-        ask("initialize", protocolVersion="2025-06-18", capabilities={}, clientInfo={"name": "t"})
+        self.greeting = ask("initialize", protocolVersion="2025-06-18", capabilities={}, clientInfo={"name": "t"})
         if listed:
             ask("tools/list")                               # as an agent's program does first
         return ask
@@ -94,15 +96,21 @@ class ConnectionsTest(BoardBase):
 
         ask = self.agent(listed=False)
         self.assertIn("Held", self.said(ask("tools/call", name="look")), "a tool not yet listed waits, unknown")
-        self.assertEqual([t["name"] for t in ask("tools/list")["result"]["tools"]], ["look", "send"],
-                         "a tool the connection doesn't offer is left out")
+        self.assertIn("(held)", self.greeting["result"]["instructions"], "how holds work comes with the connection itself")
+        tools = ask("tools/list")["result"]["tools"]
+        self.assertEqual([t["name"] for t in tools], ["look", "send"], "a tool the connection doesn't offer is left out")
+        self.assertEqual([t.get("description", "").startswith("(held)") for t in tools], [False, True])
         self.assertEqual(connections.load()["connections"]["shop"]["seen"], {"look": True, "send": False, "wipe": False})
-        self.assertEqual(self.said(ask("tools/call", name="look")), "s3cret", "what it marks read-only runs at once")
+        self.assertEqual(self.said(ask("tools/call", name="look")), "s3cret",
+                         "what it marks read-only runs at once, its server given its key and none of the agent's sign-ins")
         self.assertIn("error", ask("tools/call", name="wipe"), "one it doesn't offer is refused if called anyway")
 
         held = self.said(ask("tools/call", name="send", arguments={"to": "ann@example.com"}))
         gate = board.gates(self.root)[-1]
         self.assertIn(gate["id"], held)
+        self.assertTrue(held.startswith("Held, not run"))
+        ask("tools/call", name="send", arguments={"to": "ann@example.com"})
+        self.assertEqual(board.gates(self.root)[-1]["id"], gate["id"], "asked again while it waits: the same gate")
         self.assertFalse(self.sent.exists(), "anything not marked read-only waits")
         self.assertEqual(gate["hold"], {"connection": "shop", "tool": "send", "arguments": {"to": "ann@example.com"}})
         self.assertIn("ann@example.com", gate["why"], "the person sees what would go out")
@@ -117,18 +125,24 @@ class ConnectionsTest(BoardBase):
         ask("tools/call", name="send", arguments={"to": "bo@example.com"})
         gate = board.gates(self.root)[-1]
         board.answer_gate(self.root, gate["id"], connections.HOLD_YES)
-        self.assertIn("ran: send to bo@example.com", self.ran(gate["id"]), "their tap runs it; the agent hears how it went")
+        told = self.ran(gate["id"])
+        self.assertIn("ran: send to bo@example.com with •••", told, "their tap runs it; the agent hears how it went")
+        self.assertNotIn("s3cret", told, "with the key taken out of what the service said")
         board.answer_gate(self.root, gate["id"], connections.HOLD_YES)        # tapped twice
         time.sleep(1)
         self.assertEqual(self.sent.read_text(), "bo@example.com\n", "sent once")
         ask("tools/call", name="send", arguments={"to": "cy@example.com"})
-        board.answer_gate(self.root, board.gates(self.root)[-1]["id"], connections.HOLD_NO)
+        no = board.gates(self.root)[-1]["id"]
+        board.answer_gate(self.root, no, connections.HOLD_NO)
         time.sleep(1)
         self.assertEqual(self.sent.read_text(), "bo@example.com\n", "their no sends nothing")
+        told = [n["text"] for n in board.notes(self.root) if no in n["text"] or (n["anchor"] or {}).get("gate") == no]
+        self.assertEqual(told, [f"Gate {no}: the person declined The shop send; it was not run. Don't work around it."], "told once, plainly")
 
         connections.configure("shop", hold=["look"])                          # the holds chosen colony-wide
         ask = self.agent()
         self.assertIn("Held", self.said(ask("tools/call", name="look")))
+        connections.configure("shop", hold=None)
         self.assertIn("send to dee", self.said(ask("tools/call", name="send", arguments={"to": "dee"})))
 
     def test_a_project_can_have_its_own_account_and_holds(self):
@@ -156,6 +170,7 @@ class ConnectionsTest(BoardBase):
         self.assertEqual(deny(connections.claude_args(self.other)), [{"serverUrl": "https://gmailmcp.googleapis.com/mcp/v1"}])
 
         connections.add("mail", "Mail", [sys.executable, str(self.server)], service="gmail")
+        connections.approve("mail")
         self.assertEqual(sorted(connections.services()["gmail"]), ["claude", "colony", "title"], "one card, two sources")
         self.assertEqual(connections.path_for("gmail", self.root), "colony", "the one that can wait for a tap wins")
         args = connections.claude_args(self.root)
@@ -222,3 +237,21 @@ class ConnectionsTest(BoardBase):
         with patch.object(board.console, "ensure"):
             post("/new", name="Fresh", within=str(within), svc_listed=["shop"])
         self.assertIsNone(connections.path_for("shop", within / "Fresh"), "left unticked as it was added: off there")
+
+    def test_a_tool_once_seen_acting_never_becomes_read_only(self):
+        connections._seen("shop", [{"name": "send"}, {"name": "look", "annotations": {"readOnlyHint": True}}])
+        marks = connections._seen("shop", [{"name": "send", "annotations": {"readOnlyHint": True}},
+                                           {"name": "look", "annotations": {"readOnlyHint": True}}])
+        self.assertEqual(marks, {"send": False, "look": True}, "a server can't talk its way out of a hold")
+
+    def test_a_connection_an_agent_adds_runs_nowhere_until_the_person_approves_it(self):
+        connections.set_key("shop", "SHOP_TOKEN", "s3cret")
+        self.assertIn("shop", connections.granted(self.root))
+        connections.add("shop", "The shop", [sys.executable, str(self.server), "--other"], needs=["SHOP_TOKEN"])
+        self.assertNotIn("shop", connections.granted(self.root), "its command changed: seen again before it runs")
+        self.assertIn("to approve", board.connections_page(board.registry()))
+        self.assertIn("--other", board.connections_page(board.registry()), "the person sees what it would run")
+        connections.approve("shop")
+        self.assertIn("shop", connections.granted(self.root))
+        connections.add("shop", "The shop, renamed", [sys.executable, str(self.server), "--other"], needs=["SHOP_TOKEN"])
+        self.assertIn("shop", connections.granted(self.root), "the same command stays approved")

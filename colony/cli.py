@@ -952,8 +952,8 @@ def cmd_connect(a):
         except ValueError as err:
             print(err, file=sys.stderr)
             return 2
-        print(f"{c['title']} kept. Every project has it once the person enters its keys ({', '.join(c['keys']) or 'none'}) "
-              f"on the board's Connections page; a console takes it up when it next restarts idle. Waits for their tap: "
+        print(f"{c['title']} kept. It runs nowhere until the person approves it and enters its keys ({', '.join(c['keys']) or 'none'}) "
+              f"on the board's Connections page; then every project has it, each console from its next idle restart. Waits for their tap: "
               f"{', '.join(c['hold']) if c['hold'] else 'everything its server does not mark read-only'}.")
         return 0
     root, data = board.root_of(), connections.load()

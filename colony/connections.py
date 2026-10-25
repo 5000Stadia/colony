@@ -181,10 +181,18 @@ def add(name, title, command, *, needs=(), hold=None, tools=None, about="", serv
         data["connections"][name] = {"title": title or name, "command": list(command), "keys": list(needs),
                                      "hold": list(hold) if hold else None, "tools": list(tools) if tools else None,
                                      "about": about, "service": slug(service or name),
+                                     # a new command runs nowhere until the person has seen it (OpenClaw's lesson:
+                                     # what an agent installs is the attack surface); the same command stays approved
+                                     "approved": bool(was.get("approved")) and list(was.get("command") or []) == list(command),
                                      "on": was.get("on", True), "projects": was.get("projects") or {},
                                      "seen": was.get("seen") or {}}
         return data["connections"][name]
     return change(put)
+
+
+def approve(name):
+    """The person's yes to a connection an agent added: its command may run."""
+    configure(name, approved=True)
 
 
 def remove(name):
@@ -216,8 +224,10 @@ def pick(root, ticked, listed):
 
 
 def granted(root):
-    """The connections this project's agent is started with: on there, with every key it needs entered."""
-    return {n: c for n, c in sorted(load()["connections"].items()) if is_on(c, root) and not missing(n, c, root)}
+    """The connections this project's agent is started with: approved by the person, on there, with every key it
+    needs entered."""
+    return {n: c for n, c in sorted(load()["connections"].items())
+            if c.get("approved", True) and is_on(c, root) and not missing(n, c, root)}
 
 
 def holds(c, root):
@@ -380,16 +390,34 @@ def codex_args(root):
 
 # --- running one: the agent's side ---------------------------------------------------------------------------------
 
+PLAIN = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR", "TZ", "SHELL", "TERM",
+         "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "NODE_PATH", "VIRTUAL_ENV")
+
+
 def _start(name, root):
+    """The server, with a plain environment and its own keys: none of the sign-ins and tokens the agent's program
+    runs with."""
     c = load()["connections"][name]
     keys_dir().mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items() if k in PLAIN}
     return c, subprocess.Popen(c["command"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               env={**os.environ, **keys(name, _whose(name, root))}, cwd=str(keys_dir()))
+                               env={**env, **keys(name, _whose(name, root))}, cwd=str(keys_dir()))
+
+
+def redact(name, root, text):
+    """What a service said, with its keys taken out before it reaches the agent."""
+    for v in sorted(keys(name, _whose(name, root)).values(), key=len, reverse=True):
+        if len(v) >= 6:
+            text = text.replace(v, "•••")
+    return text
 
 
 def _seen(name, tools):
-    """The tools a server listed, and which it marks read-only, kept for the Connections page."""
-    marks = {t.get("name"): bool((t.get("annotations") or {}).get("readOnlyHint")) for t in tools if t.get("name")}
+    """The tools a server listed, and which it marks read-only, kept for the Connections page. A mark is the server's
+    word, so it only ever tightens: a tool once listed as acting is never taken for read-only later."""
+    before = (load()["connections"].get(name) or {}).get("seen") or {}
+    marks = {t.get("name"): bool((t.get("annotations") or {}).get("readOnlyHint")) and before.get(t.get("name"), True)
+             for t in tools if t.get("name")}
 
     def put(data):
         if name in data["connections"] and data["connections"][name].get("seen") != marks:
@@ -399,16 +427,29 @@ def _seen(name, tools):
     return marks
 
 
+INSTRUCTIONS = ("Colony runs this connection for the person. A tool marked (held) doesn't run when called: it waits for "
+                "their tap on the board, and its outcome arrives later as a note. Don't retry a held call or reach the "
+                "service another way; carry on with other work.")
+
+
 def _hold(root, name, c, tool, arguments):
-    """A held call put to the person: the gate shows what the agent asked for; their tap runs it."""
+    """A held call put to the person: the gate shows what the agent asked for; their tap runs it. Asked again while
+    it waits, it is the same gate."""
+    want = {"connection": name, "tool": tool, "arguments": arguments or {}}
+    gate = next((g for g in board.gates(root) if g.get("hold") == want and not g["answer"]), None)
+    if gate is None:
+        gate = _new_hold(root, name, c, tool, arguments)
+    return (f"Held, not run: {tool} waits for the person's tap (gate {gate['id']}). Its outcome arrives as a note. "
+            f"Don't retry it or go another way; carry on, or end your turn if nothing else is left.")
+
+
+def _new_hold(root, name, c, tool, arguments):
     shown = json.dumps(arguments or {}, indent=1, ensure_ascii=False)
-    gate = board.add_gate(root, f"{c['title']}: {tool}?", None,
+    return board.add_gate(root, f"{c['title']}: {tool}?", None,
                           f"The agent asks to run {tool} on {c['title']} with:\n{shown}\n\n"
                           f"\"{HOLD_YES}\" runs it now; its outcome reaches the agent as a note.",
                           consultation=None, points=None, options=[HOLD_YES, HOLD_NO],
                           hold={"connection": name, "tool": tool, "arguments": arguments or {}})
-    return (f"Held for the person: {c['title']} {tool} runs only when they tap \"{HOLD_YES}\" on gate {gate['id']}. "
-            f"Its outcome, or their no, reaches you as a note; go on with other work meanwhile.")
 
 
 def run(name, root):
@@ -420,7 +461,7 @@ def run(name, root):
     listed = holds(c, root)
     reads = {t for t, ro in (c.get("seen") or {}).items() if ro}     # by the server's marks: only its read-only run
     waits = (lambda tool: tool in listed) if listed is not None else (lambda tool: tool not in reads)
-    lists, out_lock = set(), threading.Lock()
+    lists, greets, out_lock = set(), set(), threading.Lock()
     out = sys.stdout.buffer
 
     def send(msg):
@@ -435,14 +476,21 @@ def run(name, root):
             except ValueError:
                 send(line)
                 continue
+            if isinstance(msg, dict) and msg.get("id") in greets and isinstance(msg.get("result"), dict):
+                greets.discard(msg["id"])
+                own = msg["result"].get("instructions")
+                msg["result"]["instructions"] = INSTRUCTIONS + (f"\n\n{own}" if own else "")
             if isinstance(msg, dict) and msg.get("id") in lists and isinstance(msg.get("result"), dict):
                 lists.discard(msg["id"])
                 every = msg["result"].get("tools") or []
                 marks = _seen(name, every)
                 reads.clear()
                 reads.update(t for t, ro in marks.items() if ro)
-                if offer is not None:
-                    msg["result"]["tools"] = [t for t in every if t.get("name") in offer]
+                every = [t for t in every if offer is None or t.get("name") in offer]
+                for tool in every:
+                    if waits(tool.get("name")):
+                        tool["description"] = "(held) " + (tool.get("description") or "")
+                msg["result"]["tools"] = every
             send(msg)
         os._exit(0)
     threading.Thread(target=down, daemon=True).start()
@@ -452,7 +500,9 @@ def run(name, root):
             msg = json.loads(line)
         except ValueError:
             msg = None
-        if isinstance(msg, dict) and msg.get("method") == "tools/list":
+        if isinstance(msg, dict) and msg.get("method") == "initialize":
+            greets.add(msg.get("id"))
+        elif isinstance(msg, dict) and msg.get("method") == "tools/list":
             lists.add(msg.get("id"))
         elif isinstance(msg, dict) and msg.get("method") == "tools/call":
             tool = (msg.get("params") or {}).get("name")
@@ -526,14 +576,23 @@ def release(root, gate):
     except (OSError, KeyError) as err:
         text, failed = f"{err.__class__.__name__}: {err}", True
     board.add_note(root, {"gate": gate["id"], "item": gate.get("item")},
-                   f"{title} {h['tool']}, which the person released on gate {gate['id']}, "
-                   + ("failed: " if failed else "ran: ") + text[:4000], author="colony")
+                   f"Gate {gate['id']}: the person released {title} {h['tool']}; it "
+                   + ("failed: " if failed else "ran: ") + redact(h["connection"], root, text)[:4000], author="colony")
 
 
 def answered(root, gate, text):
-    """After the person's answer from the board: a held call runs on their "Do it", in the background."""
-    if gate.get("hold") and text.strip() == HOLD_YES:
+    """After the person's answer from the board: a held call runs on their "Do it", in the background; anything else
+    leaves it unrun, and the agent hears so, with their words where they said more than no."""
+    if not gate.get("hold"):
+        return
+    if text.strip() == HOLD_YES:
         threading.Thread(target=release, args=(root, gate), daemon=True).start()
+        return
+    h = gate["hold"]
+    title = (load()["connections"].get(h["connection"]) or {}).get("title", h["connection"])
+    said = "" if text.strip() == HOLD_NO else f" They said: {text.strip()}"
+    board.add_note(root, {"gate": gate["id"], "item": gate.get("item")},
+                   f"Gate {gate['id']}: the person declined {title} {h['tool']}; it was not run. Don't work around it.{said}", author="colony")
 
 
 if __name__ == "__main__":

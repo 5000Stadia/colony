@@ -143,10 +143,9 @@ steer all of them from one board, and the projects can write to each other.
   person reorganizes it, that is their preference showing: follow it, and settle the shape with them.
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
   there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
-- Outside services (an API such as eBay's, a mailbox) reach you as connections the person grants each project (`colony
-  connect` lists them). One the work needs: `colony connect --add NAME --command "…" --key KEY --hold TOOL`, an existing
-  MCP server with its version pinned, holding each tool that sends, lists or spends; the person then enters its keys and
-  grants it in Settings. A held tool waits on their tap, and its outcome arrives as a note.
+- Outside services (an API, a mailbox) reach you as connections, set by the person per project. One the work needs
+  and you lack: `colony connect --add NAME --command "…" --key KEY`, an existing MCP server with its version pinned;
+  they enter its keys on the board, never in a chat.
 - A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
   then it waits for them on the board. If they ask you something first, answer it and ask yours again.
 - Helpers run at four tiers (routine, step-up, chores, rote), handed to you at each session start.
@@ -1476,7 +1475,8 @@ def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
     person does, as a note; settled in conversation, the agent records it and already knows (tell=False)."""
     with gate_lock(root):
         before = next((g for g in gates(root) if g["id"] == gate_id), None)
-        answer = _answer_gate(root, gate_id, text, tell=tell, decisions=decisions)
+        # a held call's outcome is told once, by colony, as it runs or not (connections.answered)
+        answer = _answer_gate(root, gate_id, text, tell=tell and not (before or {}).get("hold"), decisions=decisions)
     if tell and before and before.get("hold") and not before["answer"]:
         from . import connections                    # theirs, from the board, the first answer: a held call runs on yes
         connections.answered(root, before, text)
@@ -5618,7 +5618,12 @@ def connections_page(reg):
         sources = " or ".join(VIA[w] for w in ("colony", "claude") if s.get(w))
         c = data["connections"].get(s.get("colony")) or {}
         lacking = s.get("colony") and connections.missing(s["colony"], c)
-        body = [f"<p class='muted'>Reachable {sources}.</p>" + (f"<p>{e(c['about'])}</p>" if c.get("about") else ""),
+        review = s.get("colony") and not c.get("approved", True)
+        body = ([f"<div class='card gate'><p><b>Added by an agent; it runs nowhere until you approve it.</b> It starts: "
+                 f"<code>{e(' '.join(c.get('command') or []))}</code></p>"
+                 + _conn_form("approve", "", "/connections", "Approve", name=s["colony"])
+                 + _conn_form("remove", "", "/connections", "Remove", name=s["colony"]) + "</div>"] if review else [])
+        body += [f"<p class='muted'>Reachable {sources}.</p>" + (f"<p>{e(c['about'])}</p>" if c.get("about") else ""),
                 "<h4>Projects reach it</h4>" + _conn_form("path", _paths(s, None), "/connections", "Save", svc=svc)]
         if s.get("colony"):
             fields = _keys_fields(s["colony"], c, None)
@@ -5635,7 +5640,8 @@ def connections_page(reg):
                 + (", own settings" if connections.has_own(c, p) else "") + ")" for p in differ) + "</p>")
         out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}"
                    + (f" · {len(differ)} project{'s' * (len(differ) != 1)} differ" if differ else "")
-                   + (" · <b class='warn'>keys missing</b>" if lacking else "") + "</summary>" + "".join(body) + "</details>")
+                   + (" · <b class='warn'>to approve</b>" if review else " · <b class='warn'>keys missing</b>" if lacking else "")
+                   + "</summary>" + "".join(body) + "</details>")
     if len(out) == 1:
         out.append("<div class='card'><p class='muted'>None yet.</p></div>")
     out.append("<p class='muted'>To add a service, ask any project's agent (\"connect our eBay account\"): it sets it up "
@@ -6418,6 +6424,10 @@ class Handler(BaseHTTPRequestHandler):
                     for k in c.get("keys") or ():
                         if form.get(f"key_{k}", "").strip():
                             connections.set_key(name, k, form[f"key_{k}"], whose)
+                elif do == "approve":
+                    connections.approve(name)
+                elif do == "remove":
+                    connections.remove(name)
                 elif do == "holds":
                     connections.configure(name, root, hold=None if form.get("mode") != "chosen" else sorted(values.get("tool", [])))
             except KeyError:
