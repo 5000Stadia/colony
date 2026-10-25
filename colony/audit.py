@@ -236,8 +236,12 @@ If you could not open its files, don't judge it: answer only {"safe": "unsure", 
 def brief(name, c, root, folder, about, marks, hosts):
     road = board.roadmap(root) if root else None
     work = ((road or {}).get("vision") or (road or {}).get("goal") or "(no vision written)").strip()
-    doing = [f"{i['id']} {i['text']}" for m in (road or {}).get("milestones", []) for i in m["items"]
-             if i["state"] in ("doing", "todo")][:12] if road else []
+    on = [q.name for q in board.projects(board.registry()) if q.exists() and connections.is_on(c, q)]
+    # the items that speak of this service or the projects it is for come first: a big plan's need may sit deep in it
+    words = [w.lower() for w in (name, c.get("title") or "", c.get("service") or "", *on) if len(w) > 2]
+    opened = [i for m in (road or {}).get("milestones", []) for i in m["items"] if i["state"] in ("doing", "todo")]
+    opened.sort(key=lambda i: not any(w in (i["text"] + " " + i.get("desc", "")).lower() for w in words))
+    doing = [f"{i['id']} {i['text'][:600]}" for i in opened[:12]]
     lines = [ROLE, "", f"The connection: {name} ({c.get('title') or name})", f"Its command: {' '.join(c.get('command') or [])}",
              f"Keys it is given: {', '.join(c.get('keys') or []) or 'none'}", f"Stated purpose: {c.get('about') or '(none given)'}",
              "Colony runs it behind its own proxy, which the agent reaches it through: "
@@ -255,9 +259,12 @@ def brief(name, c, root, folder, about, marks, hosts):
     else:
         lines.append("It has no server of its own: its keys go to the project's own scripts, so judge only whether the "
                      "work calls for this service and these keys (answer safe from the stated purpose).")
-    lines += ["", f"The asking project: {Path(root).name if root else 'unknown'}", "Its vision, in the person's words:", work[:3000]]
+    lines += ["", f"Switched on for: {', '.join(on) or 'no project yet'}",
+              f"Added by the agent of: {Path(root).name if root else 'unknown'} (it may set one up for another project; "
+              "its work and the projects it is on for are what it must fit)", "That agent's vision, in the person's words:",
+              work[:3000]]
     if doing:
-        lines += ["Its open roadmap items:", *doing]
+        lines += ["Its open roadmap items (those naming this service or its projects first):", *doing]
     return "\n".join(lines)
 
 

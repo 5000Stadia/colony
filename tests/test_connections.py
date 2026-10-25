@@ -353,6 +353,8 @@ class AuditTest(BoardBase):
         key, text, folder, files = self.asked[0]
         self.assertIn("mailer/server.py", files, "the reviewer reads the package's own files")
         self.assertIn("supplier replies", text)
+        self.assertIn(f"Switched on for: {self.root.name}", text)
+        self.assertIn(f"Added by the agent of: {self.root.name}", text)
         self.assertIn("PASSWORD", text)
         self.assertIn("mcp>=1", text, "its dependencies are named, though not read")
         self.assertIn("only these of its tools: read, send; any other tool the server has is left out of its list and "

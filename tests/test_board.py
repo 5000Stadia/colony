@@ -1152,8 +1152,8 @@ class ChatTest(BoardBase):
         console.stop(self.root)
         console.COMMAND = "sh -c \"echo 'error: unknown option -SnackStand'; exit 1\""   # prints, and leaves at once
         name = console.ensure(self.root)
-        for _ in range(40):
-            if not console.live(self.root):
+        for _ in range(100):                    # under load its exit is recorded a moment after it stops
+            if not console.live(self.root) and console.died(name):
                 break
             time.sleep(0.05)
         self.assertFalse(console.live(self.root), "a program that has ended is not running, though its screen stayed")
