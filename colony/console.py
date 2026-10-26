@@ -225,6 +225,10 @@ def ensure(root, name=None, label=None, settle=0):
         until = time.time() + settle
         while time.time() < until and running(name):
             time.sleep(0.1)
+        if settle and not running(name):
+            until = time.time() + 2             # ended: what it died of is written a moment after it, later under load
+            while time.time() < until and not died(name):
+                time.sleep(0.1)
     return name
 
 

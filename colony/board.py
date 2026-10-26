@@ -2443,22 +2443,38 @@ PLAYER = """
   const ready = new Set();
   // A clip made ahead is downloaded whole and kept here as a file of the page's own (a phone's player would fetch
   // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
-  const kept = new Map();                         // the clip's address -> the page's own copy
-  const make = (p, i) => { const u = abs(clip(p, i));
-    if (kept.has(u)) return Promise.resolve();
-    return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) return;
-      kept.set(u, URL.createObjectURL(b)); ready.add(u);
-      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } }).catch(() => {}); };
-  // The clips after the one first heard are asked for one after another, each as soon as the one before has come, so
-  // the machine makes them back to back with no idle time, never more than three ahead of what is being heard.
-  let line = 0;
-  const pipe = (i, parts, from) => { const mine = ++line; let k = from;
-    const step = () => { if (mine !== line || !playing || !R || R.cur !== i) return;
-      if (k >= parts.length) { if (R.list[i + 1]) make(piecesOf(i + 1, named(i + 1, whoAt(i)))[0] || '', i + 1); return; }   // the next section's start
-      if (k - (now && now.i === i ? now.at : from) > 3) { after(step, 400); return; }
-      make(parts[k++]).then(step); };
-    step(); };
-  player.addEventListener('playing', () => { if (!player.loop) ready.add(player.src); if (loading && playing && !player.loop) { loading = false; changed(); } });
+  const kept = new Map(), failed = new Set();      // the clip's address -> the page's own copy; those not made
+  const keyOf = (u) => u.replace('&auto=1', '');  // a clip is the same clip, read by itself or on a tap
+  const make = (p, i) => { const u = abs(clip(p, i)), key = keyOf(u);
+    if (kept.has(key)) return Promise.resolve();
+    return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) { failed.add(key); return; }
+      kept.set(key, URL.createObjectURL(b)); ready.add(key);
+      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } })
+      .catch(() => { failed.add(key); }); };
+  // Ahead of what is heard, the next AHEAD clips are made, across sections, one after another as each comes (the
+  // machine makes them back to back with no idle time): from the moment something waits to be read, and topped up as
+  // each clip starts, so the buffer stays AHEAD deep. While the clip about to be heard is still being made over the
+  // network it waits, so that one comes first. A clip that failed isn't asked for again (the phone's voice reads it).
+  const AHEAD = 5;
+  let warming = false, line = 0;
+  const upcoming = () => {
+    const out = [];
+    if (!R || !left(R)) return out;
+    let k = playing && now && now.i === R.cur ? now.at + 1 : R.piece;
+    for (let i = R.cur; i < R.list.length && out.length < AHEAD; i++, k = 0) {
+      const name = i === R.cur && playing ? R.list[i].named : named(i, i === R.cur ? said : whoAt(i - 1));
+      const ps = piecesOf(i, name).filter((p) => p.trim());
+      for (; k < ps.length && out.length < AHEAD; k++) out.push([ps[k], i]);
+    }
+    return out; };
+  function warm() {
+    if (warming || (playing && loading)) return;
+    const next = upcoming().find(([p, i]) => { const key = keyOf(abs(clip(p, i))); return !kept.has(key) && !failed.has(key); });
+    if (!next) return;
+    warming = true;
+    make(next[0], next[1]).then(() => { warming = false; warm(); });
+  }
+  player.addEventListener('playing', () => { if (!player.loop) ready.add(keyOf(player.src)); if (loading && playing && !player.loop) { loading = false; changed(); } });
   // The phone stopped the sound itself (locked, a call, another app's audio): shown as paused, ▷ takes it up again,
   // and coming back to the page, what is shown is checked against what is heard.
   // Back on the page, a reading the phone stopped (dictation in another app, a call) goes on by itself, and one shown
@@ -2475,7 +2491,7 @@ PLAYER = """
     const at = player.currentTime;
     after(() => { if (playing && !paused && !player.ended && player.currentTime === at) player.play().catch(() => {}); }, 700);
   });
-  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !player.src.startsWith('blob:') && !ready.has(player.src)) {
+  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !player.src.startsWith('blob:') && !ready.has(keyOf(player.src))) {
     loading = true; changed(); } });
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
   // not let it start again)
@@ -2508,9 +2524,7 @@ PLAYER = """
       if (j >= parts.length) return finished(i);
       now = {i, parts, at: j}; R.piece = j; save(); changed();
       const u = abs(clip(parts[j]));
-      player.src = kept.get(u) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
-      if (j === from) player.addEventListener('loadeddata', () => pipe(i, parts, from + 1), {once: true});
+      player.src = kept.get(keyOf(u)) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
       j += 1;
       // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again.
       // Refused for want of a tap on this page (opened by itself), the phone's voice is refused too: ▷ again, which a
@@ -2556,7 +2570,7 @@ PLAYER = """
     from = Math.min(from, Math.max(0, parts.length - 1));
     hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null; said = whoAt(i); R.announce = false;
     if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
-    loading = !(R.kokoro && parts[from] && ready.has(abs(clip(parts[from])))); save(); changed(true);
+    loading = !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
     if (!parts.length) return finished(i);
     tell(parts[from].replace(NAME, ''));
     return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from);
@@ -2655,7 +2669,7 @@ PLAYER = """
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
   if (window.visualViewport) { on(window.visualViewport, 'resize', soon); }
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
-  function changed(started) { draw(); if (view) { view.mark(); if (started && R && R.name === view.name && R.list[R.cur]) view.focus(R.list[R.cur].k, true); } }
+  function changed(started) { if (R && R.kokoro) warm(); draw(); if (view) { view.mark(); if (started && R && R.name === view.name && R.list[R.cur]) view.focus(R.list[R.cur].k, true); } }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpskip'), 'click', skip);
   on($('.cpstop'), 'click', stop);
