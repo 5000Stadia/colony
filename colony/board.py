@@ -2425,13 +2425,26 @@ PLAYER = """
     return null; };
   const blank = (v) => ({name: v.name, key: v.key, href: v.href, kvoice: v.kvoice, kokoro: v.kokoro, list: [], cur: 0, piece: 0});
   const abs = (u) => new URL(u, location.href).href;
-  const clip = (p) => '/voice?v=' + encodeURIComponent(R.kvoice || 'am_echo') + via + '&t=' + encodeURIComponent(p.trim());
+  // each section in its own project's voice: reading every project, the projects are different speakers
+  const voiceAt = (i) => (R && R.list[i] && R.list[i].kvoice) || (R && R.kvoice) || 'am_echo';
+  // When the voice moves to another project, it says the project's name first, as a clip of its own (a piece marked
+  // NAME): between projects read in turn, and on a switch to one (from the player's list, or a chat taking the voice);
+  // not before the first reading heard here. Said in each project's own voice, or in one the person chose (⚙).
+  const NAME = '@@';
+  const herald = () => { try { return localStorage.getItem('announcer') || ''; } catch (e) { return ''; } };
+  const clip = (p, i = R ? R.cur : 0) => '/voice?v=' + encodeURIComponent(p.startsWith(NAME) && herald() || voiceAt(i)) + via
+    + '&t=' + encodeURIComponent(p.replace(NAME, '').trim());
+  let said = null;
+  const whoAt = (i) => (R.list[i] && R.list[i].name) || R.name;
+  const named = (i, before = said) => whoAt(i) !== before && (before !== null || !!R.all || !!R.announce);
+  // a section's pieces: its name first where it is said (decided as it starts, so a reading taken up again keeps them)
+  const piecesOf = (i, name = R.list[i].named) => (name ? [NAME + whoAt(i) + '.'] : []).concat(chunks(R.list[i].text));
   // the clips made already: going on to one of them is no wait, so the button stays as it is
   const ready = new Set();
   // A clip made ahead is downloaded whole and kept here as a file of the page's own (a phone's player would fetch
   // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
   const kept = new Map();                         // the clip's address -> the page's own copy
-  const make = (p) => { const u = abs(clip(p));
+  const make = (p, i) => { const u = abs(clip(p, i));
     if (kept.has(u)) return Promise.resolve();
     return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) return;
       kept.set(u, URL.createObjectURL(b)); ready.add(u);
@@ -2441,7 +2454,7 @@ PLAYER = """
   let line = 0;
   const pipe = (i, parts, from) => { const mine = ++line; let k = from;
     const step = () => { if (mine !== line || !playing || !R || R.cur !== i) return;
-      if (k >= parts.length) { const n = R.list[i + 1]; if (n) make(chunks(n.text)[0] || ''); return; }   // the next section's start
+      if (k >= parts.length) { if (R.list[i + 1]) make(piecesOf(i + 1, named(i + 1, whoAt(i)))[0] || '', i + 1); return; }   // the next section's start
       if (k - (now && now.i === i ? now.at : from) > 3) { after(step, 400); return; }
       make(parts[k++]).then(step); };
     step(); };
@@ -2518,7 +2531,7 @@ PLAYER = """
     // a phone that won't speak before a tap on the page says nothing and starts nothing: ▷ again after a moment
     let began = false;
     after(() => { if (playing && R && R.cur === i && !began && !talk.speaking) { talk.cancel(); playing = false; loading = false; changed(); } }, 2500);
-    parts.slice(from).forEach((p, n) => { const x = from + n, u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
+    parts.slice(from).forEach((p, n) => { const x = from + n, u = new SpeechSynthesisUtterance(p.replace(NAME, '').trim()); if (voice) u.voice = voice; u.rate = pace();
       u.onstart = () => { began = true; now = {i, parts, at: x}; if (R) { R.piece = x; save(); } loading = false; changed(); };
       if (x === parts.length - 1) u.onend = () => { if (playing && R && R.cur === i) finished(i); };
       talk.speak(u); });
@@ -2531,17 +2544,21 @@ PLAYER = """
     const back = R.list.findIndex((x) => !x.heard);
     playing = false; R.piece = 0;
     if (back >= 0) { R.cur = back; save(); } else { R.cur = R.list.length; forget(R.name); }
+    // a reply tapped while every project is chosen: back to them, where they were
+    const them = !R.all && get('cpsource') === 'all' && load('All projects');
+    if (them) { R = them; via = '&auto=1'; return begin(R.cur, R.piece); }
     changed(); rest(); };
   // From a section: those before it are counted heard, whether read or skipped past
   function begin(i, from = 0, flow = false, keep = false) {
     const s = R && R.list[i]; if (!s) return;
-    const parts = chunks(s.text).filter((p) => p.trim());
+    if (!from) s.named = named(i);
+    const parts = piecesOf(i).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
-    hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null;
+    hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null; said = whoAt(i); R.announce = false;
     if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
     loading = !(R.kokoro && parts[from] && ready.has(abs(clip(parts[from])))); save(); changed(true);
     if (!parts.length) return finished(i);
-    tell(parts[from]);
+    tell(parts[from].replace(NAME, ''));
     return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from);
   }
   // Another project's reading, playing or paused, gives way: kept where it stopped, its unheard sections waiting
@@ -2564,7 +2581,7 @@ PLAYER = """
     if (at + 1 >= parts.length) return finished(i);
     changed(); if (R.kokoro) sayK(i, parts, at + 1); else sayPhone(i, parts, at + 1);
   }
-  function stop() { hush(); playing = false; now = null; if (R) forget(R.name); R = null; changed(); }
+  function stop() { hush(); playing = false; now = null; if (R) { if (R.all) put('cpsource', null); forget(R.name); } R = null; changed(); }
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
   const again = (voiceChanged) => {
     if (!playing || !now || !R || now.i !== R.cur) return;
@@ -2585,9 +2602,10 @@ PLAYER = """
     + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'><input type='checkbox' class='cpaloud'> Auto-speak new replies</label>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
     + "<div class='cpvoice' hidden><label class='cpline'>Voice <select class='cpkvoice'></select></label>"
-    + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label></div></div></div>"
+    + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label>"
+    + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
-    + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
+    + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpall' hidden>All · </span><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
     + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
     + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
     + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙&#xFE0E;</button></div>";
@@ -2608,17 +2626,18 @@ PLAYER = """
     const s = R.list[R.cur];
     // paused (by a tap, or kept from before): said in words, the words being read dimmed, as new replies wait after it
     $('.cpwait').hidden = playing && !paused; bar.classList.toggle('cppaused', !playing || paused);
-    $('.cpname').textContent = R.name; $('.cpprev').textContent = words(s.text, 12); $('.cpopen').setAttribute('href', R.href || '/');
+    $('.cpall').hidden = !R.all; $('.cpname').textContent = R.all ? s.name || '' : R.name;
+    $('.cpprev').textContent = words(s.text, 12); $('.cpopen').setAttribute('href', s.href || R.href || '/');
     const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
     const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
     $('.cpskip').disabled = !playing;
     $('.cpcount').textContent = 'Section ' + (R.cur + 1) + ' of ' + R.list.length;
-    const key = R.name + '|' + R.cur + '|' + R.list.map((x) => x.k + (x.heard ? '+' : '')).join(',');
+    const key = R.name + '|' + R.cur + '|' + R.list.map((x) => (x.name || '') + x.k + (x.heard ? '+' : '')).join(',');
     if (key !== drawn) { drawn = key;
       rows.replaceChildren(...R.list.map((x, n) => { const li = document.createElement('li'); li.dataset.i = n;
         li.className = n === R.cur ? 'now' : x.heard ? 'heard' : 'wait';
         const a = document.createElement('span'); a.className = 'cpat'; a.textContent = when(x.at);
-        const w = document.createElement('span'); w.className = 'cpwords'; w.textContent = words(x.text, 10);
+        const w = document.createElement('span'); w.className = 'cpwords'; w.textContent = (R.all ? x.name + ': ' : '') + words(x.text, 10);
         li.append(a, w); return li; }));
       if (!panel.hidden) { const cur = rows.querySelector('.now'); if (cur) cur.scrollIntoView({block: 'nearest'}); } }
     placed();
@@ -2663,15 +2682,25 @@ PLAYER = """
       st.textContent = [p.key === mine ? 'this page' : '', R && R.name === p.name ? (playing ? 'reading' : 'paused') : kept ? 'paused · ' + (kept.list.length - kept.cur) + ' left' : '']
         .filter(Boolean).join(' · ');
       if (R && R.name === p.name) li.className = 'now';
-      li.append(b, st); return li; })); };
+      li.append(b, st); return li; }));
+    // every project in turn (the steward apart: its summaries are of them), second, after the page's own
+    const every = document.createElement('li'), ab = document.createElement('b'), ast = document.createElement('span');
+    every.dataset.key = '*'; ab.className = 'cpwords'; ab.textContent = 'All projects'; ast.className = 'cpstate';
+    ast.textContent = get('cpsource') === 'all' ? (R && R.all && playing ? 'reading' : 'on') : 'each in turn, named';
+    if (R && R.all) every.className = 'now';
+    every.append(ab, ast);
+    const list = $('.cpprojs'), top = list.firstElementChild;
+    list.insertBefore(every, top && top.dataset.key === mine ? top.nextSibling : top); };
   on($('.cpprojs'), 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return; shut();
+    if (li.dataset.key === '*') return startAll();
     const p = listed().find((x) => x.key === li.dataset.key); if (p) switchTo(p); });
   on($('.cpopen'), 'click', () => shut());
   const fetched = (u, as) => fetch(u, {cache: 'no-store'}).then((r) => r.ok ? r[as]() : null).catch(() => null);
   async function switchTo(p) {
+    put('cpsource', null);                           // one project chosen: no longer every project in turn
     if (R && R.name === p.name) { if (!playing) begin(R.cur, R.piece); return; }
     const kept = load(p.name);
-    if (kept) { yieldTo(kept); R = kept; via = ''; begin(R.cur, R.piece); return; }
+    if (kept) { yieldTo(kept); R = kept; R.announce = true; via = ''; begin(R.cur, R.piece); return; }
     $('.cpprev').textContent = 'Opening ' + p.name + '…';
     const [feed, vo] = await Promise.all([fetched('/chat/feed?p=' + encodeURIComponent(p.key), 'text'), fetched('/chat/voice?p=' + encodeURIComponent(p.key), 'json')]);
     // read off the page's own drawing, as the chat does, so its paragraphs stay paragraphs
@@ -2688,8 +2717,41 @@ PLAYER = """
     if (!secs.length) { draw(); $('.cpprev').textContent = 'Nothing to read in ' + p.name + ' yet'; return; }
     put('heard:' + p.name, [...new Set([...heard, ...pick.map((x) => x.dataset.k)])].slice(-300));
     yieldTo(null);
-    R = {name: p.name, key: p.key, href: p.href, kvoice: (vo && vo.voice) || 'am_echo', kokoro: vo ? !!vo.ready : false, list: secs, cur: 0, piece: 0};
+    R = {name: p.name, key: p.key, href: p.href, kvoice: (vo && vo.voice) || 'am_echo', kokoro: vo ? !!vo.ready : false, list: secs, cur: 0, piece: 0,
+      announce: true};
     via = ''; begin(0);
+  }
+  // All projects: every project's replies in the order they were written, each named as the voice comes to it, kept
+  // current with a look every few seconds while it is chosen (one choice of a single project, or ■, ends it). Chosen,
+  // it starts with what each project said since the person last wrote there and wasn't heard, from the last six
+  // hours, at most three each; the rest it counts heard.
+  async function startAll() { put('cpsource', 'all'); const r = load('All projects');
+    if (r) { yieldTo(r); R = r; R.announce = true; via = ''; begin(R.cur, 0); }
+    gather(true, true); }
+  async function gather(first, take) {
+    const got = await fetched('/chat/all', 'json');
+    if (!got || get('cpsource') !== 'all') return;
+    const fresh = [];
+    got.projects.forEach((p) => { const heard = get('heard:' + p.name) || [], was = new Set(heard);
+      let parts = p.parts.filter((x) => !was.has(x.k));
+      const take = first ? parts.filter((x) => Date.now() - Date.parse(x.at) < 6 * 3600e3).slice(-3) : parts;
+      if (!parts.length) return;
+      put('heard:' + p.name, heard.concat(parts.map((x) => x.k)).slice(-300));
+      take.forEach((x) => fresh.push({t: x.t, k: x.k, at: x.at, text: x.text, name: p.name, key: p.key, href: p.href, kvoice: p.voice})); });
+    fresh.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    if (!fresh.length && take && !(R && R.all)) { draw(); $('.cpprev').textContent = 'Nothing new in any project yet: it reads each as it comes'; }
+    intoAll(fresh, got.ready, take);
+  }
+  function intoAll(secs, ready, take) {
+    const r = R && R.all ? R : load('All projects') || {name: 'All projects', all: true, kvoice: 'am_echo', kokoro: !!ready, list: [], cur: 0, piece: 0};
+    const have = new Set(r.list.map((x) => x.name + '|' + x.k)), add = secs.filter((x) => !have.has(x.name + '|' + x.k));
+    if (!add.length) { changed(); return; }
+    r.list.push(...add);
+    while (r.list.length > 80 && r.cur > 0) { r.list.shift(); r.cur -= 1; }
+    const first = r.list.length - add.length;
+    if (r === R && playing) { save(); changed(); return; }                 // reading, or held by a pause: after it
+    if (R && R !== r && playing && !take) { put('reading:All projects', Object.assign(r, {saved: Date.now()})); return; }   // one reply tapped plays first
+    yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
   }
   // ⚙: Auto-speak, speed and voice, the same as the chat's own (each changed here shows there too)
   async function sets() {
@@ -2698,6 +2760,7 @@ PLAYER = """
     const vo = await fetched('/chat/voice?p=' + encodeURIComponent(R.key), 'json');
     if (!vo || !vo.ready) { $('.cpvoice').hidden = true; return; }
     $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.voice; $('.cpvpin').checked = vo.pinned; $('.cpvoice').hidden = false;
+    $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.options; $('.cpherald').value = herald();
   }
   on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked;
     try { localStorage.setItem('aloud', a ? '1' : '0'); } catch (e) {}
@@ -2711,11 +2774,14 @@ PLAYER = """
     $('.cpkvoice').value = got.voice; $('.cpvpin').checked = got.pinned; P.setVoice(name, got.voice);
     document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, voice: got.voice, pinned: got.pinned}})); };
   on($('.cpkvoice'), 'change', () => keepVoice({voice: $('.cpkvoice').value}));
+  on($('.cpherald'), 'change', () => { try { localStorage.setItem('announcer', $('.cpherald').value); } catch (e) {} });
   on($('.cpvpin'), 'change', () => keepVoice({pin: $('.cpvpin').checked ? '1' : '0'}));
   const P = window.colonyPlayer = {
     busy: () => left(R), placed, rate, following,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} again(false); },
-    setVoice(name, v) { if (R && R.name === name && R.kvoice !== v) { R.kvoice = v; save(); again(true); }
+    setVoice(name, v) { if (R && R.all) { const mine = R.list.filter((x) => x.name === name && x.kvoice !== v);
+        mine.forEach((x) => { x.kvoice = v; }); if (mine.length) { save(); if (whoAt(R.cur) === name) again(true); } return; }
+      if (R && R.name === name && R.kvoice !== v) { R.kvoice = v; save(); again(true); }
       else { const r = load(name); if (r) { r.kvoice = v; put('reading:' + name, r); } } },
     attach(v) { view = v; changed(); },
     leave() { view = null; },
@@ -2735,6 +2801,8 @@ PLAYER = """
       if (!secs.length) return;
       const clean = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text}));
       if (how.now) { yieldTo(null); R = blank(v); R.list = clean; via = ''; begin(0); return; }
+      if (get('cpsource') === 'all' && v.name !== 'steward') {
+        intoAll(clean.map((x) => Object.assign(x, {name: v.name, key: v.key, href: v.href, kvoice: v.kvoice})), v.kokoro); return; }
       const mine = R && R.name === v.name ? R : load(v.name);
       const add = (r) => { const have = new Set(r.list.map((x) => x.k)); clean.forEach((x) => { if (!have.has(x.k)) r.list.push(x); });
         while (r.list.length > 60 && r.cur > 0) { r.list.shift(); r.cur -= 1; } };
@@ -2758,6 +2826,7 @@ PLAYER = """
       player.src = SILENT; player.play().then(() => { unlocked = true; go(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; go(); }, {once: true, capture: true})); },
   };
   document.body.appendChild(bar);
+  O.si.call(window, () => { if (get('cpsource') === 'all') gather(false); }, 12000);
   // the reading last left on this device: here again, paused
   try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
     .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
@@ -3051,6 +3120,44 @@ def said_at(at, now=None):
     return f"<span class='stamp' title='{when:%Y-%m-%d %H:%M}'>{clock if when.date() == now.date() else f'{when:%b} {when.day}, {clock}'}</span>"
 
 
+def spoken_text(md):
+    """A reply's words as the voice reads them: no code, no pictures, a link as its words, no markdown's marks."""
+    md = re.sub(r"```.*?```", "", md, flags=re.S)
+    md = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", md)
+    md = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", md)
+    return re.sub(r"[*_`#>|]", "", md).strip()
+
+
+def chat_parts(root, shown=12, most=10):
+    """What the agent said since the person last wrote to it, part by part as Chat shows them (the same keys and
+    times), for the player reading every project in turn."""
+    from . import chat, context
+    s = context.session(root)
+    try:
+        st = Path(s["path"]).stat() if s else None
+    except OSError:
+        st = None
+    mark = (s and s["path"], st and st.st_mtime_ns, st and st.st_size)
+    if _PARTS.get(str(root), (None,))[0] == mark:
+        return _PARTS[str(root)][1]                     # its transcript unchanged since the last look
+    turns = chat.turns(chat.events(s["provider"], s["path"])) if s else []
+    turns = turns[-shown:]
+    last = max((i for i, t in enumerate(turns) if t["from"] == "you"), default=-1)
+    out = []
+    for t in turns[last + 1:]:
+        if t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
+            continue                                    # what it carried over a refresh is never read aloud
+        for j, (kind, text) in enumerate(t["items"]):
+            if kind == "say" and (words := spoken_text(text)):
+                when = (t.get("times") or [])[j] if j < len(t.get("times") or []) else t.get("last") or t["at"]
+                out.append({"t": t["at"], "k": f"s{t['at']}-{j}", "at": when, "text": words})
+    _PARTS[str(root)] = (mark, out[-most:])
+    return out[-most:]
+
+
+_PARTS = {}                  # a project's latest parts, kept until its transcript changes
+
+
 def chat_feed(key, root, shown=40):
     """The conversation, as the app shows one: the person's messages, the agent's prose in full, each run of work
     between folded to a line (Ran 6 commands), colony's own notices small; then what it is doing now."""
@@ -3315,9 +3422,9 @@ CHAT = """
       // only what changed is redrawn: a part already there stays as it is (a picture is not loaded again, so nothing
       // blinks or shifts), the rest comes in new
       const t = document.createElement('template'); t.innerHTML = last = html;
-      box.querySelectorAll('.say.reading').forEach((x) => x.classList.remove('reading'));
       const have = new Map();
-      [...box.children].forEach((c) => { if (!c.classList.contains('mine')) { const k = c.outerHTML; have.set(k, (have.get(k) || []).concat([c])); } });
+      [...box.children].forEach((c) => { if (!c.classList.contains('mine')) {
+        const k = c.outerHTML.replace('class="say reading"', 'class="say"'); have.set(k, (have.get(k) || []).concat([c])); } });
       box.replaceChildren(...[...t.content.children].map((n) => { const same = have.get(n.outerHTML); return same && same.length ? same.shift() : n; }));
       keep();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
@@ -6751,6 +6858,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
+        if url.path == "/chat/all":                   # every project's latest parts, for the player reading them all in turn
+            from . import voice
+            got = []
+            for i, root in enumerate(plist):
+                if root.exists():
+                    try:
+                        got.append({"name": root.name, "key": str(i), "href": f"/?p={i}&view=chat",
+                                    "voice": voice_of(str(i), root)[0], "parts": chat_parts(root)})
+                    except Exception:
+                        continue                         # one project's unreadable transcript never stops the rest
+            return self._send(200, json.dumps({"ready": voice.ready(), "projects": got}).encode())
         if url.path == "/chat/voice":                 # the voice a chat reads in, for the player: picked, pinned, the choices
             from . import monitor, voice
             key = (q.get("p") or ["0"])[0]
@@ -7832,7 +7950,7 @@ table.tokens tr.sub td:has(> i.key) { position:relative; padding-left:30px } tab
 table.tokens tr.head td { padding-top:12px; font-size:12.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; text-align:left }
 body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 56px) + 8px) }
 .chat .say.reading { background:color-mix(in srgb, var(--accent) 9%, transparent); box-shadow:0 0 0 8px color-mix(in srgb, var(--accent) 9%, transparent);
-  border-radius:4px; transition:background .3s, box-shadow .3s }
+  border-radius:4px }
 .chat .turnacts .spin { transform-origin:12px 12px; animation:spin .9s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
   display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
