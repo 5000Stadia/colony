@@ -5751,6 +5751,12 @@ def connections_page(reg):
                  + (f"It starts: <code>{e(' '.join(c['command']))}</code>" if c.get("command") else
                     f"It is only keys ({e(', '.join(c.get('keys') or []))}), for projects' own scripts.") + "</p>"
                  + _audit_card(s["colony"], c) + "</div>"] if review else [])
+        if c.get("changed"):
+            body.append(f"<div class='card gate'><p><b>Its tools changed since colony first saw them:</b> "
+                        f"{e(', '.join(sorted(c['changed'])))}. What a tool says it does changed (or a new one appeared), "
+                        "which is how a server turned against its approval looks. Until you accept the change, each of "
+                        "them waits for your tap.</p>" + _conn_form("accept", "", "/connections", "Accept the change",
+                                                                     name=s["colony"]) + "</div>")
         body += [f"<p class='muted'>Reachable {sources}.</p>" + (f"<p>{e(c['about'])}</p>" if c.get("about") else ""),
                 "<h4>Projects reach it</h4>" + _conn_form("path", _paths(s, None), "/connections", "Save", svc=svc)]
         if s.get("colony"):
@@ -5770,6 +5776,7 @@ def connections_page(reg):
                 + (", own settings" if connections.has_own(c, p) else "") + ")" for p in differ) + "</p>")
         out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}"
                    + (f" · {len(differ)} project{'s' * (len(differ) != 1)} differ" if differ else "")
+                   + (" · <b class='warn'>its tools changed</b>" if c.get("changed") else "")
                    + ((" · <b class='warn'>refused by the audit</b>" if audit.refused(audit.current(c)) else
                        " · being audited" if not audit.current(c) or audit.current(c).get("state") == "running" else
                        " · <b class='warn'>to approve: not seen to fit the work</b>" if audit.misfit(audit.current(c)) else
@@ -6570,6 +6577,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._send(409, shell(reg, -2, f"<h1>Connections</h1><p>{e(str(err))}</p>"))
                 elif do == "remove":
                     connections.remove(name)
+                elif do == "accept":
+                    connections.accept_tools(name)
                 elif do == "holds":
                     connections.configure(name, root, hold=None if form.get("mode") != "chosen" else sorted(values.get("tool", [])))
             except KeyError:

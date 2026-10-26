@@ -258,6 +258,24 @@ class ConnectionsTest(BoardBase):
                                            {"name": "look", "annotations": {"readOnlyHint": True}}])
         self.assertEqual(marks, {"send": False, "look": True}, "a server can't talk its way out of a hold")
 
+    def test_a_tool_whose_description_changes_after_first_sight_waits_until_the_person_accepts_it(self):
+        # the rug pull: a pinned server whose tools come to say something else (fetched from afar, say)
+        connections.set_key("shop", "SHOP_TOKEN", "s3cret")
+        connections._seen("shop", [{"name": "look", "description": "Look things up.", "annotations": {"readOnlyHint": True},
+                                    "inputSchema": {"type": "object"}},
+                                   {"name": "send", "inputSchema": {"type": "object"}},
+                                   {"name": "wipe", "inputSchema": {"type": "object"}, "annotations": {"destructiveHint": True}}])
+        ask = self.agent()                                  # it now lists look without that description
+        self.assertIn("look", connections.load()["connections"]["shop"]["changed"])
+        self.assertIn("Held", self.said(ask("tools/call", name="look")), "read-only by its marks, but changed: it waits")
+        page = board.connections_page(board.registry())
+        self.assertIn("its tools changed", page)
+        self.assertIn("value='accept'", page)
+        connections.accept_tools("shop")
+        self.assertNotIn("changed", connections.load()["connections"]["shop"])
+        ask = self.agent()
+        self.assertEqual(self.said(ask("tools/call", name="look")), "s3cret", "accepted: it runs as before")
+
     def test_a_connection_an_agent_adds_runs_nowhere_until_the_person_approves_it(self):
         connections.set_key("shop", "SHOP_TOKEN", "s3cret")
         self.assertIn("shop", connections.granted(self.root))

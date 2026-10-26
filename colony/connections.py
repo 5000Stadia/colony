@@ -536,12 +536,42 @@ def _seen(name, tools):
     marks = {t.get("name"): bool((t.get("annotations") or {}).get("readOnlyHint")) and before.get(t.get("name"), True)
              for t in tools if t.get("name")}
 
+    prints = {t["name"]: _print(t) for t in tools if t.get("name")}
+
     def put(data):
-        if name in data["connections"] and data["connections"][name].get("seen") != marks:
-            data["connections"][name]["seen"] = marks
-    if marks != (load()["connections"].get(name) or {}).get("seen"):
+        c = data["connections"].get(name)
+        if c is None:
+            return
+        c["seen"] = marks
+        # what each tool says it does, as first seen: a later change (or a tool it never listed before) is what a
+        # server turned against its approval looks like, so it waits for the person until they accept it
+        pins = c.setdefault("pins", {})
+        first = not pins
+        c["latest"] = prints
+        for tool, mark in prints.items():
+            if first:
+                pins[tool] = mark
+            elif pins.get(tool) != mark:
+                c.setdefault("changed", {}).setdefault(tool, board.now())
+    was = load()["connections"].get(name) or {}
+    if marks != was.get("seen") or prints != was.get("latest"):
         change(put)
     return marks
+
+
+def _print(tool):
+    """A tool's fingerprint: its description, inputs and marks."""
+    said = {k: tool.get(k) for k in ("description", "inputSchema", "annotations")}
+    return hashlib.sha256(json.dumps(said, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def accept_tools(name):
+    """The person accepts what a connection's tools now say: today's descriptions become the ones held to."""
+    def put(data):
+        c = data["connections"][name]
+        c["pins"] = dict(c.get("latest") or {})
+        c.pop("changed", None)
+    change(put)
 
 
 INSTRUCTIONS = ("Colony runs this connection for the person. A tool marked (held) doesn't run when called: it waits for "
@@ -577,7 +607,9 @@ def run(name, root):
     offer = set(c["tools"]) if c.get("tools") else None
     listed = holds(c, root)
     reads = {t for t, ro in (c.get("seen") or {}).items() if ro}     # by the server's marks: only its read-only run
-    waits = (lambda tool: tool in listed) if listed is not None else (lambda tool: tool not in reads)
+    changed = set(c.get("changed") or {})                             # changed since first seen: waits until accepted
+    waits = ((lambda tool: tool in listed or tool in changed) if listed is not None
+             else (lambda tool: tool not in reads or tool in changed))
     lists, greets, out_lock = set(), set(), threading.Lock()
     out = sys.stdout.buffer
 
@@ -603,6 +635,7 @@ def run(name, root):
                 marks = _seen(name, every)
                 reads.clear()
                 reads.update(t for t, ro in marks.items() if ro)
+                changed.update((load()["connections"].get(name) or {}).get("changed") or {})
                 every = [t for t in every if offer is None or t.get("name") in offer]
                 for tool in every:
                     if waits(tool.get("name")):
