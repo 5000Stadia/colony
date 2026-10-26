@@ -1121,7 +1121,9 @@ def cmd_connect(a):
             print(f"{s['title']}: keys for your scripts here: colony connect --with {s['colony']} -- COMMAND")
             continue
         print(f"{s['title']}: " + {"colony": "through colony; what it holds waits for the person's tap",
-                                   "claude": "through the person's Claude connector", None: "not here" + why}[way])
+                                   "claude": "through the person's Claude connector",
+                                   "chatgpt": "through the person's ChatGPT app (goes straight out, nothing held)",
+                                   None: "not here" + why}[way])
     if not connections.services():
         print("No connections yet.")
     return 0

@@ -482,6 +482,12 @@ class ChatGPTAppsTest(BoardBase):
         self.assertNotIn("apps.connector_20205bf7.enabled=false", connections.codex_args(self.other), "on again there")
         page = board.connections_page(board.registry())
         self.assertIn("via ChatGPT", page)
+        from colony import cli
+        out = Path(self.tmp.name) / "out.txt"
+        with patch.object(board, "root_of", return_value=self.other), patch.object(
+                connections, "path_for", side_effect=lambda svc, root: "chatgpt"), open(out, "w") as f, patch("sys.stdout", f):
+            self.assertEqual(cli.main(["connect"]), 0, "an agent's listing names the ChatGPT path")
+        self.assertIn("through the person's ChatGPT app", out.read_text())
 
     def test_a_service_reached_through_colony_has_no_chatgpt_twin(self):
         connections.add("github", "GitHub", [sys.executable, "-c", "pass"], service="github")
