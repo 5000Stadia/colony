@@ -67,6 +67,10 @@ class BoardBase(unittest.TestCase):
         counting = patch.object(tokens, 'update')                  # never reads the machine's real transcripts
         counting.start()
         self.addCleanup(counting.stop)
+        from colony import digests
+        digesting = patch.object(digests, 'all_since', return_value={})   # never asks a real model for a digest
+        digesting.start()
+        self.addCleanup(digesting.stop)
         from colony import audit
         auditing = patch.object(audit, 'start')       # nor starts a real audit (a fetch and a model) apart from it
         auditing.start()
@@ -151,6 +155,32 @@ class BoardTest(BoardBase):
         self.assertIsNone(monitor.update(t0 + 20000))
         board.set_setting("updates", "30")
         self.assertEqual(board.registry()["settings"]["updates"], 30)
+
+    def test_the_update_carries_what_each_agent_said_digested_and_asks_for_the_stewards_commentary(self):
+        from colony import digests
+        board.track(self.root)
+        board.set_setting("active_hours", "off")
+        asked = []
+        with patch.object(digests, "said_since", return_value=["Done. Yes."]):
+            self.assertEqual(digests.digest(self.root, 0, ask=lambda r, b: asked.append(b)), "Done. Yes.", "a few words are their own digest")
+        long = ["The water log now keeps a reading every morning and flags a missed day. " * 12]
+        with patch.object(digests, "said_since", return_value=long):
+            self.assertEqual(digests.digest(self.root, 0, ask=lambda r, b: asked.append(b) or "Logs daily; nothing needed."),
+                             "Logs daily; nothing needed.")
+        self.assertIn("at most three short lines", asked[0])
+        self.assertIn("flags a missed day", asked[0], "the small model reads what was said")
+        with patch.object(digests, "said_since", return_value=[]):
+            self.assertIsNone(digests.digest(self.root, 0, ask=lambda r, b: self.fail("nothing said: no call")))
+        t0 = time.time()
+        with patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
+            self.assertTrue(monitor.update_due(t0))
+            monitor.update(t0)                                   # the first look starts the clock
+            self.assertIsNone(monitor.update_due(t0 + 10), "not due within the hour")
+            self.assertEqual(monitor.update_due(t0 + 3700), t0)
+            text = monitor.update(t0 + 3700, digests={"plants": "Logs daily; nothing needed."})
+        self.assertIn("4) What each project's agent has been saying", text, "said alone, it is news for the person")
+        self.assertIn("plants: Logs daily; nothing needed.", text)
+        self.assertIn("with your own commentary", text)
 
     def test_the_monitors_own_hook_hands_over_its_inbox_and_nothing_else_of_colonys(self):
         (monitor.home() / ".board").mkdir(parents=True, exist_ok=True)

@@ -556,6 +556,7 @@ class Watcher:
         self.discovered = time.time() if os.environ.get("COLONY_CONSOLE_CMD") else 0   # tests look for nothing
         self.usage_checked = self.current_checked = self.discovered
         self.idle_since = {}
+        self.updating = False                # an update being made: its digests come from a small model
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -739,10 +740,28 @@ class Watcher:
                   f"'Scouting' in {brief_path()} afresh and follow it, starting with the audit.")
 
     def updates(self):
-        """The person's update, every so often while the steward isn't muted: handed to the steward to tell them."""
-        text = update()
-        if text:
-            queue(text, relay=True)
+        """The person's update, every so often while the steward isn't muted: handed to the steward to tell them, with
+        what each project's agent has been saying, digested by a small model first (in the background: a model's answer
+        never holds up the steward's other work)."""
+        if self.updating:
+            return
+        last = update_due()
+        if last is None:
+            return
+        if last is True:                            # the first look only starts the clock
+            update()
+            return
+        self.updating = True
+
+        def run():
+            try:
+                from . import digests
+                text = update(digests=digests.all_since(last))
+                if text:
+                    queue(text, relay=True)
+            finally:
+                self.updating = False
+        threading.Thread(target=run, daemon=True).start()
 
     def tell(self):
         """What colony has for the steward waits in its inbox, and its own hook hands it over with its next prompt as
@@ -962,11 +981,29 @@ class Watcher:
             time.sleep(self.interval)
 
 
-def update(now=None):
+def update_due(now=None):
+    """When the person's update is due: the time of the last one; True before the first look (which starts the clock);
+    None while it isn't due (not yet, off, outside their active hours)."""
+    now = time.time() if now is None else now
+    every = (board.registry()["settings"].get("updates") or 0) * 60
+    try:
+        state = json.loads((board.home() / "updates.json").read_text())
+    except (OSError, ValueError):
+        state = {}
+    if not every:
+        return None
+    if "at" not in state:
+        return True
+    return state["at"] if now - state["at"] >= every and hours.active() else None
+
+
+def update(now=None, digests=None):
     """What the steward tells the person every `updates` minutes, helm or not, as one line for it; None while it isn't
     due, outside their active hours (it covers the wait when they begin), or with nothing completed and nothing newly
     asked. Completed: roadmap items done since the last update, each in its own words (what the agent said was ready,
-    else its first sentence). Asked: everything waiting on the person, split by whether the last update had it."""
+    else its first sentence). Asked: everything waiting on the person, split by whether the last update had it.
+    Digests: {project: a few lines on what its agent told the person since the last update} (colony/digests.py), which
+    the steward weighs against what the person intends, with its own commentary."""
     now = time.time() if now is None else now
     every = (board.registry()["settings"].get("updates") or 0) * 60
     path = board.home() / "updates.json"
@@ -997,14 +1034,18 @@ def update(now=None):
     # before it was completed before `now`, so no later update would carry it.
     path.write_text(json.dumps({"at": now, "asked": [k for k, _ in asked], "mentioned": saying}))
     new = [t for k, t in asked if k not in before]
-    if not done and not new:
+    if not done and not new and not digests:
         return None
     old = [t for k, t in asked if k in before]
     part = lambda head, rows: f"{head}: " + ("; ".join(rows) if rows else "none")
+    said = (" · 4) What each project's agent has been saying (digests by a small model: summarize what matters to the "
+            "person, weighed against what they intend, with your own commentary where it helps; open a project's own "
+            "transcript only where a digest flags a decision, a stall or a drift): "
+            + "; ".join(f"{n}: {d}" for n, d in digests.items())) if digests else ""
     return ("Update for the person, helm or not: tell them briefly, in this order, leaving out what's empty, and close "
             f"with this status line as it is: {status_line()} " + " · ".join([
                 part("1) Completed since the last update", done), part("2) Already waiting on them", old),
-                part("3) New asks", new)]))
+                part("3) New asks", new)]) + said)
 
 
 def completed(root, since=None):

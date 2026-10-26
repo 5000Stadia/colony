@@ -272,7 +272,7 @@ SETTING_HELP = {
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
-    "updates": "minutes between the steward's updates to you, helm or not: what the projects finished, then what was already waiting on you, then new asks (off: none); never while it is muted or outside your active hours",
+    "updates": "minutes between the steward's updates to you, helm or not: what the projects finished, then what was already waiting on you, then new asks, then what each project's agent has been saying, digested by a small model, with the steward's commentary (off: none); never while it is muted or outside your active hours",
     "active_hours": "when you're around, as HH:MM-HH:MM on this machine's clock (off: always): outside them agents keep working but hold their questions, which reach you together when your hours begin",
 }
 
