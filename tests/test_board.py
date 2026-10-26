@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from unittest.mock import patch  # noqa: E402
 from colony import board, console, hours, mail, monitor, pins, providers, showcase  # noqa: E402
+from colony import tokens as _tokens  # noqa: E402
+REAL_COUNT = _tokens.update          # BoardBase stands it in; TokensTest reads its own transcripts
 import base64, io, socket, time  # noqa: E402
 from contextlib import contextmanager, redirect_stdout  # noqa: E402
 
@@ -61,6 +63,10 @@ class BoardBase(unittest.TestCase):
         looking = patch.object(connections, 'refresh_personal')   # never asks the real `claude` for its connectors
         looking.start()
         self.addCleanup(looking.stop)
+        from colony import tokens
+        counting = patch.object(tokens, 'update')                  # never reads the machine's real transcripts
+        counting.start()
+        self.addCleanup(counting.stop)
         from colony import audit
         auditing = patch.object(audit, 'start')       # nor starts a real audit (a fetch and a model) apart from it
         auditing.start()
@@ -5845,6 +5851,44 @@ class LessonsTest(BoardBase):
             cli.main(["research", "anything"])
         self.assertIn("Lessons the person adopted for `colony research`", out.read_text())
         self.assertIn("--recheck 30", out.read_text())
+
+
+class TokensTest(BoardBase):
+    def test_tokens_are_counted_once_by_the_hour_for_projects_and_colony_itself(self):
+        from unittest.mock import patch
+        from colony import tokens
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, True)
+        board.track(self.root)
+        now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        reply = lambda mid, n: json.dumps({"type": "assistant", "timestamp": now, "cwd": str(self.root), "message": {
+            "id": mid, "model": "claude-x", "usage": {"input_tokens": n, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0,
+                                                     "output_tokens": 5}}})
+        (base / "claude" / "projects" / "p").mkdir(parents=True)
+        # one reply written as two lines (a part each), both carrying its usage, then another
+        (base / "claude" / "projects" / "p" / "s.jsonl").write_text("\n".join([reply("m1", 10), reply("m1", 10), reply("m2", 20)]) + "\n")
+        roll = board.home() / "codex-remote" / "abc" / "sessions" / "2026"
+        roll.mkdir(parents=True)
+        (roll / "rollout-1.jsonl").write_text("\n".join([
+            json.dumps({"timestamp": now, "type": "session_meta", "payload": {"cwd": "/tmp/colony-consult-xyz"}}),
+            json.dumps({"timestamp": now, "type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {
+                "input_tokens": 50, "cached_input_tokens": 40, "output_tokens": 7}}}})]) + "\n")
+        with patch.object(providers.get("claude"), "config_home", lambda: base / "claude"), \
+                patch.object(providers.get("codex"), "config_home", lambda: base / "codex"):
+            REAL_COUNT()
+            rows, totals, reads = tokens.windows()
+            self.assertEqual(rows[("project", "plants")]["4 h"], 10 + 100 + 5 + 20 + 100 + 5, "the repeated line counted once")
+            self.assertEqual(rows[("colony", "Consultants, judges and audits")]["7 d"], 57, "a consult's tokens are colony's own")
+            self.assertEqual(reads["24 h"], 240)
+            with open(base / "claude" / "projects" / "p" / "s.jsonl", "a") as fh:
+                fh.write(reply("m3", 1) + "\n")
+            REAL_COUNT()                                   # only what was added is read
+            self.assertEqual(tokens.windows()[0][("project", "plants")]["4 h"], 240 + 106)
+        tokens.note("claude", {"input_tokens": 3, "output_tokens": 2})
+        self.assertEqual(tokens.windows()[0][("colony", "Steward's scouts")]["4 h"], 5, "a scout notes what it spent")
+        self.assertEqual(tokens.owner(str(board.home() / "agents" / "plants-codex"), [self.root], monitor.home()), ("project", "plants"))
+        self.assertEqual(tokens.owner("/tmp/claude-1000/" + re.sub(r"[^A-Za-z0-9]", "-", str(self.root)) + "/s/scratchpad", [self.root],
+                                      monitor.home()), ("project", "plants"), "a helper's scratch folder is its project's")
 
 
 class RulesTest(BoardBase):

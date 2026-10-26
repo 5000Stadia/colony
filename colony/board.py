@@ -4047,11 +4047,49 @@ def render(reg, pid, view="overview", show_all=""):
         if not hours.active(clock):
             out.append(f"<p class='muted'>Outside your hours until {e(hours.at_clock(hours.next_start(clock)))}: "
                        "what's asked now waits for them.</p>")
+        if Path(root).resolve() == Path(__file__).resolve().parent.parent:
+            out.append(tokens_html())             # colony's own page: what the whole colony spends, and colony itself
         out.append(pinned_section(pid, root))
         # what changed since the person's last look on an earlier day: the newest few, dated, and how much in all
         out.append(since_html(pid, root, page_base(root)))
         out.append(queue_html(pid, root))
     return shell(reg, pid, "".join(out))
+
+
+def tokens_html():
+    """Tokens spent over the last 4 hours, day and week: by program, by project, and colony's own overhead apart."""
+    import threading
+    from . import providers as pv, tokens
+    threading.Thread(target=tokens.update, daemon=True).start()      # current by the next look
+    rows, totals, reads = tokens.windows()
+    looked = tokens.load().get("looked")
+    if not looked:
+        return ("<h2>Tokens</h2><div class='card'><p class='muted'>Counting: the first look reads the week's transcripts, "
+                "in the background. Back in a minute.</p></div>")
+    ws = [w for w, _ in tokens.WINDOWS]
+    line = lambda label, v, cls="": (f"<tr{f' class={cls}' if cls else ''}><td>{label}</td>"
+                                     + "".join(f"<td>{tokens.short(v.get(w, 0)) if v.get(w) else '–'}</td>" for w in ws) + "</tr>")
+    of = lambda kind: sorted(((n, v) for (k, n), v in rows.items() if k == kind), key=lambda x: (-x[1]["7 d"], x[0]))
+    mine = of("colony")
+    over = {w: sum(v[w] for _, v in mine) for w in ws}
+    share = {w: f"{over[w] / totals[w]:.1%}" if totals[w] else "–" for w in ws}
+    body = ("<table class='tokens'><tr><th></th>" + "".join(f"<th>{w}</th>" for w in ws) + "</tr>"
+            + line("<b>All</b>", totals, "all")
+            + "".join(line(e(pv.PROVIDERS[k].label if k in pv.PROVIDERS else k), v, "sub") for k, v in of("program"))
+            + "<tr class='head'><td colspan='4'>By project</td></tr>"
+            + "".join(line(e(n), v, "sub") for n, v in of("project"))
+            + "".join(line(e(n), v, "sub") for n, v in of("outside"))
+            + "<tr class='head'><td colspan='4'>Colony itself</td></tr>"
+            + "".join(line(e(n), v, "sub") for n, v in mine)
+            + f"<tr class='all'><td>Overhead, of all</td>" + "".join(f"<td>{share[w]}</td>" for w in ws) + "</tr></table>")
+    fresh = {w: totals[w] - reads[w] for w in ws}
+    return ("<h2>Tokens</h2><div class='card'>" + body
+            + f"<p class='muted'>Mostly cache reads, the conversation read again at each turn, which cost a tenth and count "
+              f"lightly against limits: {reads['24 h'] / totals['24 h'] if totals['24 h'] else 0:.0%} of the last day. "
+              "Without them: " + " · ".join(f"{w} {tokens.short(fresh[w])}" for w in ws) + ". Colony itself is the steward "
+              "and the asks it makes (consultants, measure judges, connection audits, model checks, scouts); its notes "
+              "inside a project's own session count as the project's. As of "
+              f"{e(time.strftime('%-I:%M %p', time.localtime(looked)))}, from the programs' own transcripts.</p></div>")
 
 
 FOLD_SHOWN = 10          # entries of a folded record shown when it is opened, before "Show all"
@@ -7733,6 +7771,11 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-
 .cprows li.heard { color:var(--muted) } .cprows li.heard .cpwords::before { content:'✓ ' }
 .cpat { flex:none; min-width:62px; font-size:11.5px; color:var(--muted); white-space:nowrap }
 .cpwords { flex:1; min-width:0 }
+table.tokens { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums }
+table.tokens th { text-align:right; font-weight:600; color:var(--muted); font-size:12.5px; padding:2px 6px } table.tokens th:first-child { text-align:left }
+table.tokens td { text-align:right; padding:3px 6px; white-space:nowrap } table.tokens td:first-child { text-align:left; white-space:normal; overflow-wrap:anywhere }
+table.tokens tr.sub td:first-child { padding-left:16px; color:var(--muted) } table.tokens tr.all td { font-weight:600; border-top:1px solid var(--line) }
+table.tokens tr.head td { padding-top:12px; font-size:12.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; text-align:left }
 body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 56px) + 8px) }
 .chat .say.reading { background:color-mix(in srgb, var(--accent) 9%, transparent); box-shadow:0 0 0 8px color-mix(in srgb, var(--accent) 9%, transparent);
   border-radius:4px; transition:background .3s, box-shadow .3s }

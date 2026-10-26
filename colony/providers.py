@@ -399,6 +399,8 @@ class ClaudeCode:
                                                        timeout=1800).stdout)
             except (ValueError, OSError, subprocess.TimeoutExpired) as err:
                 return {"text": "", "error": err.__class__.__name__}
+        from . import tokens
+        tokens.note("claude", d.get("usage"))           # a scout keeps no transcript: what it spent is noted here
         if d.get("is_error"):
             return {"text": "", "error": str(d.get("result") or d.get("subtype") or "error")[:300]}
         return {"text": d.get("result") or "", "error": None}
@@ -823,6 +825,10 @@ class Codex:
             except (OSError, subprocess.TimeoutExpired) as err:
                 return {"text": "", "error": err.__class__.__name__}
             text = last.read_text() if last.exists() else ""
+        used = re.search(r"tokens used\W+([\d,]+)", str(getattr(r, "stderr", "") or "") + str(getattr(r, "stdout", "") or ""), re.I)
+        if used:                                          # a scout keeps no transcript: what it spent is noted here
+            from . import tokens
+            tokens.note("codex", {"input_tokens": int(used[1].replace(",", ""))})
         why = ((r.stderr or "").strip().splitlines() or ["no answer"])[-1][:300]
         return {"text": text, "error": None if text.strip() else why}
 

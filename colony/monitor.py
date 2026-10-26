@@ -909,6 +909,8 @@ class Watcher:
         recovery.tick_all()                         # work a network drop stopped, once the network is back
         from . import audit
         audit.kick()                                # a connection an agent added is audited even when the steward is muted
+        from . import tokens
+        threading.Thread(target=tokens.update, daemon=True).start()   # the tokens spent, kept current for colony's Overview
         if muted():
             self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
             return
