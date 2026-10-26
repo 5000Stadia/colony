@@ -795,6 +795,11 @@ def cmd_lesson(a):
             if len(lessons.standing(action, project)) >= lessons.MOST:
                 print(f"{lessons.MOST} are already adopted for it, and only {lessons.MOST} are shown: merge or retire one first.")
             return 0
+        if a.recurred:
+            adopted = sum(1 for r in lessons.load() if r.get("decided") and r["state"] != "declined")
+            print(f"Of {adopted} adopted, the mistake came back despite (the measure is the first number below):")
+            print(sum(1 for r in lessons.load() if r.get("suspected")))
+            return 0
         if a.suspect:
             lessons.suspect(a.suspect, a.why or "")
             print(f"{a.suspect} marked suspect; the person keeps or retires it.")
@@ -1763,6 +1768,7 @@ def main(argv=None):
     p.add_argument("--evidence", help="what happened that taught it, and where (project, note or gate id)")
     p.add_argument("--project", help="only for this project (default: every project)")
     p.add_argument("--suspect", metavar="ID"); p.add_argument("--why", help="what recurred, or how the person overrode it")
+    p.add_argument("--recurred", action="store_true", help="how many adopted lessons the mistake came back despite (a measure)")
     p.set_defaults(fn=cmd_lesson)
     p = sub.add_parser("research", help="the colony's research library: look before researching, add what others may reuse")
     p.add_argument("words", nargs="*", help="what you're looking for (none: the newest)")
