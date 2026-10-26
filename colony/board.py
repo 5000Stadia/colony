@@ -5636,7 +5636,7 @@ def connections_summary():
     return f"{len(svcs)} service{'s' * (len(svcs) != 1)}" + (f" · {lacking} waiting for keys" if lacking else "")
 
 
-VIA = {"colony": "via colony", "claude": "via Claude", "off": "off", None: "off"}
+VIA = {"colony": "via colony", "claude": "via Claude", "chatgpt": "via ChatGPT", "off": "off", None: "off"}
 
 
 def _conn_form(do, fields, back, button, **hidden):
@@ -5651,7 +5651,7 @@ def _paths(s, root, inherit=False):
     from . import connections
     now = connections.path_for_choice(s, root)
     ways = [("inherit", f"As colony-wide ({VIA[connections.path_for(s['id'], None)]})")] if inherit else []
-    ways += [(w, VIA[w]) for w in ("colony", "claude") if s.get(w)] + [("off", "Off")]
+    ways += [(w, VIA[w]) for w in ("colony", "claude", "chatgpt") if s.get(w)] + [("off", "Off")]
     return "".join(f"<label class='tick'><input type='radio' name='how' value='{w}'{' checked' if w == now else ''}> {label}</label>"
                    for w, label in ways)
 
@@ -5717,14 +5717,14 @@ def connections_page(reg):
     data, every = connections.load(), [p for p in projects(reg) if p.exists()]
     out = ["<header><h1>Connections</h1></header><p class='muted'>Outside services your projects reach. Every project has "
            "each one unless you switch it off there (on its own Connections page, or as you add it). Through colony, keys "
-           "stay in a file only you can read and what sends or spends waits for your tap; through your Claude sign-in, it "
-           "goes straight out.</p>"]
+           "stay in a file only you can read and what sends or spends waits for your tap; through your Claude or ChatGPT "
+           "sign-in (Claude projects use the one, Codex projects the other), it goes straight out.</p>"]
     for svc, s in connections.services().items():
         s["id"] = svc
         way = connections.path_for(svc, None)
         differ = [p for p in every if connections.path_for(svc, p) != way or connections.has_own(
             data["connections"].get(s.get("colony"), {}), p)]
-        sources = " or ".join(VIA[w] for w in ("colony", "claude") if s.get(w))
+        sources = " or ".join(VIA[w] for w in ("colony", "claude", "chatgpt") if s.get(w))
         c = data["connections"].get(s.get("colony")) or {}
         lacking = s.get("colony") and connections.missing(s["colony"], c)
         review = s.get("colony") and not c.get("approved", True)
@@ -6535,7 +6535,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, b"No such project.")
             try:
                 if do == "path":
-                    if form.get("how") in ("colony", "claude", "off") or (root and form.get("how") == "inherit"):
+                    if form.get("how") in ("colony", "claude", "chatgpt", "off") or (root and form.get("how") == "inherit"):
                         connections.choose_path(form.get("svc", ""), root, form["how"])
                 elif do == "own" and root:
                     connections.configure(name, root, own=bool(form.get("own")))

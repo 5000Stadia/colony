@@ -433,3 +433,42 @@ class AuditTest(BoardBase):
         r = audit.run("mailer", opener=self.registry(self.wheel("x = 1\n")), asker=ask)
         self.assertEqual(r["state"], "unreviewed")
         self.assertEqual(len(calls), len(audit.reviewer(self.root)), "each family is tried")
+
+
+class ChatGPTAppsTest(BoardBase):
+    """The apps of the person's ChatGPT sign-in, which reach Codex: on or off per project, like their Claude connectors."""
+
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.other = Path(self.tmp.name) / "stall"
+        self.other.mkdir()
+        board.track(self.other)
+
+        def put(data):
+            data["chatgpt"]["Sites"] = {"id": "connector_20205bf7", "on": True, "projects": {}}
+            data["chatgpt"]["GitHub"] = {"id": "connector_7686", "on": True, "projects": {}}
+        connections.change(put)
+
+    def test_an_app_off_in_a_project_starts_its_codex_console_without_it(self):
+        self.assertEqual(connections.services()["sites"]["chatgpt"], "Sites")
+        self.assertNotIn("apps.", " ".join(connections.codex_args(self.root)), "on by default, as a new one is")
+        connections.choose_path("sites", self.root, "off")
+        args = connections.codex_args(self.root)
+        self.assertIn("apps.connector_20205bf7.enabled=false", args)
+        self.assertNotIn("apps.connector_7686.enabled=false", args, "only the one switched off")
+        self.assertNotIn("apps.", " ".join(connections.codex_args(self.other)), "another project keeps it")
+        connections.choose_path("sites", None, "off")
+        self.assertIn("apps.connector_20205bf7.enabled=false", connections.codex_args(self.other), "off colony-wide")
+        connections.choose_path("sites", self.other, "chatgpt")
+        self.assertNotIn("apps.connector_20205bf7.enabled=false", connections.codex_args(self.other), "on again there")
+        page = board.connections_page(board.registry())
+        self.assertIn("via ChatGPT", page)
+
+    def test_a_service_reached_through_colony_has_no_chatgpt_twin(self):
+        connections.add("github", "GitHub", [sys.executable, "-c", "pass"], service="github")
+        audit._store("github", {"of": audit.fingerprint(connections.load()["connections"]["github"]), "state": "done",
+                                "safe": "yes", "fits": "yes", "at": "now", "by": "a test"})
+        connections.approve("github")
+        self.assertIn("apps.connector_7686.enabled=false", connections.codex_args(self.root),
+                      "through colony, what it holds has no unheld way around")

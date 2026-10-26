@@ -203,6 +203,9 @@ def ensure(root, name=None, label=None, settle=0):
         from . import board, providers
         if not COMMAND and not providers.installed(providers.of(None if label else root)):
             return name                             # its program isn't here: no console that would only die
+        # what an earlier one died of goes first: cleared after the start, a program that dies at once could have its
+        # own record written (by anything looking at the console then) and wiped, leaving no word of why
+        _died_path(name).unlink(missing_ok=True)
         # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
@@ -211,7 +214,6 @@ def ensure(root, name=None, label=None, settle=0):
                         # in the same breath, before the program can end: if it does, its screen stays to be read
                         ";", "set-option", "-w", "-t", name, "remain-on-exit", "on"],
                        check=True)
-        _died_path(name).unlink(missing_ok=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
         _started(name, fingerprint(root, label), providers.key(providers_of(root, label)))
         scrollable(name, providers_of(root, label))

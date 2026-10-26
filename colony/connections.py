@@ -23,7 +23,8 @@ waits too.
 
 The person's own connectors from their Claude sign-in (their Gmail, Drive) are switched on and off the same way, and
 a console is started denying those its project doesn't have; Claude calls them itself, so they can't be held.
-PROVIDER: only Claude Code brings those in; Codex's ChatGPT apps are not yet sorted per project.
+The apps of the person's ChatGPT sign-in reach Codex the same way, and a Codex console is started with those its
+project doesn't have switched off. PROVIDER: Claude Code's connectors (claude mcp list) and Codex's apps (app/list).
 """
 import fcntl
 import hashlib
@@ -77,7 +78,7 @@ def load():
         data = json.loads(path().read_text())
     except (OSError, ValueError):
         data = {}
-    for group in ("connections", "personal"):
+    for group in ("connections", "personal", "chatgpt"):
         data.setdefault(group, {})
         for entry in data[group].values():
             _shape(entry)
@@ -211,12 +212,12 @@ def remove(name):
     change(lambda data: data["connections"].pop(name, None))
 
 
-def configure(name, root=None, *, personal=False, **what):
+def configure(name, root=None, *, personal=False, chatgpt=False, **what):
     """Change a connection's settings, colony-wide (root None) or for one project. on: has it (None, at a project:
     back to the colony-wide choice); own: its own keys and holds; hold: the tools that wait for the tap (None: by
     the server's own marks)."""
     def put(data):
-        entry = data["personal" if personal else "connections"][name]
+        entry = data["chatgpt" if chatgpt else "personal" if personal else "connections"][name]
         target = entry if root is None else entry["projects"].setdefault(_key(root), {})
         for k, v in what.items():
             if v is None and root is not None and k == "on":
@@ -279,6 +280,60 @@ def discover_personal():
     return change(put)
 
 
+def discover_chatgpt():
+    """The apps the person's ChatGPT sign-in brings to Codex (Codex's app/list, those connected to their account); a
+    new one is on in every project until switched off. Asked of a Codex app-server colony already runs, else of one
+    started for the asking."""
+    from . import codex_remote, providers
+    from .codex_rpc import Client
+    if not providers.usable(providers.get("codex")):
+        return None
+    apps = None
+    for sock in sorted(board.home().glob("codex-remote/*/app-server-control/app-server-control.sock")):
+        try:
+            with Client(sock, timeout=40) as c:
+                apps = c.call("app/list", {}).get("data") or []
+            break
+        except Exception:
+            continue
+    if apps is None:
+        apps = _apps_asked()
+    if apps is None:
+        return None
+    found = {a["name"]: a["id"] for a in apps if a.get("isAccessible")}
+
+    def put(data):
+        for name, aid in found.items():
+            data["chatgpt"].setdefault(name, {"on": True, "projects": {}})["id"] = aid
+        return found
+    return change(put)
+
+
+def _apps_asked():
+    """app/list of a Codex app-server started for it, over stdio; None if it can't be asked."""
+    try:
+        p = subprocess.Popen(["codex", "app-server"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True, cwd=str(board.home()))
+    except OSError:
+        return None
+    timer = threading.Timer(60, p.kill)
+    timer.start()
+    try:
+        for msg in ({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "colony", "version": "1"}}},
+                    {"method": "initialized"}, {"id": 2, "method": "app/list", "params": {}}):
+            p.stdin.write(json.dumps({"jsonrpc": "2.0", **msg}) + "\n")
+        p.stdin.flush()
+        for line in p.stdout:
+            d = json.loads(line)
+            if d.get("id") == 2:
+                return (d.get("result") or {}).get("data")
+    except (OSError, ValueError):
+        return None
+    finally:
+        timer.cancel()
+        p.kill()
+
+
 _looking = threading.Lock()
 
 
@@ -296,6 +351,7 @@ def refresh_personal(every=6 * 3600):
 
     def go():
         try:
+            discover_chatgpt()
             if discover_personal() is not None:
                 stamp.parent.mkdir(parents=True, exist_ok=True)
                 stamp.touch()
@@ -337,6 +393,8 @@ def services():
     for n, c in data["personal"].items():
         s = out.setdefault(personal_service(n, c), {"title": n})
         s["claude"] = n
+    for n, c in data["chatgpt"].items():
+        out.setdefault(slug(n), {"title": n})["chatgpt"] = n
     return dict(sorted(out.items(), key=lambda kv: kv[1]["title"].lower()))
 
 
@@ -346,10 +404,13 @@ def path_for(svc, root):
     s, data = services().get(svc) or {}, load()
     if s.get("colony") and s["colony"] in granted(root):
         return "colony"
+    from . import providers
     if s.get("claude") and is_on(data["personal"][s["claude"]], root):
-        from . import providers
         if root is None or providers.of(root) is providers.get("claude"):
             return "claude"
+    if s.get("chatgpt") and is_on(data["chatgpt"][s["chatgpt"]], root):
+        if root is None or providers.of(root) is providers.get("codex"):
+            return "chatgpt"
     return None
 
 
@@ -357,7 +418,8 @@ def path_for_choice(s, root):
     """What a service's radio shows as chosen: in a project with no choice of its own, "inherit"."""
     data = load()
     if root is not None and not any(
-            "on" in _own(data[g].get(s.get(k)) or {}, root) for g, k in (("connections", "colony"), ("personal", "claude"))):
+            "on" in _own(data[g].get(s.get(k)) or {}, root)
+            for g, k in (("connections", "colony"), ("personal", "claude"), ("chatgpt", "chatgpt"))):
         return "inherit"
     way = path_for(s["id"], root)
     if way is None and s.get("colony") and is_on(data["connections"][s["colony"]], root):
@@ -372,8 +434,12 @@ def choose_path(svc, root, how):
     inherit = how == "inherit"
     if s.get("colony"):
         configure(s["colony"], root, on=None if inherit else how == "colony")
+    # the person's own sign-ins: each program uses its own (Claude's connector in a Claude project, ChatGPT's app in a
+    # Codex one), so choosing either keeps both; through colony, a console is started without them (denied, apps_off)
     if s.get("claude"):
-        configure(s["claude"], root, personal=True, on=None if inherit else how in ("claude", "colony"))
+        configure(s["claude"], root, personal=True, on=None if inherit else how in ("claude", "chatgpt", "colony"))
+    if s.get("chatgpt"):
+        configure(s["chatgpt"], root, chatgpt=True, on=None if inherit else how in ("claude", "chatgpt", "colony"))
 
 
 # --- starting a console with them ----------------------------------------------------------------------------------
@@ -397,10 +463,23 @@ def claude_args(root):
     return out
 
 
+def apps_off(root):
+    """The person's ChatGPT apps a Codex console starts without: off in its project, or its service reached through
+    colony there instead (one path to a service, as denied is for Claude)."""
+    data = load()
+    through_colony = {c.get("service") or n for n, c in servers(root).items()} if root is not None else set()
+    return [c["id"] for n, c in sorted(data["chatgpt"].items())
+            if c.get("id") and (not is_on(c, root) or slug(n) in through_colony)]
+
+
 def codex_args(root):
-    """Codex's launch overrides: the granted connections as MCP servers."""
+    """Codex's launch overrides: the granted connections as MCP servers, and the person's ChatGPT apps the project
+    doesn't have switched off."""
     from .codex_remote import toml
     out = []
+    for aid in (apps_off(root) if root else []):
+        if re.fullmatch(r"[A-Za-z0-9_-]+", aid):
+            out += ["-c", f"apps.{aid}.enabled=false"]
     for n in (servers(root) if root else {}):
         cmd = _server(n, root)
         out += ["-c", f"mcp_servers.{n}.command={toml(cmd[0])}", "-c", f"mcp_servers.{n}.args={toml(cmd[1:])}",
