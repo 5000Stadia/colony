@@ -7591,7 +7591,10 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
 /* The player: over every page while something is being read or waits to be taken up, above the box and the tabs */
 .cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
-.cplayer[hidden], .cppanel[hidden] { display:none } body.typing .cplayer { display:none }
+.cplayer[hidden], .cppanel[hidden] { display:none }
+/* typing on a phone, the box rides the keyboard up: the player rides just above it */
+body.typing .cplayer { top:calc(var(--kbtop, 100vh) - var(--boxh, 0px) - var(--cph, 56px) - 8px); bottom:auto !important }
+body.cpon.typing .toend { top:calc(var(--kbtop, 100vh) - 124px - var(--cph, 56px)) } body.cpon.typing .chat { padding-bottom:calc(140px + var(--cph, 56px)) }
 html.going main { opacity:.5; transition:opacity .2s .15s }
 body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-area-inset-bottom)) }
 .cplayer > * { pointer-events:auto; max-width:740px; margin:0 auto }
