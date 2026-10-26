@@ -2577,6 +2577,7 @@ def chat_feed(key, root, shown=40):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
                        "<button class='vset' aria-label='Voice: auto-speak, speed, voice'>Voice</button>"
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
+                       f"<button class='cont' data-t='{k}' hidden aria-label='Continue where it stopped'>Continue</button>"
                        f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
                        f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button></div>")
     if not turns:
@@ -2908,7 +2909,8 @@ CHAT = """
   });
   // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
   const talk = window.speechSynthesis, aloud = document.getElementById('aloud');
-  let voice = null, playing = null, paused = false, loading = false;
+  let voice = null, playing = null, paused = false, loading = false, parked = null;
+  const RKEY = 'reading:' + box.dataset.name;
   const pick = () => {
     const vs = talk ? talk.getVoices().filter((v) => /^en/i.test(v.lang)) : [];
     const rank = (v) => (/premium/i.test(v.name) ? 4 : /enhanced|neural|natural/i.test(v.name) ? 3 : 0) + (v.localService ? 1 : 0) + (v.default ? .5 : 0);
@@ -2951,6 +2953,7 @@ CHAT = """
       const st = b.dataset.t !== playing ? 'play' : loading ? 'load' : 'stop';
       if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } });
     box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== playing || loading; });
+    box.querySelectorAll('button.cont').forEach((b) => { b.hidden = !parked || playing || b.dataset.t !== parked.t || parked.at < 1; });
     box.querySelectorAll('button.hold').forEach((b) => { if (b.dataset.p !== String(paused)) { b.dataset.p = paused;
       b.innerHTML = paused ? ICON.play : ICON.pause; b.setAttribute('aria-label', paused ? 'Resume' : 'Pause'); } });
     const sets = [...box.querySelectorAll('button.vset')];
@@ -3054,7 +3057,7 @@ CHAT = """
     const next = () => {
       if (playing !== t) return;
       if (i >= parts.length) return done(t);
-      now = {t, parts, at: i};
+      now = {t, parts, at: i}; track();
       const u = new URL(clip(parts[i]), location.href).href;
       player.src = kept.get(u) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
       // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
@@ -3080,7 +3083,7 @@ CHAT = """
     let began = false;
     setTimeout(() => { if (playing === t && !began && !talk.speaking) { talk.cancel(); playing = null; loading = false; mark(); } }, 2500);
     parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
-      u.onstart = () => { began = true; now = {t, parts, at: i}; if (loading) { loading = false; mark(); } };
+      u.onstart = () => { began = true; now = {t, parts, at: i}; track(); if (loading) { loading = false; mark(); } };
       if (i === parts.length - 1) u.onend = () => done(t);
       talk.speak(u); });
   };
@@ -3093,15 +3096,28 @@ CHAT = """
     if (KOKORO) sayK(t, parts, at); else sayPhone(t, parts.slice(at));
   };
   const waiting = [];
-  function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); else rest(); }
-  const say = (t, text) => { waiting.length = 0; via = ''; start(t, text); };          // a tap: this one, now
-  const later = (t, text) => { if (playing) waiting.push({t, text}); else start(t, text); };   // a new reply: after this one
-  function start(t, text) {
+  function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); else { track(); rest(); } }
+  const say = (t, text) => { waiting.length = 0; parked = null; via = ''; start(t, text); };          // a tap: this one, now
+  // a new reply: after this one, or, when the person came back to a reading left unfinished, after that (it waits for them)
+  const later = (t, text) => { if (playing || parked) { waiting.push({t, text}); track(); } else start(t, text); };
+  function start(t, text, from = 0) {
     const parts = chunks(text).filter((p) => p.trim());
-    hush(!!resting); playing = t;
-    loading = !(KOKORO && parts[0] && ready.has(new URL(clip(parts[0]), location.href).href)); mark();
-    if (parts[0]) tell(parts[0]);
-    return KOKORO ? sayK(t, parts) : sayPhone(t, parts);
+    from = Math.min(from, Math.max(0, parts.length - 1));
+    hush(!!resting); playing = t; parked = null;
+    loading = !(KOKORO && parts[from] && ready.has(new URL(clip(parts[from]), location.href).href)); mark();
+    if (parts[from]) tell(parts[from]);
+    return KOKORO ? sayK(t, parts, from) : sayPhone(t, parts.slice(from));
+  }
+  // Where the reading is, kept on this device for each project, piece by piece: the reply being read, the piece being
+  // heard, and the replies waiting their turn. Leaving the page and coming back, it is there again, paused: ▷ reads
+  // that reply from the start, and a long one stopped partway offers Continue from the piece it stopped at; what was
+  // waiting is read after it. Stopped with ■, or read to the end with nothing waiting, nothing is kept.
+  function track() {
+    try {
+      if (!playing && !waiting.length) { localStorage.removeItem(RKEY); return; }
+      localStorage.setItem(RKEY, JSON.stringify({t: playing, piece: now && now.t === playing ? now.parts[now.at] : '',
+        queue: waiting.map((w) => w.t), at: Date.now()}));
+    } catch (e) {}
   }
   // ▷ reads all the agent said since the person's own message before it, across colony's notices in between
   const turn = (t) => {
@@ -3215,6 +3231,17 @@ CHAT = """
   }
   if (ms) { [['pause', () => hold(true)], ['play', () => hold(false)], ['nexttrack', skip],
     ['stop', () => { hush(); playing = null; mark(); }]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
+  // A reading left unfinished here comes back paused (track): the reply it was in, the piece it reached, what waited.
+  try { const was = JSON.parse(localStorage.getItem(RKEY) || 'null');
+    const here = (t) => t && box.querySelector(`.say[data-t="${CSS.escape(t)}"]`);
+    if (was && (here(was.t) || (was.queue || []).some(here))) {
+      if (here(was.t)) { const parts = chunks(turn(was.t)).filter((p) => p.trim());
+        parked = {t: was.t, at: Math.max(0, parts.indexOf(was.piece))}; }
+      (was.queue || []).filter(here).forEach((t) => waiting.push({t, text: turn(t)}));
+      if (!parked && waiting.length) { const n = waiting.shift(); parked = {t: n.t, at: 0}; }
+      mark();
+    } else localStorage.removeItem(RKEY);
+  } catch (e) {}
   // On coming back, what came since is read at once where the browser lets a page speak by itself; a phone lets it only
   // after a tap, so there it starts with the first touch anywhere on the page.
   if (aloud.checked && says.some((x) => !heard.has(x.dataset.k))) {
@@ -3246,8 +3273,11 @@ CHAT = """
     // ⏸ holds the reading where it is, ▷ takes it up from there
     if (ev.target.closest('button.hold')) return hold(!paused);
     if (ev.target.closest('button.skip')) return skip();
+    const c = ev.target.closest('button.cont');
+    if (c && parked && parked.t === c.dataset.t) { via = ''; start(parked.t, turn(parked.t), parked.at); return; }
     const l = ev.target.closest('button.listen');
-    if (l) { if (playing === l.dataset.t) { hush(); playing = null; mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
+    if (l && parked && parked.t === l.dataset.t && !playing) { via = ''; start(parked.t, turn(parked.t)); return; }   // from the start, what waited after it
+    if (l) { if (playing === l.dataset.t) { hush(); playing = null; waiting.length = 0; track(); mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
     await fetch('/choose', {method: 'POST', body: new URLSearchParams({p: key, option: b.dataset.option})}).catch(() => {});
     setTimeout(refresh, 600);
@@ -7292,7 +7322,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
-.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts .vset { width:auto; min-width:36px; font-size:13px; padding:0 10px }
+.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .turnacts .vset, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
 .chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
 .chat .turnacts .spin { transform-origin:12px 12px; animation:spin .9s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
