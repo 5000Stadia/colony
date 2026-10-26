@@ -2600,7 +2600,16 @@ PLAYER = """
     if (at + 1 >= parts.length) return finished(i);
     changed(); if (R.kokoro) sayK(i, parts, at + 1); else sayPhone(i, parts, at + 1);
   }
-  function stop() { hush(); playing = false; now = null; if (R) { if (R.all) put('cpsource', null); forget(R.name); } R = null; changed(); }
+  // ■ is silence: what is read stops and is let go, a voice's sample too, and Auto goes off (its ring with it), so the
+  // next reply to land doesn't start it all again; Auto beside the latest reply, or in ⚙, turns it back on
+  function stop() { hush(); sample.pause(); playing = false; now = null; put('cpsource', null);
+    if (R) forget(R.name);
+    R = null; setAloud(false); changed(); }
+  function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
+    const box = document.getElementById('aloud'); if (box) box.checked = on;
+    $('.cpaloud').checked = on; ring(); if (view) view.mark(); }
+  // while Auto is on, a light circles ▷ and ⏸ (the player's, and those beside Auto in Chat)
+  const ring = () => document.documentElement.classList.toggle('autoon', aloud());
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
   const again = (voiceChanged) => {
     if (!playing || !now || !R || now.i !== R.cur) return;
@@ -2656,7 +2665,7 @@ PLAYER = """
   // from) or set auto-speak, speed and voice; a tap elsewhere folds it again.
   const draw = () => {
     const show = left(R);
-    bar.hidden = false;
+    ring(); bar.hidden = false;
     if (bar.classList.contains('cpidle') === show) { bar.classList.toggle('cpidle', !show); if (show) bar.classList.remove('open'); else shut(); }
     document.body.classList.toggle('cpon', show);
     if (!show) { $('.cpall').hidden = $('.cpwait').hidden = true; $('.cpname').textContent = 'Player';
@@ -2810,10 +2819,7 @@ PLAYER = """
     $('.cpvpin').closest('label').hidden = who.key === 'steward' && !R;      // the person's own voice: nothing to pin it to
     $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.options; $('.cpherald').value = herald();
   }
-  on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked;
-    try { localStorage.setItem('aloud', a ? '1' : '0'); } catch (e) {}
-    if (a) unlock();
-    const box = document.getElementById('aloud'); if (box) box.checked = a; if (view) view.mark(); });
+  on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked; if (a) unlock(); setAloud(a); });
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
   const keepVoice = async (body) => { const {key, name} = voiced(); if (!key) return;
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
@@ -3634,6 +3640,7 @@ CHAT = """
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
   // ▷, then a spinner while the voice is being made, then ■ once it is heard; pause and skip come with the sound
   const mark = () => { if (!box.isConnected) return;
+    document.documentElement.classList.toggle('autoon', !!(aloud && aloud.checked));
     const s = P.of(view.name), on = s && s.playing ? s.t : null;
     box.querySelectorAll('button.listen').forEach((b) => {
       const st = b.dataset.t !== on ? 'play' : s.loading ? 'load' : 'stop';
@@ -8050,6 +8057,16 @@ body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:
   border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:16px }
+/* Auto on: a small light circles the play and pause buttons, its tail in the rainbow, glowing */
+.cpbar .cphold, .chat .turnacts .listen, .chat .turnacts .hold { position:relative }
+html.autoon .cpbar .cphold::before, html.autoon .chat .turnacts:has(.auto) .listen::before, html.autoon .chat .turnacts:has(.auto) .hold:not([hidden])::before {
+  content:''; position:absolute; inset:1px; border-radius:50%; padding:2px; pointer-events:none;
+  background:conic-gradient(transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
+  filter:drop-shadow(0 0 2px #ff9ad5); animation:autoring 1.8s linear infinite }
+@keyframes autoring { to { transform:rotate(360deg) } }
+@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon .chat .turnacts:has(.auto) .listen::before,
+  html.autoon .chat .turnacts:has(.auto) .hold::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
