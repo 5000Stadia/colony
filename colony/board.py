@@ -3236,6 +3236,7 @@ def chat_feed(key, root, shown=40):
     turns = turns[-shown:]
     letters = mail_by_turn(root, turns)
     out = []
+    last_say = max((i for i, t in enumerate(turns) if any(kind == "say" for kind, _ in t["items"])), default=-1)
     for i, t in enumerate(turns):
         k = f"{e(t['at'])}"
         if t["from"] == "you":                          # with the pictures it sent, as pictures
@@ -3277,7 +3278,10 @@ def chat_feed(key, root, shown=40):
                        f"<button class='cont' data-t='{k}' hidden aria-label='Continue where it stopped'>Continue</button>"
                        f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
                        f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button>"
-                       f"{said_at(t.get('last') or t['at'])}</div>")
+                       # the latest reply's Auto: new replies read as they come, on or off with a tap (the person's, kept)
+                       + ("<button class='auto' aria-pressed='false' aria-label='Read new replies aloud as they come'>Auto</button>"
+                          if i == last_say else "")
+                       + f"{said_at(t.get('last') or t['at'])}</div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
@@ -3634,7 +3638,8 @@ CHAT = """
     box.querySelectorAll('button.cont').forEach((b) => { b.hidden = !s || s.playing || b.dataset.t !== s.t || !s.into; });
     box.querySelectorAll('button.hold').forEach((b) => { const p = !!(s && s.paused); if (b.dataset.p !== String(p)) { b.dataset.p = p;
       b.innerHTML = p ? ICON.play : ICON.pause; b.setAttribute('aria-label', p ? 'Resume' : 'Pause'); } });
-    box.querySelectorAll('button.vset').forEach((b) => { b.classList.toggle('on', !!(aloud && aloud.checked)); });
+    box.querySelectorAll('button.auto').forEach((b) => { const on = !!(aloud && aloud.checked);
+      if (b.getAttribute('aria-pressed') !== String(on)) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); } });
     focus(s && s.active ? s.k : null, false); };
   // Follow in chat (the player's list): the section being heard is marked, and as each starts it is brought into view
   // below the bar, unless a finger moved the page just now or the box is being typed in
@@ -3781,6 +3786,7 @@ CHAT = """
       cp.innerHTML = ok ? ICON.check : '✗'; setTimeout(() => { cp.innerHTML = ICON.copy; }, 1500); return;
     }
     // ⏸ holds the reading where it is, ▷ takes it up from there
+    if (ev.target.closest('button.auto')) { aloud.checked = !aloud.checked; aloud.dispatchEvent(new Event('change')); return; }
     if (ev.target.closest('button.hold')) return P.hold(!P.now().paused);
     if (ev.target.closest('button.skip')) return P.skip();
     if (ev.target.closest('button.cont')) return P.resume(view.name);           // from the piece it stopped at
@@ -7974,8 +7980,8 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .stamp { font-size:10.5px; color:var(--muted); opacity:.8; white-space:nowrap }
-.chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px } .chat .turnacts .vset, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
-.chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
+.chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px } .chat .turnacts .auto, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
+.chat .turnacts .auto.on { color:var(--accent); font-weight:600; background:var(--sunk) }
 /* The player: over every page while something is being read or waits to be taken up, above the box and the tabs */
 .cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
 .cplayer[hidden], .cppanel[hidden] { display:none }
