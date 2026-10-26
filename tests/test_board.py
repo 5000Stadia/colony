@@ -5891,3 +5891,26 @@ class ReadyChecksTest(BoardBase):
         (self.root / "work.py").write_text("x = 1\n")
         subprocess.run(["git", "add", "work.py"], cwd=self.root)
         self.assertEqual(cli._uncommitted(self.root), ["work.py"])
+
+
+class StewardBriefTest(BoardBase):
+    """The steward's brief, written at each start, stays whole, and a start that changes nothing tells it nothing."""
+
+    def test_a_section_starting_the_board_is_never_cut_and_an_unchanged_brief_raises_no_notice(self):
+        from colony import monitor, providers
+        claude = providers.get("claude")
+        folder = Path(self.tmp.name) / "steward"
+        folder.mkdir()
+        text = "# Steward\n\n## Your job\n\nwork\n\n## The board is yours to keep healthy\n\nkeep it\n"
+        (folder / "CLAUDE.md").write_text(text)
+        claude.wire(folder, "")
+        self.assertEqual((folder / "CLAUDE.md").read_text(), text, "nothing to deploy: left as it is")
+        claude.wire(folder, "## This project is part of a colony\n\nthe protocol\n")
+        self.assertIn("## The board is yours to keep healthy", (folder / "CLAUDE.md").read_text(), "not taken for the old block")
+        with patch.object(monitor, "provider", return_value=claude):
+            monitor.ensure()
+            queued = []
+            with patch.object(monitor, "queue", side_effect=lambda text, **k: queued.append(text)):
+                monitor.ensure()
+            self.assertEqual(queued, [], "a start that changed nothing tells the steward nothing")
+            self.assertIn("The board is yours to keep healthy", monitor.brief_path().read_text())

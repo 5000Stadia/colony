@@ -186,9 +186,14 @@ class ClaudeCode:
         claude_md = root / "CLAUDE.md"
         have = claude_md.read_text() if claude_md.exists() else ""
         block = protocol.lstrip("\n")
-        marker = next((m for m in ("## This project is part of a colony", "## The board") if m in have), None)
-        if marker:
-            start = have.index(marker)
+        # the block's heading, or its old one, as a whole line: "## The board is yours to keep healthy" (the steward's
+        # own section) is not "## The board", and was cut out at every start when it was taken for it
+        found = [re.search(rf"(?m)^{re.escape(m)}[ \t]*$", have) for m in ("## This project is part of a colony", "## The board")]
+        marker = next((f for f in found if f), None)
+        if not block:
+            pass                                   # nothing to deploy (the steward, whose brief is its own): left as it is
+        elif marker:
+            start = marker.start()
             end = have.find("\n## ", start + 5)
             claude_md.write_text(have[:start] + block + (have[end + 1:] if end != -1 else ""))
         else:
