@@ -187,12 +187,18 @@ def _died_path(name):
 
 
 def died(name):
-    """How its program last ended, where it ended in an error: {"at", "status", "lines"}, or None."""
+    """How its program last ended, where it ended in an error since it was last started: {"at", "status", "lines"},
+    or None. A record from before that start is an earlier program's, kept rather than deleted: two starts at once
+    (a message, a note delivered) would otherwise wipe the one that just died's record, and with it why."""
     try:
         d = json.loads(_died_path(name).read_text())
     except (OSError, ValueError):
         return None
-    return d if d.get("status") else None
+    try:
+        began = (json.loads(_started_path().read_text()).get(name) or {}).get("at") or 0
+    except (OSError, ValueError):
+        began = 0
+    return d if d.get("status") and d.get("at", 0) >= began else None
 
 
 def ensure(root, name=None, label=None, settle=0):
@@ -203,9 +209,8 @@ def ensure(root, name=None, label=None, settle=0):
         from . import board, providers
         if not COMMAND and not providers.installed(providers.of(None if label else root)):
             return name                             # its program isn't here: no console that would only die
-        # what an earlier one died of goes first: cleared after the start, a program that dies at once could have its
-        # own record written (by anything looking at the console then) and wiped, leaving no word of why
-        _died_path(name).unlink(missing_ok=True)
+        # what an earlier one died of no longer counts from here (died() reads only what came after this start)
+        began = time.time()
         # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
@@ -215,7 +220,7 @@ def ensure(root, name=None, label=None, settle=0):
                         ";", "set-option", "-w", "-t", name, "remain-on-exit", "on"],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
-        _started(name, fingerprint(root, label), providers.key(providers_of(root, label)))
+        _started(name, fingerprint(root, label), providers.key(providers_of(root, label)), at=began)
         scrollable(name, providers_of(root, label))
         if not label:
             try:
@@ -292,8 +297,8 @@ def _record(change):
         tmp.replace(path)
 
 
-def _started(name, fp, program=None):
-    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "at": time.time(), **({"program": program} if program else {})}))
+def _started(name, fp, program=None, at=None):
+    _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "at": at or time.time(), **({"program": program} if program else {})}))
 
 
 def running_program(name):

@@ -2601,9 +2601,24 @@ PLAYER = """
     if (!playing || !now || !R || now.i !== R.cur) return;
     if (R.kokoro && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
     const {i, parts, at} = now;
+    if (paused) { hush(); playing = false; R.piece = at; save(); changed(); return; }   // ▷ takes it up there, in the new voice
     hush(); playing = true; changed();
     if (R.kokoro) sayK(i, parts, at); else sayPhone(i, parts, at);
   };
+  // A voice chosen is heard at once, saying its name and a sentence that ranges across the sounds of speech (a
+  // question, an exclamation, numbers, a time), so voices are compared by ear. What was being read pauses, and stays
+  // paused: ▷ takes it up again.
+  const sample = new Audio();
+  const SAMPLE = "Here's how I sound. The quick brown fox jumps over the lazy dog, and at 3:45 on a breezy Thursday, "
+    + "would you believe it, the jazz quartet played twelve encores!";
+  function preview(v, label) {
+    if (!v) return;
+    if (playing && !paused) hold(true);
+    if (resting) { player.pause(); player.loop = false; resting = 0; }
+    sample.src = '/voice?v=' + encodeURIComponent(v) + '&t=' + encodeURIComponent((label || '') + '. ' + SAMPLE);
+    sample.playbackRate = sample.defaultPlaybackRate = pace();
+    sample.play().catch(() => {});
+  }
   if (ms) { [['pause', () => hold(true)], ['play', () => hold(false)], ['nexttrack', skip], ['stop', stop]].forEach(([a, h]) => {
     try { ms.setActionHandler(a, h); } catch (e) {} }); }
   // The player: over every page, above the box and the tabs, while there is something to read or take up again
@@ -2787,8 +2802,10 @@ PLAYER = """
     const got = await r.json();
     $('.cpkvoice').value = got.voice; $('.cpvpin').checked = got.pinned; P.setVoice(name, got.voice);
     document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, voice: got.voice, pinned: got.pinned}})); };
-  on($('.cpkvoice'), 'change', () => keepVoice({voice: $('.cpkvoice').value}));
-  on($('.cpherald'), 'change', () => { try { localStorage.setItem('announcer', $('.cpherald').value); } catch (e) {} });
+  const label = (sel) => (sel.selectedOptions[0] || {}).textContent || '';
+  on($('.cpkvoice'), 'change', () => { preview($('.cpkvoice').value, label($('.cpkvoice'))); keepVoice({voice: $('.cpkvoice').value}); });
+  on($('.cpherald'), 'change', () => { try { localStorage.setItem('announcer', $('.cpherald').value); } catch (e) {}
+    preview($('.cpherald').value, label($('.cpherald'))); });
   on($('.cpvpin'), 'change', () => keepVoice({pin: $('.cpvpin').checked ? '1' : '0'}));
   const P = window.colonyPlayer = {
     busy: () => left(R), placed, rate, following,
@@ -2808,7 +2825,7 @@ PLAYER = """
         into: r.piece >= 1 || (r.cur > 0 && r.list[r.cur - 1].t === s.t)};
     },
     now: () => ({playing, paused}),
-    hold, skip, stop,
+    hold, skip, stop, preview,
     // sections from a chat: tapped (read these now) or new ones arriving there (auto). New ones join a reading of
     // their project's already going, or wait after one kept paused; otherwise they take the voice from any other.
     read(v, secs, how = {}) {
@@ -3633,7 +3650,8 @@ CHAT = """
   document.addEventListener('colony-voice', (ev) => { const d = ev.detail; if (!picker) return;
     if (d.name === view.name) { kvoice = picker.value = d.voice; pin.checked = d.pinned; }
     else if (!d.pinned && !pin.checked) kvoice = picker.value = d.voice; });
-  if (picker) { picker.addEventListener('change', () => keepVoice({voice: picker.value}));
+  if (picker) { picker.addEventListener('change', () => { P.preview(picker.value, (picker.selectedOptions[0] || {}).textContent);
+      keepVoice({voice: picker.value}); });
     pin.addEventListener('change', () => keepVoice({pin: pin.checked ? '1' : '0'}));
     // a voice once kept on this device for this project stays with it, as its pin
     try { const old = localStorage.getItem('kvoice:' + box.dataset.name);
