@@ -568,6 +568,11 @@ def cmd_show(a):
     """Put a deliverable in the project's showcase for the person to see, rate and comment on, if they like."""
     from . import board, showcase
     root = board.root_of()
+    dead = _dead_link(a.link or "")
+    if dead:
+        print(f"colony: {a.link} doesn't open ({dead}); the person would tap a dead link. Start it, or show it once it runs.",
+              file=sys.stderr)
+        return 2
     try:
         x = showcase.add(root, a.title, a.what, a.try_ or "", a.link or "", a.item)
     except FileNotFoundError:
@@ -578,6 +583,28 @@ def cmd_show(a):
         return 2
     print(f"shown {x['id']}: {x['title']} (the person may rate and comment; it arrives as a note)")
     return 0
+
+
+def _dead_link(link, timeout=8):
+    """Why a web link doesn't open, or "" if it does (or isn't a web link)."""
+    import urllib.error
+    import urllib.request
+    if not link.startswith(("http://", "https://")):
+        return ""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(link, headers={"User-Agent": "colony-check"}), timeout=timeout):
+            return ""
+    except urllib.error.HTTPError as err:
+        return "" if err.code in (401, 403) else f"it answers {err.code}"     # behind a login is still there
+    except (urllib.error.URLError, OSError, ValueError) as err:
+        return str(getattr(err, "reason", err))[:120]
+
+
+def _uncommitted(root):
+    """Tracked files with changes not committed, in the project's git (none if it isn't one)."""
+    import subprocess
+    r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=str(root), capture_output=True, text=True)
+    return [l[3:] for l in r.stdout.splitlines() if l.strip()] if r.returncode == 0 else []
 
 
 def cmd_hint(a):
@@ -1442,6 +1469,10 @@ def cmd_ready(a):
     root = board.root_of()
     board.mark_ready(root, a.item, a.what, a.check or "")
     print(f"{a.item}: the person will see it ready for their OK")
+    left = _uncommitted(root)
+    if left:
+        print(f"Colony's check: {len(left)} tracked file{'s' * (len(left) != 1)} not committed ({', '.join(left[:5])}"
+              f"{', …' if len(left) > 5 else ''}). If they're this item's work, commit them now; it isn't ready until it's in.")
     return 0
 
 

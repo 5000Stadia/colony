@@ -3626,7 +3626,9 @@ class PinTest(BoardBase):
         self.assertEqual(run("show", "No what").returncode, 2, "an entry says what it is")
         (self.root / "Pip’s Puddle Parade.pdf").write_bytes(b"%PDF-1.4 x")
         run("show", "The book", "--what", "the full draft", "--link", "Pip’s Puddle Parade.pdf")
-        run("show", "The playable case", "--what", "the 1660 investigation, end to end", "--link", "http://localhost:5173/case")
+        dead = run("show", "The playable case", "--what", "the 1660 investigation, end to end", "--link", "http://localhost:5173/case")
+        self.assertEqual(dead.returncode, 2, "nothing answers there: the person would tap a dead link")
+        showcase.add(self.root, "The playable case", "the 1660 investigation, end to end", link="http://localhost:5173/case")
         for n in range(showcase.FRESH):
             showcase.add(self.root, f"Older {n}", "an earlier build")
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
@@ -5855,3 +5857,37 @@ class RulesTest(BoardBase):
         self.assertIn("Standing rules", board.rules_box(self.root, 0))
         rules.retire(self.root, r["id"], "lifted")
         self.assertEqual(rules.session_text(self.root), "")
+
+
+class ReadyChecksTest(BoardBase):
+    """What colony checks itself before the person is shown work: a showcase link opens, a ready item is committed."""
+
+    def test_a_dead_link_never_reaches_the_showcase_and_uncommitted_work_is_named_at_ready(self):
+        import subprocess
+        import socket
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+        from colony import cli
+
+        class Ok(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+
+            def log_message(self, *a):
+                pass
+        server = HTTPServer(("127.0.0.1", 0), Ok)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.assertEqual(cli._dead_link(f"http://127.0.0.1:{server.server_address[1]}/"), "")
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+        self.assertTrue(cli._dead_link(f"http://127.0.0.1:{port}/"), "nothing listening")
+        self.assertEqual(cli._dead_link("report.pdf"), "", "a file is checked where it is kept")
+        board.track(self.root)
+        with patch.object(board, "root_of", return_value=self.root):
+            self.assertEqual(cli.main(["show", "Demo", "--what", "the demo", "--link", f"http://127.0.0.1:{port}/"]), 2)
+        subprocess.run(["git", "init", "-q"], cwd=self.root)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], cwd=self.root)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x", "--allow-empty"], cwd=self.root)
+        (self.root / "work.py").write_text("x = 1\n")
+        subprocess.run(["git", "add", "work.py"], cwd=self.root)
+        self.assertEqual(cli._uncommitted(self.root), ["work.py"])
