@@ -135,12 +135,25 @@ where things stand; `colony remote --off` puts it back as it was.
   starts on this machine, with no gateway or outside account in between, and only in the projects you give it
   (Settings › Connections). Its keys stay in a file only you can read, typed into Settings, never into a chat. A
   tool it holds (one that sends, lists or spends) waits for your tap on the board; the agent hears how it went.
-  Your own connectors from your Claude sign-in (Gmail, Drive) are given project by project the same way.
-  An agent adds one with `colony connect --add`.
+  Your own connectors from your Claude sign-in (Gmail, Drive), and the apps of your ChatGPT sign-in for Codex
+  projects, are given project by project the same way. An agent adds one with `colony connect --add` (or keys
+  only, for its own script: `colony connect --with NAME -- COMMAND`); before you're asked to approve it, colony
+  audits it: a fresh model of another family reads the pinned package's code, without running it, and weighs it
+  against the asking project's work. Unsafe is refused and the agent told why; a poor fit is shown to you, yours
+  to approve anyway.
 - **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
   Outside them agents keep working but don't end on a question to you: the decisions they need, and any
   question asked in a console, are held off Waiting on you and arrive together when your hours begin (new
   hours move them), and the steward isn't woken just to pass something on. What you send goes through at any hour.
+  Seen within the last quarter hour (you wrote to an agent, tapped or sent on the board, opened one of its
+  pages), you count as around whatever the clock says.
+- **A wiser colony:** what one project learns, the next starts with. When you correct an agent, the steward may
+  propose a one-sentence lesson keyed to the colony action it's about; you adopt it with a tap on Needs you, and
+  agents see it each time they take that action (`colony lesson`). Research one project did is kept for all in a
+  shared library with a date to look again (`colony research "words"`, `--add FILE`). Your standing orders to a
+  project are kept by colony and handed back at every session start, after a compaction too (`colony rule`).
+- **Usage limits:** an agent the limit stopped mid-work is woken when it lifts, from the limit's own message on
+  its console, and told to carry on where it stopped.
 - **Today:** each project's page for your day, made from colony's records at no token cost: what landed since
   you last looked on an earlier day, the day's decisions numbered, the queue, and what's held for your hours.
   Answer by number in one box (`1 yes; 2 email`). An agent can give a reversible decision a default, which
