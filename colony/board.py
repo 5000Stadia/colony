@@ -2175,7 +2175,7 @@ def sidebar(reg, pid):
                     f"{len(members)}</span><span class='badge gate'{'' if waits else ' hidden'}>{waits}</span></span>"
                     f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); colonyNav.go('/nest?n={q}')\">"
                     f"→</span></span></a><span class='members'>{''.join(chips)}<a class='proj nestset' href='/nest?n={q}' "
-                    f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙</a></span></span>")
+                    f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙&#xFE0E;</a></span></span>")
     # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
@@ -2191,7 +2191,7 @@ def sidebar(reg, pid):
                 "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/connections' title='Connections'><span class='long'>Connections</span><span class='short'>⇄</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
-                "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙</span></a></div>")
+                "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙&#xFE0E;</span></a></div>")
     # on a phone the steward is a bar of its own above the projects' row, which scrolls alone
     # scrolled past the pinned chips, a 📌 floats at the row's left: a tap brings them back
     return (side[0] + "<div class='navrow'>" + "".join(side[1:]) + "</div>"
@@ -2586,7 +2586,7 @@ PLAYER = """
     + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b class='cpname'></b><span class='cpprev'></span></button>"
     + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
     + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
-    + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙</button></div>";
+    + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙&#xFE0E;</button></div>";
   const $ = (s) => bar.querySelector(s), panel = $('.cpsecs'), rows = $('.cprows'), follow = $('.cpfollow input');
   const following = () => { try { return localStorage.getItem('follow') !== '0'; } catch (e) { return true; } };
   follow.checked = following();
@@ -8020,7 +8020,10 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   .console-bar { flex-wrap:wrap } .console-bar > span { flex:1 1 220px; min-width:0; overflow-wrap:anywhere }
   /* All projects, Add, Models and Settings ride at the right of the steward's bar, always in reach */
   .navfoot { position:absolute; top:0; right:4px; flex-direction:row; align-items:center; margin:0; padding:0; border:0;
-    gap:0; font-size:17px; z-index:3 } nav .proj.monitor { padding-right:176px }
+    gap:0; font-size:17px; z-index:3 }
+  /* its five links are 44px each to a finger: the steward's line ends before them, never under them (the person's screenshot, Oct 26) */
+  nav .proj.monitor { padding-right:232px }
+  @media (max-width: 440px) { nav .proj.monitor .sline { display:none } }   /* no room for its line there: its dot says it */
   .navfoot a { padding:0 8px; min-height:38px; display:inline-flex; align-items:center; justify-content:center }
   .navfoot .long { display:none } .navfoot .short { display:inline }
   nav .proj.monitor.on ~ .navrow .navfoot a { color:var(--card) }   /* on the steward's own page its bar is the accent */
