@@ -5884,6 +5884,9 @@ class TokensTest(BoardBase):
                 fh.write(reply("m3", 1) + "\n")
             REAL_COUNT()                                   # only what was added is read
             self.assertEqual(tokens.windows()[0][("project", "plants")]["4 h"], 240 + 106)
+            # a limit window's used part, by who spent it, weighed as the program's prices weigh tokens
+            got = tokens.spent("claude", time.time() - 3600)
+            self.assertEqual(got[("project", "plants")], 3 * (10 * 0 + 100 * 0.1 + 5 * 5) + 10 + 20 + 1)
         tokens.note("claude", {"input_tokens": 3, "output_tokens": 2})
         self.assertEqual(tokens.windows()[0][("colony", "Steward's scouts")]["4 h"], 5, "a scout notes what it spent")
         self.assertEqual(tokens.owner(str(board.home() / "agents" / "plants-codex"), [self.root], monitor.home()), ("project", "plants"))

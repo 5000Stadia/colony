@@ -206,20 +206,45 @@ def owner(cwd, roots, steward):
     return ("project", Path(best).name) if best else ("outside", "Outside colony")
 
 
-def windows(now=None):
-    """{program: {window: total}, ("project", name): {...}, ("colony", what): {...}, ...} and the share that is cache reads."""
+# How a program's limits weigh its tokens, as its prices do: (new input, cache read, cache write, output). A cache read
+# costs a tenth of new input; output several times it (Claude 5x, OpenAI's models 8x).
+WEIGHTS = {"claude": (1, 0.1, 1.25, 5), "codex": (1, 0.1, 1, 8)}
+# a limit window's length, by the name its program reports it under
+SPANS = {"5-hour": 5 * 3600, "weekly": 7 * 24 * 3600}
+
+
+def spent(prog, since, now=None):
+    """What each owner (project, colony itself, outside) spent of a program since a time, weighed as its limits weigh
+    tokens: {owner: weight}. A window's start falls within an hour: the hour it falls in counts whole."""
+    from . import monitor
+    roots = [Path(p) for p in board.projects(board.registry())]
+    w, out = WEIGHTS.get(prog, (1, 0.1, 1, 5)), {}
+    for k, v in load()["hours"].items():
+        hour, p, cwd = k.split("|", 2)
+        if p == prog and int(hour) + 3600 > since:
+            who = owner(cwd, roots, monitor.home())
+            who = ("colony", "Colony itself") if who[0] == "colony" else who
+            out[who] = out.get(who, 0) + sum(a * b for a, b in zip(w, v))
+    return out
+
+
+def windows(now=None, prog=None):
+    """{program: {window: total}, ("project", name): {...}, ("colony", what): {...}, ...} and the share that is cache
+    reads; for one program, prog."""
     from . import monitor
     now = now or time.time()
     roots = [Path(p) for p in board.projects(board.registry())]
     steward = monitor.home()
     rows, reads, totals = {}, {w: 0 for w, _ in WINDOWS}, {w: 0 for w, _ in WINDOWS}
     for k, v in load()["hours"].items():
-        hour, prog, cwd = k.split("|", 2)
-        age, n = now - int(hour), sum(v)
+        hour, prog_, cwd = k.split("|", 2)
+        if prog and prog_ != prog:
+            continue
+        prog_key, age, n = prog_, now - int(hour), sum(v)
         who = owner(cwd, roots, steward)
         for w, span in WINDOWS:
             if age <= span:
-                for key in (("program", prog), who):
+                for key in (("program", prog_key), who):
                     rows.setdefault(key, {x: 0 for x, _ in WINDOWS})[w] += n
                 totals[w] += n
                 reads[w] += v[1]

@@ -2527,14 +2527,18 @@ PLAYER = """
   const finished = (i) => { if (!R || R.cur !== i) return;
     R.list[i].heard = true;
     if (i + 1 < R.list.length) return begin(i + 1, 0, true);
-    playing = false; R.cur = R.list.length; R.piece = 0; forget(R.name); changed(); rest(); };
+    // read to the end: one left unheard before (kept paused when a new reply came) waits there, with Continue
+    const back = R.list.findIndex((x) => !x.heard);
+    playing = false; R.piece = 0;
+    if (back >= 0) { R.cur = back; save(); } else { R.cur = R.list.length; forget(R.name); }
+    changed(); rest(); };
   // From a section: those before it are counted heard, whether read or skipped past
-  function begin(i, from = 0, flow = false) {
+  function begin(i, from = 0, flow = false, keep = false) {
     const s = R && R.list[i]; if (!s) return;
     const parts = chunks(s.text).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
     hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null;
-    R.list.forEach((x, n) => { if (n < i) x.heard = true; });
+    if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
     loading = !(R.kokoro && parts[from] && ready.has(abs(clip(parts[from])))); save(); changed(true);
     if (!parts.length) return finished(i);
     tell(parts[from]);
@@ -2583,7 +2587,7 @@ PLAYER = """
     + "<div class='cpvoice' hidden><label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label></div></div></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
-    + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b class='cpname'></b><span class='cpprev'></span></button>"
+    + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
     + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
     + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
     + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙&#xFE0E;</button></div>";
@@ -2602,6 +2606,8 @@ PLAYER = """
     document.body.classList.toggle('cpon', show);
     if (!show) return;
     const s = R.list[R.cur];
+    // paused (by a tap, or kept from before): said in words, the words being read dimmed, as new replies wait after it
+    $('.cpwait').hidden = playing && !paused; bar.classList.toggle('cppaused', !playing || paused);
     $('.cpname').textContent = R.name; $('.cpprev').textContent = words(s.text, 12); $('.cpopen').setAttribute('href', R.href || '/');
     const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
     const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
@@ -2732,9 +2738,13 @@ PLAYER = """
       const mine = R && R.name === v.name ? R : load(v.name);
       const add = (r) => { const have = new Set(r.list.map((x) => x.k)); clean.forEach((x) => { if (!have.has(x.k)) r.list.push(x); });
         while (r.list.length > 60 && r.cur > 0) { r.list.shift(); r.cur -= 1; } };
-      if (mine && mine !== R) { add(mine); put('reading:' + v.name, Object.assign(mine, {saved: Date.now()})); changed(); return; }
-      if (mine) { const was = left(R); add(R); save(); via = '&auto=1'; if (!was) begin(R.cur); else changed(); return; }
-      yieldTo(null); R = blank(v); add(R); via = '&auto=1'; begin(0);
+      if (mine && mine === R && playing) { add(R); save(); changed(); return; }    // being read, or held by a pause: after it
+      // otherwise they are read as they land; a reading kept paused stays listed before them, unheard
+      const r = mine || blank(v), fresh = new Set(clean.map((x) => x.k));
+      add(r);
+      const first = r.list.findIndex((x, n) => n >= r.cur && fresh.has(x.k) && !x.heard);
+      if (first < 0) { if (r !== R) put('reading:' + v.name, Object.assign(r, {saved: Date.now()})); changed(); return; }
+      yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
     },
     // ▷ on a reply kept paused: from its start, what waited after it still waiting
     again(v, secs) { const r = R && R.name === v.name ? R : load(v.name), ks = new Set(secs.map((x) => x.k));
@@ -3087,7 +3097,6 @@ def chat_feed(key, root, shown=40):
                 out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}' data-at='{e(when)}'>{chat_prose(text, key, root)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
-                       "<button class='vset' aria-label='Voice: auto-speak, speed, voice'>Voice</button>"
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
                        f"<button class='cont' data-t='{k}' hidden aria-label='Continue where it stopped'>Continue</button>"
                        f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
@@ -4057,39 +4066,75 @@ def render(reg, pid, view="overview", show_all=""):
 
 
 def tokens_html():
-    """Tokens spent over the last 4 hours, day and week: by program, by project, and colony's own overhead apart."""
+    """Tokens spent, a section for each program: its limit windows as bars, the part used split by who used it (each
+    project in its own colour, colony itself, outside colony), and under them what each spent over 4 hours, a day and
+    a week, colony's own overhead apart."""
     import threading
-    from . import providers as pv, tokens
+    from . import providers as pv, tokens, usage
     threading.Thread(target=tokens.update, daemon=True).start()      # current by the next look
-    rows, totals, reads = tokens.windows()
     looked = tokens.load().get("looked")
     if not looked:
         return ("<h2>Tokens</h2><div class='card'><p class='muted'>Counting: the first look reads the week's transcripts, "
                 "in the background. Back in a minute.</p></div>")
     ws = [w for w, _ in tokens.WINDOWS]
+    tint = {Path(p).name: PALETTE.get(colour(p)) for p in projects(registry())}
+    spare = iter([("#8a7f6a", "#c2b79f"), ("#6f8a9a", "#a7c2d2"), ("#9a6f8a", "#d2a7c2"), ("#7f9a6f", "#b7d2a7")] * 9)
+    hue = {("colony", "Colony itself"): ("#77736c", "#a29d95"), ("outside", "Outside colony"): ("#c9c4ba", "#5c5952")}
+    paint = lambda who: hue.get(who) or tint.get(who[1]) or hue.setdefault(who, next(spare))
+    dot = lambda c: f"--c:{c[0]};--cd:{c[1]}"
+    rank = {"project": 0, "colony": 1, "outside": 2}
+    num = lambda n: tokens.short(n) if n else "–"
     line = lambda label, v, cls="": (f"<tr{f' class={cls}' if cls else ''}><td>{label}</td>"
-                                     + "".join(f"<td>{tokens.short(v.get(w, 0)) if v.get(w) else '–'}</td>" for w in ws) + "</tr>")
-    of = lambda kind: sorted(((n, v) for (k, n), v in rows.items() if k == kind), key=lambda x: (-x[1]["7 d"], x[0]))
-    mine = of("colony")
-    over = {w: sum(v[w] for _, v in mine) for w in ws}
-    share = {w: f"{over[w] / totals[w]:.1%}" if totals[w] else "–" for w in ws}
-    body = ("<table class='tokens'><tr><th></th>" + "".join(f"<th>{w}</th>" for w in ws) + "</tr>"
-            + line("<b>All</b>", totals, "all")
-            + "".join(line(e(pv.PROVIDERS[k].label if k in pv.PROVIDERS else k), v, "sub") for k, v in of("program"))
-            + "<tr class='head'><td colspan='4'>By project</td></tr>"
-            + "".join(line(e(n), v, "sub") for n, v in of("project"))
-            + "".join(line(e(n), v, "sub") for n, v in of("outside"))
-            + "<tr class='head'><td colspan='4'>Colony itself</td></tr>"
-            + "".join(line(e(n), v, "sub") for n, v in mine)
-            + f"<tr class='all'><td>Overhead, of all</td>" + "".join(f"<td>{share[w]}</td>" for w in ws) + "</tr></table>")
-    fresh = {w: totals[w] - reads[w] for w in ws}
-    return ("<h2>Tokens</h2><div class='card'>" + body
-            + f"<p class='muted'>Mostly cache reads, the conversation read again at each turn, which cost a tenth and count "
-              f"lightly against limits: {reads['24 h'] / totals['24 h'] if totals['24 h'] else 0:.0%} of the last day. "
-              "Without them: " + " · ".join(f"{w} {tokens.short(fresh[w])}" for w in ws) + ". Colony itself is the steward "
-              "and the asks it makes (consultants, measure judges, connection audits, model checks, scouts); its notes "
-              "inside a project's own session count as the project's. As of "
-              f"{e(time.strftime('%-I:%M %p', time.localtime(looked)))}, from the programs' own transcripts.</p></div>")
+                                     + "".join(f"<td>{num(v.get(w, 0))}</td>" for w in ws) + "</tr>")
+    clock = lambda ts: time.strftime("%-I:%M %p" if time.localtime(ts)[:3] == time.localtime()[:3] else "%a %-I:%M %p", time.localtime(ts))
+    out, (_, every, cached) = [], tokens.windows()
+    for key, prov in pv.PROVIDERS.items():
+        limits = usage.read(key)
+        rows, totals, reads = tokens.windows(prog=key)
+        if not limits and not any(totals.values()):
+            continue
+        bars = []
+        for name, v in sorted(limits.items(), key=lambda x: x[0] != "5-hour"):      # the session's window first
+            span, used = tokens.SPANS.get(name), float(v.get("used") or 0)
+            if not span or not v.get("resets_at"):
+                continue
+            got = sorted(tokens.spent(key, v["resets_at"] - span).items(), key=lambda x: (rank[x[0][0]], -x[1]))
+            whole = sum(x for _, x in got)
+            parts = [(who, used * x / whole, x / whole) for who, x in got] if whole else []
+            seg = "".join(f"<span style='width:{p:.2f}%;{dot(paint(who))}' title='{e(who[1])}: {p:.1f}% of the limit'></span>"
+                          for who, p, _ in parts)
+            shown = [x for x in parts if x[1] >= 0.5] or parts[:3]
+            rest = sum(p for who, p, _ in parts if (who, p, _) not in shown)
+            legend = ("".join(f"<span class='uk'><i style='{dot(paint(who))}'></i>{e(who[1])} <b>{p:.0f}%</b>"
+                              f"<span class='muted'> · {sh:.0%} of the used</span></span>" for who, p, sh in shown)
+                      + (f"<span class='uk muted'>others {rest:.1f}%</span>" if rest >= 0.05 else "")
+                      if parts else "<span class='muted'>Nothing from this machine in this window: the use came from elsewhere "
+                                    "(its app, another device).</span>")
+            bars.append(f"<div class='uwin'><div class='uhead'><b>{e(name.capitalize())} window</b><span class='muted'>"
+                        f"{used:g}% used · resets {e(clock(v['resets_at']))}</span></div>"
+                        f"<div class='ubar' role='img' aria-label='{used:g}% of the {e(name)} limit used'>{seg}</div>"
+                        f"<div class='ulegend'>{legend}</div></div>")
+        of = lambda kind: sorted(((n, v) for (k, n), v in rows.items() if k == kind), key=lambda x: (-x[1]["7 d"], x[0]))
+        mine = of("colony")
+        over = {w: sum(v[w] for _, v in mine) for w in ws}
+        table = ("<table class='tokens'><tr><th>Tokens</th>" + "".join(f"<th>{w}</th>" for w in ws) + "</tr>"
+                 + line("<b>All</b>", totals, "all")
+                 + "".join(line(f"<i class='key' style='{dot(paint(('project', n)))}'></i>{e(n)}", v, "sub") for n, v in of("project"))
+                 + "".join(line(e(n), v, "sub") for n, v in of("outside"))
+                 + ("<tr class='head'><td colspan='4'>Colony itself</td></tr>" + "".join(line(e(n), v, "sub") for n, v in mine)
+                    + "<tr class='all'><td>Overhead, of all</td>"
+                    + "".join(f"<td>{over[w] / totals[w]:.1%}</td>" if totals[w] else "<td>–</td>" for w in ws) + "</tr>" if mine else "")
+                 + "</table>")
+        out.append(f"<h3 class='uprog'>{e(prov.label)}</h3>" + "".join(bars) + table)
+    weights = " ".join(f"{pv.PROVIDERS[k].label} output {w[3]}x." for k, w in tokens.WEIGHTS.items() if k in pv.PROVIDERS)
+    return ("<h2>Tokens</h2><div class='card'>" + "".join(out)
+            + "<p class='muted'>Each window's used part is split by what this machine's sessions spent in it, weighed as the "
+              f"program's prices weigh tokens: a cache read a tenth of new input; {e(weights)} Use from elsewhere (its app, "
+              "another device) isn't seen here, so it falls to those shown. The tables count tokens as they are, mostly cache "
+              f"reads (the conversation read again at each turn): {cached['24 h'] / every['24 h'] if every['24 h'] else 0:.0%} of the last day. "
+              "Colony itself is the steward and the asks it makes (consultants, measure judges, connection audits, model "
+              "checks, scouts); its notes inside a project's own session count as the project's. As of "
+              f"{e(time.strftime('%-I:%M %p', time.localtime(looked)))}.</p></div>")
 
 
 FOLD_SHOWN = 10          # entries of a folded record shown when it is opened, before "Show all"
@@ -7756,6 +7801,7 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-
 .cpbar .cpwhat { flex:1; min-width:0; width:auto; height:auto; display:flex; flex-direction:column; align-items:stretch; justify-content:center;
   padding:2px 6px; line-height:1.25; text-align:left; color:inherit; font:inherit }
 .cpwhat b { font-size:12px; color:var(--accent); font-weight:600 } .cpwhat b::after { content:' ▾'; opacity:.7 }
+.cppaused .cpprev { opacity:.55 } .cppaused .cpwait { color:var(--flag) }
 .cpbar .cpcog { font-size:19px; color:var(--muted) } .cpbar .cpcog[aria-expanded=true], .cpbar .cpwhat[aria-expanded=true] { background:var(--sunk) }
 .cphead a.cpopen { color:var(--accent); text-decoration:none; font-size:13px }
 .cpprojs li { align-items:center } .cpprojs .cpstate { margin-left:auto; font-size:12px; color:var(--muted); white-space:nowrap }
@@ -7775,6 +7821,14 @@ table.tokens { width:100%; border-collapse:collapse; font-size:14px; font-varian
 table.tokens th { text-align:right; font-weight:600; color:var(--muted); font-size:12.5px; padding:2px 6px } table.tokens th:first-child { text-align:left }
 table.tokens td { text-align:right; padding:3px 6px; white-space:nowrap } table.tokens td:first-child { text-align:left; white-space:normal; overflow-wrap:anywhere }
 table.tokens tr.sub td:first-child { padding-left:16px; color:var(--muted) } table.tokens tr.all td { font-weight:600; border-top:1px solid var(--line) }
+.uprog { margin:4px 0 8px; font-size:15px } .uprog:not(:first-child) { margin-top:22px; padding-top:14px; border-top:1px solid var(--line) }
+.uwin { margin:0 0 14px } .uhead { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:14px; margin-bottom:5px }
+.ubar { display:flex; height:14px; border-radius:7px; background:var(--sunk); box-shadow:inset 0 0 0 1px var(--line); overflow:hidden }
+.ubar span { display:block; height:100%; background:var(--c) } .ubar span + span { box-shadow:inset 1px 0 0 var(--card) }
+.ulegend { display:flex; flex-wrap:wrap; gap:3px 12px; margin-top:6px; font-size:12.5px }
+.ulegend i, table.tokens i.key { display:inline-block; width:9px; height:9px; border-radius:2px; background:var(--c); margin-right:5px; vertical-align:0 }
+@media (prefers-color-scheme: dark) { .ubar span, .ulegend i, table.tokens i.key { background:var(--cd) } }
+table.tokens tr.sub td:has(> i.key) { position:relative; padding-left:30px } table.tokens i.key { position:absolute; left:14px; top:.62em }
 table.tokens tr.head td { padding-top:12px; font-size:12.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; text-align:left }
 body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 56px) + 8px) }
 .chat .say.reading { background:color-mix(in srgb, var(--accent) 9%, transparent); box-shadow:0 0 0 8px color-mix(in srgb, var(--accent) 9%, transparent);
