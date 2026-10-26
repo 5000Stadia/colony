@@ -1133,6 +1133,26 @@ class ChatTest(BoardBase):
             r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host}))
             self.assertEqual((r.status, r.read(), r.headers["Content-Type"]), (200, b"ID3mp3", "audio/mpeg"))
 
+    def test_each_voices_sample_is_made_once_and_kept_for_good(self):
+        from colony import voice
+        made = []
+
+        def ask(line):
+            made.append(line["text"])
+            Path(line["out"]).write_bytes(b"ID3mp3")
+            return {}
+        with patch.object(voice, "ready", return_value=True), patch.object(voice, "_ask", ask), patch.object(voice, "KEEP", 1):
+            voice.make_samples()
+            self.assertEqual(len(made), len(voice.VOICES), "every voice's, once")
+            self.assertTrue(made[0].startswith(voice.VOICES[0][1] + ". Here's how I sound."), "its name first")
+            for n in range(3):
+                voice.speak(f"Reply number {n}.", "am_echo")      # the kept clips turn over; the samples stay
+            self.assertEqual(len(list((voice.folder() / "samples").glob("*.mp3"))), len(voice.VOICES))
+            self.assertEqual(len(list((voice.folder() / "cache").glob("*.mp3"))), 1)
+            voice.make_samples()
+            self.assertEqual(len(made), len(voice.VOICES) + 3, "made already: not again")
+        self.assertIn("jazz quartet", board.player_js(), "the player asks for the very words made ahead")
+
     def test_the_voice_says_money_times_and_symbols_as_spoken(self):
         from colony import voice
         said = {"It costs $100.": "It costs 100 dollars.", "About $1.50 each.": "About 1 dollar and 50 cents each.",

@@ -2211,10 +2211,15 @@ def css_version():
     return hashlib.sha1(CSS.encode()).hexdigest()[:10]
 
 
+def player_js():
+    from . import voice
+    return PLAYER.replace("@ICONS@", json.dumps(ICONS)).replace("@SAMPLE@", json.dumps(voice.SAMPLE))
+
+
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
-            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{PLAYER.replace('@ICONS@', json.dumps(ICONS))}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
+            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LASTPAGE}{BAR}</script></body></html>")
 
 
@@ -2609,8 +2614,7 @@ PLAYER = """
   // question, an exclamation, numbers, a time), so voices are compared by ear. What was being read pauses, and stays
   // paused: ▷ takes it up again.
   const sample = new Audio();
-  const SAMPLE = "Here's how I sound. The quick brown fox jumps over the lazy dog, and at 3:45 on a breezy Thursday, "
-    + "would you believe it, the jazz quartet played twelve encores!";
+  const SAMPLE = @SAMPLE@;                        // colony/voice.py's: each voice's is made ahead and kept
   function preview(v, label) {
     if (!v) return;
     if (playing && !paused) hold(true);
@@ -7794,6 +7798,8 @@ def serve(port, lan=False, monitor=True):
     from . import monitor as mon, vision
     vision.install_all()
     rewire_projects()
+    from . import voice
+    threading.Thread(target=voice.make_samples, daemon=True).start()   # every voice's sample, made once and kept
     mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.lan = lan

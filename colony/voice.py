@@ -24,6 +24,11 @@ VOICES = (("af_heart", "Heart"), ("af_bella", "Bella"), ("af_nicole", "Nicole"),
           ("bm_lewis", "Lewis"), ("bm_daniel", "Daniel"))
 GROUPS = (("af_", "American, women"), ("am_", "American, men"), ("bf_", "British, women"), ("bm_", "British, men"))
 DEFAULT = "am_echo"          # the voice out of the box; the person's own choice stands after it
+# What a voice says when it is chosen, after its name: a sentence that ranges across the sounds of speech (a question,
+# an exclamation, numbers, a time), so voices are compared by ear. Each voice's is made once and kept for good, apart
+# from the clips kept for a while (samples/, about 64 KB each, 1.7 MB for them all), so trying voices never waits.
+SAMPLE = ("Here's how I sound. The quick brown fox jumps over the lazy dog, and at 3:45 on a breezy Thursday, "
+          "would you believe it, the jazz quartet played twelve encores!")
 IDLE = 600                 # seconds without a word before Kokoro is let go: its memory back, a moment's start next time
 KEEP = 300                 # clips kept, newest first: a reply played again plays at once
 _lock, _worker = threading.Lock(), {}
@@ -58,6 +63,18 @@ def setup(say=print):
             urllib.request.urlretrieve(MODEL + name, part)
             part.rename(folder() / name)
     say("Ready: Chat reads replies in Kokoro's voice.")
+
+
+def sample(voice):
+    """A voice's sample: its name, then SAMPLE."""
+    return f"{dict(VOICES).get(voice, voice)}. {SAMPLE}"
+
+
+def make_samples():
+    """Every voice's sample, those not made yet, one after another: run in the background as the board starts."""
+    if ready():
+        for v, _ in VOICES:
+            speak(sample(v), v)
 
 
 def warm():
@@ -200,7 +217,9 @@ def speak(text, voice=None):
         return None
     cache = folder() / "cache"
     cache.mkdir(parents=True, exist_ok=True)
-    out = cache / (hashlib.sha1(f"{voice}\n{text}\nlead\n".encode()).hexdigest() + ".mp3")
+    kept = folder() / "samples" if text == spoken(" ".join(sample(voice).split()))[:1200] else cache
+    kept.mkdir(parents=True, exist_ok=True)
+    out = kept / (hashlib.sha1(f"{voice}\n{text}\nlead\n".encode()).hexdigest() + ".mp3")
     if out.exists():
         return out
     with _lock:                                          # one at a time: the worker reads one line, answers one
