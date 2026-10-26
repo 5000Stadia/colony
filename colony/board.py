@@ -2633,6 +2633,7 @@ PLAYER = """
     + "<div class='cpvoice' hidden><label class='cpline'>Voice <span class='muted cpwhose'></span> <select class='cpkvoice'></select></label>"
     + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
+    + "<div class='cpminirow'><button type='button' class='cpmini' aria-label='Player: choose what to hear, voice, speed'>♪</button></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
     + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpall' hidden>All · </span><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
     + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
@@ -2647,11 +2648,15 @@ PLAYER = """
     const clock = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
     return d.toDateString() === new Date().toDateString() ? clock : d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ', ' + clock; };
   let drawn = '';
+  // With nothing to read, the player waits as a small ♪ in the corner: a tap opens it, to choose what to hear (Read
+  // from) or set auto-speak, speed and voice; a tap elsewhere folds it again.
   const draw = () => {
     const show = left(R);
-    if (bar.hidden === show) { bar.hidden = !show; document.body.classList.toggle('cpon', show); if (!show) shut(); }
+    bar.hidden = false;
+    if (bar.classList.contains('cpidle') === show) { bar.classList.toggle('cpidle', !show); if (show) bar.classList.remove('open'); else shut(); }
     document.body.classList.toggle('cpon', show);
-    if (!show) return;
+    if (!show) { $('.cpall').hidden = $('.cpwait').hidden = true; $('.cpname').textContent = 'Player';
+      $('.cpprev').textContent = 'Choose what to hear'; bar.classList.remove('cppaused'); placed(); return; }
     const s = R.list[R.cur];
     // paused (by a tap, or kept from before): said in words, the words being read dimmed, as new replies wait after it
     $('.cpwait').hidden = playing && !paused; bar.classList.toggle('cppaused', !playing || paused);
@@ -2682,6 +2687,7 @@ PLAYER = """
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
+  on(document, 'DOMContentLoaded', placed); on(window, 'load', placed);   // it is made before the tabs below it are there
   if (window.visualViewport) { on(window.visualViewport, 'resize', soon); }
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
   function changed(started) { if (R && R.kokoro) warm(); draw(); if (view) { view.mark(); if (started && R && R.name === view.name && R.list[R.cur]) view.focus(R.list[R.cur].k, true); } }
@@ -2692,7 +2698,8 @@ PLAYER = """
   function shut() { panels.forEach(([b, p]) => { p.hidden = true; b.setAttribute('aria-expanded', 'false'); }); }
   panels.forEach(([b, p, fill]) => on(b, 'click', () => { const was = p.hidden; shut(); if (was) { p.hidden = false; b.setAttribute('aria-expanded', 'true'); fill(); } }));
   on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li || !R) return; shut(); begin(+li.dataset.i); });
-  on(document, 'click', (ev) => { if (!ev.target.closest('#cplayer')) shut(); });
+  on(document, 'click', (ev) => { if (!ev.target.closest('#cplayer')) { shut(); bar.classList.remove('open'); } });
+  on($('.cpmini'), 'click', () => { bar.classList.add('open'); placed(); });
   // Whose reading it is: the project of the page open first, then the one reading, those with a reading kept paused,
   // then the rest, as the board lists them. A tap reads from it: a kept reading from where it stopped; otherwise what
   // came since the person last wrote there and hasn't been read, or, all read, its latest reply.
@@ -2784,7 +2791,10 @@ PLAYER = """
   }
   // ⚙: Auto-speak, speed and voice, the same as the chat's own (each changed here shows there too)
   // whose voice ⚙ sets: the reading's project; reading them all, the project being heard (named beside Voice)
-  const voiced = () => { const s = R && R.all ? R.list[R.cur] || {} : R || {}; return {key: s.key, name: s.name || (R && R.name)}; };
+  const voiced = () => { const s = R && R.all ? R.list[R.cur] || {} : R || {};
+    if (s.key) return {key: s.key, name: s.name || R.name};
+    const mine = here(), p = listed().find((x) => x.key === mine);
+    return p ? {key: p.key, name: p.name} : {key: 'steward', name: 'your voice'}; };
   async function sets() {
     $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate());
     const who = voiced();
@@ -2793,6 +2803,7 @@ PLAYER = """
     const vo = await fetched('/chat/voice?p=' + encodeURIComponent(who.key), 'json');
     if (!vo || !vo.ready) { $('.cpvoice').hidden = true; return; }
     $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.voice; $('.cpvpin').checked = vo.pinned; $('.cpvoice').hidden = false;
+    $('.cpvpin').closest('label').hidden = who.key === 'steward' && !R;      // the person's own voice: nothing to pin it to
     $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.options; $('.cpherald').value = herald();
   }
   on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked;
@@ -7969,6 +7980,10 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
 .cplayer[hidden], .cppanel[hidden] { display:none }
 /* typing on a phone, the box rides the keyboard up: the player rides just above it */
+.cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
+.cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpskip, .cplayer.cpidle .cpstop { display:none }
+.cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--accent);
+  font-size:20px; box-shadow:0 3px 12px rgba(0,0,0,.16); display:inline-flex; align-items:center; justify-content:center; cursor:pointer }
 body.typing .cplayer { top:calc(var(--kbtop, 100vh) - var(--boxh, 0px) - var(--cph, 56px) - 8px); bottom:auto !important }
 body.cpon.typing .toend { top:calc(var(--kbtop, 100vh) - 124px - var(--cph, 56px)) } body.cpon.typing .chat { padding-bottom:calc(140px + var(--cph, 56px)) }
 html.going main { opacity:.5; transition:opacity .2s .15s }
