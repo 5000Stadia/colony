@@ -1049,9 +1049,11 @@ class ChatTest(BoardBase):
         self.assertIn("data-voice='0'", page, "not installed: the phone's own voice")
         self.assertNotIn("id='kvoice'", page)
         self.assertIsNone(voice.speak("Hello there."))
-        self.assertIn("talk.pause()", board.CHAT, "⏸ between ■ and ⏭ holds the reading, ▷ takes it up")
-        self.assertIn("player.pause()", board.CHAT)
-        self.assertIn("said >= 2 && lead.split(' ').length >= 4", board.CHAT,
+        self.assertLess(page.index("window.colonyPlayer = {"), page.index("<nav"), "the player is there before the chat's script looks for it")
+        self.assertIn("P.read(view, news.map(sec), {auto: true})", board.CHAT, "the chat hands new parts to the board's player")
+        self.assertIn("talk.pause()", board.PLAYER, "⏸ between ■ and ⏭ holds the reading, ▷ takes it up")
+        self.assertIn("player.pause()", board.PLAYER)
+        self.assertIn("said >= 2 && lead.split(' ').length >= 4", board.PLAYER,
                       "the first clip is two sentences: one alone left a hiccup before the second (the person)")
         asked = []
 
@@ -1097,7 +1099,7 @@ class ChatTest(BoardBase):
                 "Open board.py now.": "Open board dot py now.", "Visit https://example.com/page. Then": "Visit example dot com. Then",
                 "Great work 🎉 done ✅.": "Great work done.", "in the 90s": "in the 90s", "See the README.": "See the README."}
         self.assertEqual({t: voice.spoken(t) for t in said}, said)
-        self.assertIn("(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)", board.CHAT,
+        self.assertIn("(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)", board.PLAYER,
                       "a sentence ends at a stop and a space: $1.50 and Dr. are not broken into two clips")
 
     def test_a_codex_rollout_reads_the_same_way(self):

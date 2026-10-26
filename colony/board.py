@@ -2173,7 +2173,7 @@ def sidebar(reg, pid):
                     f"<a class='proj nestchip' href='/nest?n={q}' onclick='return toggleFold(this.parentNode)'>"
                     f"<span class='pname'><span class='sdot {state.replace(' ', '-')}'></span>{e(here)} <span class='nestcount'>"
                     f"{len(members)}</span><span class='badge gate'{'' if waits else ' hidden'}>{waits}</span></span>"
-                    f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); location.href='/nest?n={q}'\">"
+                    f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); colonyNav.go('/nest?n={q}')\">"
                     f"→</span></span></a><span class='members'>{''.join(chips)}<a class='proj nestset' href='/nest?n={q}' "
                     f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙</a></span></span>")
     # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
@@ -2214,7 +2214,7 @@ def css_version():
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
-            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
+            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{PLAYER.replace('@ICONS@', json.dumps(ICONS))}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}{BAR}</script></body></html>")
 
 
@@ -2238,10 +2238,10 @@ LASTPAGE = """
     const proj = document.body.dataset.project, q = new URLSearchParams(location.search);
     if (proj && location.pathname === '/' && [...q.keys()].join() === 'p') {
       const last = localStorage.getItem('page:' + proj);
-      let from = null; try { from = document.referrer ? new URL(document.referrer) : null; } catch (e) {}
+      let from = null; try { const r = window.colonyFrom || document.referrer; from = r ? new URL(r) : null; } catch (e) {}
       const inside = from && from.origin === location.origin && from.searchParams.get('p') === q.get('p');
       if (last && !inside) { const to = new URL(last, location.href); to.searchParams.set('p', q.get('p'));
-        if (to.pathname + to.search !== here) return location.replace(to.pathname + to.search); }
+        if (to.pathname + to.search !== here) return window.colonyNav ? colonyNav.replace(to.pathname + to.search) : location.replace(to.pathname + to.search); }
     }
     if (proj) localStorage.setItem('page:' + proj, here);
     localStorage.setItem('lastpage', here);
@@ -2279,6 +2279,404 @@ BAR = """
   document.addEventListener('focusout', (ev) => { if (!ev.target.matches('input, textarea, select')) return;
     setTimeout(() => { const y = scrollY; scrollTo(scrollX, y > 0 ? y - 1 : y + 1); scrollTo(scrollX, y); soon(); }, 350); });
   soon();
+})();
+"""
+
+# The board's player (R108): reading aloud lives in the page's frame, not in a chat, with a bar over every page; and while
+# something is being read, a link or a form changes the page in place, so the voice goes on. At any other time pages
+# load as they always have. Before the page's own scripts, which find it there.
+PLAYER = """
+(() => {
+  if (window.colonyNav) return;
+  // A page's own listeners on the window and the document, and its timers, are noted as it adds them, so when the page
+  // changes in place the old one's go with it; the player's are added past this and stay.
+  const O = {add: EventTarget.prototype.addEventListener, rm: EventTarget.prototype.removeEventListener,
+    si: window.setInterval, st: window.setTimeout, ci: window.clearInterval, ct: window.clearTimeout};
+  const fresh = () => ({ls: [], is: new Set(), ts: new Set()});
+  let scope = fresh();
+  const noted = (x) => x === window || x === document || x === window.visualViewport;
+  EventTarget.prototype.addEventListener = function (t, f, o) { if (noted(this)) scope.ls.push([this, t, f, o]); return O.add.call(this, t, f, o); };
+  window.setInterval = function (f, ms, ...a) { const id = O.si.call(window, f, ms, ...a); scope.is.add(id); return id; };
+  window.setTimeout = function (f, ms, ...a) { const s = scope; let id = 0;
+    id = O.st.call(window, typeof f === 'function' ? (...b) => { s.ts.delete(id); return f.apply(window, b); } : f, ms, ...a);
+    s.ts.add(id); return id; };
+  const leave = () => { const s = scope; scope = fresh();
+    s.ls.forEach(([x, t, f, o]) => O.rm.call(x, t, f, o)); s.is.forEach((id) => O.ci.call(window, id)); s.ts.forEach((id) => O.ct.call(window, id)); };
+  const busy = () => !!(window.colonyPlayer && window.colonyPlayer.busy());
+  // The page changes in place: the new one's body comes in, the player stays, and its scripts run as they would have.
+  let going = 0;
+  const go = async (url, how = {}) => {
+    const mine = ++going, method = (how.method || 'GET').toUpperCase(), root = document.documentElement;
+    root.classList.add('going');                   // on its way: the page dims, so a tap is seen to have landed
+    let r = null;
+    try { r = await fetch(url, {method, body: how.body, credentials: 'same-origin'}); } catch (e) {}
+    if (mine !== going) return;
+    root.classList.remove('going');
+    if (!r) { if (method === 'GET') location.href = url; return; }
+    if (!(r.headers.get('content-type') || '').includes('text/html')) { if (method === 'GET') location.href = r.url; return; }
+    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    if (mine !== going) return;
+    if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = r.url; return; }
+    const from = location.href, to = method !== 'GET' && !r.redirected ? location.href : r.url;
+    leave(); if (window.colonyPlayer) window.colonyPlayer.leave();
+    try {
+      if (how.push !== false) history.replaceState(Object.assign({}, history.state, {colony: 1, y: scrollY}), '');
+      if (how.replace) history.replaceState({colony: 1}, '', to); else if (how.push !== false) history.pushState({colony: 1}, '', to);
+    } catch (e) {}
+    document.title = doc.title;
+    const st = document.head.querySelector('style'), nst = doc.head.querySelector('style');
+    if (st && nst) st.textContent = nst.textContent;
+    const css = document.head.querySelector('link[rel=stylesheet]'), ncss = doc.head.querySelector('link[rel=stylesheet]');
+    if (css && ncss && css.getAttribute('href') !== ncss.getAttribute('href')) css.setAttribute('href', ncss.getAttribute('href'));
+    [...document.body.attributes].forEach((a) => document.body.removeAttribute(a.name));
+    [...doc.body.attributes].forEach((a) => document.body.setAttribute(a.name, a.value));
+    const bar = document.getElementById('cplayer');
+    document.body.replaceChildren(...[...doc.body.childNodes].map((n) => document.adoptNode(n)));
+    if (bar) document.body.appendChild(bar);
+    window.colonyFrom = from;
+    scrollTo(0, how.y || 0);
+    // each script runs in a block of its own: a name it declares can be declared again by the next page
+    document.body.querySelectorAll('script').forEach((old) => { const s = document.createElement('script');
+      s.textContent = '{\\n' + old.textContent + '\\n}'; old.replaceWith(s); });
+    if (window.colonyPlayer) window.colonyPlayer.placed();
+  };
+  O.add.call(window, 'popstate', (ev) => { if (ev.state && ev.state.colony) go(location.href, {push: false, y: ev.state.y}); });
+  // While something is being read, a link or a form on the board changes the page in place, so the voice goes on
+  O.add.call(window, 'click', (ev) => {
+    if (ev.defaultPrevented || ev.button || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || !busy()) return;
+    const a = ev.target.closest && ev.target.closest('a[href]');
+    if (!a || (a.target && a.target !== '_self') || a.hasAttribute('download')) return;
+    const u = new URL(a.href, location.href);
+    if (u.origin !== location.origin || /\\.[a-z0-9]{1,5}$/i.test(u.pathname) || /^\\/(static|voice|chat\\/file|pins\\/file|file)\\b/.test(u.pathname)) return;
+    if (u.pathname + u.search === location.pathname + location.search && u.hash) return;
+    ev.preventDefault(); go(u.href);
+  });
+  O.add.call(window, 'submit', (ev) => {
+    if (ev.defaultPrevented || !busy()) return;
+    const f = ev.target, b = ev.submitter;
+    const target = (b && b.getAttribute('formtarget')) || f.getAttribute('target');
+    if (target && target !== '_self') return;
+    const action = new URL((b && b.getAttribute('formaction')) || f.getAttribute('action') || location.href, location.href);
+    if (action.origin !== location.origin) return;
+    const method = ((b && b.getAttribute('formmethod')) || f.getAttribute('method') || 'get').toUpperCase();
+    const multi = ((b && b.getAttribute('formenctype')) || f.enctype) === 'multipart/form-data';
+    let d; try { d = b ? new FormData(f, b) : new FormData(f); } catch (e) { d = new FormData(f); if (b && b.name) d.append(b.name, b.value); }
+    ev.preventDefault();
+    if (method === 'GET') { action.search = new URLSearchParams(d).toString(); go(action.href); }
+    else go(action.href, {method, body: multi ? d : new URLSearchParams(d)});
+  });
+  window.colonyNav = {keep: O, go: (u) => busy() ? go(new URL(u, location.href).href) : (location.href = u),
+    replace: (u) => busy() ? go(new URL(u, location.href).href, {replace: true}) : location.replace(u),
+    reload: () => busy() ? go(location.href, {replace: true}) : location.reload()};
+})();
+(() => {
+  if (window.colonyPlayer || !window.colonyNav) return;
+  const O = colonyNav.keep, on = (x, t, f, o) => O.add.call(x, t, f, o), after = (f, ms) => O.st.call(window, f, ms);
+  const get = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+  const put = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+  const talk = window.speechSynthesis, player = new Audio(), ms = navigator.mediaSession;
+  let voice = null;
+  const pick = () => {
+    const vs = talk ? talk.getVoices().filter((v) => /^en/i.test(v.lang)) : [];
+    const rank = (v) => (/premium/i.test(v.name) ? 4 : /enhanced|neural|natural/i.test(v.name) ? 3 : 0) + (v.localService ? 1 : 0) + (v.default ? .5 : 0);
+    voice = vs.sort((a, b) => rank(b) - rank(a))[0] || null;
+  };
+  if (talk) { pick(); talk.addEventListener && on(talk, 'voiceschanged', pick); }
+  // A fast start that grows into paragraphs: the first clip is the first two sentences, so the voice starts in
+  // moments and plays long enough for the second to be made (one alone left a hiccup after it), and each next one a third longer than the last, which the machine makes in less time than the one before
+  // it takes to play (all that has played gives it its time), so there is no wait; soon a clip is a whole paragraph. A clip never
+  // runs across a paragraph's end, and breaks only between sentences: a pause there reads as a breath, at a comma
+  // it reads as a stall (the person's ear).
+  const chunks = (text) => {
+    // a clip takes about 0.75 of its playing time to make here (measured: 0.74 to 0.80 at the person's speed), so
+    // the next may be as long as all that has played lets it be made in time, with a margin: over 0.85
+    const out = []; let want = 80, heard = 0, made = 0, lead = '', said = 0;
+    const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length;
+      want = Math.min(600, Math.max(40, heard / 0.85 - made)); };
+    text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).forEach((p) => {
+      // a sentence ends at a stop followed by a space, so $1.50, 3.14 and board.py stay whole, as do Dr. and e.g.
+      const sents = (p.match(/.+?(?:(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)|$)/g) || [p]).map((x) => x.trim()).filter(Boolean);
+      let cur = '';
+      sents.forEach((x) => {
+        // the first two sentences for a quick start; under four words ("Done. Yes.") they take the next with them
+        if (!out.length) { lead = lead ? lead + ' ' + x : x; said += 1;
+          if (said >= 2 && lead.split(' ').length >= 4) push(lead); return; }
+        if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; }
+        cur = cur ? cur + ' ' + x : x;                                  // a sentence is never broken, however long
+      });
+      if (cur) push(cur);
+    });
+    if (!out.length && lead) push(lead);
+    return out;
+  };
+  // The reading: one project's, its sections (each part of a reply as it was written, with its time) in order, the one
+  // being heard and the piece of it reached. Kept on this device as it goes, so a reading left (another chat took the
+  // voice, the page was closed) comes back paused where it stopped, what it hadn't reached still unheard.
+  let R = null, playing = false, paused = false, loading = false, via = '', view = null, now = null;
+  const rate = () => { let r = 1; try { r = +localStorage.getItem('pace') || 1; } catch (e) {} return [1, 1.25, 1.5, 1.75].includes(r) ? r : 1; };
+  const pace = () => rate() + 0.25;               // the voices read slowly: each speed plays a quarter faster than it says
+  const aloud = () => { try { return localStorage.getItem('aloud') === '1'; } catch (e) { return false; } };
+  const left = (r) => !!r && r.cur < r.list.length;
+  const save = () => { if (R) put('reading:' + R.name, Object.assign({}, R, {saved: Date.now()})); };
+  const forget = (name) => put('reading:' + name, null);
+  const load = (name) => { const r = name && get('reading:' + name);
+    if (r && Array.isArray(r.list) && left(r) && Date.now() - (r.saved || 0) < 12 * 3600e3) return r;
+    if (r) put('reading:' + name, null);
+    return null; };
+  const blank = (v) => ({name: v.name, key: v.key, href: v.href, kvoice: v.kvoice, kokoro: v.kokoro, list: [], cur: 0, piece: 0});
+  const abs = (u) => new URL(u, location.href).href;
+  const clip = (p) => '/voice?v=' + encodeURIComponent(R.kvoice || 'am_echo') + via + '&t=' + encodeURIComponent(p.trim());
+  // the clips made already: going on to one of them is no wait, so the button stays as it is
+  const ready = new Set();
+  // A clip made ahead is downloaded whole and kept here as a file of the page's own (a phone's player would fetch
+  // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
+  const kept = new Map();                         // the clip's address -> the page's own copy
+  const make = (p) => { const u = abs(clip(p));
+    if (kept.has(u)) return Promise.resolve();
+    return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) return;
+      kept.set(u, URL.createObjectURL(b)); ready.add(u);
+      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } }).catch(() => {}); };
+  // The clips after the one first heard are asked for one after another, each as soon as the one before has come, so
+  // the machine makes them back to back with no idle time, never more than three ahead of what is being heard.
+  let line = 0;
+  const pipe = (i, parts, from) => { const mine = ++line; let k = from;
+    const step = () => { if (mine !== line || !playing || !R || R.cur !== i) return;
+      if (k >= parts.length) { const n = R.list[i + 1]; if (n) make(chunks(n.text)[0] || ''); return; }   // the next section's start
+      if (k - (now && now.i === i ? now.at : from) > 3) { after(step, 400); return; }
+      make(parts[k++]).then(step); };
+    step(); };
+  player.addEventListener('playing', () => { if (!player.loop) ready.add(player.src); if (loading && playing && !player.loop) { loading = false; changed(); } });
+  // The phone stopped the sound itself (locked, a call, another app's audio): shown as paused, ▷ takes it up again,
+  // and coming back to the page, what is shown is checked against what is heard.
+  // Back on the page, a reading the phone stopped (dictation in another app, a call) goes on by itself, and one shown
+  // as playing whose sound has not moved is set going again; a pause the person chose stays.
+  let ours = 0, byPhone = false;
+  player.addEventListener('pause', () => { if (Date.now() - ours < 600 || player.ended || player.loop || !playing || paused) return;
+    paused = true; byPhone = true; loading = false; changed(); });
+  on(document, 'visibilitychange', () => {
+    if (document.hidden) return;
+    if (resting && player.paused) { player.play().catch(() => {}); return; }
+    if (!playing) return;
+    if (!R.kokoro) { if (talk && !talk.speaking && !talk.pending) { playing = false; changed(); } return; }
+    if (paused) { if (byPhone) { byPhone = false; hold(false); } return; }
+    const at = player.currentTime;
+    after(() => { if (playing && !paused && !player.ended && player.currentTime === at) player.play().catch(() => {}); }, 700);
+  });
+  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !player.src.startsWith('blob:') && !ready.has(player.src)) {
+    loading = true; changed(); } });
+  // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
+  // not let it start again)
+  const hush = (keep) => { ours = Date.now(); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
+    player.loop = false; resting = 0; line++; };
+  // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
+  // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
+  let resting = 0;
+  const rest = () => { if (!R || !R.kokoro || !aloud()) return;
+    player.onended = player.onerror = null; player.loop = true; player.src = SILENT; resting = Date.now();
+    player.play().catch(() => { resting = 0; }); };
+  O.si.call(window, () => { if (resting && Date.now() - resting > 20 * 60e3) { player.pause(); player.loop = false; resting = 0; } }, 30e3);
+  // on the lock screen as a song is: what is being read, with pause and skip
+  const tell = (text) => { try { if (ms && window.MediaMetadata) ms.metadata = new MediaMetadata({title: text.slice(0, 90),
+    artist: R.name, album: 'colony'}); } catch (e) {} };
+  // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
+  // silence, and from then on new replies may be read by themselves.
+  const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+  let unlocked = false;
+  const unlock = () => {
+    if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
+    if (unlocked || playing) return;
+    unlocked = true; player.src = SILENT; player.play().catch(() => { unlocked = false; });
+  };
+  on(document, 'pointerdown', () => { if (aloud()) unlock(); }, true);
+  const sayK = (i, parts, from) => {
+    let j = from;
+    const next = () => {
+      if (!playing || !R || R.cur !== i) return;
+      if (j >= parts.length) return finished(i);
+      now = {i, parts, at: j}; R.piece = j; save(); changed();
+      const u = abs(clip(parts[j]));
+      player.src = kept.get(u) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
+      // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
+      if (j === from) player.addEventListener('loadeddata', () => pipe(i, parts, from + 1), {once: true});
+      j += 1;
+      // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again.
+      // Refused for want of a tap on this page (opened by itself), the phone's voice is refused too: ▷ again, which a
+      // tap plays, rather than ■ over silence.
+      player.play().catch((err) => { if (err && err.name === 'AbortError') return;
+        if (err && err.name === 'NotAllowedError' && playing && R && R.cur === i) { hush(); playing = false; unlocked = false; changed(); return; }
+        if (playing && R && R.cur === i && now && now.at === j - 1) { hush(); sayPhone(i, parts, j - 1); } });
+    };
+    player.onended = next;
+    player.onerror = () => { const err = player.error;                  // the phone's voice then, for a clip that failed
+      if (!err || err.code === 1 || !playing || !R || R.cur !== i) return;   // 1: stopped on purpose, nothing failed
+      hush(); sayPhone(i, parts, Math.max(0, j - 1)); };
+    next();
+  };
+  const sayPhone = (i, parts, from) => {
+    if (!talk) { playing = false; changed(); return; }
+    playing = true; changed();
+    // a phone that won't speak before a tap on the page says nothing and starts nothing: ▷ again after a moment
+    let began = false;
+    after(() => { if (playing && R && R.cur === i && !began && !talk.speaking) { talk.cancel(); playing = false; loading = false; changed(); } }, 2500);
+    parts.slice(from).forEach((p, n) => { const x = from + n, u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
+      u.onstart = () => { began = true; now = {i, parts, at: x}; if (R) { R.piece = x; save(); } loading = false; changed(); };
+      if (x === parts.length - 1) u.onend = () => { if (playing && R && R.cur === i) finished(i); };
+      talk.speak(u); });
+  };
+  // a section heard to its end: on to the next; the last, and the reading is done
+  const finished = (i) => { if (!R || R.cur !== i) return;
+    R.list[i].heard = true;
+    if (i + 1 < R.list.length) return begin(i + 1, 0, true);
+    playing = false; R.cur = R.list.length; R.piece = 0; forget(R.name); changed(); rest(); };
+  // From a section: those before it are counted heard, whether read or skipped past
+  function begin(i, from = 0, flow = false) {
+    const s = R && R.list[i]; if (!s) return;
+    const parts = chunks(s.text).filter((p) => p.trim());
+    from = Math.min(from, Math.max(0, parts.length - 1));
+    hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null;
+    R.list.forEach((x, n) => { if (n < i) x.heard = true; });
+    loading = !(R.kokoro && parts[from] && ready.has(abs(clip(parts[from])))); save(); changed(true);
+    if (!parts.length) return finished(i);
+    tell(parts[from]);
+    return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from);
+  }
+  // Another project's reading, playing or paused, gives way: kept where it stopped, its unheard sections waiting
+  const yieldTo = (r) => { if (R && R !== r) { if (playing) hush(); playing = false; paused = false; if (left(R)) save(); R = null; } };
+  // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
+  function hold(want) {
+    if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } else if (!want && left(R)) begin(R.cur, R.piece); return; }
+    paused = want; ours = Date.now(); byPhone = false;
+    if (R.kokoro && !(talk && talk.speaking)) { if (paused) player.pause(); else player.play().catch(() => { paused = true; changed(); }); }
+    else if (talk) { if (paused) talk.pause(); else talk.resume(); }
+    changed();
+  }
+  // ⏭: on to the next section, or, at the last, to the next piece of it
+  function skip() {
+    if (!R || !playing) return;
+    if (R.cur + 1 < R.list.length) return begin(R.cur + 1);
+    if (!now || now.i !== R.cur) return;
+    const {i, parts, at} = now;
+    hush(); playing = true;
+    if (at + 1 >= parts.length) return finished(i);
+    changed(); if (R.kokoro) sayK(i, parts, at + 1); else sayPhone(i, parts, at + 1);
+  }
+  function stop() { hush(); playing = false; now = null; if (R) forget(R.name); R = null; changed(); }
+  // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
+  const again = (voiceChanged) => {
+    if (!playing || !now || !R || now.i !== R.cur) return;
+    if (R.kokoro && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
+    const {i, parts, at} = now;
+    hush(); playing = true; changed();
+    if (R.kokoro) sayK(i, parts, at); else sayPhone(i, parts, at);
+  };
+  if (ms) { [['pause', () => hold(true)], ['play', () => hold(false)], ['nexttrack', skip], ['stop', stop]].forEach(([a, h]) => {
+    try { ms.setActionHandler(a, h); } catch (e) {} }); }
+  // The player: over every page, above the box and the tabs, while there is something to read or take up again
+  const PICON = @ICONS@;
+  const bar = document.createElement('div'); bar.id = 'cplayer'; bar.className = 'cplayer'; bar.hidden = true;
+  bar.innerHTML = "<div class='cppanel' hidden><div class='cphead'><span class='cpcount'></span>"
+    + "<label class='cpfollow'><input type='checkbox'> Follow in chat</label></div><ol class='cprows'></ol></div>"
+    + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
+    + "<a class='cpwhat'><b class='cpname'></b><span class='cpprev'></span></a>"
+    + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
+    + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button></div>";
+  const $ = (s) => bar.querySelector(s), panel = $('.cppanel'), rows = $('.cprows'), follow = $('.cpfollow input');
+  const following = () => { try { return localStorage.getItem('follow') !== '0'; } catch (e) { return true; } };
+  follow.checked = following();
+  on(follow, 'change', () => { try { localStorage.setItem('follow', follow.checked ? '1' : '0'); } catch (e) {} if (view) view.mark(); });
+  const words = (t, n) => { const w = t.replace(/\\s+/g, ' ').trim().split(' '); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
+  const when = (at) => { const d = new Date(at); if (isNaN(d)) return '';
+    const clock = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    return d.toDateString() === new Date().toDateString() ? clock : d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ', ' + clock; };
+  let drawn = '';
+  const draw = () => {
+    const show = left(R);
+    if (bar.hidden === show) { bar.hidden = !show; document.body.classList.toggle('cpon', show); if (!show) panel.hidden = true; }
+    document.body.classList.toggle('cpon', show);
+    if (!show) return;
+    const s = R.list[R.cur];
+    $('.cpname').textContent = R.name; $('.cpprev').textContent = words(s.text, 12); $('.cpwhat').setAttribute('href', R.href || '/');
+    const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
+    const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
+    $('.cpskip').disabled = !playing;
+    $('.cpcount').textContent = 'Section ' + (R.cur + 1) + ' of ' + R.list.length;
+    const key = R.name + '|' + R.cur + '|' + R.list.map((x) => x.k + (x.heard ? '+' : '')).join(',');
+    if (key !== drawn) { drawn = key;
+      rows.replaceChildren(...R.list.map((x, n) => { const li = document.createElement('li'); li.dataset.i = n;
+        li.className = n === R.cur ? 'now' : x.heard ? 'heard' : 'wait';
+        const a = document.createElement('span'); a.className = 'cpat'; a.textContent = when(x.at);
+        const w = document.createElement('span'); w.className = 'cpwords'; w.textContent = words(x.text, 10);
+        li.append(a, w); return li; }));
+      if (!panel.hidden) { const cur = rows.querySelector('.now'); if (cur) cur.scrollIntoView({block: 'nearest'}); } }
+    placed();
+  };
+  // sits above what is fixed at the foot of the page: the box in Chat, a phone's tabs
+  const placed = () => { if (bar.hidden) return;
+    let edge = innerHeight;
+    document.querySelectorAll('.composer, .tabs').forEach((x) => { const p = getComputedStyle(x).position;
+      if (p !== 'fixed' && p !== 'sticky') return;
+      const r = x.getBoundingClientRect(); if (r.height && r.top > innerHeight * 0.55 && r.top < edge) edge = r.top; });
+    bar.style.bottom = Math.max(0, Math.round(innerHeight - edge)) + 'px';
+    document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px'); };
+  let placing = 0;
+  const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
+  on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
+  if (window.visualViewport) { on(window.visualViewport, 'resize', soon); }
+  // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
+  function changed(started) { draw(); if (view) { view.mark(); if (started && R && R.name === view.name && R.list[R.cur]) view.focus(R.list[R.cur].k, true); } }
+  on($('.cphold'), 'click', () => hold(playing ? !paused : false));
+  on($('.cpskip'), 'click', skip);
+  on($('.cpstop'), 'click', stop);
+  on($('.cplist'), 'click', () => { panel.hidden = !panel.hidden; $('.cplist').setAttribute('aria-expanded', String(!panel.hidden));
+    drawn = ''; draw(); });
+  on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li || !R) return; panel.hidden = true; begin(+li.dataset.i); });
+  on(document, 'click', (ev) => { if (!panel.hidden && !ev.target.closest('#cplayer')) panel.hidden = true; });
+  const P = window.colonyPlayer = {
+    busy: () => left(R), placed, rate, following,
+    setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} again(false); },
+    setVoice(name, v) { if (R && R.name === name && R.kvoice !== v) { R.kvoice = v; save(); again(true); }
+      else { const r = load(name); if (r) { r.kvoice = v; put('reading:' + name, r); } } },
+    attach(v) { view = v; changed(); },
+    leave() { view = null; },
+    unlock,
+    // where a project's reading is: the one in play, or one kept paused for it
+    of(name) {
+      const r = R && R.name === name ? R : load(name); if (!left(r)) return null;
+      const s = r.list[r.cur], active = r === R;
+      return {active, playing: active && playing, paused: active && paused, loading: active && loading, t: s.t, k: s.k,
+        into: r.piece >= 1 || (r.cur > 0 && r.list[r.cur - 1].t === s.t)};
+    },
+    now: () => ({playing, paused}),
+    hold, skip, stop,
+    // sections from a chat: tapped (read these now) or new ones arriving there (auto). New ones join a reading of
+    // their project's already going, or wait after one kept paused; otherwise they take the voice from any other.
+    read(v, secs, how = {}) {
+      if (!secs.length) return;
+      const clean = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text}));
+      if (how.now) { yieldTo(null); R = blank(v); R.list = clean; via = ''; begin(0); return; }
+      const mine = R && R.name === v.name ? R : load(v.name);
+      const add = (r) => { const have = new Set(r.list.map((x) => x.k)); clean.forEach((x) => { if (!have.has(x.k)) r.list.push(x); });
+        while (r.list.length > 60 && r.cur > 0) { r.list.shift(); r.cur -= 1; } };
+      if (mine && mine !== R) { add(mine); put('reading:' + v.name, Object.assign(mine, {saved: Date.now()})); changed(); return; }
+      if (mine) { const was = left(R); add(R); save(); via = '&auto=1'; if (!was) begin(R.cur); else changed(); return; }
+      yieldTo(null); R = blank(v); add(R); via = '&auto=1'; begin(0);
+    },
+    // ▷ on a reply kept paused: from its start, what waited after it still waiting
+    again(v, secs) { const r = R && R.name === v.name ? R : load(v.name), ks = new Set(secs.map((x) => x.k));
+      const rest = left(r) ? r.list.slice(r.cur).filter((x) => !ks.has(x.k)) : [];
+      yieldTo(null); R = blank(v); R.list = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text})).concat(rest); via = ''; begin(0); },
+    // Continue: from the piece it stopped at
+    resume(name) { const r = R && R.name === name ? R : load(name); if (!left(r)) return; yieldTo(r); R = r; via = ''; begin(R.cur, R.piece); },
+    // coming back with Auto-speak on: what came since is read at once where the browser lets a page speak by itself; a
+    // phone lets it only after a tap, so there it starts with the first touch anywhere on the page
+    whenAllowed(go) { if (unlocked || playing) return go();
+      player.src = SILENT; player.play().then(() => { unlocked = true; go(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; go(); }, {once: true, capture: true})); },
+  };
+  document.body.appendChild(bar);
+  // the reading last left on this device: here again, paused
+  try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
+    .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
+  draw();
 })();
 """
 
@@ -2345,7 +2743,7 @@ document.querySelectorAll('.nestgroup .grip').forEach((h) => {
 });
 function pinProject(ev, p, on) {
   ev.preventDefault(); ev.stopPropagation();
-  fetch('/project/pin', {method: 'POST', body: new URLSearchParams({p, on})}).then(() => location.reload()).catch(() => {});
+  fetch('/project/pin', {method: 'POST', body: new URLSearchParams({p, on})}).then(() => window.colonyNav ? colonyNav.reload() : location.reload()).catch(() => {});
   return false;
 }
 """
@@ -2587,7 +2985,8 @@ def chat_feed(key, root, shown=40):
                            f"<ul>{''.join(f'<li>{e(x)}</li>' for x in run)}</ul></details>")
                 run = []
             if kind == "say":
-                out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}'>{chat_prose(text, key, root)}</div>")
+                when = (t.get("times") or [])[j] if j < len(t.get("times") or []) else t.get("last") or t["at"]
+                out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}' data-at='{e(when)}'>{chat_prose(text, key, root)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
                        "<button class='vset' aria-label='Voice: auto-speak, speed, voice'>Voice</button>"
@@ -2675,7 +3074,8 @@ ICONS = {"copy": _SVG.format("<rect x='8' y='8' width='12' height='12' rx='2.5'/
          "load": _SVG.format("<path class='spin' d='M12 3.5a8.5 8.5 0 1 0 8.5 8.5'/>"),
          "pause": _SVG.format("<rect x='6.5' y='5' width='3.5' height='14' rx='1' fill='currentColor'/><rect x='14' y='5' width='3.5' height='14' rx='1' fill='currentColor'/>"),
          "skip": _SVG.format("<path d='M4.5 5.5v13l8-6.5z'/><path d='M12.5 5.5v13l8-6.5z'/>"),
-         "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>")}
+         "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>"),
+         "list": _SVG.format("<path d='M4 7h16M4 12h16M4 17h10'/>")}
 
 
 # The voice Chat reads in is the person's, on every device: one voice of theirs that every project uses, changed from
@@ -2793,7 +3193,7 @@ CHAT = """
   let moving = 0;
   ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true}));
   async function refresh() {
-    if (Date.now() - moving < 1200) return;
+    if (!box.isConnected || Date.now() - moving < 1200) return;
     // an answer being written in the conversation (to what it needs of the person) is never redrawn away
     if ([...box.querySelectorAll('textarea')].some((t) => t.value.trim()) || box.contains(document.activeElement) &&
         document.activeElement.matches('textarea, select, input')) return;
@@ -2808,6 +3208,7 @@ CHAT = """
       // only what changed is redrawn: a part already there stays as it is (a picture is not loaded again, so nothing
       // blinks or shifts), the rest comes in new
       const t = document.createElement('template'); t.innerHTML = last = html;
+      box.querySelectorAll('.say.reading').forEach((x) => x.classList.remove('reading'));
       const have = new Map();
       [...box.children].forEach((c) => { if (!c.classList.contains('mine')) { const k = c.outerHTML; have.set(k, (have.get(k) || []).concat([c])); } });
       box.replaceChildren(...[...t.content.children].map((n) => { const same = have.get(n.outerHTML); return same && same.length ? same.shift() : n; }));
@@ -2923,224 +3324,66 @@ CHAT = """
     held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.'
       : r && r.status === 503 ? await r.text() : r ? 'Not sent: the board could not hand it over (' + r.status + ').' : 'Not sent: the board could not be reached.';
   });
-  // Read aloud, in the device's own best voice: a reply on a tap, or each new one as its turn ends
-  const talk = window.speechSynthesis, aloud = document.getElementById('aloud');
-  let voice = null, playing = null, paused = false, loading = false, parked = null;
-  const RKEY = 'reading:' + box.dataset.name;
-  const pick = () => {
-    const vs = talk ? talk.getVoices().filter((v) => /^en/i.test(v.lang)) : [];
-    const rank = (v) => (/premium/i.test(v.name) ? 4 : /enhanced|neural|natural/i.test(v.name) ? 3 : 0) + (v.localService ? 1 : 0) + (v.default ? .5 : 0);
-    voice = vs.sort((a, b) => rank(b) - rank(a))[0] || null;
-  };
-  if (talk) { pick(); talk.addEventListener && talk.addEventListener('voiceschanged', pick); }
+  // Read aloud: the board's player, over every page, reads; this chat hands it the replies and shows where it is
+  const P = window.colonyPlayer, aloud = document.getElementById('aloud'), sheet = document.getElementById('voicesheet');
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  // A fast start that grows into paragraphs: the first clip is the first two sentences, so the voice starts in
-  // moments and plays long enough for the second to be made (one alone left a hiccup after it), and each next one a third longer than the last, which the machine makes in less time than the one before
-  // it takes to play (all that has played gives it its time), so there is no wait; soon a clip is a whole paragraph. A clip never
-  // runs across a paragraph's end, and breaks only between sentences: a pause there reads as a breath, at a comma
-  // it reads as a stall (the person's ear).
-  const chunks = (text) => {
-    // a clip takes about 0.75 of its playing time to make here (measured: 0.74 to 0.80 at the person's speed), so
-    // the next may be as long as all that has played lets it be made in time, with a margin: over 0.85
-    const out = []; let want = 80, heard = 0, made = 0, lead = '', said = 0;
-    const push = (c) => { if (out.length) made += c.length; out.push(c); heard += c.length;
-      want = Math.min(600, Math.max(40, heard / 0.85 - made)); };
-    text.split(/\\n\\s*\\n/).map((p) => p.replace(/\\s+/g, ' ').trim()).filter(Boolean).forEach((p) => {
-      // a sentence ends at a stop followed by a space, so $1.50, 3.14 and board.py stay whole, as do Dr. and e.g.
-      const sents = (p.match(/.+?(?:(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)|$)/g) || [p]).map((x) => x.trim()).filter(Boolean);
-      let cur = '';
-      sents.forEach((x) => {
-        // the first two sentences for a quick start; under four words ("Done. Yes.") they take the next with them
-        if (!out.length) { lead = lead ? lead + ' ' + x : x; said += 1;
-          if (said >= 2 && lead.split(' ').length >= 4) push(lead); return; }
-        if (cur && (cur + ' ' + x).length > want) { push(cur); cur = ''; }
-        cur = cur ? cur + ' ' + x : x;                                  // a sentence is never broken, however long
-      });
-      if (cur) push(cur);
-    });
-    if (!out.length && lead) push(lead);
-    return out;
+  const KOKORO = box.dataset.voice === '1', picker = document.getElementById('kvoice'), pin = document.getElementById('vpin');
+  let kvoice = picker ? picker.value : 'am_echo';
+  const view = {name: box.dataset.name, key, href: location.pathname + location.search, kokoro: KOKORO, get kvoice() { return kvoice; },
+    mark: () => mark(), focus: (k, go) => focus(k, go)};
+  // a section: one part of a reply as it was written, with its time
+  const sec = (x) => ({t: x.dataset.t, k: x.dataset.k, at: x.dataset.at || '', text: plain([x])});
+  // ▷ reads all the agent said since the person's own message before it, across colony's notices in between
+  const turn = (t) => {
+    const all = [...box.querySelectorAll('.say')], end = all.map((x) => x.dataset.t).lastIndexOf(t);
+    const you = [...box.querySelectorAll('.msg.you:not(.mine)')].filter((m) => m.compareDocumentPosition(all[end]) & Node.DOCUMENT_POSITION_FOLLOWING).pop();
+    return all.slice(0, end + 1).filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)).map(sec);
   };
-  const sheet = document.getElementById('voicesheet');
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
   // ▷, then a spinner while the voice is being made, then ■ once it is heard; pause and skip come with the sound
-  const mark = () => { box.querySelectorAll('button.listen').forEach((b) => {
-      const st = b.dataset.t !== playing ? 'play' : loading ? 'load' : 'stop';
+  const mark = () => { if (!box.isConnected) return;
+    const s = P.of(view.name), on = s && s.playing ? s.t : null;
+    box.querySelectorAll('button.listen').forEach((b) => {
+      const st = b.dataset.t !== on ? 'play' : s.loading ? 'load' : 'stop';
       if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } });
-    box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== playing || loading; });
-    box.querySelectorAll('button.cont').forEach((b) => { b.hidden = !parked || playing || b.dataset.t !== parked.t || parked.at < 1; });
-    box.querySelectorAll('button.hold').forEach((b) => { if (b.dataset.p !== String(paused)) { b.dataset.p = paused;
-      b.innerHTML = paused ? ICON.play : ICON.pause; b.setAttribute('aria-label', paused ? 'Resume' : 'Pause'); } });
-    const sets = [...box.querySelectorAll('button.vset')];
-    sets.forEach((b) => { b.classList.toggle('on', !!(aloud && aloud.checked)); }); };
+    box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== on || s.loading; });
+    box.querySelectorAll('button.cont').forEach((b) => { b.hidden = !s || s.playing || b.dataset.t !== s.t || !s.into; });
+    box.querySelectorAll('button.hold').forEach((b) => { const p = !!(s && s.paused); if (b.dataset.p !== String(p)) { b.dataset.p = p;
+      b.innerHTML = p ? ICON.play : ICON.pause; b.setAttribute('aria-label', p ? 'Resume' : 'Pause'); } });
+    box.querySelectorAll('button.vset').forEach((b) => { b.classList.toggle('on', !!(aloud && aloud.checked)); });
+    focus(s && s.active ? s.k : null, false); };
+  // Follow in chat (the player's list): the section being heard is marked, and as each starts it is brought into view
+  // below the bar, unless a finger moved the page just now or the box is being typed in
+  let fingered = 0;
+  ['touchstart', 'touchmove', 'wheel'].forEach((t) => window.addEventListener(t, () => { fingered = Date.now(); }, {passive: true}));
+  const focus = (k, go) => { if (!box.isConnected) return;
+    const follow = P.following();
+    box.querySelectorAll('.say.reading').forEach((x) => { if (!follow || x.dataset.k !== k) x.classList.remove('reading'); });
+    const el = follow && k && box.querySelector(`.say[data-k="${CSS.escape(k)}"]`); if (!el) return;
+    el.classList.add('reading');
+    if (!go || typingNow() || Date.now() - fingered < 4000) return;
+    const nav = document.querySelector('nav'), under = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom : 0;
+    stick = false; window.scrollBy({top: el.getBoundingClientRect().top - under - 12, behavior: 'smooth'}); };
   sheet.querySelector('.shut').addEventListener('click', () => { sheet.hidden = true; });
   document.addEventListener('click', (ev) => { if (!sheet.hidden && !ev.target.closest('#voicesheet, button.vset')) sheet.hidden = true; });
-  // its speed, remembered on this device: a tap steps through them
-  const RATES = [1, 1.25, 1.5, 1.75], rateBtn = document.getElementById('rate');
-  // The voices read slowly: each speed plays a quarter faster than it says, so 1× is a natural pace.
-  let rate = 1; try { rate = +localStorage.getItem('pace') || 1; } catch (e) {}
-  const pace = () => rate + 0.25;
-  if (!RATES.includes(rate)) rate = 1;
-  rateBtn.value = String(rate);
-  rateBtn.addEventListener('change', () => { rate = +rateBtn.value || 1;
-    try { localStorage.setItem('pace', rate); } catch (e) {} again(false); });
-  const KOKORO = box.dataset.voice === '1', player = new Audio(), picker = document.getElementById('kvoice');
+  // its speed, remembered on this device
+  const rateBtn = document.getElementById('rate');
+  rateBtn.value = String(P.rate());
+  rateBtn.addEventListener('change', () => P.setRate(+rateBtn.value || 1));
   // the voice is the board's to keep: the person's own, or this project's where it is pinned
-  const pin = document.getElementById('vpin');
-  let kvoice = picker ? picker.value : 'am_echo';
   const keepVoice = async (body) => {
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
     const got = await r.json(), changed = got.voice !== kvoice;
     kvoice = picker.value = got.voice; pin.checked = got.pinned;
-    if (changed) again(true);
+    if (changed) P.setVoice(view.name, kvoice);
   };
   if (picker) { picker.addEventListener('change', () => keepVoice({voice: picker.value}));
     pin.addEventListener('change', () => keepVoice({pin: pin.checked ? '1' : '0'}));
     // a voice once kept on this device for this project stays with it, as its pin
     try { const old = localStorage.getItem('kvoice:' + box.dataset.name);
       if (old) { localStorage.removeItem('kvoice:' + box.dataset.name); if (!pin.checked && old !== kvoice) keepVoice({voice: old, pin: '1'}); } } catch (e) {} }
-  // heard, or waiting on the next clip still being made
-  player.addEventListener('playing', () => { if (!player.loop) ready.add(player.src); if (loading && playing && !player.loop) { loading = false; mark(); } });
-  // The phone stopped the sound itself (locked, a call, another app's audio): shown as paused, ▷ takes it up again,
-  // and coming back to the page, what is shown is checked against what is heard.
-  // Back on the page, a reading the phone stopped (dictation in another app, a call) goes on by itself, and one shown
-  // as playing whose sound has not moved is set going again; a pause the person chose stays.
-  let ours = 0, byPhone = false;
-  player.addEventListener('pause', () => { if (Date.now() - ours < 600 || player.ended || player.loop || !playing || paused) return;
-    paused = true; byPhone = true; loading = false; mark(); });
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) return;
-    if (resting && player.paused) { player.play().catch(() => {}); return; }
-    if (!playing) return;
-    if (!KOKORO) { if (talk && !talk.speaking && !talk.pending) { playing = null; mark(); } return; }
-    if (paused) { if (byPhone) { byPhone = false; hold(false); } return; }
-    const at = player.currentTime;
-    setTimeout(() => { if (playing && !paused && !player.ended && player.currentTime === at) player.play().catch(() => {}); }, 700);
-  });
-  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !player.src.startsWith('blob:') && !ready.has(player.src)) {
-    loading = true; mark(); } });
-  // the clips made already: going on to one of them is no wait, so the button stays as it is
-  const ready = new Set();
-  // A clip made ahead is downloaded whole and kept here as a file of the page's own (a phone's player would fetch
-  // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
-  const kept = new Map();                         // the clip's address -> the page's own copy
-  const make = (p) => { const u = new URL(clip(p), location.href).href;
-    if (kept.has(u)) return Promise.resolve();
-    return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) return;
-      kept.set(u, URL.createObjectURL(b)); ready.add(u);
-      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } }).catch(() => {}); };
-  // The clips after the one first heard are asked for one after another, each as soon as the one before has come, so
-  // the machine makes them back to back with no idle time, never more than three ahead of what is being heard.
-  let line = 0;
-  const pipe = (t, parts, from) => { const mine = ++line; let k = from;
-    const step = () => { if (mine !== line || playing !== t) return;
-      if (k >= parts.length) { if (waiting[0]) make(chunks(waiting[0].text)[0] || ''); return; }   // the next reply's start
-      if (k - ((now && now.t === t) ? now.at : from) > 3) { setTimeout(step, 400); return; }
-      make(parts[k++]).then(step); };
-    step(); };
-  let via = '';                          // marks a clip started by itself, in the board's log of asks
-  const clip = (p) => '/voice?v=' + encodeURIComponent(kvoice) + via + '&t=' + encodeURIComponent(p.trim());
-  // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
-  // not let it start again)
-  const hush = (keep) => { ours = Date.now(); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
-    player.loop = false; resting = 0; };
-  // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
-  // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
-  let resting = 0;
-  const rest = () => { if (!KOKORO || !aloud.checked) return;
-    player.onended = player.onerror = null; player.loop = true; player.src = SILENT; resting = Date.now();
-    player.play().catch(() => { resting = 0; }); };
-  setInterval(() => { if (resting && Date.now() - resting > 20 * 60e3) { player.pause(); player.loop = false; resting = 0; } }, 30e3);
-  // on the lock screen as a song is: what is being read, with pause and skip
-  const ms = navigator.mediaSession;
-  const tell = (text) => { try { if (ms && window.MediaMetadata) ms.metadata = new MediaMetadata({title: text.slice(0, 90),
-    artist: box.dataset.name, album: 'colony'}); } catch (e) {} };
-  // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
-  // silence, and from then on new replies may be read by themselves.
-  const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
-  let unlocked = false;
-  const unlock = () => {
-    if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
-    if (unlocked || !KOKORO || playing) return;
-    unlocked = true; player.src = SILENT; player.play().catch(() => { unlocked = false; });
-  };
-  document.addEventListener('pointerdown', () => { if (aloud.checked) unlock(); }, true);
-  let now = null;                       // what is being read: {t, parts, at}, the piece being heard
-  const sayK = (t, parts, from = 0) => {
-    let i = from;
-    const next = () => {
-      if (playing !== t) return;
-      if (i >= parts.length) return done(t);
-      now = {t, parts, at: i}; track();
-      const u = new URL(clip(parts[i]), location.href).href;
-      player.src = kept.get(u) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      // the first clip heard comes over the network as it is made; the rest are lined up as soon as it has come
-      if (i === from) player.addEventListener('loadeddata', () => pipe(t, parts, from + 1), {once: true});
-      i += 1;
-      // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again.
-      // Refused for want of a tap on this page (opened by itself, or arrived at by a jump), the phone's voice is refused
-      // too: ▷ again, which a tap plays, rather than ■ over silence.
-      player.play().catch((err) => { if (err && err.name === 'AbortError') return;
-        if (err && err.name === 'NotAllowedError' && playing === t) { hush(); playing = null; unlocked = false; mark(); return; }
-        if (playing === t && now && now.at === i - 1) { hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); } });
-    };
-    player.onended = next;
-    player.onerror = () => { const err = player.error;                  // the phone's voice then, for a clip that failed
-      if (!err || err.code === 1 || playing !== t) return;               // 1: stopped on purpose, nothing failed
-      hush(); sayPhone(t, parts.slice(Math.max(0, i - 1))); };
-    next();
-  };
-  const sayPhone = (t, parts) => {
-    if (!talk) { playing = null; mark(); return; }
-    playing = t; mark();
-    // a phone that won't speak before a tap on the page says nothing and starts nothing: ▷ again after a moment
-    let began = false;
-    setTimeout(() => { if (playing === t && !began && !talk.speaking) { talk.cancel(); playing = null; loading = false; mark(); } }, 2500);
-    parts.forEach((p, i) => { const u = new SpeechSynthesisUtterance(p.trim()); if (voice) u.voice = voice; u.rate = pace();
-      u.onstart = () => { began = true; now = {t, parts, at: i}; track(); if (loading) { loading = false; mark(); } };
-      if (i === parts.length - 1) u.onend = () => done(t);
-      talk.speak(u); });
-  };
-  // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
-  const again = (voiceChanged) => {
-    if (!playing || !now || now.t !== playing) return;
-    if (KOKORO && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
-    const {t, parts, at} = now;
-    hush(); playing = t; mark();
-    if (KOKORO) sayK(t, parts, at); else sayPhone(t, parts.slice(at));
-  };
-  const waiting = [];
-  function done(t) { if (playing !== t) return; playing = null; mark(); const n = waiting.shift(); if (n) start(n.t, n.text); else { track(); rest(); } }
-  const say = (t, text) => { waiting.length = 0; parked = null; via = ''; start(t, text); };          // a tap: this one, now
-  // a new reply: after this one, or, when the person came back to a reading left unfinished, after that (it waits for them)
-  const later = (t, text) => { if (playing || parked) { waiting.push({t, text}); track(); } else start(t, text); };
-  function start(t, text, from = 0) {
-    const parts = chunks(text).filter((p) => p.trim());
-    from = Math.min(from, Math.max(0, parts.length - 1));
-    hush(!!resting); playing = t; parked = null;
-    loading = !(KOKORO && parts[from] && ready.has(new URL(clip(parts[from]), location.href).href)); mark();
-    if (parts[from]) tell(parts[from]);
-    return KOKORO ? sayK(t, parts, from) : sayPhone(t, parts.slice(from));
-  }
-  // Where the reading is, kept on this device for each project, piece by piece: the reply being read, the piece being
-  // heard, and the replies waiting their turn. Leaving the page and coming back, it is there again, paused: ▷ reads
-  // that reply from the start, and a long one stopped partway offers Continue from the piece it stopped at; what was
-  // waiting is read after it. Stopped with ■, or read to the end with nothing waiting, nothing is kept.
-  function track() {
-    try {
-      if (!playing && !waiting.length) { localStorage.removeItem(RKEY); return; }
-      localStorage.setItem(RKEY, JSON.stringify({t: playing, piece: now && now.t === playing ? now.parts[now.at] : '',
-        queue: waiting.map((w) => w.t), at: Date.now()}));
-    } catch (e) {}
-  }
-  // ▷ reads all the agent said since the person's own message before it, across colony's notices in between
-  const turn = (t) => {
-    const all = [...box.querySelectorAll('.say')], end = all.map((x) => x.dataset.t).lastIndexOf(t);
-    const you = [...box.querySelectorAll('.msg.you:not(.mine)')].filter((m) => m.compareDocumentPosition(all[end]) & Node.DOCUMENT_POSITION_FOLLOWING).pop();
-    return plain(all.slice(0, end + 1).filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)));
-  };
   // What has been read is remembered on this device, for each project: coming back (a reload, another project and
   // back) with Auto-speak on, it reads what came since, up to the last ten parts after the person's own last message.
   const HKEY = 'heard:' + box.dataset.name, BACK = 10;
@@ -3152,20 +3395,16 @@ CHAT = """
   try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
   aloud.addEventListener('change', () => { mark();
     try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
-    if (talk && aloud.checked) talk.speak(new SpeechSynthesisUtterance(''));   // a tap lets the phone speak later
-    if (aloud.checked) unlock();
-    if (!aloud.checked) { hush(); playing = null; mark(); }
+    if (aloud.checked) P.unlock();                 // a tap lets the phone speak later
+    else { const s = P.of(view.name); if (s && s.active) P.stop(); }
   });
   // Each part of a reply is read as it lands (the transcript holds a part only once it is written whole), after any
   // still being read: waiting for the turn to end would hold the voice back for as long as the work takes.
-  const fresh = () => {
+  const fresh = () => { if (!box.isConnected) return;
     const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
     news.forEach((x) => heard.add(x.dataset.k)); if (news.length) remember();
-    if (!aloud.checked) return;                    // what came while it was off isn't read later
-    const turns = [];
-    news.forEach((x) => { const last = turns[turns.length - 1];
-      if (last && last.t === x.dataset.t) last.els.push(x); else turns.push({t: x.dataset.t, els: [x]}); });
-    turns.forEach((g) => { via = '&auto=1'; later(g.t, plain(g.els)); });
+    if (!aloud.checked || !news.length) return;    // what came while it was off isn't read later
+    P.read(view, news.map(sec), {auto: true});
   };
   new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
   // What waits in its queue, sent mid-turn: Send now, or Edit and reorder, taken back out of the queue meanwhile so
@@ -3220,50 +3459,18 @@ CHAT = """
   // for a couple of seconds, or the message is sent.
   let keyed = 0, was = ta.value.length, byVoice = false, quiet = 0;
   ta.addEventListener('keydown', () => { keyed = Date.now(); });
-  const goOn = () => { clearTimeout(quiet); if (byVoice && paused) hold(false); byVoice = false; };
-  const dictating = () => { if (playing && !paused) { hold(true); byVoice = true; }
+  const goOn = () => { clearTimeout(quiet); if (byVoice && P.now().paused) P.hold(false); byVoice = false; };
+  const dictating = () => { const n = P.now(); if (n.playing && !n.paused) { P.hold(true); byVoice = true; }
     if (byVoice) { clearTimeout(quiet); quiet = setTimeout(goOn, 2200); } };
   ta.addEventListener('compositionstart', dictating);
   ta.addEventListener('compositionupdate', () => { if (byVoice) dictating(); });
   ta.addEventListener('input', (ev) => { const grew = ta.value.length - was; was = ta.value.length;
     if (ev.inputType !== 'insertFromPaste' && (grew > 12 || byVoice && grew > 0) && Date.now() - keyed > 400) dictating(); });
   form.addEventListener('submit', goOn);
-  // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
-  function hold(want) {
-    if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } return; }
-    paused = want; ours = Date.now(); byPhone = false;
-    if (KOKORO && !talk?.speaking) { if (paused) player.pause(); else player.play().catch(() => { paused = true; mark(); }); }
-    else if (talk) { if (paused) talk.pause(); else talk.resume(); }
-    mark();
-  }
-  // ⏭: on to the next reply waiting to be read, or, with none waiting, to the next part of this one
-  function skip() {
-    if (waiting.length) { const n = waiting.shift(); start(n.t, n.text); return; }
-    if (!now || now.t !== playing) return;
-    const {t, parts, at} = now;
-    hush(); playing = t;
-    if (at + 1 >= parts.length) return done(t);
-    mark(); if (KOKORO) sayK(t, parts, at + 1); else sayPhone(t, parts.slice(at + 1));
-  }
-  if (ms) { [['pause', () => hold(true)], ['play', () => hold(false)], ['nexttrack', skip],
-    ['stop', () => { hush(); playing = null; mark(); }]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
-  // A reading left unfinished here comes back paused (track): the reply it was in, the piece it reached, what waited.
-  try { const was = JSON.parse(localStorage.getItem(RKEY) || 'null');
-    const here = (t) => t && box.querySelector(`.say[data-t="${CSS.escape(t)}"]`);
-    if (was && (here(was.t) || (was.queue || []).some(here))) {
-      if (here(was.t)) { const parts = chunks(turn(was.t)).filter((p) => p.trim());
-        parked = {t: was.t, at: Math.max(0, parts.indexOf(was.piece))}; }
-      (was.queue || []).filter(here).forEach((t) => waiting.push({t, text: turn(t)}));
-      if (!parked && waiting.length) { const n = waiting.shift(); parked = {t: n.t, at: 0}; }
-      mark();
-    } else localStorage.removeItem(RKEY);
-  } catch (e) {}
   // On coming back, what came since is read at once where the browser lets a page speak by itself; a phone lets it only
   // after a tap, so there it starts with the first touch anywhere on the page.
-  if (aloud.checked && says.some((x) => !heard.has(x.dataset.k))) {
-    const go = () => { unlocked = true; fresh(); };
-    player.src = SILENT; player.play().then(go).catch(() => document.addEventListener('pointerdown', go, {once: true, capture: true}));
-  }
+  P.attach(view);
+  if (aloud.checked && says.some((x) => !heard.has(x.dataset.k))) P.whenAllowed(fresh);
   // an answer to what it needs goes from here, the page staying where it is
   box.addEventListener('submit', async (ev) => {
     const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
@@ -3287,13 +3494,15 @@ CHAT = """
       cp.innerHTML = ok ? ICON.check : '✗'; setTimeout(() => { cp.innerHTML = ICON.copy; }, 1500); return;
     }
     // ⏸ holds the reading where it is, ▷ takes it up from there
-    if (ev.target.closest('button.hold')) return hold(!paused);
-    if (ev.target.closest('button.skip')) return skip();
-    const c = ev.target.closest('button.cont');
-    if (c && parked && parked.t === c.dataset.t) { via = ''; start(parked.t, turn(parked.t), parked.at); return; }
+    if (ev.target.closest('button.hold')) return P.hold(!P.now().paused);
+    if (ev.target.closest('button.skip')) return P.skip();
+    if (ev.target.closest('button.cont')) return P.resume(view.name);           // from the piece it stopped at
     const l = ev.target.closest('button.listen');
-    if (l && parked && parked.t === l.dataset.t && !playing) { via = ''; start(parked.t, turn(parked.t)); return; }   // from the start, what waited after it
-    if (l) { if (playing === l.dataset.t) { hush(); playing = null; waiting.length = 0; track(); mark(); } else say(l.dataset.t, turn(l.dataset.t)); return; }
+    if (l) { const s = P.of(view.name), t = l.dataset.t;
+      if (s && s.playing && s.t === t) P.stop();
+      else if (s && !s.playing && s.t === t) P.again(view, turn(t));               // from the start, what waited after it
+      else P.read(view, turn(t), {now: true});
+      return; }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
     await fetch('/choose', {method: 'POST', body: new URLSearchParams({p: key, option: b.dataset.option})}).catch(() => {});
     setTimeout(refresh, 600);
@@ -7380,6 +7589,32 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .stamp { font-size:10.5px; color:var(--muted); opacity:.8; white-space:nowrap }
 .chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px } .chat .turnacts .vset, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
 .chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
+/* The player: over every page while something is being read or waits to be taken up, above the box and the tabs */
+.cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
+.cplayer[hidden], .cppanel[hidden] { display:none } body.typing .cplayer { display:none }
+html.going main { opacity:.5; transition:opacity .2s .15s }
+body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-area-inset-bottom)) }
+.cplayer > * { pointer-events:auto; max-width:740px; margin:0 auto }
+.cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:var(--card); border:1px solid var(--line);
+  border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16) }
+.cpbar button { width:40px; height:40px; min-height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:var(--ink);
+  display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } .cpbar button:hover { background:var(--sunk) }
+.cpbar button:disabled { opacity:.35 } .cpbar .cphold { color:var(--accent) } .cpbar .cplist[aria-expanded=true] { color:var(--accent); background:var(--sunk) }
+.cpwhat { flex:1; min-width:0; display:flex; flex-direction:column; padding:2px 6px; line-height:1.25; color:inherit; text-decoration:none }
+.cpwhat b { font-size:12px; color:var(--accent); font-weight:600 } .cpprev { font-size:13.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.cppanel { display:flex; flex-direction:column; max-height:min(52vh, 420px); margin-bottom:6px; background:var(--card); border:1px solid var(--line);
+  border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16); overflow:hidden }
+.cphead { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; font-size:13px; color:var(--muted); border-bottom:1px solid var(--line) }
+.cpfollow { display:flex; align-items:center; gap:6px; margin:0; color:var(--ink) }
+.cprows { list-style:none; margin:0; padding:4px; overflow-y:auto }
+.cprows li { display:flex; gap:10px; align-items:baseline; padding:9px 8px; border-radius:10px; cursor:pointer; font-size:14px; line-height:1.35 }
+.cprows li:hover { background:var(--sunk) } .cprows li.now { background:var(--sunk); font-weight:600 } .cprows li.now .cpat { color:var(--accent) }
+.cprows li.heard { color:var(--muted) } .cprows li.heard .cpwords::before { content:'✓ ' }
+.cpat { flex:none; min-width:62px; font-size:11.5px; color:var(--muted); white-space:nowrap }
+.cpwords { flex:1; min-width:0 }
+body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 56px) + 8px) }
+.chat .say.reading { background:color-mix(in srgb, var(--accent) 9%, transparent); box-shadow:0 0 0 8px color-mix(in srgb, var(--accent) 9%, transparent);
+  border-radius:4px; transition:background .3s, box-shadow .3s }
 .chat .turnacts .spin { transform-origin:12px 12px; animation:spin .9s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
   display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
