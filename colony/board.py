@@ -2533,6 +2533,18 @@ def mail_by_turn(root, turns):
     return {i: "\n\n".join(ms) for i, ms in byturn.items()}
 
 
+def said_at(at, now=None):
+    """A message's time in a few characters, in this machine's time: "8:41 PM" today, "Oct 24, 8:41 PM" before."""
+    from datetime import datetime
+    try:
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return ""
+    now = (now or datetime.now().astimezone())
+    clock = when.strftime("%I:%M %p").lstrip("0")
+    return f"<span class='stamp' title='{when:%Y-%m-%d %H:%M}'>{clock if when.date() == now.date() else f'{when:%b} {when.day}, {clock}'}</span>"
+
+
 def chat_feed(key, root, shown=40):
     """The conversation, as the app shows one: the person's messages, the agent's prose in full, each run of work
     between folded to a line (Ran 6 commands), colony's own notices small; then what it is doing now."""
@@ -2548,7 +2560,7 @@ def chat_feed(key, root, shown=40):
             shots = "".join(f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
                             for a in re.findall(r"^Attached: (.+)$", t["text"], flags=re.M)
                             if a.strip().lower().endswith(IMAGES) and (u := chat_file(key, root, e(a.strip()))))
-            out.append(f"<div class='msg you'>{e(t['text'])}{shots}</div>")
+            out.append(f"<div class='msg you'>{e(t['text'])}{shots}{said_at(t['at'])}</div>")
         elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
             out.append(f"<div class='msg you pending queued' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
         elif t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
@@ -2582,7 +2594,8 @@ def chat_feed(key, root, shown=40):
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
                        f"<button class='cont' data-t='{k}' hidden aria-label='Continue where it stopped'>Continue</button>"
                        f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
-                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button></div>")
+                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button>"
+                       f"{said_at(t.get('last') or t['at'])}</div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
@@ -7364,7 +7377,8 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
-.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .turnacts .vset, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
+.chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .stamp { font-size:10.5px; color:var(--muted); opacity:.8; white-space:nowrap }
+.chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px } .chat .turnacts .vset, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
 .chat .turnacts .vset.on { color:var(--accent); font-weight:600 }
 .chat .turnacts .spin { transform-origin:12px 12px; animation:spin .9s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;

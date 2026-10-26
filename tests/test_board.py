@@ -1123,7 +1123,7 @@ class ChatTest(BoardBase):
                         + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi, see [the lab](https://x.io)."}]}}))
         with patch("colony.context.session", return_value={"provider": "claude", "id": "s", "path": str(path)}):
             page = board.render(board.registry(), 0, "chat")
-            self.assertIn("<div class='msg you'>hello</div>", page)
+            self.assertIn("<div class='msg you'>hello<span class='stamp'", page, "each message with its time, small")
             self.assertIn("<a href='https://x.io' target='_blank' rel='noopener'>the lab</a>", page)
             self.assertIn("id='composer'", page)
             self.assertIn("view=console'>Console<", page, "the console is a tab away")

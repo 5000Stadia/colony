@@ -187,6 +187,8 @@ def turns(evs):
             if not out:
                 out.append({"from": None, "text": "", "at": at, "items": []})
             out[-1]["items"].append((kind, text))
+            if at:
+                out[-1]["last"] = at                    # when the agent last wrote in it: the reply's own time
     return out
 
 
