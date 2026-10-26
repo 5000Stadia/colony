@@ -2630,7 +2630,7 @@ PLAYER = """
     + "<div class='cppanel cpwho' hidden><div class='cphead'><span>Read from</span><a class='cpopen'>Open its chat ›</a></div><ol class='cprows cpprojs'></ol></div>"
     + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'><input type='checkbox' class='cpaloud'> Auto-speak new replies</label>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
-    + "<div class='cpvoice' hidden><label class='cpline'>Voice <select class='cpkvoice'></select></label>"
+    + "<div class='cpvoice' hidden><label class='cpline'>Voice <span class='muted cpwhose'></span> <select class='cpkvoice'></select></label>"
     + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
@@ -2783,10 +2783,14 @@ PLAYER = """
     yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
   }
   // ⚙: Auto-speak, speed and voice, the same as the chat's own (each changed here shows there too)
+  // whose voice ⚙ sets: the reading's project; reading them all, the project being heard (named beside Voice)
+  const voiced = () => { const s = R && R.all ? R.list[R.cur] || {} : R || {}; return {key: s.key, name: s.name || (R && R.name)}; };
   async function sets() {
     $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate());
-    if (!R) return;
-    const vo = await fetched('/chat/voice?p=' + encodeURIComponent(R.key), 'json');
+    const who = voiced();
+    if (!who.key) { $('.cpvoice').hidden = true; return; }
+    $('.cpwhose').textContent = who.name;
+    const vo = await fetched('/chat/voice?p=' + encodeURIComponent(who.key), 'json');
     if (!vo || !vo.ready) { $('.cpvoice').hidden = true; return; }
     $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.voice; $('.cpvpin').checked = vo.pinned; $('.cpvoice').hidden = false;
     $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.options; $('.cpherald').value = herald();
@@ -2796,8 +2800,8 @@ PLAYER = """
     if (a) unlock();
     const box = document.getElementById('aloud'); if (box) box.checked = a; if (view) view.mark(); });
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
-  const keepVoice = async (body) => { if (!R) return; const name = R.name;
-    const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: R.key}, body))}).catch(() => null);
+  const keepVoice = async (body) => { const {key, name} = voiced(); if (!key) return;
+    const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
     const got = await r.json();
     $('.cpkvoice').value = got.voice; $('.cpvpin').checked = got.pinned; P.setVoice(name, got.voice);
