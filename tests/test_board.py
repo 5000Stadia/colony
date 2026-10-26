@@ -179,6 +179,10 @@ class BoardTest(BoardBase):
             self.assertEqual(monitor.update_due(t0 + 3700), t0)
             text = monitor.update(t0 + 3700, digests={"plants": "Logs daily; nothing needed."})
         self.assertIn("4) What each project's agent has been saying", text, "said alone, it is news for the person")
+        # a notice colony gave every project at once is answered by each: none of those replies is read or digested
+        self.assertEqual(board.colony_wide({"a": [7, 9], "b": [7], "c": [7, 7], "d": [9]}), {7}, "three projects or more")
+        with patch.object(digests, "_said", return_value=[{"text": "Noted, pausing.", "colony": 7}, {"text": "Built R2.", "colony": None}]):
+            self.assertEqual(digests.said_since(self.root, 0, wide={7}), ["Built R2."])
         self.assertIn("plants: Logs daily; nothing needed.", text)
         self.assertIn("with your own commentary", text)
 

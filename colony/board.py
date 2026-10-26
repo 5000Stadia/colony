@@ -3142,6 +3142,28 @@ def spoken_text(md):
     return re.sub(r"[*_`#>|]", "", md).strip()
 
 
+def iso_epoch(stamp):
+    """A transcript's time (ISO, as the programs write it) in epoch seconds; 0 where it has none."""
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0
+
+
+WIDE = 300                   # seconds: colony starting a turn in many projects within one span is one notice to them all
+
+
+def colony_wide(started):
+    """The spans (WIDE seconds each, numbered) in which colony started a turn in three projects or more, from {project:
+    the spans its colony-started turns began in}: a notice to them all (a usage limit, a safe pause, colony updated),
+    so their replies are the same reply many times over, and none of them is read aloud among the projects or
+    digested for the steward."""
+    from collections import Counter
+    seen = Counter(b for spans in started.values() for b in set(spans))
+    return {b for b, n in seen.items() if n >= 3}
+
+
 def chat_parts(root, shown=12, most=10):
     """What the agent said since the person last wrote to it, part by part as Chat shows them (the same keys and
     times), for the player reading every project in turn."""
@@ -3164,7 +3186,8 @@ def chat_parts(root, shown=12, most=10):
         for j, (kind, text) in enumerate(t["items"]):
             if kind == "say" and (words := spoken_text(text)):
                 when = (t.get("times") or [])[j] if j < len(t.get("times") or []) else t.get("last") or t["at"]
-                out.append({"t": t["at"], "k": f"s{t['at']}-{j}", "at": when, "text": words})
+                out.append({"t": t["at"], "k": f"s{t['at']}-{j}", "at": when, "text": words,
+                            **({"colony": int(iso_epoch(t["at"]) // WIDE)} if t["from"] == "colony" else {})})
     _PARTS[str(root)] = (mark, out[-most:])
     return out[-most:]
 
@@ -6882,6 +6905,10 @@ class Handler(BaseHTTPRequestHandler):
                                     "voice": voice_of(str(i), root)[0], "parts": chat_parts(root)})
                     except Exception:
                         continue                         # one project's unreadable transcript never stops the rest
+            # a notice colony gave them all is answered by each: none of those replies is read among the projects
+            wide = colony_wide({g["name"]: [p["colony"] for p in g["parts"] if "colony" in p] for g in got})
+            for g in got:
+                g["parts"] = [{k: v for k, v in p.items() if k != "colony"} for p in g["parts"] if p.get("colony") not in wide]
             return self._send(200, json.dumps({"ready": voice.ready(), "projects": got}).encode())
         if url.path == "/chat/voice":                 # the voice a chat reads in, for the player: picked, pinned, the choices
             from . import monitor, voice

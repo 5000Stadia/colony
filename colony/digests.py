@@ -12,33 +12,30 @@ SHORT = 60                  # words: said in fewer, it is its own digest
 CAP = 12000                 # characters of what was said that the small model reads at most, the latest
 
 
-def said_since(root, since):
-    """What the agent said to the person since a time (epoch seconds), as the voice would read it: its prose only."""
+def said_since(root, since, wide=()):
+    """What the agent said to the person since a time (epoch seconds), as the voice would read it: its prose only,
+    leaving out its replies to a notice colony gave every project at once (spans in `wide`, board.colony_wide)."""
+    return [x["text"] for x in _said(root, since) if x["colony"] not in wide]
+
+
+def _said(root, since):
     from . import chat, context
     s = context.session(root)
     turns = chat.turns(chat.events(s["provider"], s["path"])) if s else []
     out = []
     for t in turns:
         times = t.get("times") or []
+        span = int(board.iso_epoch(t["at"]) // board.WIDE) if t["from"] == "colony" else None
         for j, (kind, text) in enumerate(t["items"]):
             when = times[j] if j < len(times) else t.get("last") or t["at"]
-            if kind == "say" and _when(when) > since and (words := board.spoken_text(text)):
-                out.append(words)
+            if kind == "say" and board.iso_epoch(when) > since and (words := board.spoken_text(text)):
+                out.append({"text": words, "colony": span})
     return out
 
 
-def _when(stamp):
-    """A transcript's time (ISO, as the programs write it) in epoch seconds; 0 where it has none."""
-    from datetime import datetime
-    try:
-        return datetime.fromisoformat(str(stamp).replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return 0
-
-
-def digest(root, since, ask=None):
+def digest(root, since, ask=None, wide=()):
     """A few lines on what a project's agent said since a time; None where it said nothing."""
-    said = "\n\n".join(said_since(root, since))[-CAP:]
+    said = "\n\n".join(said_since(root, since, wide))[-CAP:]
     if not said.strip():
         return None
     if len(said.split()) < SHORT:
@@ -60,12 +57,18 @@ def _ask(root, brief):
 def all_since(since):
     """{project name: digest} for every project the steward follows that said something since a time."""
     from . import monitor
-    out = {}
+    out, ps, started = {}, [], {}
     for p in board.projects():
-        if not p.exists() or p == monitor.home() or not monitor.involved(p):
-            continue
+        if p.exists() and p != monitor.home() and monitor.involved(p):
+            try:
+                started[p.name] = [x["colony"] for x in _said(p, since) if x["colony"] is not None]
+                ps.append(p)
+            except Exception:
+                continue                             # an unreadable transcript: left out
+    wide = board.colony_wide(started)
+    for p in ps:
         try:
-            d = digest(p, since)
+            d = digest(p, since, wide=wide)
         except Exception:
             d = None                                 # one project's unreadable transcript or failed call: left out
         if d:
