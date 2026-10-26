@@ -132,6 +132,9 @@ steer all of them from one board, and the projects can write to each other.
 - An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
+- A standing order from the person (from now on, always, never) is kept by colony, not your memory: `colony rule
+  "the rule" --words "their words"`. It comes back at every session start, after a compaction too; when they lift
+  one, `colony rule --retire ID "why"`.
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
   `--default "what stands if they skip it"`); where it has clear answers, `--option "..."` for each and `--recommended "..."` for
   yours: they answer with a tap. The answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`. An open gate stays on their list.
@@ -3321,6 +3324,20 @@ box.addEventListener('click', (ev) => {{
             + (f"<div class='panel'>{form}{pin}</div>" if cls == "psettings" else form) + "</details>")
 
 
+def rules_box(root, pid):
+    """The person's standing rules for this project, folded under its vision, each retirable with a tap."""
+    from . import rules
+    found = rules.rules(root)
+    if not found:
+        return ""
+    items = "".join(f"<li>{e(r['text'])} <span class='muted'>(your words: {e(r['words'])})</span>"
+                    f"<form class='inline' method='post' action='/rule'><input type='hidden' name='p' value='{pid}'>"
+                    f"<input type='hidden' name='id' value='{e(r['id'])}'><button class='quiet'>Retire</button></form></li>"
+                    for r in found)
+    return (f"<details class='vision'><summary><b>Standing rules</b> · {len(found)}, kept for its agent across "
+            f"compactions</summary><ul>{items}</ul></details>")
+
+
 def vision_box(root, pid):
     from . import vision
     road = roadmap(root)
@@ -3572,7 +3589,8 @@ def render(reg, pid, view="overview", show_all=""):
     waiting = len(moments(root)) if view == "overview" else 0
     lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
-               + switch_line(root) + lead_status + f"{vision_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
+               + switch_line(root) + lead_status + f"{vision_box(root, pid)}{rules_box(root, pid) if view == 'overview' else ''}"
+               f"<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
     elif view == "library":                 # what the project knows and has made, found where it is
@@ -6754,6 +6772,21 @@ class Handler(BaseHTTPRequestHandler):
                 save_registry(reg)
             self.send_response(303)
             self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/rule":
+            from . import rules
+            try:
+                root = projects(reg)[int(form.get("p", ""))]
+                rules.retire(root, form.get("id", ""), "the person retired it on the board", by="person")
+                add_note(root, None, f"The person retired a standing rule on the board ({form.get('id', '')}); it no longer holds.",
+                         author="colony", quiet=True)
+            except (ValueError, IndexError, KeyError):
+                pass
+            back = f"/?p={form.get('p', '')}&view=overview"
+            self.send_response(303)
+            self.send_header("Location", back)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

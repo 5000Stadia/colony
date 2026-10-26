@@ -5833,3 +5833,25 @@ class LessonsTest(BoardBase):
             cli.main(["research", "anything"])
         self.assertIn("Lessons the person adopted for `colony research`", out.read_text())
         self.assertIn("--recheck 30", out.read_text())
+
+
+class RulesTest(BoardBase):
+    """The person's standing rules, kept by colony and handed back at every session start, after a compaction too."""
+
+    def test_a_standing_rule_comes_back_at_each_session_start_until_it_is_lifted(self):
+        from colony import cli, rules
+        board.track(self.root)
+        with self.assertRaises(ValueError):
+            rules.add(self.root, "Update the README at each milestone.", "")      # theirs, in their words
+        r = rules.add(self.root, "Update the README at each milestone.", "whenever you finish a milestone, update the README")
+        self.assertIn("Update the README at each milestone.", rules.session_text(self.root))
+        out = Path(self.tmp.name) / "hook.txt"
+        payload = json.dumps({"session_id": "s1", "source": "compact", "hook_event_name": "SessionStart"})
+        import io
+        with patch.object(board, "root_of", return_value=self.root), patch("sys.stdin", io.StringIO(payload)), \
+                open(out, "w") as f, patch("sys.stdout", f):
+            cli.main(["notes", "--deliver", "--session"])
+        self.assertIn("standing rules for this project", out.read_text(), "after a compaction, it is back")
+        self.assertIn("Standing rules", board.rules_box(self.root, 0))
+        rules.retire(self.root, r["id"], "lifted")
+        self.assertEqual(rules.session_text(self.root), "")
