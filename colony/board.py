@@ -2574,13 +2574,20 @@ PLAYER = """
   // The player: over every page, above the box and the tabs, while there is something to read or take up again
   const PICON = @ICONS@;
   const bar = document.createElement('div'); bar.id = 'cplayer'; bar.className = 'cplayer'; bar.hidden = true;
-  bar.innerHTML = "<div class='cppanel' hidden><div class='cphead'><span class='cpcount'></span>"
+  // three panels open above it, one at a time: the sections (☰), whose reading it is (its name), and its settings (⚙)
+  bar.innerHTML = "<div class='cppanel cpsecs' hidden><div class='cphead'><span class='cpcount'></span>"
     + "<label class='cpfollow'><input type='checkbox'> Follow in chat</label></div><ol class='cprows'></ol></div>"
+    + "<div class='cppanel cpwho' hidden><div class='cphead'><span>Read from</span><a class='cpopen'>Open its chat ›</a></div><ol class='cprows cpprojs'></ol></div>"
+    + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'><input type='checkbox' class='cpaloud'> Auto-speak new replies</label>"
+    + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
+    + "<div class='cpvoice' hidden><label class='cpline'>Voice <select class='cpkvoice'></select></label>"
+    + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label></div></div></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
-    + "<a class='cpwhat'><b class='cpname'></b><span class='cpprev'></span></a>"
+    + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b class='cpname'></b><span class='cpprev'></span></button>"
     + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
-    + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button></div>";
-  const $ = (s) => bar.querySelector(s), panel = $('.cppanel'), rows = $('.cprows'), follow = $('.cpfollow input');
+    + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
+    + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙</button></div>";
+  const $ = (s) => bar.querySelector(s), panel = $('.cpsecs'), rows = $('.cprows'), follow = $('.cpfollow input');
   const following = () => { try { return localStorage.getItem('follow') !== '0'; } catch (e) { return true; } };
   follow.checked = following();
   on(follow, 'change', () => { try { localStorage.setItem('follow', follow.checked ? '1' : '0'); } catch (e) {} if (view) view.mark(); });
@@ -2591,11 +2598,11 @@ PLAYER = """
   let drawn = '';
   const draw = () => {
     const show = left(R);
-    if (bar.hidden === show) { bar.hidden = !show; document.body.classList.toggle('cpon', show); if (!show) panel.hidden = true; }
+    if (bar.hidden === show) { bar.hidden = !show; document.body.classList.toggle('cpon', show); if (!show) shut(); }
     document.body.classList.toggle('cpon', show);
     if (!show) return;
     const s = R.list[R.cur];
-    $('.cpname').textContent = R.name; $('.cpprev').textContent = words(s.text, 12); $('.cpwhat').setAttribute('href', R.href || '/');
+    $('.cpname').textContent = R.name; $('.cpprev').textContent = words(s.text, 12); $('.cpopen').setAttribute('href', R.href || '/');
     const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
     const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
     $('.cpskip').disabled = !playing;
@@ -2627,10 +2634,78 @@ PLAYER = """
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpskip'), 'click', skip);
   on($('.cpstop'), 'click', stop);
-  on($('.cplist'), 'click', () => { panel.hidden = !panel.hidden; $('.cplist').setAttribute('aria-expanded', String(!panel.hidden));
-    drawn = ''; draw(); });
-  on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li || !R) return; panel.hidden = true; begin(+li.dataset.i); });
-  on(document, 'click', (ev) => { if (!panel.hidden && !ev.target.closest('#cplayer')) panel.hidden = true; });
+  const panels = [[$('.cplist'), panel, () => { drawn = ''; draw(); }], [$('.cpwhat'), $('.cpwho'), () => who()], [$('.cpcog'), $('.cpset'), () => sets()]];
+  function shut() { panels.forEach(([b, p]) => { p.hidden = true; b.setAttribute('aria-expanded', 'false'); }); }
+  panels.forEach(([b, p, fill]) => on(b, 'click', () => { const was = p.hidden; shut(); if (was) { p.hidden = false; b.setAttribute('aria-expanded', 'true'); fill(); } }));
+  on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li || !R) return; shut(); begin(+li.dataset.i); });
+  on(document, 'click', (ev) => { if (!ev.target.closest('#cplayer')) shut(); });
+  // Whose reading it is: the project of the page open first, then the one reading, those with a reading kept paused,
+  // then the rest, as the board lists them. A tap reads from it: a kept reading from where it stopped; otherwise what
+  // came since the person last wrote there and hasn't been read, or, all read, its latest reply.
+  const listed = () => { const out = new Map();
+    if (document.querySelector('nav a.proj.monitor')) out.set('steward', {key: 'steward', name: 'steward', href: '/steward?view=chat'});
+    document.querySelectorAll('nav a.proj[href^="/?p="]').forEach((a) => { const k = new URL(a.href).searchParams.get('p'), n = a.querySelector('.pname');
+      if (out.has(k) || !n) return;
+      const name = [...n.childNodes].filter((x) => x.nodeType === 3).map((x) => x.textContent).join('').trim();
+      out.set(k, {key: k, name, href: '/?p=' + k + '&view=chat'}); });
+    return [...out.values()]; };
+  const here = () => location.pathname === '/steward' ? 'steward' : location.pathname === '/' ? new URLSearchParams(location.search).get('p') : null;
+  const who = () => { const all = listed(), mine = here(), rank = (p) => p.key === mine ? 0 : R && p.name === R.name ? 1 : load(p.name) ? 2 : 3;
+    $('.cpprojs').replaceChildren(...all.map((p, n) => [rank(p), n, p]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , p]) => {
+      const li = document.createElement('li'), b = document.createElement('b'), st = document.createElement('span'), kept = load(p.name);
+      li.dataset.key = p.key; b.className = 'cpwords'; b.textContent = p.name; st.className = 'cpstate';
+      st.textContent = [p.key === mine ? 'this page' : '', R && R.name === p.name ? (playing ? 'reading' : 'paused') : kept ? 'paused · ' + (kept.list.length - kept.cur) + ' left' : '']
+        .filter(Boolean).join(' · ');
+      if (R && R.name === p.name) li.className = 'now';
+      li.append(b, st); return li; })); };
+  on($('.cpprojs'), 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return; shut();
+    const p = listed().find((x) => x.key === li.dataset.key); if (p) switchTo(p); });
+  on($('.cpopen'), 'click', () => shut());
+  const fetched = (u, as) => fetch(u, {cache: 'no-store'}).then((r) => r.ok ? r[as]() : null).catch(() => null);
+  async function switchTo(p) {
+    if (R && R.name === p.name) { if (!playing) begin(R.cur, R.piece); return; }
+    const kept = load(p.name);
+    if (kept) { yieldTo(kept); R = kept; via = ''; begin(R.cur, R.piece); return; }
+    $('.cpprev').textContent = 'Opening ' + p.name + '…';
+    const [feed, vo] = await Promise.all([fetched('/chat/feed?p=' + encodeURIComponent(p.key), 'text'), fetched('/chat/voice?p=' + encodeURIComponent(p.key), 'json')]);
+    // read off the page's own drawing, as the chat does, so its paragraphs stay paragraphs
+    const box = document.createElement('div'); box.className = 'chat'; box.style.cssText = 'position:absolute;left:-9999px;top:0;width:600px';
+    box.innerHTML = feed || ''; document.body.appendChild(box);
+    const says = [...box.querySelectorAll('.say')], you = [...box.querySelectorAll('.msg.you')].pop();
+    const since = says.filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const heard = new Set(get('heard:' + p.name) || []);
+    let pick = since.filter((x) => !heard.has(x.dataset.k)).slice(-10);
+    if (!pick.length) { const last = says.length && says[says.length - 1].dataset.t; pick = since.length ? since : says.filter((x) => x.dataset.t === last); }
+    const secs = pick.map((x) => { x.querySelectorAll('pre').forEach((e) => e.remove());
+      return {t: x.dataset.t, k: x.dataset.k, at: x.dataset.at || '', text: x.innerText.replace(/[*_`#>|]/g, '').trim()}; }).filter((x) => x.text);
+    box.remove();
+    if (!secs.length) { draw(); $('.cpprev').textContent = 'Nothing to read in ' + p.name + ' yet'; return; }
+    put('heard:' + p.name, [...new Set([...heard, ...pick.map((x) => x.dataset.k)])].slice(-300));
+    yieldTo(null);
+    R = {name: p.name, key: p.key, href: p.href, kvoice: (vo && vo.voice) || 'am_echo', kokoro: vo ? !!vo.ready : false, list: secs, cur: 0, piece: 0};
+    via = ''; begin(0);
+  }
+  // ⚙: Auto-speak, speed and voice, the same as the chat's own (each changed here shows there too)
+  async function sets() {
+    $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate());
+    if (!R) return;
+    const vo = await fetched('/chat/voice?p=' + encodeURIComponent(R.key), 'json');
+    if (!vo || !vo.ready) { $('.cpvoice').hidden = true; return; }
+    $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.voice; $('.cpvpin').checked = vo.pinned; $('.cpvoice').hidden = false;
+  }
+  on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked;
+    try { localStorage.setItem('aloud', a ? '1' : '0'); } catch (e) {}
+    if (a) unlock();
+    const box = document.getElementById('aloud'); if (box) box.checked = a; if (view) view.mark(); });
+  on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
+  const keepVoice = async (body) => { if (!R) return; const name = R.name;
+    const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: R.key}, body))}).catch(() => null);
+    if (!r || !r.ok) return;
+    const got = await r.json();
+    $('.cpkvoice').value = got.voice; $('.cpvpin').checked = got.pinned; P.setVoice(name, got.voice);
+    document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, voice: got.voice, pinned: got.pinned}})); };
+  on($('.cpkvoice'), 'change', () => keepVoice({voice: $('.cpkvoice').value}));
+  on($('.cpvpin'), 'change', () => keepVoice({pin: $('.cpvpin').checked ? '1' : '0'}));
   const P = window.colonyPlayer = {
     busy: () => left(R), placed, rate, following,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} again(false); },
@@ -3379,6 +3454,9 @@ CHAT = """
     kvoice = picker.value = got.voice; pin.checked = got.pinned;
     if (changed) P.setVoice(view.name, kvoice);
   };
+  document.addEventListener('colony-voice', (ev) => { const d = ev.detail; if (!picker) return;
+    if (d.name === view.name) { kvoice = picker.value = d.voice; pin.checked = d.pinned; }
+    else if (!d.pinned && !pin.checked) kvoice = picker.value = d.voice; });
   if (picker) { picker.addEventListener('change', () => keepVoice({voice: picker.value}));
     pin.addEventListener('change', () => keepVoice({pin: pin.checked ? '1' : '0'}));
     // a voice once kept on this device for this project stays with it, as its pin
@@ -6567,6 +6645,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
+        if url.path == "/chat/voice":                 # the voice a chat reads in, for the player: picked, pinned, the choices
+            from . import monitor, voice
+            key = (q.get("p") or ["0"])[0]
+            try:
+                root = monitor.home() if key == "steward" else plist[int(key)]
+            except (ValueError, IndexError):
+                return self._send(404, b"No such console")
+            name, pinned = voice_of(key, root)
+            ready = voice.ready()
+            return self._send(200, json.dumps({"voice": name, "pinned": pinned, "ready": ready,
+                                               "options": voice.options(name) if ready else ""}).encode())
         if url.path == "/chat/feed":                  # the chat's conversation, as it stands now
             from . import monitor
             key = (q.get("p") or ["0"])[0]
@@ -7603,8 +7692,14 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-
 .cpbar button { width:40px; height:40px; min-height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:var(--ink);
   display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } .cpbar button:hover { background:var(--sunk) }
 .cpbar button:disabled { opacity:.35 } .cpbar .cphold { color:var(--accent) } .cpbar .cplist[aria-expanded=true] { color:var(--accent); background:var(--sunk) }
-.cpwhat { flex:1; min-width:0; display:flex; flex-direction:column; padding:2px 6px; line-height:1.25; color:inherit; text-decoration:none }
-.cpwhat b { font-size:12px; color:var(--accent); font-weight:600 } .cpprev { font-size:13.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.cpbar .cpwhat { flex:1; min-width:0; width:auto; height:auto; display:flex; flex-direction:column; align-items:stretch; justify-content:center;
+  padding:2px 6px; line-height:1.25; text-align:left; color:inherit; font:inherit }
+.cpwhat b { font-size:12px; color:var(--accent); font-weight:600 } .cpwhat b::after { content:' ▾'; opacity:.7 }
+.cpbar .cpcog { font-size:19px; color:var(--muted) } .cpbar .cpcog[aria-expanded=true], .cpbar .cpwhat[aria-expanded=true] { background:var(--sunk) }
+.cphead a.cpopen { color:var(--accent); text-decoration:none; font-size:13px }
+.cpprojs li { align-items:center } .cpprojs .cpstate { margin-left:auto; font-size:12px; color:var(--muted); white-space:nowrap }
+.cpsets { display:flex; flex-direction:column; gap:12px; padding:12px 14px }
+.cpline { display:flex; align-items:center; gap:10px; margin:0; font-size:14px } .cpline select { flex:1; min-width:0 } .cpprev { font-size:13.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .cppanel { display:flex; flex-direction:column; max-height:min(52vh, 420px); margin-bottom:6px; background:var(--card); border:1px solid var(--line);
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16); overflow:hidden }
 .cphead { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; font-size:13px; color:var(--muted); border-bottom:1px solid var(--line) }
