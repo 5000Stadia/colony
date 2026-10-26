@@ -2215,7 +2215,7 @@ def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{PLAYER.replace('@ICONS@', json.dumps(ICONS))}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{LASTPAGE}{BAR}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
@@ -2834,6 +2834,29 @@ document.addEventListener('input', (ev) => {
   drafting = setTimeout(() => fetch('/answers/draft', {method: 'POST', body: new URLSearchParams(new FormData(f))}).catch(() => {}), 700);
 });
 document.addEventListener('submit', (ev) => { if (ev.target.matches('form.bynumber')) clearTimeout(drafting); }, true);
+"""
+
+
+# A tap on one of a decision's answers takes effect at once, on any page: the question leaves the page as the finger
+# lifts and the answer goes behind it, with no page to wait for. It stays gone while the page redraws (a rule keyed to its
+# gate), and comes back saying so only if the answer never reached the board. The board's reply to an answer is a
+# redirect to a page, which isn't fetched: an answer once taken is sent, however slow that page would have been to make.
+ANSWERS = """
+document.addEventListener('submit', async (ev) => {
+  const f = ev.target, b = ev.submitter;
+  if (!f.matches || !f.matches('form[action="/answer"]') || !(b && b.matches('button.choice'))) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const gate = (f.querySelector('input[name=gate]') || {}).value || '';
+  const rule = document.createElement('style');
+  rule.textContent = `.need:has(input[name=gate][value="${CSS.escape(gate)}"]), .card.gate:has(input[name=gate][value="${CSS.escape(gate)}"]),
+    details.need[data-k="g${CSS.escape(gate)}"] { display:none !important }`;
+  document.head.appendChild(rule);
+  const r = await fetch('/answer', {method: 'POST', body: new URLSearchParams(new FormData(f)), redirect: 'manual'}).catch(() => null);
+  if (r && (r.ok || r.type === 'opaqueredirect')) return;
+  rule.remove();
+  const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: the board could not be reached. Tap again.';
+  f.closest('.gatechoices') ? f.closest('.gatechoices').after(p) : f.after(p);
+}, true);
 """
 
 
@@ -3554,8 +3577,8 @@ CHAT = """
     const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
     ev.preventDefault();
     const d = new FormData(f); if (ev.submitter && ev.submitter.name) d.append(ev.submitter.name, ev.submitter.value);
-    const r = await fetch('/answer', {method: 'POST', body: f.enctype === 'multipart/form-data' ? d : new URLSearchParams(d)}).catch(() => null);
-    if (!r || !r.ok) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: try again.'; f.appendChild(p); return; }
+    const r = await fetch('/answer', {method: 'POST', body: f.enctype === 'multipart/form-data' ? d : new URLSearchParams(d), redirect: 'manual'}).catch(() => null);
+    if (!r || !(r.ok || r.type === 'opaqueredirect')) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: try again.'; f.appendChild(p); return; }
     f.querySelectorAll('textarea, input[type=file]').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
     refresh();
   });

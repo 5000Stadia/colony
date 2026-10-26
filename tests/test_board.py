@@ -1042,6 +1042,14 @@ class ChatTest(BoardBase):
         shown = board.gate_body(self.root, 0, dict(again, answer=None, answered_at=None), "/")
         self.assertIn("You asked:</span> this one?</p><a class='shot'", shown, "the picture with the question")
 
+    def test_a_tapped_answer_leaves_the_page_at_once_and_is_sent_behind_it(self):
+        board.track(self.root)
+        page = board.render(board.registry(), 0, "chat")
+        self.assertIn("matches('button.choice')", page, "every page takes a tapped answer in place")
+        self.assertIn("display:none !important", board.ANSWERS, "gone as the finger lifts, and through redraws")
+        self.assertIn("redirect: 'manual'", board.ANSWERS, "sent is sent: the page it redirects to is never awaited")
+        self.assertIn("redirect: 'manual'", board.CHAT, "a typed answer likewise")
+
     def test_replies_are_read_in_kokoros_voice_where_it_is_installed_and_the_phones_otherwise(self):
         from colony import voice
         board.track(self.root)
