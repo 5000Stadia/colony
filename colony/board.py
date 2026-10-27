@@ -2350,9 +2350,9 @@ PLAYER = """
     if (css && ncss && css.getAttribute('href') !== ncss.getAttribute('href')) css.setAttribute('href', ncss.getAttribute('href'));
     [...document.body.attributes].forEach((a) => document.body.removeAttribute(a.name));
     [...doc.body.attributes].forEach((a) => document.body.setAttribute(a.name, a.value));
-    const bar = document.getElementById('cplayer');
+    const kept = ['cplayer', 'gc'].map((x) => document.getElementById(x)).filter(Boolean);    // the player, the message box
     document.body.replaceChildren(...[...doc.body.childNodes].map((n) => document.adoptNode(n)));
-    if (bar) document.body.appendChild(bar);
+    kept.forEach((x) => document.body.appendChild(x));
     window.colonyFrom = from;
     scrollTo(0, how.y || 0);
     // each script runs in a block of its own: a name it declares can be declared again by the next page
@@ -2649,7 +2649,7 @@ PLAYER = """
     R = null; setAloud(false); changed(); }
   function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
     const box = document.getElementById('aloud'); if (box) box.checked = on;
-    $('.cpauto').value = on ? mode() : 'off'; ring(); if (view) view.mark(); }
+    $('.cpauto').value = on ? mode() : 'off'; ring(); placed(); if (view) view.mark(); }
   // while Auto is on, a light circles ▷ and ⏸ (the player's, and those beside Auto in Chat)
   const ring = () => document.documentElement.classList.toggle('autoon', aloud());
   // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice
@@ -2662,7 +2662,7 @@ PLAYER = """
     const who = s.name || R.name, href = s.href || R.href;
     if (view && view.name === who) { view.focus(s.k, true); return null; }
     // never away from something being written: a box with words in it, or one being typed in, keeps the page
-    const box = document.querySelector('#composer textarea'), at = document.activeElement;
+    const box = document.body.classList.contains('gcon') ? null : document.querySelector('#composer textarea'), at = document.activeElement;
     if (!href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select'))
         || Date.now() - touched < 8000) return null;
     return colonyNav.go(href);
@@ -2759,11 +2759,14 @@ PLAYER = """
     placed();
   };
   // sits above what is fixed at the foot of the page: the box in Chat, a phone's tabs
-  const placed = () => { if (bar.hidden) return;
+  const placed = () => { gcDraw();
     let edge = innerHeight;
     document.querySelectorAll('.composer, .tabs').forEach((x) => { const p = getComputedStyle(x).position;
       if (p !== 'fixed' && p !== 'sticky') return;
       const r = x.getBoundingClientRect(); if (r.height && r.top > innerHeight * 0.55 && r.top < edge) edge = r.top; });
+    // the message box sits on the tabs, the player on it
+    if (!gc.hidden && !gcTyping) { gc.style.top = ''; gc.style.bottom = Math.max(0, Math.round(innerHeight - edge)) + 'px'; edge -= gc.offsetHeight; }
+    document.documentElement.style.setProperty('--gch', (gc.hidden ? 0 : gc.offsetHeight) + 'px');
     bar.style.bottom = Math.max(0, Math.round(innerHeight - edge)) + 'px';
     document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px'); };
   let placing = 0;
@@ -2933,7 +2936,7 @@ PLAYER = """
       const s = R && R.list[R.cur];                     // arrived at the chat being read: there, at once
       if (s && playing && following() && (s.name || R.name) === v.name) v.focus(s.k, true); },
     scope: () => get('cpsource') === 'all' ? 'all' : 'one', setScope,
-    mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} if (view) view.mark(); },
+    mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); },
     leave() { view = null; },
     unlock,
     // where a project's reading is: the one in play, or one kept paused for it
@@ -2996,6 +2999,66 @@ PLAYER = """
   }
   O.si.call(window, () => { if (get('cpsource') === 'all') gather(false); else if (aloud()) keepUp(); }, 12000);
   after(() => { if (get('cpsource') !== 'all' && aloud()) keepUp(); }, 2000);    // a page opened looks at once
+  // The message box over every page while Auto reads with text (Audio + text, Text only; R112): a line on it names
+  // the project it sends to. Empty, it follows the project on screen (on a page of none, the one being read); with
+  // words in it, it keeps the project they were begun for until sent, the page changing under it as the voice moves
+  // on. A tap on its line lists every project, the active page's first. Unsent words are kept on this device. On a
+  // Chat page it stands in for the page's own box; Auto off, or reading aloud alone, the page's box is as it was.
+  const gc = document.createElement('form'); gc.id = 'gc'; gc.className = 'gc'; gc.hidden = true;
+  gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
+    + "<div class='gcrow'><textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div>";
+  document.body.appendChild(gc);
+  const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
+  const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
+  let anchor = null, gcTyping = false, ridef = 0;          // anchor: {key, name, chosen} the words are for
+  try { const was = JSON.parse(sessionStorage.getItem('gc') || 'null'); if (was) { anchor = was.to; gta.value = was.text || ''; } } catch (e) {}
+  const keepDraft = () => { try { sessionStorage.setItem('gc', JSON.stringify({to: anchor, text: gta.value})); } catch (e) {} };
+  const onPage = () => { const k = here(); return listed().find((x) => x.key === k) || null; };
+  const target = () => { if (anchor) return anchor; const p = onPage(); if (p) return p;
+    const s = R && left(R) ? (R.all ? R.list[R.cur] : R) : null; return s && s.key ? {key: s.key, name: s.name || R.name} : null; };
+  function gcDraw() {
+    const show = aloud() && mode() !== 'audio';
+    if (gc.hidden === show) { gc.hidden = !show; if (!show) glist.hidden = true; }
+    document.body.classList.toggle('gcon', show);
+    if (!show) return;
+    const t = target(), says = 'To: ' + (t ? t.name : 'choose a project') + ' ▾';
+    if (gto.textContent !== says) gto.textContent = says;
+    gc.classList.toggle('held', !!anchor);
+  }
+  const grow = () => { gta.style.height = 'auto'; gta.style.height = Math.min(gta.scrollHeight, 140) + 'px'; };
+  on(gta, 'input', () => { const words = !!gta.value.trim();
+    if (words && !anchor) anchor = target();                 // the first word ties them to where they are going
+    if (!words && anchor && !anchor.chosen) anchor = null;
+    grow(); keepDraft(); placed(); });
+  on(gto, 'click', () => { if (!glist.hidden) { glist.hidden = true; return; }
+    const page = onPage();
+    glist.innerHTML = (page ? `<li data-k="${esc(page.key)}"><b>Active page:</b> ${esc(page.name)}</li>` : '')
+      + listed().map((p) => `<li data-k="${esc(p.key)}">${esc(p.name)}</li>`).join('');
+    glist.hidden = false; });
+  on(glist, 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return;
+    const p = listed().find((x) => x.key === li.dataset.k); if (p) anchor = {key: p.key, name: p.name, chosen: true};
+    glist.hidden = true; keepDraft(); placed(); });
+  on(document, 'click', (ev) => { if (!glist.hidden && !ev.target.closest('#gc')) glist.hidden = true; });
+  // typing on a phone, the box rides the keyboard: placed where the visible part of the page ends, the player out of the way
+  const ride = () => { if (!gcTyping) return; const v = window.visualViewport;
+    if (v) { gc.style.bottom = 'auto'; gc.style.top = Math.round(v.offsetTop + v.height - gc.offsetHeight) + 'px'; }
+    ridef = requestAnimationFrame(ride); };
+  on(gta, 'focus', () => { gcTyping = true; document.body.classList.add('gctyping'); cancelAnimationFrame(ridef); ride(); });
+  on(gta, 'blur', () => { gcTyping = false; document.body.classList.remove('gctyping'); cancelAnimationFrame(ridef); placed(); });
+  on(gc.querySelector('.gcsend'), 'pointerdown', (ev) => ev.preventDefault());      // the box keeps its focus until it sends
+  on(gc, 'submit', async (ev) => { ev.preventDefault();
+    const t = target(), text = gta.value.trim();
+    if (!text) return;
+    if (!t) { gto.click(); return; }                          // nowhere to send yet: the list, to choose
+    gta.value = ''; anchor = null; keepDraft(); grow(); gta.blur(); gsaid.textContent = 'Sending to ' + t.name + '…'; placed();
+    const r = await fetch('/chat/send', {method: 'POST', body: new URLSearchParams({p: t.key, text})}).catch(() => null);
+    if (r && r.ok) { gsaid.textContent = 'Sent to ' + t.name; after(() => { if (gsaid.textContent === 'Sent to ' + t.name) gsaid.textContent = ''; }, 4000); return; }
+    // not sent: the words come back, still for that project
+    gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = {key: t.key, name: t.name, chosen: true}; keepDraft(); grow(); placed();
+    gsaid.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console'
+      : r && r.status === 503 ? (await r.text()).slice(0, 140) : 'Not sent: the board could not be reached';
+  });
+  grow();
   // the reading last left on this device: here again, paused
   try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
     .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
@@ -8213,6 +8276,27 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .cplayer[hidden], .cppanel[hidden] { display:none }
 /* typing on a phone, the box rides the keyboard up: the player rides just above it */
 .composer button.send.arm { width:auto; min-width:72px; padding:0 14px; border-radius:22px; font-size:15px; font-weight:600; background:var(--flag) }
+/* the message box over every page (R112), on the tabs, the player on it */
+.gc { position:fixed; left:0; right:0; z-index:44; padding:0 10px 6px; pointer-events:none } .gc[hidden], .gclist[hidden] { display:none }
+.gc > * { pointer-events:auto; max-width:740px; margin-left:auto; margin-right:auto }
+/* its line is a tab on the box's top edge, on the box's own ground, so the page under it never shows through */
+.gchead { display:flex; align-items:baseline; gap:8px; width:max-content; max-width:calc(100% - 28px); margin:0 0 -1px 14px !important;
+  padding:3px 10px 2px; font-size:12.5px; background:var(--card); border:1px solid var(--line); border-bottom:0; border-radius:10px 10px 0 0;
+  position:relative; z-index:1; white-space:nowrap; overflow:hidden }
+.gcsaid { color:var(--muted); overflow:hidden; text-overflow:ellipsis }
+.gc .gcto { border:0; background:transparent; color:var(--accent); font-weight:600; padding:2px 2px; min-height:0; width:auto; font-size:12.5px; cursor:pointer }
+.gc.held .gcto::after { content:' · kept while you write'; color:var(--muted); font-weight:400 }
+.gcrow { display:flex; align-items:flex-end; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:20px; padding:5px 5px 5px 14px;
+  box-shadow:0 4px 18px rgba(0,0,0,.16) }
+.gcrow textarea { flex:1; min-width:0; border:0; background:transparent; resize:none; font:inherit; font-size:16px; line-height:1.4; color:var(--ink);
+  padding:7px 0; max-height:140px; outline:none; box-shadow:none }
+.gc .gcsend { width:36px; height:36px; min-height:36px; padding:0; border-radius:50%; border:0; background:var(--accent); color:var(--card); font-size:18px; flex:none }
+.gclist { list-style:none; margin:0 0 6px; padding:4px; background:var(--card); border:1px solid var(--line); border-radius:12px; max-height:42vh;
+  overflow-y:auto; box-shadow:0 6px 22px rgba(0,0,0,.22) } .gclist li { padding:10px; border-radius:8px; cursor:pointer; font-size:14.5px }
+@media (hover: hover) { .gclist li:hover { background:var(--sunk) } }
+body.gcon #composer { display:none } body.gctyping .cplayer { display:none }
+body.gcon .chat { padding-bottom:calc(12px + var(--cph, 56px) + var(--gch, 0px)) }
+body.gcon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 0px) + var(--gch, 0px) + 8px) }
 .automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
   border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
 .automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
