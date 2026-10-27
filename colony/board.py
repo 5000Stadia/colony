@@ -2662,15 +2662,12 @@ PLAYER = """
     changed();
   }
   // ⏭: on to the next section, or, at the last, to the next piece of it
+  // Next: on to the next part, this one counted heard (the last: done). One way on, in the player's bar, from the
+  // lock screen and a reply's own ⏭ alike (the person: "since it's completely related to the Auto")
   function skip() {
     if (!R || !playing) return;
-    if (R.cur + 1 < R.list.length) return begin(R.cur + 1);
-    if (R.silent) return finished(R.cur);
-    if (!now || now.i !== R.cur) return;
-    const {i, parts, at} = now;
-    hush(); playing = true;
-    if (at + 1 >= parts.length) return finished(i);
-    changed(); if (R.kokoro) sayK(i, parts, at + 1); else sayPhone(i, parts, at + 1);
+    if (!R.silent) { hush(); playing = true; }
+    finished(R.cur);
   }
   // ■ is silence: what is read stops and is let go, a voice's sample too, and Auto goes off (its ring with it), so the
   // next reply to land doesn't start it all again; Auto beside the latest reply, or in ⚙, turns it back on
@@ -2739,11 +2736,10 @@ PLAYER = """
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
-    + "<button type='button' class='cpnext' hidden aria-label='Read: on to the next'></button>"
     + "<div class='cpminirow'><button type='button' class='cpmini' aria-label='Player: choose what to hear, voice, speed'>♪</button></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
     + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpall' hidden>All · </span><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
-    + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
+    + "<button type='button' class='cphold'></button><button type='button' class='cpnext' aria-label='Next part'>" + PICON.next + "</button>"
     + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
     + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙&#xFE0E;</button></div>";
   const $ = (s) => bar.querySelector(s), panel = $('.cpsecs'), rows = $('.cprows');
@@ -2774,7 +2770,9 @@ PLAYER = """
     $('.cpprev').textContent = words(s.text, 12); $('.cpopen').setAttribute('href', s.href || R.href || '/');
     const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
     const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
-    $('.cpskip').disabled = !playing;
+    const nx = $('.cpnext'), last = R.cur + 1 >= R.list.length; nx.disabled = !playing;
+    if (nx.dataset.last !== String(last)) { nx.dataset.last = last; nx.innerHTML = last ? PICON.check : PICON.next;
+      nx.setAttribute('aria-label', last ? 'Done' : 'Next part'); }
     $('.cpcount').textContent = 'Section ' + (R.cur + 1) + ' of ' + R.list.length;
     const key = R.name + '|' + R.cur + '|' + R.list.map((x) => (x.name || '') + x.k + (x.heard ? '+' : '')).join(',');
     if (key !== drawn) { drawn = key;
@@ -2831,19 +2829,8 @@ PLAYER = """
     if (nd) { nd.style.top = answering ? Math.round((v ? v.offsetTop : 0) + 8) + 'px' : '';
       nd.style.bottom = answering ? 'auto' : ''; nd.style.maxHeight = answering ? Math.round((v ? v.height : innerHeight) - 16) + 'px' : ''; }
     document.documentElement.style.setProperty('--ndh', ndh + 'px');
-    // Next →: always in the one place, at the right on top of the stack, so a thumb taps on through part after part
-    // without looking for it (at a part's corner it moved with every part: the person, "the user has to get to the
-    // bottom of each message"); the part being read is the marked one
-    const want = !!(R && playing && R.cur < R.list.length) && plain && !gcTyping && !(nd && nd.open) && !document.body.classList.contains('typing');
-    const nb = bar.querySelector('.cpnext'); nb.hidden = !want;
-    if (want) { const last = R.cur + 1 >= R.list.length, col = document.querySelector('.chat'), c = col && col.getBoundingClientRect();
-      nb.innerHTML = last ? 'Done' + PICON.check : 'Next' + PICON.next; nb.setAttribute('aria-label', last ? 'Read: done' : 'Read: on to the next');
-      const roof = nd && nd.offsetHeight ? nd.getBoundingClientRect().top : innerHeight - (lift + (mini ? 8 : bar.offsetHeight));
-      nb.style.top = Math.round(roof - nb.offsetHeight - 6) + 'px';      // 6px above whatever floats on top, as measured
-      nb.style.right = c && c.width ? Math.round(Math.max(12, innerWidth - c.right + 4)) + 'px' : ''; }
-    // the end of a page clears all that floats over it, Next too: the last reply's time and buttons are never under it
-    document.documentElement.style.setProperty('--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)
-      + (R && playing && R.cur < R.list.length && !gcTyping && !document.body.classList.contains('typing') ? 42 : 0)) + 'px'); };
+    // the end of a page clears all that floats over it: the last reply's time and buttons are never under it
+    document.documentElement.style.setProperty('--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)) + 'px'); };
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
@@ -2853,9 +2840,7 @@ PLAYER = """
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
   function changed() { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
-  on($('.cpskip'), 'click', skip);
-  const nextBtn = $('.cpnext');
-  on(nextBtn, 'click', () => { if (!R || !playing) return; if (!R.silent) { hush(); playing = true; } finished(R.cur); });
+  on($('.cpnext'), 'click', skip);
   on($('.cpstop'), 'click', stop);
   const panels = [[$('.cplist'), panel, () => { drawn = ''; draw(); }], [$('.cpwhat'), $('.cpwho'), () => who()], [$('.cpcog'), $('.cpset'), () => { if (playing && !paused) { hold(true); heldForSettings = true; } sets(); }]];
   // ⚙ open, what was playing pauses (voices are tried there); shut, it goes on, in the voice chosen
@@ -8509,7 +8494,7 @@ main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--
 .automenu .reach { min-width:236px } .automenu .reach button { flex:1; white-space:nowrap; text-align:center; padding:8px 8px; font-size:13.5px; color:var(--muted); background:var(--sunk) }
 .automenu .reach button.on { color:var(--card); background:var(--accent); font-weight:600 }
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
-.cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpskip, .cplayer.cpidle .cpstop { display:none }
+.cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpnext, .cplayer.cpidle .cpstop { display:none }
 .cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   background:color-mix(in srgb, var(--accent) 8%, var(--card)); color:var(--accent);
   font-size:20px; box-shadow:0 3px 12px rgba(0,0,0,.16); display:inline-flex; align-items:center; justify-content:center; cursor:pointer }
@@ -8518,18 +8503,15 @@ body.cpon.typing .toend { top:calc(var(--kbtop, 100vh) - 124px - var(--cph, 56px
 html.going main { opacity:.5; transition:opacity .2s .15s }
 body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + var(--ndh, 0px) + env(safe-area-inset-bottom)) }
 .cplayer > * { pointer-events:auto; max-width:740px; margin:0 auto }
-/* Next →, the reading's way on: a filled pill pointing forward, unlike ↓ (back to the latest), a plain round one */
-.cplayer .cpnext { position:fixed; right:16px; z-index:46; height:36px; min-height:36px; margin:0; padding:0 12px 0 16px; border:0;
-  border-radius:999px; background:var(--accent); color:var(--card); box-shadow:0 4px 18px rgba(0,0,0,.28); display:flex;
-  align-items:center; justify-content:center; gap:6px; font:600 15px/1 inherit; animation:cpnextin .25s ease-out }
-.cplayer .cpnext[hidden] { display:none } .cplayer .cpnext svg { width:19px; height:19px; stroke-width:2.4 }
-@keyframes cpnextin { from { opacity:0; transform:scale(.8) } }
 .cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
   border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .cpbar button { width:40px; height:40px; min-height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:var(--ink);
   display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } @media (hover: hover) {.cpbar button:hover { background:var(--sunk) }}
-.cpbar button:disabled { opacity:.35 } .cpbar .cphold { color:var(--accent) } .cpbar .cplist[aria-expanded=true] { color:var(--accent); background:var(--sunk) }
+.cpbar button:disabled { opacity:.35 } .cpbar .cphold { color:var(--accent) }
+/* Next, the reading's way on: the bar's one filled button, pointing forward (✓ on the last part) */
+.cpbar .cpnext { padding:4px; border-radius:50%; background:var(--accent) content-box; color:var(--card) }
+.cpbar .cpnext svg { stroke-width:2.4 } @media (hover: hover) {.cpbar .cpnext:hover { background:var(--accent) content-box; filter:brightness(1.1) }} .cpbar .cplist[aria-expanded=true] { color:var(--accent); background:var(--sunk) }
 .cpbar .cpwhat { flex:1; min-width:0; width:auto; height:auto; display:flex; flex-direction:column; align-items:stretch; justify-content:center;
   padding:2px 6px; line-height:1.25; text-align:left; color:inherit; font:inherit }
 .cpwhat b { font-size:12px; color:var(--accent); font-weight:600 } .cpwhat b::after { content:' ▾'; opacity:.7 }
@@ -8575,11 +8557,11 @@ table.tokens tr.head td { padding-top:12px; font-size:12.5px; font-weight:600; c
   border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:16px }
-/* Auto on: a small light circles the player's play and pause button, its tail in the rainbow, glowing; in Chat the
+/* Auto on: a small light circles the player's Next, the way Auto goes on by itself, its tail in the rainbow, glowing; in Chat the
    part being read, while it sounds, has a calm border and a soft glow (the person: "for text highlight ... a gentle
    border solid maybe light glow but no stark animation too visually busy for readability") */
-.cpbar .cphold, .chat .say.reading { position:relative }
-html.autoon .cpbar .cphold::before {
+.cpbar .cpnext, .chat .say.reading { position:relative }
+html.autoon .cpbar .cpnext::before {
   content:''; position:absolute; inset:1px; border-radius:50%; padding:2px; pointer-events:none;
   background:conic-gradient(transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
   -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
@@ -8587,7 +8569,7 @@ html.autoon .cpbar .cphold::before {
 @keyframes autoring { to { transform:rotate(360deg) } }
 html.autoon.cpgo .chat .say.reading::before { content:''; position:absolute; inset:-8px; border-radius:8px; pointer-events:none;
   border:1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); box-shadow:0 0 10px color-mix(in srgb, var(--accent) 25%, transparent) }
-@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before { animation:none } }
+@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cpnext::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } @media (hover: hover) {.chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }}
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }

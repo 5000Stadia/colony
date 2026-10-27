@@ -5701,9 +5701,14 @@ class PhonePageTest(HoursBase):
         # the person: "text only ... duration ... pretty arbitrary ... a big next arrow button that pops up over the
         # message", "beneficial for audio as well", "point to the right ... forward momentum"
         self.assertNotIn("n / 200 * 60000", board.PLAYER, "no reading time reckoned from length")
-        self.assertIn("class='cpnext' hidden", board.PLAYER)
-        self.assertIn("if (!R.silent) { hush(); playing = true; } finished(R.cur);", board.PLAYER, "heard: on at once, the part counted heard")
-        self.assertIn("'Next' + PICON.next", board.PLAYER)
+        # one way on, in the player's bar, with Auto's ring (the person: "since it's completely related to the Auto
+        # should be outline play animation ... be over the next button"): ⏭ and a floating Next were the same move
+        self.assertIn("<button type='button' class='cpnext' aria-label='Next part'>\" + PICON.next", board.PLAYER)
+        self.assertNotIn("cpskip", board.PLAYER)
+        self.assertIn("if (!R.silent) { hush(); playing = true; }\n    finished(R.cur);", board.PLAYER, "heard: on at once, the part counted heard")
+        self.assertIn("nx.innerHTML = last ? PICON.check : PICON.next", board.PLAYER)
+        self.assertIn("html.autoon .cpbar .cpnext::before", board.CSS)
+        self.assertNotIn(".cphold::before", board.CSS)
         self.assertIn("next", board.ICONS)
         # a tap on Next (or the rest of the player) isn't a finger moving the page: the page goes on with what is read
         self.assertIn("if (!(ev.target.closest && ev.target.closest('#cplayer, #gc'))) fingered = Date.now();", board.CHAT)
@@ -5715,13 +5720,12 @@ class PhonePageTest(HoursBase):
         self.assertEqual(board.gate_spoken(g), "Which one? See the link or renders first. The choices: A; B, recommended.")
         self.assertEqual(board.gate_spoken({"question": "Go?", "default": "it goes"}), "Go? If you skip it: it goes.")
         self.assertIn("const np = ev.target.closest('button.needplay');", board.CHAT)
-        self.assertIn("&& !(nd && nd.open)", board.PLAYER, "Next keeps off an open Needs you")
 
     def test_the_end_of_a_chat_clears_what_floats_over_it(self):
         # the person: "the send now button and the status line at the bottom of the chat ... hide underneath"
         self.assertIn("body .chat { padding-bottom:calc(12px + var(--room, 0px)) }", board.CSS)
         self.assertNotIn("body.cpon .chat { padding-bottom", board.CSS, "the player's room alone no longer wins over the box's")
-        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)\n      + (R && playing && R.cur < R.list.length && !gcTyping && !document.body.classList.contains('typing') ? 42 : 0))", board.PLAYER)
+        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)) + 'px')", board.PLAYER)
         # a phone's bounce at the end hides what floats a moment: the room kept for it stays, and there is no bounce
         self.assertIn("ndh = !ns ? 0 : ns.offsetHeight ? ns.offsetHeight + 28 : ndh;", board.PLAYER)
         self.assertIn("html.atend, html.atend body { overscroll-behavior-y:none }", board.CSS)
