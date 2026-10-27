@@ -2500,12 +2500,12 @@ PLAYER = """
     loading = true; changed(); } });
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
   // not let it start again)
-  const hush = (keep) => { ours = Date.now(); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
+  const hush = (keep) => { ours = Date.now(); O.ct.call(window, dwell); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
     player.loop = false; resting = 0; line++; };
   // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
   // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
   let resting = 0;
-  const rest = () => { if (!R || !R.kokoro || !aloud()) return;
+  const rest = () => { if (!R || !R.kokoro || R.silent || !aloud()) return;
     player.onended = player.onerror = null; player.loop = true; player.src = SILENT; resting = Date.now();
     player.play().catch(() => { resting = 0; }); };
   O.si.call(window, () => { if (resting && Date.now() - resting > 20 * 60e3) { player.pause(); player.loop = false; resting = 0; } }, 30e3);
@@ -2578,8 +2578,9 @@ PLAYER = """
     const f = get('cpfollow');
     if (!R.all && R.key && !(f && f.name === R.name)) put('cpfollow', {name: R.name, key: R.key, href: R.href, since: Date.now()});
     if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
-    loading = !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
+    loading = !R.silent && !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
     if (!parts.length) return finished(i);
+    if (R.silent) return show(i);
     tell(parts[from].replace(NAME, ''));
     return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from);
   }
@@ -2589,6 +2590,7 @@ PLAYER = """
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } else if (!want && left(R)) begin(R.cur, R.piece); return; }
     paused = want; ours = Date.now(); byPhone = false;
+    if (R.silent) { if (!paused) show(R.cur); else O.ct.call(window, dwell); changed(); return; }
     if (R.kokoro && !(talk && talk.speaking)) { if (paused) player.pause(); else player.play().catch(() => { paused = true; changed(); }); }
     else if (talk) { if (paused) talk.pause(); else talk.resume(); }
     changed();
@@ -2597,6 +2599,7 @@ PLAYER = """
   function skip() {
     if (!R || !playing) return;
     if (R.cur + 1 < R.list.length) return begin(R.cur + 1);
+    if (R.silent) return finished(R.cur);
     if (!now || now.i !== R.cur) return;
     const {i, parts, at} = now;
     hush(); playing = true;
@@ -2613,6 +2616,25 @@ PLAYER = """
     $('.cpaloud').checked = on; ring(); if (view) view.mark(); }
   // while Auto is on, a light circles ▷ and ⏸ (the player's, and those beside Auto in Chat)
   const ring = () => document.documentElement.classList.toggle('autoon', aloud());
+  // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice
+  // going on), unless the person is typing or touched the page just now (it waits for the next part then)
+  let touched = 0;
+  on(document, 'pointerdown', (ev) => { if (!ev.target.closest('#cplayer')) touched = Date.now(); }, true);
+  function showHere() {
+    if (!R || !following()) return;
+    const s = R.list[R.cur]; if (!s) return;
+    const who = s.name || R.name, href = s.href || R.href;
+    if (view && view.name === who) return view.focus(s.k, true);
+    if (!href || document.body.classList.contains('typing') || Date.now() - touched < 8000) return;
+    colonyNav.go(href);
+  }
+  // Text only: no sound; each part stays for as long as reading it takes (200 words a minute, 4 s at least)
+  let dwell = 0;
+  function show(i) {
+    O.ct.call(window, dwell);
+    const n = R.list[i].text.split(' ').length, ms = Math.min(60000, Math.max(4000, n / 200 * 60000));
+    dwell = after(() => { if (playing && !paused && R && R.cur === i) finished(i); }, ms);
+  }
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
   const again = (voiceChanged) => {
     if (!playing || !now || !R || now.i !== R.cur) return;
@@ -2642,9 +2664,11 @@ PLAYER = """
   const bar = document.createElement('div'); bar.id = 'cplayer'; bar.className = 'cplayer'; bar.hidden = true;
   // three panels open above it, one at a time: the sections (☰), whose reading it is (its name), and its settings (⚙)
   bar.innerHTML = "<div class='cppanel cpsecs' hidden><div class='cphead'><span class='cpcount'></span>"
-    + "<label class='cpfollow'><input type='checkbox'> Follow in chat</label></div><ol class='cprows'></ol></div>"
+    + "</div><ol class='cprows'></ol></div>"
     + "<div class='cppanel cpwho' hidden><div class='cphead'><span>Read from</span><a class='cpopen'>Open its chat ›</a></div><ol class='cprows cpprojs'></ol></div>"
     + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'><input type='checkbox' class='cpaloud'> Auto-speak new replies</label>"
+    + "<label class='cpline'>Reading <select class='cpmode'><option value='both'>Audio + text</option><option value='audio'>Audio only</option>"
+    + "<option value='text'>Text only</option></select></label>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
     + "<div class='cpvoice' hidden><label class='cpline'>Voice <span class='muted cpwhose'></span> <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
@@ -2654,10 +2678,12 @@ PLAYER = """
     + "<button type='button' class='cphold'></button><button type='button' class='cpskip' aria-label='Skip ahead'>" + PICON.skip + "</button>"
     + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
     + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙&#xFE0E;</button></div>";
-  const $ = (s) => bar.querySelector(s), panel = $('.cpsecs'), rows = $('.cprows'), follow = $('.cpfollow input');
-  const following = () => { try { return localStorage.getItem('follow') !== '0'; } catch (e) { return true; } };
-  follow.checked = following();
-  on(follow, 'change', () => { try { localStorage.setItem('follow', follow.checked ? '1' : '0'); } catch (e) {} if (view) view.mark(); });
+  const $ = (s) => bar.querySelector(s), panel = $('.cpsecs'), rows = $('.cprows');
+  // How it reads, chosen as Auto is turned on (or in ⚙): both (aloud, the page following what is read, into each
+  // project's Chat), audio (aloud alone, the page left as it is), text (no sound: the page moves from part to part at
+  // reading pace). A reply tapped is always heard.
+  const mode = () => { try { return localStorage.getItem('automode') || 'both'; } catch (e) { return 'both'; } };
+  const following = () => mode() !== 'audio';
   const words = (t, n) => { const w = t.replace(/\\s+/g, ' ').trim().split(' '); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
   const when = (at) => { const d = new Date(at); if (isNaN(d)) return '';
     const clock = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
@@ -2706,7 +2732,7 @@ PLAYER = """
   on(document, 'DOMContentLoaded', placed); on(window, 'load', placed);   // it is made before the tabs below it are there
   if (window.visualViewport) { on(window.visualViewport, 'resize', soon); }
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
-  function changed(started) { if (R && R.kokoro) warm(); draw(); if (view) { view.mark(); if (started && R && R.name === view.name && R.list[R.cur]) view.focus(R.list[R.cur].k, true); } }
+  function changed(started) { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); if (started) showHere(); }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpskip'), 'click', skip);
   on($('.cpstop'), 'click', stop);
@@ -2803,7 +2829,7 @@ PLAYER = """
     const first = r.list.length - add.length;
     if (r === R && playing) { save(); changed(); return; }                 // reading, or held by a pause: after it
     if (R && R !== r && playing && !take) { put('reading:All projects', Object.assign(r, {saved: Date.now()})); return; }   // one reply tapped plays first
-    yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
+    yieldTo(r); R = r; R.silent = aloud() && mode() === 'text'; via = '&auto=1'; begin(first, 0, false, true);
   }
   // ⚙: Auto-speak, speed and voice, the same as the chat's own (each changed here shows there too)
   // whose voice ⚙ sets: the reading's project; reading them all, the project being heard (named beside Voice)
@@ -2812,7 +2838,7 @@ PLAYER = """
     const mine = here(), p = listed().find((x) => x.key === mine);
     return p ? {key: p.key, name: p.name} : {key: 'default', name: 'every project (default)'}; };
   async function sets() {
-    $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate());
+    $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate()); $('.cpmode').value = mode();
     const who = voiced();
     if (!who.key) { $('.cpvoice').hidden = true; return; }
     $('.cpwhose').textContent = who.name;
@@ -2823,6 +2849,7 @@ PLAYER = """
     $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.voices; $('.cpherald').value = herald();
   }
   on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked; if (a) unlock(); setAloud(a); });
+  on($('.cpmode'), 'change', () => P.setMode($('.cpmode').value));
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
   const keepVoice = async (body) => { const {key, name} = voiced(); if (!key) return;
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
@@ -2842,7 +2869,10 @@ PLAYER = """
         mine.forEach((x) => { x.kvoice = v; }); if (mine.length) { save(); if (whoAt(R.cur) === name) again(true); } return; }
       if (R && R.name === name && R.kvoice !== v) { R.kvoice = v; save(); again(true); }
       else { const r = load(name); if (r) { r.kvoice = v; put('reading:' + name, r); } } },
-    attach(v) { view = v; changed(); },
+    attach(v) { view = v; changed();
+      const s = R && R.list[R.cur];                     // arrived at the chat being read: there, at once
+      if (s && playing && following() && (s.name || R.name) === v.name) v.focus(s.k, true); },
+    mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} if (view) view.mark(); },
     leave() { view = null; },
     unlock,
     // where a project's reading is: the one in play, or one kept paused for it
@@ -2871,7 +2901,7 @@ PLAYER = """
       add(r);
       const first = r.list.findIndex((x, n) => n >= r.cur && fresh.has(x.k) && !x.heard);
       if (first < 0) { if (r !== R) put('reading:' + v.name, Object.assign(r, {saved: Date.now()})); changed(); return; }
-      yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
+      yieldTo(r); R = r; R.silent = mode() === 'text'; via = '&auto=1'; begin(first, 0, false, true);
     },
     // ▷ on a reply kept paused: from its start, what waited after it still waiting
     again(v, secs) { const r = R && R.name === v.name ? R : load(v.name), ks = new Set(secs.map((x) => x.k));
@@ -3686,7 +3716,9 @@ CHAT = """
     box.querySelectorAll('button.hold').forEach((b) => { const p = !!(s && s.paused); if (b.dataset.p !== String(p)) { b.dataset.p = p;
       b.innerHTML = p ? ICON.play : ICON.pause; b.setAttribute('aria-label', p ? 'Resume' : 'Pause'); } });
     box.querySelectorAll('button.auto').forEach((b) => { const on = !!(aloud && aloud.checked);
-      if (b.getAttribute('aria-pressed') !== String(on)) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); } });
+      const say = on ? {both: 'Auto', audio: 'Auto · audio', text: 'Auto · text'}[P.mode()] || 'Auto' : 'Auto';
+      if (b.getAttribute('aria-pressed') !== String(on) || b.textContent !== say) {
+        b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.textContent = say; } });
     focus(s && s.active ? s.k : null, false); };
   // Follow in chat (the player's list): the section being heard is marked, and as each starts it is brought into view
   // below the bar, unless a finger moved the page just now or the box is being typed in
@@ -3816,6 +3848,18 @@ CHAT = """
     f.querySelectorAll('textarea, input[type=file]').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
     refresh();
   });
+  // Auto, off: a tap asks how to read, Audio + text, Audio only or Text only, and turns it on that way
+  const menu = document.createElement('div'); menu.className = 'automenu'; menu.hidden = true;
+  menu.innerHTML = "<button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
+    + "<button type='button' data-m='text'>Text only</button>";
+  document.body.appendChild(menu);
+  const autoMenu = (b) => { const r = b.getBoundingClientRect(); menu.hidden = false;
+    menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = Math.max(8, r.top - menu.offsetHeight - 6) + 'px'; };
+  menu.addEventListener('click', (ev) => { const m = ev.target.closest('button'); if (!m) return;
+    menu.hidden = true; P.setMode(m.dataset.m); aloud.checked = true; aloud.dispatchEvent(new Event('change')); });
+  document.addEventListener('click', (ev) => { if (!menu.hidden && !ev.target.closest('.automenu, button.auto')) menu.hidden = true; });
+  window.addEventListener('scroll', () => { menu.hidden = true; }, {passive: true});
   box.addEventListener('click', async (ev) => {
     if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
     const cp = ev.target.closest('button.copy');
@@ -3829,7 +3873,8 @@ CHAT = """
       cp.innerHTML = ok ? ICON.check : '✗'; setTimeout(() => { cp.innerHTML = ICON.copy; }, 1500); return;
     }
     // ⏸ holds the reading where it is, ▷ takes it up from there
-    if (ev.target.closest('button.auto')) { aloud.checked = !aloud.checked; aloud.dispatchEvent(new Event('change')); return; }
+    const au = ev.target.closest('button.auto');
+    if (au) { if (aloud.checked) { aloud.checked = false; aloud.dispatchEvent(new Event('change')); } else autoMenu(au); return; }
     if (ev.target.closest('button.hold')) return P.hold(!P.now().paused);
     if (ev.target.closest('button.skip')) return P.skip();
     if (ev.target.closest('button.cont')) return P.resume(view.name);           // from the piece it stopped at
@@ -8062,6 +8107,10 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
 .cplayer[hidden], .cppanel[hidden] { display:none }
 /* typing on a phone, the box rides the keyboard up: the player rides just above it */
+.automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
+  border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
+.automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
+.automenu button:hover { background:var(--sunk) }
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
 .cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpskip, .cplayer.cpidle .cpstop { display:none }
 .cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--accent);
