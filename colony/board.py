@@ -2785,19 +2785,25 @@ PLAYER = """
   // player on the box, or on the chat's own box where the message box isn't shown.
   const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden';
   document.body.appendChild(probe);
+  // As the page is (no keyboard, not zoomed), each is held at a set height from the foot (bottom:), steady while a phone's
+  // toolbar comes and goes: a frame's odd measure (the person: "Periodic flash for one frame brings floating message
+  // box to bottom") moves nothing. Only while the visible part is apart from the page is each placed from its foot.
   const placed = () => { gcDraw();
     const v = window.visualViewport, foot = v ? v.offsetTop + v.height : innerHeight;
+    const plain = !v || (Math.abs(v.offsetTop) < 1 && Math.abs(innerHeight - v.height) < 2);
     const shift = -probe.getBoundingClientRect().top;          // what a box's own measure is off the page's by
-    let edge = foot;
+    let lift = 0;                                              // from the foot to what they sit on
     const tabs = document.querySelector('.tabs');
-    if (tabs && getComputedStyle(tabs).position === 'fixed' && tabs.offsetHeight) edge -= tabs.offsetHeight;
+    if (tabs && getComputedStyle(tabs).position === 'fixed' && tabs.offsetHeight) lift = tabs.offsetHeight;
     const own = document.querySelector('.composer');
     if (own && gc.hidden && ['fixed', 'sticky'].includes(getComputedStyle(own).position)) {
       const r = own.getBoundingClientRect(), top = r.top + shift;
-      if (r.height && r.top > (v ? v.height : innerHeight) * 0.55 && top < edge) edge = top; }
-    if (!gc.hidden && !gcTyping) { gc.style.bottom = 'auto'; gc.style.top = Math.round(edge - gc.offsetHeight) + 'px'; edge -= gc.offsetHeight; }
+      if (r.height && r.top > (v ? v.height : innerHeight) * 0.55 && foot - top > lift) lift = Math.round(foot - top); }
+    const at = (el, up) => { if (plain) { el.style.top = 'auto'; el.style.bottom = Math.round(up) + 'px'; }
+      else { el.style.bottom = 'auto'; el.style.top = Math.round(foot - up - el.offsetHeight) + 'px'; } };
+    if (!gc.hidden && !gcTyping) { at(gc, lift); lift += gc.offsetHeight; }
     document.documentElement.style.setProperty('--gch', (gc.hidden ? 0 : gc.offsetHeight) + 'px');
-    bar.style.bottom = 'auto'; bar.style.top = Math.round(edge - bar.offsetHeight) + 'px';
+    at(bar, lift);
     document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px'); };
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
@@ -3763,7 +3769,8 @@ CHAT = """
     try {
       const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
       const html = await r.text(); if (html === last) return;
-      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick, was = lastBottom();
+      // a part being read stays in view as replies land under it: the page keeps its place rather than following them
+      const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick && !box.querySelector('.say.reading'), was = lastBottom();
       const shut = [...box.querySelectorAll('details:not([open])')].map((d) => d.dataset.k);   // what came open, folded by them
       // what the reader is looking at stays where it is, though the oldest turns above drop away as new ones come
       const seen = [...box.querySelectorAll('[data-k]')].find((x) => x.getBoundingClientRect().bottom > 0);
