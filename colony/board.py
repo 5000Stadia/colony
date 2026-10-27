@@ -2629,7 +2629,7 @@ PLAYER = """
     R = null; setAloud(false); changed(); }
   function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
     const box = document.getElementById('aloud'); if (box) box.checked = on;
-    $('.cpaloud').checked = on; ring(); if (view) view.mark(); }
+    $('.cpauto').value = on ? mode() : 'off'; ring(); if (view) view.mark(); }
   // while Auto is on, a light circles ▷ and ⏸ (the player's, and those beside Auto in Chat)
   const ring = () => document.documentElement.classList.toggle('autoon', aloud());
   // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice
@@ -2682,11 +2682,11 @@ PLAYER = """
   bar.innerHTML = "<div class='cppanel cpsecs' hidden><div class='cphead'><span class='cpcount'></span>"
     + "</div><ol class='cprows'></ol></div>"
     + "<div class='cppanel cpwho' hidden><div class='cphead'><span>Read from</span><a class='cpopen'>Open its chat ›</a></div><ol class='cprows cpprojs'></ol></div>"
-    + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'><input type='checkbox' class='cpaloud'> Auto-speak new replies</label>"
-    + "<label class='cpline'>Reading <select class='cpmode'><option value='both'>Audio + text</option><option value='audio'>Audio only</option>"
-    + "<option value='text'>Text only</option></select></label>"
+    + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'>Auto <select class='cpauto'><option value='off'>Off</option>"
+    + "<option value='both'>Audio + text</option><option value='audio'>Audio only</option><option value='text'>Text only</option></select></label>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
-    + "<div class='cpvoice' hidden><label class='cpline'>Voice <span class='muted cpwhose'></span> <select class='cpkvoice'></select></label>"
+    + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
+    + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
     + "<div class='cpminirow'><button type='button' class='cpmini' aria-label='Player: choose what to hear, voice, speed'>♪</button></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
@@ -2850,27 +2850,36 @@ PLAYER = """
     if (R && R !== r && playing && !take) { put('reading:All projects', Object.assign(r, {saved: Date.now()})); return; }   // one reply tapped plays first
     yieldTo(r); R = r; R.silent = aloud() && mode() === 'text'; via = '&auto=1'; begin(first, 0, false, true);
   }
-  // ⚙: Auto-speak, speed and voice, the same as the chat's own (each changed here shows there too)
-  // whose voice ⚙ sets: the reading's project; reading them all, the project being heard (named beside Voice)
-  const voiced = () => { const s = R && R.all ? R.list[R.cur] || {} : R || {};
-    if (s.key) return {key: s.key, name: s.name || R.name};
-    const mine = here(), p = listed().find((x) => x.key === mine);
-    return p ? {key: p.key, name: p.name} : {key: 'default', name: 'every project (default)'}; };
-  async function sets() {
-    $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate()); $('.cpmode').value = mode();
-    const who = voiced();
-    if (!who.key) { $('.cpvoice').hidden = true; return; }
-    $('.cpwhose').textContent = who.name;
+  // ⚙: Auto (off, or how it reads), speed and voice, the same as the chat's own (each changed here shows there too).
+  // Whose voice: it starts on the project of the page open, else the one being heard, else every project's (the
+  // colony's); its name is a picker, so several projects' voices can be set while there.
+  const voiced = () => { const mine = here(), p = listed().find((x) => x.key === mine);
+    if (p) return {key: p.key, name: p.name};
+    const s = R && R.all ? R.list[R.cur] || {} : R || {};
+    return s.key ? {key: s.key, name: s.name || R.name} : {key: 'default', name: 'Every project (default)'}; };
+  let whom = null, asking = 0;                     // the project whose voice ⚙ shows, while it is open
+  const whose = () => whom || voiced();
+  async function sets(fresh = true) {
+    $('.cpauto').value = aloud() ? mode() : 'off'; $('.cprate').value = String(rate());
+    if (fresh) { whom = voiced();
+      $('.cpwhom').innerHTML = "<option value='default'>Every project (default)</option>" + listed().map((p) =>
+        `<option value="${p.key}">${p.name.replace(/[&<>"]/g, '')}</option>`).join('');
+      $('.cpwhom').value = whom.key; }
+    const who = whose(), ask = ++asking;
     const vo = await fetched('/chat/voice?p=' + encodeURIComponent(who.key), 'json');
+    if (ask !== asking) return;                    // another project chosen meanwhile: its answer is the one shown
     if (!vo || !vo.ready) { $('.cpvoice').hidden = true; return; }
     $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.default ? vo.voice : vo.own ? vo.voice : ''; $('.cpvoice').hidden = false;
     $('.cpkvoice').dataset.voice = vo.voice;
     $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.voices; $('.cpherald').value = herald();
   }
-  on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked; if (a) unlock(); setAloud(a); });
-  on($('.cpmode'), 'change', () => P.setMode($('.cpmode').value));
+  on($('.cpauto'), 'change', () => { const v = $('.cpauto').value;
+    if (v === 'off') return setAloud(false);
+    P.setMode(v); unlock(); setAloud(true); });
+  on($('.cpwhom'), 'change', () => { const k = $('.cpwhom').value, p = listed().find((x) => x.key === k);
+    whom = p ? {key: p.key, name: p.name} : {key: 'default', name: 'Every project (default)'}; sets(false); });
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
-  const keepVoice = async (body) => { const {key, name} = voiced(); if (!key) return;
+  const keepVoice = async (body) => { const {key, name} = whose(); if (!key) return;
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
     const got = await r.json();
@@ -8167,7 +8176,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
   border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
 .automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
-.automenu button:hover { background:var(--sunk) }
+@media (hover: hover) { .automenu button:hover { background:var(--sunk) } }
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
 .cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpskip, .cplayer.cpidle .cpstop { display:none }
 .cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--accent);
@@ -8180,7 +8189,7 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-
 .cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:var(--card); border:1px solid var(--line);
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .cpbar button { width:40px; height:40px; min-height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:var(--ink);
-  display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } .cpbar button:hover { background:var(--sunk) }
+  display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } @media (hover: hover) {.cpbar button:hover { background:var(--sunk) }}
 .cpbar button:disabled { opacity:.35 } .cpbar .cphold { color:var(--accent) } .cpbar .cplist[aria-expanded=true] { color:var(--accent); background:var(--sunk) }
 .cpbar .cpwhat { flex:1; min-width:0; width:auto; height:auto; display:flex; flex-direction:column; align-items:stretch; justify-content:center;
   padding:2px 6px; line-height:1.25; text-align:left; color:inherit; font:inherit }
@@ -8197,7 +8206,7 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-
 .cpfollow { display:flex; align-items:center; gap:6px; margin:0; color:var(--ink) }
 .cprows { list-style:none; margin:0; padding:4px; overflow-y:auto }
 .cprows li { display:flex; gap:10px; align-items:baseline; padding:9px 8px; border-radius:10px; cursor:pointer; font-size:14px; line-height:1.35 }
-.cprows li:hover { background:var(--sunk) } .cprows li.now { background:var(--sunk); font-weight:600 } .cprows li.now .cpat { color:var(--accent) }
+@media (hover: hover) { .cprows li:hover { background:var(--sunk) } } .cprows li.now { background:var(--sunk); font-weight:600 } .cprows li.now .cpat { color:var(--accent) }
 .cprows li.heard { color:var(--muted) } .cprows li.heard .cpwords::before { content:'✓ ' }
 .cpat { flex:none; min-width:62px; font-size:11.5px; color:var(--muted); white-space:nowrap }
 .cpwords { flex:1; min-width:0 }
@@ -8244,7 +8253,7 @@ html.autoon.cpgo .chat .say.reading::before { content:''; position:absolute; ins
 @keyframes autoborder { to { --autospin:360deg } }
 @media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon.cpgo .chat .say.reading::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
-  color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
+  color:var(--muted); font-size:18px; cursor:pointer } @media (hover: hover) {.chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }}
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
 .chatlive .act { display:flex; flex-direction:column; min-width:0; flex:1; line-height:1.3 }
 .chatlive .act > span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .chatlive .act .more { font-size:11.5px }
