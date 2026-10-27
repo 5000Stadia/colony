@@ -2574,6 +2574,9 @@ PLAYER = """
     const parts = piecesOf(i).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
     hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null; said = whoAt(i); R.announce = false;
+    // the project read is the one the player follows: with Auto on, its new replies are read wherever the person is
+    const f = get('cpfollow');
+    if (!R.all && R.key && !(f && f.name === R.name)) put('cpfollow', {name: R.name, key: R.key, href: R.href, since: Date.now()});
     if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
     loading = !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
     if (!parts.length) return finished(i);
@@ -2602,7 +2605,7 @@ PLAYER = """
   }
   // ■ is silence: what is read stops and is let go, a voice's sample too, and Auto goes off (its ring with it), so the
   // next reply to land doesn't start it all again; Auto beside the latest reply, or in ⚙, turns it back on
-  function stop() { hush(); sample.pause(); playing = false; now = null; put('cpsource', null);
+  function stop() { hush(); sample.pause(); playing = false; now = null; put('cpsource', null); put('cpfollow', null);
     if (R) forget(R.name);
     R = null; setAloud(false); changed(); }
   function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
@@ -2665,6 +2668,7 @@ PLAYER = """
   const draw = () => {
     const show = left(R);
     ring(); bar.hidden = false;
+    document.documentElement.classList.toggle('cpgo', show && playing && !paused);      // sounding now
     if (bar.classList.contains('cpidle') === show) { bar.classList.toggle('cpidle', !show); if (show) bar.classList.remove('open'); else shut(); }
     document.body.classList.toggle('cpon', show);
     if (!show) { $('.cpall').hidden = $('.cpwait').hidden = true; $('.cpname').textContent = 'Player';
@@ -2881,7 +2885,23 @@ PLAYER = """
       player.src = SILENT; player.play().then(() => { unlocked = true; go(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; go(); }, {once: true, capture: true})); },
   };
   document.body.appendChild(bar);
-  O.si.call(window, () => { if (get('cpsource') === 'all') gather(false); }, 12000);
+  // With Auto on, the project the player follows (the last one read) is looked at every few seconds, wherever the
+  // person is, as every project is when All projects is chosen: its chat need not be open for its replies to be read.
+  // What it says from the moment it was followed counts; its chat, open, reads its own as they come.
+  async function keepUp() {
+    const f = get('cpfollow'), got = f && await fetched('/chat/all', 'json');
+    if (!got || !aloud() || get('cpsource') === 'all' || (view && view.name === f.name)) return;
+    const p = got.projects.find((x) => x.key === f.key && x.name === f.name);
+    if (!p) return;
+    const heard = get('heard:' + p.name) || [], was = new Set(heard);
+    const parts = p.parts.filter((x) => !was.has(x.k) && Date.parse(x.at) > (f.since || 0) - 5000);
+    if (!parts.length) return;
+    put('heard:' + p.name, heard.concat(parts.map((x) => x.k)).slice(-300));
+    P.read({name: p.name, key: p.key, href: p.href, kvoice: p.voice, kokoro: !!got.ready},
+      parts.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text})), {auto: true});
+  }
+  O.si.call(window, () => { if (get('cpsource') === 'all') gather(false); else if (aloud()) keepUp(); }, 12000);
+  after(() => { if (get('cpsource') !== 'all' && aloud()) keepUp(); }, 2000);    // a page opened looks at once
   // the reading last left on this device: here again, paused
   try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
     .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
@@ -3221,7 +3241,7 @@ def chat_parts(root, shown=12, most=10):
     turns = turns[-shown:]
     last = max((i for i, t in enumerate(turns) if t["from"] == "you"), default=-1)
     out = []
-    for t in turns[last + 1:]:
+    for t in turns[max(last, 0):]:                     # the turn of their last message holds the reply to it
         if t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
             continue                                    # what it carried over a refresh is never read aloud
         for j, (kind, text) in enumerate(t["items"]):
@@ -8101,8 +8121,9 @@ body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:16px }
 /* Auto on: a small light circles the player's play and pause button, its tail in the rainbow, glowing; in Chat it
-   runs round the border of Auto itself */
-.cpbar .cphold, .chat .turnacts .auto { position:relative }
+   runs round the border of the part being read, as it starts to play (the person: "only do the auto animation on the
+   section of the chat WHEN that section starts to play") */
+.cpbar .cphold, .chat .say.reading { position:relative }
 html.autoon .cpbar .cphold::before {
   content:''; position:absolute; inset:1px; border-radius:50%; padding:2px; pointer-events:none;
   background:conic-gradient(transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
@@ -8110,12 +8131,12 @@ html.autoon .cpbar .cphold::before {
   filter:drop-shadow(0 0 2px #ff9ad5); animation:autoring 1.8s linear infinite }
 @keyframes autoring { to { transform:rotate(360deg) } }
 @property --autospin { syntax:'<angle>'; inherits:false; initial-value:0deg }
-html.autoon .chat .turnacts .auto::before { content:''; position:absolute; inset:0; border-radius:inherit; padding:2px; pointer-events:none;
+html.autoon.cpgo .chat .say.reading::before { content:''; position:absolute; inset:-8px; border-radius:8px; padding:2px; pointer-events:none;
   background:conic-gradient(from var(--autospin), transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
   -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
   filter:drop-shadow(0 0 2px #ff9ad5); animation:autoborder 1.8s linear infinite }
 @keyframes autoborder { to { --autospin:360deg } }
-@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon .chat .turnacts .auto::before { animation:none } }
+@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon.cpgo .chat .say.reading::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
