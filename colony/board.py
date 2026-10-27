@@ -2236,7 +2236,7 @@ def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LASTPAGE}{BAR}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
@@ -3021,9 +3021,17 @@ PLAYER = """
   // Chat page it stands in for the page's own box; Auto off, or reading aloud alone, the page's box is as it was.
   const gc = document.createElement('form'); gc.id = 'gc'; gc.className = 'gc'; gc.hidden = true;
   gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
-    + "<div class='gcrow'><textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div>";
+    + "<div class='gcfiles' hidden></div><div class='gcrow'><label class='gcattach' aria-label='Attach photos or files'>+<input type='file' multiple hidden></label>"
+    + "<textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div>";
   document.body.appendChild(gc);
   const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
+  const gfile = gc.querySelector('input[type=file]'), gfiles = gc.querySelector('.gcfiles');
+  const chosen = () => { const fs = [...gfile.files]; gfiles.hidden = !fs.length;
+    gfiles.textContent = fs.length ? '📎 ' + fs.map((f) => f.name).join(', ') : '';
+    if (fs.length && !anchor) anchor = target();             // a file ties it to where it is going, as a word does
+    placed(); };
+  on(gfile, 'change', chosen);
+  on(gfiles, 'click', () => { gfile.value = ''; chosen(); });   // a tap on them lets them go
   const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
   let anchor = null, gcTyping = false, ridef = 0;          // anchor: {key, name, chosen} the words are for
   try { const was = JSON.parse(sessionStorage.getItem('gc') || 'null'); if (was) { anchor = was.to; gta.value = was.text || ''; } } catch (e) {}
@@ -3056,24 +3064,35 @@ PLAYER = """
   on(document, 'click', (ev) => { if (!glist.hidden && !ev.target.closest('#gc')) glist.hidden = true; });
   // typing on a phone, the box rides the keyboard: placed where the visible part of the page ends, the player out of the way
   const ride = () => { if (!gcTyping) return; const v = window.visualViewport;
-    if (v) { gc.style.bottom = 'auto'; gc.style.top = Math.round(v.offsetTop + v.height - gc.offsetHeight) + 'px'; }
+    if (v) { const h = gc.offsetHeight, low = v.offsetTop, high = v.offsetTop + Math.max(0, v.height - h);
+      gc.style.bottom = 'auto'; gc.style.top = Math.round(Math.min(high, Math.max(low, v.offsetTop + v.height - h))) + 'px'; }
     ridef = requestAnimationFrame(ride); };
-  on(gta, 'focus', () => { gcTyping = true; document.body.classList.add('gctyping'); cancelAnimationFrame(ridef); ride(); });
+  let gtold = 0;
+  const gmeasure = (when) => { if (gtold++ > 5) return; const v = window.visualViewport, r = gc.getBoundingClientRect(),
+    tabs = document.querySelector('.tabs'), tr = tabs && tabs.getBoundingClientRect();
+    fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'gc-' + when, top: Math.round(r.top),
+      bottom: Math.round(r.bottom), h: Math.round(r.height), inner: innerHeight, vvh: v && Math.round(v.height), vvtop: v && Math.round(v.offsetTop),
+      tabs: tr && Math.round(tr.top), style: gc.style.cssText, path: location.pathname + location.search})})}).catch(() => {}); };
+  on(gta, 'focus', () => { gcTyping = true; document.body.classList.add('gctyping'); cancelAnimationFrame(ridef); ride();
+    after(() => gmeasure('typing'), 1200); });
   on(gta, 'blur', () => { gcTyping = false; document.body.classList.remove('gctyping'); cancelAnimationFrame(ridef); placed(); });
   on(gc.querySelector('.gcsend'), 'pointerdown', (ev) => ev.preventDefault());      // the box keeps its focus until it sends
   on(gc, 'submit', async (ev) => { ev.preventDefault();
-    const t = target(), text = gta.value.trim();
-    if (!text) return;
+    const t = target(), text = gta.value.trim(), fs = [...gfile.files];
+    if (!text && !fs.length) return;
     if (!t) { gto.click(); return; }                          // nowhere to send yet: the list, to choose
-    gta.value = ''; anchor = null; keepDraft(); grow(); gta.blur(); gsaid.textContent = 'Sending to ' + t.name + '…'; placed();
-    const r = await fetch('/chat/send', {method: 'POST', body: new URLSearchParams({p: t.key, text})}).catch(() => null);
+    const body = new FormData(); body.append('p', t.key); body.append('text', text); fs.forEach((f) => body.append('file', f));
+    gta.value = ''; gfile.value = ''; chosen(); anchor = null; keepDraft(); grow(); gta.blur(); gsaid.textContent = 'Sending to ' + t.name + '…'; placed();
+    const r = await fetch('/chat/send', {method: 'POST', body: fs.length ? body : new URLSearchParams({p: t.key, text})}).catch(() => null);
     if (r && r.ok) { gsaid.textContent = 'Sent to ' + t.name; after(() => { if (gsaid.textContent === 'Sent to ' + t.name) gsaid.textContent = ''; }, 4000); return; }
     // not sent: the words come back, still for that project
     gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = {key: t.key, name: t.name, chosen: true}; keepDraft(); grow(); placed();
+    if (fs.length) { try { const dt = new DataTransfer(); fs.forEach((f) => dt.items.add(f)); gfile.files = dt.files; chosen(); } catch (e) {} }
     gsaid.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console'
       : r && r.status === 503 ? (await r.text()).slice(0, 140) : 'Not sent: the board could not be reached';
   });
   grow();
+  after(() => { if (!gc.hidden) gmeasure('resting'); }, 2500);
   // the reading last left on this device: here again, paused
   try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
     .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
@@ -3182,6 +3201,20 @@ document.addEventListener('submit', async (ev) => {
   rule.remove();
   const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: the board could not be reached. Tap again.';
   f.closest('.gatechoices') ? f.closest('.gatechoices').after(p) : f.after(p);
+}, true);
+"""
+
+
+# A panel made as it is opened (a project's Settings): fetched the first time, its scripts run as they would have been.
+LAZY = """
+document.addEventListener('toggle', async (ev) => {
+  const d = ev.target; if (!d.matches || !d.matches('details[data-lazy]') || !d.open || d.dataset.made) return;
+  d.dataset.made = '1';
+  const r = await fetch(d.dataset.lazy, {cache: 'no-store'}).catch(() => null);
+  const panel = d.querySelector('.panel'); if (!panel) return;
+  if (!r || !r.ok) { panel.innerHTML = "<p class='muted'>Couldn't open it: try again.</p>"; delete d.dataset.made; return; }
+  panel.innerHTML = await r.text();
+  panel.querySelectorAll('script').forEach((old) => { const s = document.createElement('script'); s.textContent = '{\\n' + old.textContent + '\\n}'; old.replaceWith(s); });
 }, true);
 """
 
@@ -4320,17 +4353,10 @@ def render(reg, pid, view="overview", show_all=""):
     done = sum(1 for m in road["milestones"] for i in m["items"] if i["state"] == "done")
     total = sum(len(m["items"]) for m in road["milestones"])
     merged, own = project_settings(root)
-    # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space
-    settings = (f"<details class='psettings'><summary>Settings</summary><div class='panel'>{project_settings_form(pid, own, root=root)}"
-                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
-                f"{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
-                f"<p class='muted'>Archive takes it off the board and the steward's watch (at work, it finishes that turn "
-                f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
-                f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
-                f"<input name='why' placeholder='Why (optional; its agent reads it when it comes back)'>"
-                f"<button class='quiet'>Archive</button></form>"
-                f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
-                f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div></div></details>")
+    # the project's settings tuck into a link on the title's line, opening as a panel, to keep phones' space; what
+    # is in it is made as it opens (it took most of a second, every page, folded away)
+    settings = (f"<details class='psettings' data-lazy='/project/settings?p={pid}'><summary>Settings</summary>"
+                "<div class='panel'><p class='muted'>Opening…</p></div></details>")
     # Message sits on the title's line too, where a phone reaches it (its console is full screen)
     message = message_form(pid, plist, "psettings")
     # pinned or not, it says so beside Message, and a tap changes it
@@ -5228,6 +5254,22 @@ def tier_fields(root):
                 f"{e(name)}" + (f" at {e(x)}" if x else "") + "</option>" for x in efforts) + "</optgroup>")
         out.append(f"<label>{e(t.capitalize())} helpers <select name='tier_{t}'>{''.join(opts)}</select></label>")
     return "".join(out)
+
+
+def settings_panel(pid, root):
+    """A project's Settings panel, made as it is opened: its models and effort, its program, its lead, its nest,
+    and archiving or deleting it."""
+    merged, own = project_settings(root)
+    return (f"{project_settings_form(pid, own, root=root)}"
+                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
+                f"{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
+                f"<p class='muted'>Archive takes it off the board and the steward's watch (at work, it finishes that turn "
+                f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
+                f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
+                f"<input name='why' placeholder='Why (optional; its agent reads it when it comes back)'>"
+                f"<button class='quiet'>Archive</button></form>"
+                f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
+                f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div>")
 
 
 def project_settings_form(pid, own, action="/project-settings", root=None):
@@ -7274,6 +7316,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, all_projects_page(reg).encode())
         if url.path == "/usage":
             return self._send(200, usage_page(reg).encode())
+        if url.path == "/project/settings":           # a project's Settings panel, made as it opens
+            try:
+                return self._send(200, settings_panel(pid, plist[pid]).encode())
+            except IndexError:
+                return self._send(404, b"no such project")
         if url.path == "/nest":
             return self._send(200, nest_page(reg, (q.get("n") or [""])[0]).encode())
         if url.path == "/static/board.css":
@@ -8296,15 +8343,21 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .gc > * { pointer-events:auto; max-width:740px; margin-left:auto; margin-right:auto }
 /* its line is a tab on the box's top edge, on the box's own ground, so the page under it never shows through */
 .gchead { display:flex; align-items:baseline; gap:8px; width:max-content; max-width:calc(100% - 28px); margin:0 0 -1px 14px !important;
-  padding:3px 10px 2px; font-size:12.5px; background:var(--card); border:1px solid var(--line); border-bottom:0; border-radius:10px 10px 0 0;
+  padding:3px 10px 2px; font-size:12.5px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-bottom:0; border-radius:10px 10px 0 0;
   position:relative; z-index:1; white-space:nowrap; overflow:hidden }
 .gcsaid { color:var(--muted); overflow:hidden; text-overflow:ellipsis }
 .gc .gcto { border:0; background:transparent; color:var(--accent); font-weight:600; padding:2px 2px; min-height:0; width:auto; font-size:12.5px; cursor:pointer }
 .gc.held .gcto::after { content:' · kept while you write'; color:var(--muted); font-weight:400 }
-.gcrow { display:flex; align-items:flex-end; gap:6px; background:var(--card); border:1px solid var(--line); border-radius:20px; padding:5px 5px 5px 14px;
+.gcrow { display:flex; align-items:flex-end; gap:6px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius:20px; padding:5px 5px 5px 8px;
   box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .gcrow textarea { flex:1; min-width:0; border:0; background:transparent; resize:none; font:inherit; font-size:16px; line-height:1.4; color:var(--ink);
   padding:7px 0; max-height:140px; outline:none; box-shadow:none }
+.gcattach { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; flex:none; margin:1px 0;
+  border-radius:50%; color:var(--accent); font-size:22px; cursor:pointer; background:var(--sunk) }
+.gcfiles { margin:0 0 4px 14px !important; padding:4px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
+  background:var(--card); border:1px solid var(--line); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .gc .gcsend { width:36px; height:36px; min-height:36px; padding:0; border-radius:50%; border:0; background:var(--accent); color:var(--card); font-size:18px; flex:none }
 .gclist { list-style:none; margin:0 0 6px; padding:4px; background:var(--card); border:1px solid var(--line); border-radius:12px; max-height:42vh;
   overflow-y:auto; box-shadow:0 6px 22px rgba(0,0,0,.22) } .gclist li { padding:10px; border-radius:8px; cursor:pointer; font-size:14.5px }
@@ -8321,14 +8374,16 @@ body.gcon main:not(:has(.composer))::after { content:''; display:block; height:c
 .automenu .reach button.on { color:var(--card); background:var(--accent); font-weight:600 }
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
 .cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpskip, .cplayer.cpidle .cpstop { display:none }
-.cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--accent);
+.cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  background:color-mix(in srgb, var(--accent) 8%, var(--card)); color:var(--accent);
   font-size:20px; box-shadow:0 3px 12px rgba(0,0,0,.16); display:inline-flex; align-items:center; justify-content:center; cursor:pointer }
 body.typing .cplayer { top:calc(var(--kbtop, 100vh) - var(--boxh, 0px) - var(--cph, 56px) - 8px); bottom:auto !important }
 body.cpon.typing .toend { top:calc(var(--kbtop, 100vh) - 124px - var(--cph, 56px)) } body.cpon.typing .chat { padding-bottom:calc(140px + var(--cph, 56px)) }
 html.going main { opacity:.5; transition:opacity .2s .15s }
 body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-area-inset-bottom)) }
 .cplayer > * { pointer-events:auto; max-width:740px; margin:0 auto }
-.cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:var(--card); border:1px solid var(--line);
+.cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .cpbar button { width:40px; height:40px; min-height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:var(--ink);
   display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } @media (hover: hover) {.cpbar button:hover { background:var(--sunk) }}
@@ -8342,7 +8397,8 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-
 .cpprojs li { align-items:center } .cpprojs .cpstate { margin-left:auto; font-size:12px; color:var(--muted); white-space:nowrap }
 .cpsets { display:flex; flex-direction:column; gap:12px; padding:12px 14px }
 .cpline { display:flex; align-items:center; gap:10px; margin:0; font-size:14px } .cpline select { flex:1; min-width:0 } .cpprev { font-size:13.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-.cppanel { display:flex; flex-direction:column; max-height:min(52vh, 420px); margin-bottom:6px; background:var(--card); border:1px solid var(--line);
+.cppanel { display:flex; flex-direction:column; max-height:min(52vh, 420px); margin-bottom:6px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
+  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16); overflow:hidden }
 .cphead { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; font-size:13px; color:var(--muted); border-bottom:1px solid var(--line) }
 .cpfollow { display:flex; align-items:center; gap:6px; margin:0; color:var(--ink) }

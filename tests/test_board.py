@@ -1812,7 +1812,7 @@ class GlanceTest(BoardBase):
             page = board.render(board.registry(), 0, "console")
             self.assertIn("Claude Code isn&#x27;t installed on this machine", page)
             self.assertIn("so its console can't start", page)
-            self.assertIn("Claude Code (not installed)</option>", board.render(board.registry(), 0, ""), "the forms say so")
+            self.assertIn("Claude Code (not installed)</option>", board.settings_panel(0, self.root), "the forms say so")
             self.assertIn("Codex", board.settle_provider(), "the default moves to what is here")
             self.assertEqual(board.registry()["settings"]["provider"], "codex")
             self.assertIsNone(board.settle_provider(), "once")
@@ -4274,7 +4274,8 @@ class UsageTest(BoardBase):
         self.claude_at(96)
         self.assertEqual(usage.check(), [], "under 98%: nothing")
         self.claude_at(98.5)
-        self.assertEqual([w for _, w in usage.check()], ["paused"])
+        with patch.object(console, "snapshot", return_value={"state": "working", "lines": []}):   # at work when it comes
+            self.assertEqual([w for _, w in usage.check()], ["paused"])
         [note] = [n for n in board.notes(self.root) if "usage limit" in n["text"]]
         self.assertTrue(note.get("quiet"), "told on its next turn, not woken")
         for words in ("Safe pause: Claude Code is at 98.5%", "so nothing is cut off mid-task", "don't cancel them", "where things stand", "1. Wait for the reset", "2. Hand this project to Codex",
@@ -4296,6 +4297,15 @@ class UsageTest(BoardBase):
         self.assertEqual([x for _, x in usage.check()], ["resumed"])
         self.assertIn("has reset. Carry on", board.notes(self.root)[-1]["text"])
         self.assertFalse(board.notes(self.root)[-1].get("quiet"), "woken to carry on")
+        # idle when the limit came: held all the same, but told nothing either way (it would only say nothing was running)
+        told = len(board.notes(self.root))
+        self.claude_at(98.5)
+        with patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
+            self.assertEqual([w for _, w in usage.check()], ["paused"])
+        self.assertTrue(usage.paused().get(str(self.root)), "held: nothing starts it")
+        self.claude_at(98.5, resets_in=-1)
+        self.assertEqual([x for _, x in usage.check()], ["resumed"])
+        self.assertEqual(len(board.notes(self.root)), told, "no wind-down, no carry-on: nothing to wake it for")
 
     def test_a_project_can_keep_going_or_pause_sooner(self):
         from colony import usage
@@ -5709,10 +5719,12 @@ class PhonePageTest(HoursBase):
             board.render(board.registry(), 0)                      # a look yesterday: nothing has changed since
         with self.clock(14):
             page = board.render(board.registry(), 0)
-        remote = page.index("Remote Control: on")
-        self.assertLess(page.index("<summary>Settings</summary>"), remote, "how it is reached is one of its settings")
-        self.assertLess(remote, page.index("<div class='dangers'>"))
-        self.assertEqual(page.count("Remote Control: on"), 1)
+        self.assertIn("data-lazy='/project/settings?p=0'><summary>Settings</summary>", page, "its settings, made as they open")
+        panel = board.settings_panel(0, self.root)
+        remote = panel.index("Remote Control: on")
+        self.assertLess(remote, panel.index("<div class='dangers'>"), "how it is reached is one of its settings")
+        self.assertEqual(panel.count("Remote Control: on"), 1)
+        self.assertNotIn("Remote Control: on", page, "folded away, not made with every page")
         for empty in ("<h2>Library</h2>", "Nothing pinned yet", "Since you were last here", "Nothing is waiting on you",
                       ">Showcase<", "Completed versions"):
             self.assertNotIn(empty, page)

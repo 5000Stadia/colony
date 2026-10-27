@@ -857,7 +857,7 @@ class LeadTest(unittest.TestCase):
         self.assertNotIn('blocking decision', page, 'the record of a past hold is not a hold')
         overview = board.render(board.registry(), 0)
         self.assertNotIn('Start selected version', overview, 'not in the header of every tab')
-        self.assertIn('Switch lead', overview.split('<summary>Settings</summary>')[1], 'who leads is one of its settings')
+        self.assertIn('Switch lead', board.settings_panel(0, board.projects(board.registry())[0]), 'who leads is one of its settings')
         with patch.object(continuation, 'tick'):
             progress.start(self.root, c['id'])
             gate = board.add_gate(self.helper, 'Which soil?')      # a decision in the helper holds the shared version
