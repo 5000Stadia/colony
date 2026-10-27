@@ -2310,20 +2310,34 @@ PLAYER = """
     s.ls.forEach(([x, t, f, o]) => O.rm.call(x, t, f, o)); s.is.forEach((id) => O.ci.call(window, id)); s.ts.forEach((id) => O.ct.call(window, id)); };
   const busy = () => !!(window.colonyPlayer && window.colonyPlayer.busy());
   // The page changes in place: the new one's body comes in, the player stays, and its scripts run as they would have.
+  // A page the player will show next is fetched ahead and kept half a minute, so going there is at once.
   let going = 0;
+  const ahead = new Map();
+  const prefetch = async (url) => { url = new URL(url, location.href).href;
+    const was = ahead.get(url); if (was && Date.now() - was.at < 30000) return;
+    try { const r = await fetch(url, {credentials: 'same-origin'});
+      if (r.ok && (r.headers.get('content-type') || '').includes('text/html')) ahead.set(url, {at: Date.now(), url: r.url, html: await r.text()});
+    } catch (e) {}
+    while (ahead.size > 6) ahead.delete(ahead.keys().next().value); };
   const go = async (url, how = {}) => {
     const mine = ++going, method = (how.method || 'GET').toUpperCase(), root = document.documentElement;
     root.classList.add('going');                   // on its way: the page dims, so a tap is seen to have landed
-    let r = null;
-    try { r = await fetch(url, {method, body: how.body, credentials: 'same-origin'}); } catch (e) {}
-    if (mine !== going) return;
+    let r = null, html = '', got = url, redirected = false;
+    const hit = method === 'GET' && ahead.get(url);
+    if (hit && Date.now() - hit.at < 30000) { ahead.delete(url); html = hit.html; got = hit.url; }    // fetched ahead: at once
+    else {
+      try { r = await fetch(url, {method, body: how.body, credentials: 'same-origin'}); } catch (e) {}
+      if (mine !== going) return;
+      root.classList.remove('going');
+      if (!r) { if (method === 'GET') location.href = url; return; }
+      if (!(r.headers.get('content-type') || '').includes('text/html')) { if (method === 'GET') location.href = r.url; return; }
+      html = await r.text(); got = r.url; redirected = r.redirected;
+    }
     root.classList.remove('going');
-    if (!r) { if (method === 'GET') location.href = url; return; }
-    if (!(r.headers.get('content-type') || '').includes('text/html')) { if (method === 'GET') location.href = r.url; return; }
-    const doc = new DOMParser().parseFromString(await r.text(), 'text/html');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
     if (mine !== going) return;
-    if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = r.url; return; }
-    const from = location.href, to = method !== 'GET' && !r.redirected ? location.href : r.url;
+    if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = got; return; }
+    const from = location.href, to = method !== 'GET' && !redirected ? location.href : got;
     leave(); if (window.colonyPlayer) window.colonyPlayer.leave();
     try {
       if (how.push !== false) history.replaceState(Object.assign({}, history.state, {colony: 1, y: scrollY}), '');
@@ -2371,7 +2385,7 @@ PLAYER = """
     if (method === 'GET') { action.search = new URLSearchParams(d).toString(); go(action.href); }
     else go(action.href, {method, body: multi ? d : new URLSearchParams(d)});
   });
-  window.colonyNav = {keep: O, go: (u) => busy() ? go(new URL(u, location.href).href) : (location.href = u),
+  window.colonyNav = {keep: O, prefetch, go: (u) => busy() ? go(new URL(u, location.href).href) : (location.href = u),
     replace: (u) => busy() ? go(new URL(u, location.href).href, {replace: true}) : location.replace(u),
     reload: () => busy() ? go(location.href, {replace: true}) : location.reload()};
 })();
@@ -2596,9 +2610,15 @@ PLAYER = """
     if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
     loading = !R.silent && !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
     if (!parts.length) return finished(i);
+    // Audio + text: the part is shown first, its page changed to where it was said, then heard (3 s at most to wait);
+    // and the next part, where it is in another project, has its page fetched meanwhile, so going there is at once
+    const shown = showHere(), n = R.list[i + 1];
+    if (n && following() && (n.name || R.name) !== (s.name || R.name) && (n.href || R.href)) colonyNav.prefetch(n.href || R.href);
     if (R.silent) return show(i);
     tell(parts[from].replace(NAME, ''));
-    return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from);
+    const sound = () => { if (playing && R && R.cur === i) return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from); };
+    if (shown) return Promise.race([shown, new Promise((ok) => after(ok, 3000))]).then(sound);
+    return sound();
   }
   // Another project's reading, playing or paused, gives way: kept where it stopped, its unheard sections waiting
   const yieldTo = (r) => { if (R && R !== r) { if (playing) hush(); playing = false; paused = false; if (left(R)) save(); R = null; } };
@@ -2637,12 +2657,15 @@ PLAYER = """
   let touched = 0;
   on(document, 'pointerdown', (ev) => { if (!ev.target.closest('#cplayer')) touched = Date.now(); }, true);
   function showHere() {
-    if (!R || !following()) return;
-    const s = R.list[R.cur]; if (!s) return;
+    if (!R || !following()) return null;
+    const s = R.list[R.cur]; if (!s) return null;
     const who = s.name || R.name, href = s.href || R.href;
-    if (view && view.name === who) return view.focus(s.k, true);
-    if (!href || document.body.classList.contains('typing') || Date.now() - touched < 8000) return;
-    colonyNav.go(href);
+    if (view && view.name === who) { view.focus(s.k, true); return null; }
+    // never away from something being written: a box with words in it, or one being typed in, keeps the page
+    const box = document.querySelector('#composer textarea'), at = document.activeElement;
+    if (!href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select'))
+        || Date.now() - touched < 8000) return null;
+    return colonyNav.go(href);
   }
   // Text only: no sound; each part stays for as long as reading it takes (200 words a minute, 4 s at least)
   let dwell = 0;
@@ -2749,7 +2772,7 @@ PLAYER = """
   on(document, 'DOMContentLoaded', placed); on(window, 'load', placed);   // it is made before the tabs below it are there
   if (window.visualViewport) { on(window.visualViewport, 'resize', soon); }
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
-  function changed(started) { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); if (started) showHere(); }
+  function changed() { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpskip'), 'click', skip);
   on($('.cpstop'), 'click', stop);
@@ -2915,6 +2938,9 @@ PLAYER = """
     unlock,
     // where a project's reading is: the one in play, or one kept paused for it
     of(name) {
+      // reading every project, the part being read is its project's: its chat marks it as its own
+      if (R && R.all && left(R) && R.list[R.cur].name === name) { const s = R.list[R.cur];
+        return {active: true, playing, paused, loading, t: s.t, k: s.k, into: R.piece >= 1}; }
       const r = R && R.name === name ? R : load(name); if (!left(r)) return null;
       const s = r.list[r.cur], active = r === R;
       return {active, playing: active && playing, paused: active && paused, loading: active && loading, t: s.t, k: s.k,

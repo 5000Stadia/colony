@@ -171,6 +171,18 @@ def running(name):
     dead, _, status = (r.stdout.splitlines() or [""])[0].strip().partition(" ")
     if dead != "1":
         return True
+    # tmux can say a pane is dead a moment before it knows how it ended: asked again for that, an error is never
+    # taken for a clean exit (the suite's flaky test, its record read: status 0 beside the error's own words)
+    for _ in range(10):
+        if status.strip():
+            break
+        time.sleep(0.1)
+        again = subprocess.run(["tmux", "list-panes", "-t", name, "-F", "#{pane_dead_status} #{pane_dead_signal}"],
+                               capture_output=True, text=True).stdout.split()
+        if again and again[0].isdigit():
+            status = again[0]
+        elif len(again) > 1 and again[1].isdigit():
+            status = str(128 + int(again[1]))          # ended by a signal, as a shell would say it
     # from its history too: as the pane dies, tmux moves what was on the screen up into it
     shown = subprocess.run(["tmux", "capture-pane", "-p", "-S", "-200", "-t", name], capture_output=True, text=True).stdout
     words = [l.rstrip() for l in shown.splitlines() if l.strip() and not l.startswith("Pane is dead")]  # tmux's own
