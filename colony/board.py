@@ -3047,9 +3047,9 @@ PLAYER = """
   // on. A tap on its line lists every project, the active page's first. Unsent words are kept on this device. On a
   // Chat page it stands in for the page's own box; Auto off, or reading aloud alone, the page's box is as it was.
   const gc = document.createElement('form'); gc.id = 'gc'; gc.className = 'gc'; gc.hidden = true;
-  gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
+  gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gcbox'><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
     + "<div class='gcfiles' hidden></div><div class='gcrow'><label class='gcattach' aria-label='Attach photos or files'>+<input type='file' multiple hidden></label>"
-    + "<textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div>";
+    + "<textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div></div>";
   document.body.appendChild(gc);
   const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
   const gfile = gc.querySelector('input[type=file]'), gfiles = gc.querySelector('.gcfiles');
@@ -8202,6 +8202,8 @@ CSS = """
 * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--ink); display:flex; min-height:100vh;
   font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif }
 nav { width:220px; flex:none; border-right:1px solid var(--line); padding:16px 10px; background:var(--card) }
+/* where the menu is a column (a desktop, a phone turned sideways), the player and the message box keep to the page beside it */
+@media (min-width: 701px) { body .cplayer, body .gc { left:220px } }
 nav .pinjump { display:none }
 nav .proj { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; color:var(--ink); text-decoration:none }
 nav .proj.on { background:var(--sunk); font-weight:600 } main { flex:1; min-width:0; max-width:1240px; padding:8px 24px 60px }
@@ -8378,7 +8380,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .gc { position:fixed; left:0; right:0; z-index:44; padding:0 10px 6px; pointer-events:none } .gc[hidden], .gclist[hidden] { display:none }
 .gc > * { pointer-events:auto; max-width:740px; margin-left:auto; margin-right:auto }
 /* its line is a tab on the box's top edge, on the box's own ground, so the page under it never shows through */
-.gchead { display:flex; align-items:baseline; gap:8px; width:max-content; max-width:calc(100% - 28px); margin:0 0 -1px 14px !important;
+.gchead { display:flex; align-items:baseline; gap:8px; width:max-content; max-width:calc(100% - 28px); margin:0 0 -1px 14px;
   padding:3px 10px 2px; font-size:12.5px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
   border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-bottom:0; border-radius:10px 10px 0 0;
   position:relative; z-index:1; white-space:nowrap; overflow:hidden }
@@ -8392,7 +8394,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
   padding:7px 0; max-height:140px; outline:none; box-shadow:none }
 .gcattach { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; flex:none; margin:1px 0;
   border-radius:50%; color:var(--accent); font-size:22px; cursor:pointer; background:var(--sunk) }
-.gcfiles { margin:0 0 4px 14px !important; padding:4px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
+.gcfiles { margin:0 0 4px 14px; padding:4px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
   background:var(--card); border:1px solid var(--line); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .gc .gcsend { width:36px; height:36px; min-height:36px; padding:0; border-radius:50%; border:0; background:var(--accent); color:var(--card); font-size:18px; flex:none }
 .gclist { list-style:none; margin:0 0 6px; padding:4px; background:var(--card); border:1px solid var(--line); border-radius:12px; max-height:42vh;
