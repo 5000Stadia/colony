@@ -871,20 +871,22 @@ class ChatTest(BoardBase):
         self.assertFalse(board.own_host("attacker.invalid:8765"), "a name pointed here from elsewhere (DNS rebinding)")
         self.assertFalse(board.own_host("evil.localhost"))
 
-    def test_the_voice_is_the_persons_own_and_a_project_can_pin_its_own(self):
+    def test_every_project_reads_in_the_colonys_voice_unless_one_was_chosen_for_it(self):
         other = Path(self.tmp.name) / "photonic"
         self.assertEqual(board.voice_of(0, self.root), ("am_echo", False), "Echo out of the box")
         board.choose_voice(0, self.root, "bf_emma")
-        self.assertEqual(board.voice_of(1, other), ("bf_emma", False), "a change on a project not pinned is the person's voice")
-        board.choose_voice(0, self.root, pin=True)
-        board.choose_voice(1, other, "am_echo")
-        self.assertEqual(board.voice_of(0, self.root), ("bf_emma", True), "pinned: a change elsewhere leaves it")
-        self.assertEqual(board.voice_of(1, Path(self.tmp.name) / "new"), ("am_echo", False), "a new project: the last voice chosen")
-        board.choose_voice(0, self.root, "bm_george")
-        self.assertEqual(board.voice_of(1, other), ("am_echo", False), "a pinned project's change is its own")
-        self.assertEqual(board.choose_voice(0, self.root, pin=False), ("am_echo", False))
+        self.assertEqual(board.voice_of(0, self.root), ("bf_emma", True), "a voice chosen is the project's own")
+        self.assertEqual(board.voice_of(1, other), ("am_echo", False), "and changes no other project's")
+        board.default_voice("bm_george")
+        self.assertEqual(board.voice_of(1, other), ("bm_george", False), "the rest follow the colony's voice (Settings)")
+        self.assertEqual(board.voice_of(0, self.root), ("bf_emma", True), "one of its own stays")
+        self.assertEqual(board.choose_voice(0, self.root, ""), ("bm_george", False), "Default: it follows the colony's again")
+        self.assertIn("<option value='' selected>Default (George)</option>", board.voice_choices(), "Default first, named")
+        self.assertIn("<option value='bf_emma' selected>", board.voice_choices("bf_emma"))
         with self.assertRaises(ValueError):
             board.choose_voice(0, self.root, "nobody")
+        with self.assertRaises(ValueError):
+            board.default_voice("nobody")
 
     def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
         board.track(self.root)
@@ -1242,8 +1244,15 @@ class ChatTest(BoardBase):
             urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=hello",
                                                           headers={"Host": host, "Origin": f"http://{host}"}))
         self.assertEqual(gone.exception.code, 503)
+        said = gone.exception.read().decode()
+        if "unknown option" not in said:                  # what was there, so a failure here says why
+            path = console._died_path(name)
+            record = path.read_text() if path.exists() else "no record"
+            began = json.loads(console._started_path().read_text()).get(name) if console._started_path().exists() else None
+            panes = subprocess.run(["tmux", "list-panes", "-t", name, "-F", "#{pane_dead} #{pane_dead_status}"], capture_output=True, text=True)
+            said += f" || record: {record} || started: {began} || tmux: {panes.returncode} {panes.stdout!r} {panes.stderr!r}"
         self.assertIn("its agent isn't running; it stopped with an error (exit 1), its last words: error: unknown option "
-                      "-SnackStand", gone.exception.read().decode())
+                      "-SnackStand", said)
         self.assertIn("r.status === 503 ? await r.text()", board.CHAT)
         console.COMMAND = "true"
         console.ensure(self.root, settle=2)

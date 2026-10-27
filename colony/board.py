@@ -2644,7 +2644,6 @@ PLAYER = """
     + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'><input type='checkbox' class='cpaloud'> Auto-speak new replies</label>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
     + "<div class='cpvoice' hidden><label class='cpline'>Voice <span class='muted cpwhose'></span> <select class='cpkvoice'></select></label>"
-    + "<label class='cpline'><input type='checkbox' class='cpvpin'> Pin voice to this project</label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
     + "<div class='cpminirow'><button type='button' class='cpmini' aria-label='Player: choose what to hear, voice, speed'>♪</button></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
@@ -2807,7 +2806,7 @@ PLAYER = """
   const voiced = () => { const s = R && R.all ? R.list[R.cur] || {} : R || {};
     if (s.key) return {key: s.key, name: s.name || R.name};
     const mine = here(), p = listed().find((x) => x.key === mine);
-    return p ? {key: p.key, name: p.name} : {key: 'steward', name: 'your voice'}; };
+    return p ? {key: p.key, name: p.name} : {key: 'default', name: 'every project (default)'}; };
   async function sets() {
     $('.cpaloud').checked = aloud(); $('.cprate').value = String(rate());
     const who = voiced();
@@ -2815,9 +2814,9 @@ PLAYER = """
     $('.cpwhose').textContent = who.name;
     const vo = await fetched('/chat/voice?p=' + encodeURIComponent(who.key), 'json');
     if (!vo || !vo.ready) { $('.cpvoice').hidden = true; return; }
-    $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.voice; $('.cpvpin').checked = vo.pinned; $('.cpvoice').hidden = false;
-    $('.cpvpin').closest('label').hidden = who.key === 'steward' && !R;      // the person's own voice: nothing to pin it to
-    $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.options; $('.cpherald').value = herald();
+    $('.cpkvoice').innerHTML = vo.options; $('.cpkvoice').value = vo.default ? vo.voice : vo.own ? vo.voice : ''; $('.cpvoice').hidden = false;
+    $('.cpkvoice').dataset.voice = vo.voice;
+    $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.voices; $('.cpherald').value = herald();
   }
   on($('.cpaloud'), 'change', () => { const a = $('.cpaloud').checked; if (a) unlock(); setAloud(a); });
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
@@ -2825,13 +2824,13 @@ PLAYER = """
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
     const got = await r.json();
-    $('.cpkvoice').value = got.voice; $('.cpvpin').checked = got.pinned; P.setVoice(name, got.voice);
-    document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, voice: got.voice, pinned: got.pinned}})); };
+    $('.cpkvoice').dataset.voice = got.voice; P.setVoice(name, got.voice);
+    document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, voice: got.voice, own: got.own, colony: key === 'default'}})); };
   const label = (sel) => (sel.selectedOptions[0] || {}).textContent || '';
-  on($('.cpkvoice'), 'change', () => { preview($('.cpkvoice').value, label($('.cpkvoice'))); keepVoice({voice: $('.cpkvoice').value}); });
+  on($('.cpkvoice'), 'change', () => { const v = $('.cpkvoice').value;       // Default: the colony's voice, said as such
+    preview(v || $('.cpkvoice').dataset.voice, label($('.cpkvoice'))); keepVoice({voice: v}); });
   on($('.cpherald'), 'change', () => { try { localStorage.setItem('announcer', $('.cpherald').value); } catch (e) {}
     preview($('.cpherald').value, label($('.cpherald'))); });
-  on($('.cpvpin'), 'change', () => keepVoice({pin: $('.cpvpin').checked ? '1' : '0'}));
   const P = window.colonyPlayer = {
     busy: () => left(R), placed, rate, following,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} again(false); },
@@ -3394,24 +3393,42 @@ def voice_of(key, root):
     return (v["pins"][me], True) if me in v["pins"] else (v["voice"], False)
 
 
-def choose_voice(key, root, name=None, pin=None):
-    """A voice chosen in a chat (the person's own, or this project's where it is pinned); pin=True keeps the voice it
-    reads in now for this project, pin=False lets it follow the person's voice again."""
+def choose_voice(key, root, name=""):
+    """A project's voice: one chosen is its own, kept for it alone; "" (Default) has it follow the colony's voice again.
+    Choosing a voice never changes another project's (the person: "selecting a voice and having it pin or auto
+    change everywhere is weird")."""
     from . import voice
     v, me = _voices(), "steward" if key == "steward" else str(Path(root).resolve())
-    if name is not None and name not in dict(voice.VOICES):
+    if name and name not in dict(voice.VOICES):
         raise ValueError(name)
-    now, pinned = voice_of(key, root)
-    if pin is True:
-        v["pins"][me] = name or now
-    elif pin is False:
-        v["pins"].pop(me, None)
-    elif name and pinned:
+    if name:
         v["pins"][me] = name
-    elif name:
-        v["voice"] = name
+    else:
+        v["pins"].pop(me, None)
+    home().mkdir(parents=True, exist_ok=True)
     (home() / "voice.json").write_text(json.dumps(v, indent=1))
     return voice_of(key, root)
+
+
+def default_voice(name=None):
+    """The colony's voice, set in Settings: every project reads in it unless it has a voice of its own."""
+    from . import voice
+    v = _voices()
+    if name is not None:
+        if name not in dict(voice.VOICES):
+            raise ValueError(name)
+        v["voice"] = name
+        home().mkdir(parents=True, exist_ok=True)
+        (home() / "voice.json").write_text(json.dumps(v, indent=1))
+    return v["voice"]
+
+
+def voice_choices(own=""):
+    """A project's voice picker: Default (the colony's voice, named) first, then every voice; its own selected."""
+    from . import voice
+    d = default_voice()
+    return (f"<option value=''{'' if own else ' selected'}>Default ({e(dict(voice.VOICES).get(d, d))})</option>"
+            + voice.options(own or None))
 
 
 def queue_keys(key, root):
@@ -3438,9 +3455,8 @@ def chat_page(key, root):
             "<input type='checkbox' id='aloud'> Auto-speak</label>"
             "<select class='rate' id='rate' aria-label='Reading speed'>"
             + "".join(f"<option value='{r}'>{r:g}×</option>" for r in (1, 1.25, 1.5, 1.75)) + "</select>"
-            + (f"<select id='kvoice' aria-label='Voice'>{voice.options(voice_of(key, root)[0])}</select>"
-               f"<label class='vpin' title='Keep this voice for this project; unpinned, it uses your voice'>"
-               f"<input type='checkbox' id='vpin'{' checked' if voice_of(key, root)[1] else ''}> Pin voice to project</label>" if voice.ready() else "")
+            + (f"<select id='kvoice' aria-label='Voice' data-voice='{e(voice_of(key, root)[0])}'>"
+               f"{voice_choices(voice_of(key, root)[0] if voice_of(key, root)[1] else '')}</select>" if voice.ready() else "")
             + "<button type='button' class='shut' aria-label='Close'>✕</button></div>"
             "<button class='toend' id='toend' hidden aria-label='Back to the latest'>↓</button><div class='chatheld muted' id='chatheld' hidden></div>"
             f"<script>const ICON = {json.dumps(ICONS)};{CHAT}</script>")
@@ -3625,8 +3641,8 @@ CHAT = """
   const P = window.colonyPlayer, aloud = document.getElementById('aloud'), sheet = document.getElementById('voicesheet');
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
     return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
-  const KOKORO = box.dataset.voice === '1', picker = document.getElementById('kvoice'), pin = document.getElementById('vpin');
-  let kvoice = picker ? picker.value : 'am_echo';
+  const KOKORO = box.dataset.voice === '1', picker = document.getElementById('kvoice');
+  let kvoice = picker ? picker.dataset.voice : 'am_echo';         // what it reads in: its own, or the colony's
   const view = {name: box.dataset.name, key, href: location.pathname + location.search, kokoro: KOKORO, get kvoice() { return kvoice; },
     mark: () => mark(), focus: (k, go) => focus(k, go)};
   // a section: one part of a reply as it was written, with its time
@@ -3670,23 +3686,19 @@ CHAT = """
   const rateBtn = document.getElementById('rate');
   rateBtn.value = String(P.rate());
   rateBtn.addEventListener('change', () => P.setRate(+rateBtn.value || 1));
-  // the voice is the board's to keep: the person's own, or this project's where it is pinned
+  // the voice is the board's to keep: this project's own where one was chosen, else the colony's
   const keepVoice = async (body) => {
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
     const got = await r.json(), changed = got.voice !== kvoice;
-    kvoice = picker.value = got.voice; pin.checked = got.pinned;
+    kvoice = got.voice; picker.value = got.own ? got.voice : '';
     if (changed) P.setVoice(view.name, kvoice);
   };
   document.addEventListener('colony-voice', (ev) => { const d = ev.detail; if (!picker) return;
-    if (d.name === view.name) { kvoice = picker.value = d.voice; pin.checked = d.pinned; }
-    else if (!d.pinned && !pin.checked) kvoice = picker.value = d.voice; });
-  if (picker) { picker.addEventListener('change', () => { P.preview(picker.value, (picker.selectedOptions[0] || {}).textContent);
-      keepVoice({voice: picker.value}); });
-    pin.addEventListener('change', () => keepVoice({pin: pin.checked ? '1' : '0'}));
-    // a voice once kept on this device for this project stays with it, as its pin
-    try { const old = localStorage.getItem('kvoice:' + box.dataset.name);
-      if (old) { localStorage.removeItem('kvoice:' + box.dataset.name); if (!pin.checked && old !== kvoice) keepVoice({voice: old, pin: '1'}); } } catch (e) {} }
+    if (d.name === view.name) { kvoice = d.voice; picker.value = d.own ? d.voice : ''; }
+    else if (d.colony && !picker.value) kvoice = d.voice; });         // the colony's changed, and this one follows it
+  if (picker) picker.addEventListener('change', () => { P.preview(picker.value || picker.dataset.voice, (picker.selectedOptions[0] || {}).textContent);
+    keepVoice({voice: picker.value}); });
   // What has been read is remembered on this device, for each project: coming back (a reload, another project and
   // back) with Auto-speak on, it reads what came since, up to the last ten parts after the person's own last message.
   const HKEY = 'heard:' + box.dataset.name, BACK = 10;
@@ -5102,8 +5114,10 @@ def duplicate_agent_page(reg, original, chosen):
 def add_project_page(reg, tab="new", error=""):
     """Add a project three ways, one tab each: a new one, an existing folder, or a clone of a GitHub
     repository. Folders are chosen with Browse…, which starts closed and opens in place."""
+    from . import voice
     choices = (project_settings_form(0, {}, action="")
                .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0]
+               + (f"<label>Voice, reading its replies aloud <select name='voice'>{voice_choices()}</select></label>" if voice.ready() else "")
                + connection_ticks())
     where = reg["new_root"]
     picker = lambda name, value, placeholder: (
@@ -6431,7 +6445,7 @@ def connection_ticks():
 
 
 def settings_page(reg):
-    from . import selection
+    from . import selection, voice
     selection.migrate()
     reg = registry()
     rows = []
@@ -6613,6 +6627,13 @@ def settings_page(reg):
         section("consulting", "Consulting", "On: two fresh views at costly decisions" if s["consult"] else "Off", card(consulting)),
         section("steward", "Steward", ("Runs with the board" if s["monitor"] else "Off") + e(f" · {mm or 'its default'}"),
                 card(steward_on, monitor_card)),
+        section("voice", "Reading aloud", e(f"Default voice: {dict(voice.VOICES).get(default_voice(), default_voice())}") if voice.ready()
+                else "Not set up", card(f"<form method='post' action='/voice/default' class='options'><label>Default voice, for every "
+                                        f"project without a voice of its own <select name='voice'>{voice.options(default_voice())}</select></label>"
+                                        "<button>Save</button></form><p class='muted'>A project's own voice is chosen in its Chat's "
+                                        "player (⚙), or when it is made; choosing Default there has it follow this one again.</p>"
+                                        if voice.ready() else "<p class='muted'>Reading replies aloud needs its voice set up: "
+                                        "<code>colony voice --setup</code>.</p>")),
         section("connections", "Connections", e(connections_summary()),
                 card("<p>Outside services your projects reach, and how: <a href='/connections'>Connections →</a></p>")),
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
@@ -6962,15 +6983,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"ready": voice.ready(), "projects": got}).encode())
         if url.path == "/chat/voice":                 # the voice a chat reads in, for the player: picked, pinned, the choices
             from . import monitor, voice
-            key = (q.get("p") or ["0"])[0]
+            key, ready = (q.get("p") or ["0"])[0], voice.ready()
+            if key == "default":                     # the colony's own, for every project without one of its own
+                d = default_voice()
+                return self._send(200, json.dumps({"voice": d, "own": False, "ready": ready, "default": True,
+                                                   "options": voice.options(d) if ready else "",
+                                                   "voices": voice.options() if ready else ""}).encode())
             try:
                 root = monitor.home() if key == "steward" else plist[int(key)]
             except (ValueError, IndexError):
                 return self._send(404, b"No such console")
-            name, pinned = voice_of(key, root)
-            ready = voice.ready()
-            return self._send(200, json.dumps({"voice": name, "pinned": pinned, "ready": ready,
-                                               "options": voice.options(name) if ready else ""}).encode())
+            name, own = voice_of(key, root)
+            return self._send(200, json.dumps({"voice": name, "own": own, "ready": ready,
+                                               "options": voice_choices(name if own else "") if ready else "",
+                                               "voices": voice.options() if ready else ""}).encode())
         if url.path == "/chat/feed":                  # the chat's conversation, as it stands now
             from . import monitor
             key = (q.get("p") or ["0"])[0]
@@ -7348,6 +7374,8 @@ class Handler(BaseHTTPRequestHandler):
                 if chosen:
                     project_settings(dest, chosen)
                 connections.pick(dest, values.get("svc", []), values.get("svc_listed", []))
+                if form.get("voice"):
+                    choose_voice("0", dest, form["voice"])
                 track(dest)                        # a clone has work of its own: its agent brings the plan over
                 target = f"/?p={projects().index(dest.resolve())}"
             self.send_response(303)
@@ -7379,6 +7407,8 @@ class Handler(BaseHTTPRequestHandler):
                     if chosen:
                         project_settings(folder, chosen)
                     connections.pick(folder, values.get("svc", []), values.get("svc_listed", []))
+                    if form.get("voice"):
+                        choose_voice("0", folder, form["voice"])
                     track(folder)
                     target = f"/?p={projects().index(folder)}"
             elif path == "/new" and folder_name(form.get("name", "")):
@@ -7387,6 +7417,8 @@ class Handler(BaseHTTPRequestHandler):
                 if chosen:
                     project_settings(new, chosen)
                 connections.pick(new, values.get("svc", []), values.get("svc_listed", []))
+                if form.get("voice"):
+                    choose_voice("0", new, form["voice"])
                 track(new)
                 console.ensure(new)
                 target = f"/?p={projects().index(new)}"
@@ -7465,16 +7497,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if path == "/chat/voice":                        # a voice chosen, or pinned to this project, in Chat
+        if path == "/chat/voice":                        # a project's voice chosen (or Default), or the colony's own
             from . import monitor
-            key = values.get("p", ["0"])[0]
+            key, chosen = values.get("p", ["0"])[0], values.get("voice", [""])[0]
             try:
+                if key == "default":
+                    return self._send(200, json.dumps({"voice": default_voice(chosen), "own": False}).encode())
                 root = monitor.home() if key == "steward" else projects(registry())[int(key)]
-                pin = {"1": True, "0": False}.get(values.get("pin", [""])[0])
-                name, pinned = choose_voice(key, root, values.get("voice", [None])[0] or None, pin)
+                name, own = choose_voice(key, root, chosen)
             except (ValueError, IndexError):
                 return self._send(400, b"no such voice or project")
-            return self._send(200, json.dumps({"voice": name, "pinned": pinned}).encode())
+            return self._send(200, json.dumps({"voice": name, "own": own}).encode())
+        if path == "/voice/default":                     # Settings: the colony's voice
+            try:
+                default_voice(form.get("voice", ""))
+            except ValueError:
+                return self._send(400, b"no such voice")
+            self.send_response(303)
+            self.send_header("Location", "/settings#set-voice")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/chat/measure":                      # where the box landed on the person's phone, typing
             line = f"{now()} {values.get('m', [''])[0][:400]} {self.headers.get('User-Agent', '')[:60]}\n"
             with open(home() / "chat-measure.log", "a") as fh:
@@ -8052,21 +8095,27 @@ body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:
 .voicesheet { position:fixed; left:50%; transform:translateX(-50%); width:min(760px, calc(100% - 24px)); bottom:120px; z-index:36;
   display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; margin:0; padding:8px 10px 8px 14px; border:1px solid var(--line); border-radius:16px; background:var(--card);
   box-shadow:0 2px 12px rgba(0,0,0,.12); font-size:14px } .voicesheet[hidden] { display:none } .voicesheet .gap { flex:1 }
-.voicesheet .aloud { display:flex; align-items:center; gap:6px; color:var(--ink); white-space:nowrap } .voicesheet .aloud input { width:18px; height:18px; margin:0 } .voicesheet .vpin { display:flex; align-items:center; gap:5px; color:var(--ink); white-space:nowrap; font-size:14px } .voicesheet .vpin input { width:18px; height:18px; margin:0 }
+.voicesheet .aloud { display:flex; align-items:center; gap:6px; color:var(--ink); white-space:nowrap } .voicesheet .aloud input { width:18px; height:18px; margin:0 }
 .voicesheet .rate, .voicesheet select { height:32px; min-height:32px; padding:0 10px; border-radius:999px; background:var(--sunk); color:var(--ink);
   border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:16px }
-/* Auto on: a small light circles the play and pause buttons, its tail in the rainbow, glowing */
-.cpbar .cphold, .chat .turnacts .listen, .chat .turnacts .hold { position:relative }
-html.autoon .cpbar .cphold::before, html.autoon .chat .turnacts:has(.auto) .listen::before, html.autoon .chat .turnacts:has(.auto) .hold:not([hidden])::before {
+/* Auto on: a small light circles the player's play and pause button, its tail in the rainbow, glowing; in Chat it
+   runs round the border of Auto itself */
+.cpbar .cphold, .chat .turnacts .auto { position:relative }
+html.autoon .cpbar .cphold::before {
   content:''; position:absolute; inset:1px; border-radius:50%; padding:2px; pointer-events:none;
   background:conic-gradient(transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
   -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
   filter:drop-shadow(0 0 2px #ff9ad5); animation:autoring 1.8s linear infinite }
 @keyframes autoring { to { transform:rotate(360deg) } }
-@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon .chat .turnacts:has(.auto) .listen::before,
-  html.autoon .chat .turnacts:has(.auto) .hold::before { animation:none } }
+@property --autospin { syntax:'<angle>'; inherits:false; initial-value:0deg }
+html.autoon .chat .turnacts .auto::before { content:''; position:absolute; inset:0; border-radius:inherit; padding:2px; pointer-events:none;
+  background:conic-gradient(from var(--autospin), transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
+  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
+  filter:drop-shadow(0 0 2px #ff9ad5); animation:autoborder 1.8s linear infinite }
+@keyframes autoborder { to { --autospin:360deg } }
+@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon .chat .turnacts .auto::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } .chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
