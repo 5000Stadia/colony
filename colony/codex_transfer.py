@@ -26,7 +26,9 @@ SCHEMAS = {
     'memories_1.sqlite': {'336cf750d54445731a85a98978c3ed856c3b4082cd78dedea1abd077ccaa3f78'},
     'queue_1.sqlite': {'61fa56e75e81b3877d41334e93680fa000821fad51cb23a6614cdd7559aa8749'},
     'state_5.sqlite': {'73bcf64ead533cff2e73e7049212d9793453a5830580295769669c55956b0d47',
-                       'a6126d481c89aab968eba6359f8d7ffd25c6adbf320987385b5faa140147e138'},
+                       'a6126d481c89aab968eba6359f8d7ffd25c6adbf320987385b5faa140147e138',
+                       # Codex 0.165: threads.attached_thread_parent_id (checked in transfer: kept within the family)
+                       '0402f5d3275ab834eb11d7d88d8704b9a56fbdca58b97c14cc9acbc54f2fc9a9'},
     'thread_history_1.sqlite': {'a06ad45b4139c3e11664bb3930a0b9e2214fd623233f8bf5c13e1767d37c7f60',
                                 'd47238276e8338970768f8cfb307922075d6d2e2caae1c3c5b0ed031f1f1cdb5'},
 }
@@ -136,6 +138,13 @@ def transfer(source, destination, tid):
         root = next((r for r in rows if r['id'] == tid), None)
         if not root or len(rows) != len(ids):
             raise TransferError('Conversation family is incomplete; keeping its original home')
+        # An attached conversation links outside the spawn family (as a fork does): copied alone, one side would be
+        # left pointing at nothing. Until native transfer carries these, it stays local.
+        if any(r.get('attached_thread_parent_id') and r['attached_thread_parent_id'] not in ids for r in rows) or (
+                'attached_thread_parent_id' in root and state.execute(
+                    f'SELECT 1 FROM threads WHERE attached_thread_parent_id IN ({marks}) AND id NOT IN ({marks}) LIMIT 1',
+                    sorted(ids) * 2).fetchone()):
+            raise TransferError('Attached conversations need native transfer support; conversation kept local')
         if journal.get('state') == 'prepared':
             if root['archived']:
                 if not journal.get('files') or any(not (destination / p).is_file() or file_hash(destination / p) != digest

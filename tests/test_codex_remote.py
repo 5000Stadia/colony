@@ -240,6 +240,18 @@ class NativeRemoteTest(unittest.TestCase):
             self.turn(client, unrelated, 'Other project words')
             with self.assertRaisesRegex(TransferError, 'writer'):
                 transfer(home, self.base / 'blocked', tid)
+        # Codex 0.165 attaches one conversation to another: attached outside the family, it stays local
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(original / 'state_5.sqlite')) as db:
+            attachable = 'attached_thread_parent_id' in [r[1] for r in db.execute('PRAGMA table_info(threads)')]
+            if attachable:
+                with db:
+                    db.execute('UPDATE threads SET attached_thread_parent_id=? WHERE id=?', (tid, unrelated))
+                with self.assertRaisesRegex(TransferError, 'Attached'):
+                    transfer(original, self.base / 'attached', tid)
+                with db:
+                    db.execute('UPDATE threads SET attached_thread_parent_id=NULL WHERE id=?', (unrelated,))
         history = path.read_bytes()
         destination = self.base / 'transferred'
         remote.prepare_home(root, destination, self.source)
