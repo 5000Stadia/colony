@@ -2638,7 +2638,13 @@ PLAYER = """
     if (R.silent) return show(i);
     tell(parts[from].replace(NAME, ''));
     const sound = () => { if (playing && R && R.cur === i) return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from); };
-    if (shown) return Promise.race([shown, new Promise((ok) => after(ok, 3000))]).then(sound);
+    // A part that begins with its project's name: the name waits until the message's first clip is made too, so the two
+    // run on with no gap between them (the person: "a delay before first message ... no audio name reading start until
+    // message 1 is ready"); 20 s at most, then it goes on regardless
+    const titled = R.kokoro && parts[from] && parts[from].startsWith(NAME) && parts[from + 1];
+    const both = titled ? Promise.race([Promise.all([make(parts[from], i), make(parts[from + 1], i)]), new Promise((ok) => after(ok, 20000))]) : null;
+    const waits = [shown && Promise.race([shown, new Promise((ok) => after(ok, 3000))]), both].filter(Boolean);
+    if (waits.length) return Promise.all(waits).then(sound);
     return sound();
   }
   // Another project's reading, playing or paused, gives way: kept where it stopped, its unheard sections waiting
