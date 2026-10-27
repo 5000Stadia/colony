@@ -2818,7 +2818,7 @@ PLAYER = """
     document.documentElement.style.setProperty('--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight)) + 'px');
     document.documentElement.style.setProperty('--ndh', (ns && plain ? ns.offsetHeight + 28 : 0) + 'px');
     // Next →: at the end of the part being read, kept in reach above the stack while that end is further down
-    const want = !!(R && playing && R.cur < R.list.length) && plain && !gcTyping && !document.body.classList.contains('typing');
+    const want = !!(R && playing && R.cur < R.list.length) && plain && !gcTyping && !(nd && nd.open) && !document.body.classList.contains('typing');
     const nb = bar.querySelector('.cpnext'); nb.hidden = !want; if (!want) return;
     const last = R.cur + 1 >= R.list.length, el = document.querySelector('.chat .say.reading');
     nb.innerHTML = last ? 'Done' + PICON.check : 'Next' + PICON.next; nb.setAttribute('aria-label', last ? 'Read: done' : 'Read: on to the next');
@@ -2826,7 +2826,7 @@ PLAYER = """
     const nav = document.querySelector('nav'), floor = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom + 8 : 8;
     const b = el && el.getBoundingClientRect(), end = b ? b.bottom - nb.offsetHeight / 2 : -1;
     nb.style.top = Math.round(end >= floor && end <= hi ? end : hi) + 'px';
-    nb.style.right = b ? Math.round(Math.max(12, innerWidth - b.right)) + 'px' : ''; };
+    nb.style.right = b ? Math.round(Math.max(12, innerWidth - b.right + 8)) + 'px' : ''; };   // on its corner, set in a little
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
@@ -3601,7 +3601,9 @@ def chat_feed(key, root, shown=40):
     rest = waiting_parts(key, root, f"/?p={key}&view=chat", label=False, with_gates=False)[2] if key != "steward" else []
     if asks or rest:
         out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · {len(asks) + len(rest)}</summary>"
-                   + "".join(f"<details class='need' open data-k='g{e(g['id'])}'><summary><span class='q'>{e(short(g['question'], 110))}</span>"
+                   + "".join(f"<details class='need' open data-k='g{e(g['id'])}'><summary>"
+                             f"<button type='button' class='needplay' data-t='g{e(g['id'])}' data-say='{e(gate_spoken(g))}' "
+                             f"aria-label='Read this question aloud'>{ICONS['play']}</button><span class='q'>{e(short(g['question'], 110))}</span>"
                              f"<span class='fold muted'>Fold ▴</span></summary>"
                              f"{gate_body(root, key, g, '/')}</details>" for g in asks) + "".join(rest) + "</details>")
     if line and tasks:
@@ -3617,6 +3619,20 @@ def chat_feed(key, root, shown=40):
         else:
             out.append(f"<div class='chatask'>It needs you in its console. <a href='/?p={key}&view=console'>Open it →</a></div>")
     return "".join(out)
+
+
+def gate_spoken(gate):
+    """A decision as the player reads it, by its ▷ in a chat's Needs you: the question, why, what stands if it is
+    skipped, and the choices, the recommended one said so."""
+    rec = gate.get("recommended") or ""
+    opts = [o + (", recommended" if o == rec else "") for o in gate.get("options") or []]
+    said = [gate["question"], gate.get("why") or "",
+            f"If you skip it: {gate['default']}." if gate.get("default") and not opts else "",
+            ("The choices: " + "; ".join(opts) + ".") if opts else ""]
+    said = " ".join(x.strip() for x in said if x.strip())
+    # an address is not spelled out: a web one is "the link", a long path its last name
+    said = re.sub(r"https?://\S+?(?=[.,;:)]?(\s|$))", "the link", said)
+    return re.sub(r"\b[\w.-]+(?:/[\w.-]+){2,}/?", lambda m: m.group().rstrip("/").rsplit("/", 1)[-1], said)
 
 
 def tasks_html(tasks, shown=15):
@@ -3947,7 +3963,7 @@ CHAT = """
   const mark = () => { if (!box.isConnected) return;
     document.documentElement.classList.toggle('autoon', !!(aloud && aloud.checked));
     const s = P.of(view.name), on = s && s.playing ? s.t : null;
-    box.querySelectorAll('button.listen').forEach((b) => {
+    box.querySelectorAll('button.listen, button.needplay').forEach((b) => {
       const st = b.dataset.t !== on ? 'play' : s.loading ? 'load' : 'stop';
       if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } });
     box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== on || s.loading; });
@@ -4055,7 +4071,7 @@ CHAT = """
     draw();
   });
   // opening something (a decision, a run of work) keeps the reader where they are: it no longer follows the end
-  box.addEventListener('toggle', () => { stick = atEnd(); }, true);
+  box.addEventListener('toggle', () => { stick = atEnd(); P.placed(); }, true);
   // Needs you opened by a tap: read from the start (asked again, from the latest round). Floating on the player, it
   // opens upward and scrolls in itself; a tap outside it folds it again, unless an answer is being written there.
   document.addEventListener('click', (ev) => { const d = box.querySelector('details.needs');
@@ -4130,6 +4146,11 @@ CHAT = """
     if (ev.target.closest('button.hold')) return P.hold(!P.now().paused);
     if (ev.target.closest('button.skip')) return P.skip();
     if (ev.target.closest('button.cont')) return P.resume(view.name);           // from the piece it stopped at
+    // ▷ by a question in Needs you: it is read, as a reply is (a tap again, while it is read, stops it)
+    const np = ev.target.closest('button.needplay');
+    if (np) { ev.preventDefault(); const s = P.of(view.name), t = np.dataset.t;
+      if (s && s.playing && s.t === t) P.stop(); else P.read(view, [{t, k: t, at: '', text: np.dataset.say}], {now: true});
+      return; }
     const l = ev.target.closest('button.listen');
     if (l) { const s = P.of(view.name), t = l.dataset.t;
       if (s && s.playing && s.t === t) P.stop();
@@ -8371,6 +8392,10 @@ html.apart .chat details.needs, body.gctyping .chat details.needs, body.typing .
 .chat details.need { margin:8px 0 0; padding:8px 10px; border-radius:10px; background:var(--card) }
 .chat details.need > summary { cursor:pointer; list-style:none } .chat details.need > summary::-webkit-details-marker { display:none } .chat details.need .fold, .chat details.need[open] .q { display:none }
 .chat details.need[open] .fold { display:inline }
+.chat details.need > summary { display:flex; align-items:center; gap:8px }
+.chat details.need .needplay { flex:none; width:30px; height:30px; min-height:30px; padding:0; border:0; border-radius:50%;
+  background:transparent; color:var(--flag); display:inline-flex; align-items:center; justify-content:center }
+.chat details.need .needplay svg { width:17px; height:17px }
 .chat details.need textarea { width:100%; min-height:64px; margin:6px 0; font:inherit; padding:8px; border-radius:10px;
   border:1px solid var(--line); background:var(--bg); color:var(--ink) } .chat details.need form { margin:6px 0 0 }
 .chat details.need button { min-height:36px; padding:4px 14px; border-radius:999px; border:1px solid var(--line); background:var(--sunk); color:var(--ink) }
@@ -8466,10 +8491,10 @@ html.going main { opacity:.5; transition:opacity .2s .15s }
 body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + var(--ndh, 0px) + env(safe-area-inset-bottom)) }
 .cplayer > * { pointer-events:auto; max-width:740px; margin:0 auto }
 /* Next →, the reading's way on: a filled pill pointing forward, unlike ↓ (back to the latest), a plain round one */
-.cplayer .cpnext { position:fixed; right:16px; z-index:46; height:52px; min-height:52px; margin:0; padding:0 18px 0 22px; border:0;
-  border-radius:999px; background:var(--accent); color:var(--card); box-shadow:0 4px 18px rgba(0,0,0,.28); display:flex; gap:8px;
-  align-items:center; justify-content:center; font:600 17px/1 inherit; animation:cpnextin .25s ease-out }
-.cplayer .cpnext[hidden] { display:none } .cplayer .cpnext svg { width:24px; height:24px; stroke-width:2.4 }
+.cplayer .cpnext { position:fixed; right:16px; z-index:46; height:36px; min-height:36px; margin:0; padding:0 12px 0 16px; border:0;
+  border-radius:999px; background:var(--accent); color:var(--card); box-shadow:0 4px 18px rgba(0,0,0,.28); display:flex;
+  align-items:center; justify-content:center; gap:6px; font:600 15px/1 inherit; animation:cpnextin .25s ease-out }
+.cplayer .cpnext[hidden] { display:none } .cplayer .cpnext svg { width:19px; height:19px; stroke-width:2.4 }
 @keyframes cpnextin { from { opacity:0; transform:scale(.8) } }
 .cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
   border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));

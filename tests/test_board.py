@@ -5691,6 +5691,15 @@ class PhonePageTest(HoursBase):
         self.assertIn("'Next' + PICON.next", board.PLAYER)
         self.assertIn("next", board.ICONS)
 
+    def test_each_question_in_a_chats_needs_you_can_be_read_aloud(self):
+        # the person: "a small play button in the needs you box questions by each individual question heading"
+        g = {"question": "Which one?", "why": "See http://host.ts.net:8801/ or work/out/renders/ first.",
+             "options": ["A", "B"], "recommended": "B"}
+        self.assertEqual(board.gate_spoken(g), "Which one? See the link or renders first. The choices: A; B, recommended.")
+        self.assertEqual(board.gate_spoken({"question": "Go?", "default": "it goes"}), "Go? If you skip it: it goes.")
+        self.assertIn("const np = ev.target.closest('button.needplay');", board.CHAT)
+        self.assertIn("&& !(nd && nd.open)", board.PLAYER, "Next keeps off an open Needs you")
+
     def test_the_end_of_a_chat_clears_what_floats_over_it(self):
         # the person: "the send now button and the status line at the bottom of the chat ... hide underneath"
         self.assertIn("body .chat { padding-bottom:calc(12px + var(--room, 0px)) }", board.CSS)
