@@ -2510,6 +2510,21 @@ PLAYER = """
     player.onended = player.onerror = null; player.loop = true; player.src = SILENT; resting = Date.now();
     player.play().catch(() => { resting = 0; }); };
   O.si.call(window, () => { if (resting && Date.now() - resting > 20 * 60e3) { player.pause(); player.loop = false; resting = 0; } }, 30e3);
+  // A reading shown as playing whose sound has stood still for a few seconds (stopped by the phone, a clip that ended
+  // without saying so) is set going again, on to the next clip where this one ended; each time goes to the board's log
+  // with what the phone said, so the cause is read from the phone's own numbers.
+  let stood = 0, told = 0;
+  O.si.call(window, () => {
+    if (!playing || paused || loading || !R || R.silent || !R.kokoro || resting || document.hidden || !(player.paused || player.ended)) { stood = 0; return; }
+    if (!stood) { stood = Date.now(); return; }
+    if (Date.now() - stood < 4000) return;
+    stood = 0;
+    if (told++ < 6) fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'stall', ended: player.ended,
+      paused: player.paused, state: player.readyState, net: player.networkState, error: player.error && player.error.code, t: player.currentTime,
+      d: player.duration, cur: R.cur, of: R.list.length, piece: now && now.at, blob: player.src.startsWith('blob:')})})}).catch(() => {});
+    if (player.ended && player.onended) player.onended();
+    else player.play().catch(() => { if (playing && R && now) begin(R.cur, now.at); });
+  }, 2000);
   // on the lock screen as a song is: what is being read, with pause and skip
   const tell = (text) => { try { if (ms && window.MediaMetadata) ms.metadata = new MediaMetadata({title: text.slice(0, 90),
     artist: R.name, album: 'colony'}); } catch (e) {} };
@@ -2609,7 +2624,7 @@ PLAYER = """
   }
   // ■ is silence: what is read stops and is let go, a voice's sample too, and Auto goes off (its ring with it), so the
   // next reply to land doesn't start it all again; Auto beside the latest reply, or in ⚙, turns it back on
-  function stop() { hush(); sample.pause(); playing = false; now = null; put('cpsource', null); put('cpfollow', null);
+  function stop() { heldForSettings = false; hush(); sample.pause(); playing = false; now = null; put('cpsource', null); put('cpfollow', null);
     if (R) forget(R.name);
     R = null; setAloud(false); changed(); }
   function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
@@ -2737,8 +2752,11 @@ PLAYER = """
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpskip'), 'click', skip);
   on($('.cpstop'), 'click', stop);
-  const panels = [[$('.cplist'), panel, () => { drawn = ''; draw(); }], [$('.cpwhat'), $('.cpwho'), () => who()], [$('.cpcog'), $('.cpset'), () => sets()]];
-  function shut() { panels.forEach(([b, p]) => { p.hidden = true; b.setAttribute('aria-expanded', 'false'); }); }
+  const panels = [[$('.cplist'), panel, () => { drawn = ''; draw(); }], [$('.cpwhat'), $('.cpwho'), () => who()], [$('.cpcog'), $('.cpset'), () => { if (playing && !paused) { hold(true); heldForSettings = true; } sets(); }]];
+  // ⚙ open, what was playing pauses (voices are tried there); shut, it goes on, in the voice chosen
+  let heldForSettings = false;
+  function shut() { panels.forEach(([b, p]) => { p.hidden = true; b.setAttribute('aria-expanded', 'false'); });
+    if (heldForSettings) { heldForSettings = false; if (left(R)) hold(false); } }
   panels.forEach(([b, p, fill]) => on(b, 'click', () => { const was = p.hidden; shut(); if (was) { p.hidden = false; b.setAttribute('aria-expanded', 'true'); fill(); } }));
   on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li || !R) return; shut(); begin(+li.dataset.i); });
   on(document, 'click', (ev) => { if (!ev.target.closest('#cplayer')) { shut(); bar.classList.remove('open'); } });
@@ -3588,8 +3606,11 @@ CHAT = """
   let tick = 0;                                  // every 3 s; reading aloud, twice as often, so the voice starts sooner
   setInterval(() => { if (aloud.checked || ++tick % 2 === 0) refresh(); }, 1500);
   const sendBtn = form.querySelector('button.send');
+  let armed = 0;                                  // ■ tapped once: a second tap within 3 s stops the agent
   const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files.length;
-    sendBtn.textContent = b && empty ? '■' : '↑'; sendBtn.setAttribute('aria-label', b && empty ? 'Stop' : 'Send');
+    const asking = b && empty && Date.now() - armed < 3000;
+    sendBtn.textContent = asking ? 'Stop?' : b && empty ? '■' : '↑'; sendBtn.classList.toggle('arm', asking);
+    sendBtn.setAttribute('aria-label', asking ? 'Tap again to stop it' : b && empty ? 'Stop' : 'Send');
     ta.placeholder = b ? 'Queue for after this turn…' : ta.dataset.idle; };
   ta.dataset.idle = ta.placeholder; busy();
   new MutationObserver(busy).observe(box, {childList: true}); ta.addEventListener('input', busy); file.addEventListener('change', busy);
@@ -3666,8 +3687,12 @@ CHAT = """
     ev.preventDefault();
     const text = ta.value.trim(), fs = [...file.files];
     if (!text && !fs.length) {
-      if (box.querySelector('.chatlive.busy')) { await fetch('/chat/stop', {method: 'POST', body: new URLSearchParams({p: key})}).catch(() => {});
-        setTimeout(refresh, 800); }
+      if (!box.querySelector('.chatlive.busy')) return;
+      // a second tap stops it: one alone could be a finger the page moved onto ■ as it shifted (the person, twice)
+      if (Date.now() - armed > 3000) { armed = Date.now(); busy(); setTimeout(busy, 3100); return; }
+      armed = 0; busy();
+      await fetch('/chat/stop', {method: 'POST', body: new URLSearchParams({p: key})}).catch(() => {});
+      setTimeout(refresh, 800);
       return;
     }
     // it goes out at once: the box clears and the message shows while the board hands it over, however long that takes
@@ -8138,6 +8163,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
 .cplayer[hidden], .cppanel[hidden] { display:none }
 /* typing on a phone, the box rides the keyboard up: the player rides just above it */
+.composer button.send.arm { width:auto; min-width:72px; padding:0 14px; border-radius:22px; font-size:15px; font-weight:600; background:var(--flag) }
 .automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
   border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
 .automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
