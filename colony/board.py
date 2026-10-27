@@ -2037,8 +2037,9 @@ def all_projects_page(reg):
     """Every project at a glance, under its nest: what it's doing, what waits on the person, what it's for."""
     plist = projects(reg)
     goal = lambda p: first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"])
-    return shell(reg, -2, "<h1>All projects</h1>" + (f"<div class='card plist'>{project_list(plist, goal)}</div>" if plist
-                                                      else "<p class='muted'>No projects yet.</p>") + archived_shelf())
+    return shell(reg, -2, "<h1>All projects</h1>" + (tokens_html(brief=True) if plist else "")
+                 + (f"<div class='card plist'>{project_list(plist, goal)}</div>" if plist else "<p class='muted'>No projects yet.</p>")
+                 + archived_shelf())
 
 
 def woke(root):
@@ -4193,7 +4194,7 @@ def render(reg, pid, view="overview", show_all=""):
     lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
                + switch_line(root) + lead_status + f"{vision_box(root, pid)}{rules_box(root, pid) if view == 'overview' else ''}"
-               f"<p class='muted'>Roadmap: {done}/{total}{active}</p>" + "</header>")
+               f"<p class='muted'>Roadmap: {done}/{total}{active}</p>" + (project_usage(root) if view == "overview" else "") + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
     elif view == "library":                 # what the project knows and has made, found where it is
@@ -4327,8 +4328,6 @@ def render(reg, pid, view="overview", show_all=""):
         if not hours.active(clock):
             out.append(f"<p class='muted'>Outside your hours until {e(hours.at_clock(hours.next_start(clock)))}: "
                        "what's asked now waits for them.</p>")
-        if Path(root).resolve() == Path(__file__).resolve().parent.parent:
-            out.append(tokens_html())             # colony's own page: what the whole colony spends, and colony itself
         out.append(pinned_section(pid, root))
         # what changed since the person's last look on an earlier day: the newest few, dated, and how much in all
         out.append(since_html(pid, root, page_base(root)))
@@ -4336,10 +4335,10 @@ def render(reg, pid, view="overview", show_all=""):
     return shell(reg, pid, "".join(out))
 
 
-def tokens_html():
+def tokens_html(brief=False):
     """Tokens spent, a section for each program: its limit windows as bars, the part used split by who used it (each
     project in its own colour, colony itself, outside colony), and under them what each spent over 4 hours, a day and
-    a week, colony's own overhead apart."""
+    a week, colony's own overhead apart. Brief (All projects): the bars alone, and the way to the rest (Usage)."""
     import threading
     from . import providers as pv, tokens, usage
     threading.Thread(target=tokens.update, daemon=True).start()      # current by the next look
@@ -4396,7 +4395,10 @@ def tokens_html():
                     + "<tr class='all'><td>Overhead, of all</td>"
                     + "".join(f"<td>{over[w] / totals[w]:.1%}</td>" if totals[w] else "<td>–</td>" for w in ws) + "</tr>" if mine else "")
                  + "</table>")
-        out.append(f"<h3 class='uprog'>{e(prov.label)}</h3>" + "".join(bars) + table)
+        out.append(f"<h3 class='uprog'>{e(prov.label)}</h3>" + "".join(bars) + ("" if brief else table))
+    if brief:
+        return ("<h2>Usage</h2><div class='card'>" + "".join(out)
+                + "<p><a href='/usage'>Tokens by project, and colony's own →</a></p></div>")
     weights = " ".join(f"{pv.PROVIDERS[k].label} output {w[3]}x." for k, w in tokens.WEIGHTS.items() if k in pv.PROVIDERS)
     return ("<h2>Tokens</h2><div class='card'>" + "".join(out)
             + "<p class='muted'>Each window's used part is split by what this machine's sessions spent in it, weighed as the "
@@ -4406,6 +4408,33 @@ def tokens_html():
               "Colony itself is the steward and the asks it makes (consultants, measure judges, connection audits, model "
               "checks, scouts); its notes inside a project's own session count as the project's. As of "
               f"{e(time.strftime('%-I:%M %p', time.localtime(looked)))}.</p></div>")
+
+
+def usage_page(reg):
+    """Usage: what the programs' limits hold and who spent it, every project and colony itself, for anyone's colony."""
+    return shell(reg, -2, "<h1>Usage</h1>" + tokens_html())
+
+
+def project_usage(root):
+    """A project's tokens in a line on its Overview: over 4 hours, a day and a week, and its share of each limit."""
+    from . import providers as pv, tokens, usage
+    if not tokens.load().get("looked"):
+        return ""
+    me = ("project", Path(root).name)
+    rows = tokens.windows()[0].get(me)
+    if not rows or not rows["7 d"]:
+        return ""
+    shares = []
+    for key, prov in pv.PROVIDERS.items():
+        for name, v in sorted(usage.read(key).items(), key=lambda x: x[0] != "5-hour"):
+            span = tokens.SPANS.get(name)
+            if span and v.get("resets_at") and v.get("used"):
+                got = tokens.spent(key, v["resets_at"] - span)
+                whole, mine = sum(got.values()), got.get(me, 0)
+                if whole and mine:
+                    shares.append(f"{v['used'] * mine / whole:.0f}% of {prov.label}'s {name} limit")
+    return ("<p class='muted'><a href='/usage'>Tokens</a>: " + " · ".join(f"{w} {tokens.short(rows[w])}" for w, _ in tokens.WINDOWS
+                                                                     if rows[w]) + "".join(f" · {x}" for x in shares) + "</p>")
 
 
 FOLD_SHOWN = 10          # entries of a folded record shown when it is opened, before "Show all"
@@ -7091,6 +7120,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body)
         if url.path == "/projects":
             return self._send(200, all_projects_page(reg).encode())
+        if url.path == "/usage":
+            return self._send(200, usage_page(reg).encode())
         if url.path == "/nest":
             return self._send(200, nest_page(reg, (q.get("n") or [""])[0]).encode())
         if url.path == "/static/board.css":
@@ -8149,7 +8180,7 @@ table.tokens th { text-align:right; font-weight:600; color:var(--muted); font-si
 table.tokens td { text-align:right; padding:3px 6px; white-space:nowrap } table.tokens td:first-child { text-align:left; white-space:normal; overflow-wrap:anywhere }
 table.tokens tr.sub td:first-child { padding-left:16px; color:var(--muted) } table.tokens tr.all td { font-weight:600; border-top:1px solid var(--line) }
 .uprog { margin:4px 0 8px; font-size:15px } .uprog:not(:first-child) { margin-top:22px; padding-top:14px; border-top:1px solid var(--line) }
-.uwin { margin:0 0 14px } .uhead { display:flex; justify-content:space-between; align-items:baseline; gap:8px; font-size:14px; margin-bottom:5px }
+.uwin { margin:0 0 14px } .uhead { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:2px 8px; font-size:14px; margin-bottom:5px } .uhead b { white-space:nowrap }
 .ubar { display:flex; height:14px; border-radius:7px; background:var(--sunk); box-shadow:inset 0 0 0 1px var(--line); overflow:hidden }
 .ubar span { display:block; height:100%; background:var(--c) } .ubar span + span { box-shadow:inset 1px 0 0 var(--card) }
 .ulegend { display:flex; flex-wrap:wrap; gap:3px 12px; margin-top:6px; font-size:12.5px }
