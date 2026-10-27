@@ -2809,7 +2809,6 @@ PLAYER = """
     document.documentElement.style.setProperty('--gch', (gc.hidden ? 0 : gc.offsetHeight) + 'px');
     at(bar, lift);
     document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px');
-    document.documentElement.style.setProperty('--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)) + 'px');
     // a chat's Needs you floats on the player: placed from the page's foot, so shown only as the page is
     const nd = document.querySelector('.chat details.needs'), ns = nd && nd.querySelector('summary');
     // on top of the stack: on the player, on the box where the player is shut, beside the player's ♪ where only that shows
@@ -2817,16 +2816,18 @@ PLAYER = """
     document.documentElement.classList.toggle('apart', !plain); document.documentElement.classList.toggle('cpsmall', mini && !bar.hidden);
     document.documentElement.style.setProperty('--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight)) + 'px');
     document.documentElement.style.setProperty('--ndh', (ns && plain ? ns.offsetHeight + 28 : 0) + 'px');
-    // Next →: at the end of the part being read, kept in reach above the stack while that end is further down
+    // Next →: always in the one place, at the right on top of the stack, so a thumb taps on through part after part
+    // without looking for it (at a part's corner it moved with every part: the person, "the user has to get to the
+    // bottom of each message"); the part being read is the marked one
     const want = !!(R && playing && R.cur < R.list.length) && plain && !gcTyping && !(nd && nd.open) && !document.body.classList.contains('typing');
-    const nb = bar.querySelector('.cpnext'); nb.hidden = !want; if (!want) return;
-    const last = R.cur + 1 >= R.list.length, el = document.querySelector('.chat .say.reading');
-    nb.innerHTML = last ? 'Done' + PICON.check : 'Next' + PICON.next; nb.setAttribute('aria-label', last ? 'Read: done' : 'Read: on to the next');
-    const hi = innerHeight - (lift + (mini ? 8 : bar.offsetHeight)) - (ns ? ns.offsetHeight + 28 : 0) - nb.offsetHeight - 8;
-    const nav = document.querySelector('nav'), floor = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom + 8 : 8;
-    const b = el && el.getBoundingClientRect(), end = b ? b.bottom - nb.offsetHeight / 2 : -1;
-    nb.style.top = Math.round(end >= floor && end <= hi ? end : hi) + 'px';
-    nb.style.right = b ? Math.round(Math.max(12, innerWidth - b.right + 8)) + 'px' : ''; };   // on its corner, set in a little
+    const nb = bar.querySelector('.cpnext'); nb.hidden = !want;
+    if (want) { const last = R.cur + 1 >= R.list.length, col = document.querySelector('.chat'), c = col && col.getBoundingClientRect();
+      nb.innerHTML = last ? 'Done' + PICON.check : 'Next' + PICON.next; nb.setAttribute('aria-label', last ? 'Read: done' : 'Read: on to the next');
+      nb.style.top = Math.round(innerHeight - (lift + (mini ? 8 : bar.offsetHeight)) - (ns ? ns.offsetHeight + 28 : 0) - nb.offsetHeight - 6) + 'px';
+      nb.style.right = c && c.width ? Math.round(Math.max(12, innerWidth - c.right + 4)) + 'px' : ''; }
+    // the end of a page clears all that floats over it, Next too: the last reply's time and buttons are never under it
+    document.documentElement.style.setProperty('--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)
+      + (want ? nb.offsetHeight + 6 : 0)) + 'px'); };
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);

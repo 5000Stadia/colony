@@ -5704,7 +5704,7 @@ class PhonePageTest(HoursBase):
         # the person: "the send now button and the status line at the bottom of the chat ... hide underneath"
         self.assertIn("body .chat { padding-bottom:calc(12px + var(--room, 0px)) }", board.CSS)
         self.assertNotIn("body.cpon .chat { padding-bottom", board.CSS, "the player's room alone no longer wins over the box's")
-        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight))", board.PLAYER)
+        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)\n      + (want ? nb.offsetHeight + 6 : 0))", board.PLAYER)
 
     def test_the_status_says_what_the_project_is_at_never_its_consoles_spinner_or_footer(self):
         console.snapshot = lambda root, lines=6, name=None: {
