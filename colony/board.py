@@ -666,20 +666,35 @@ def epoch(stamp):
     return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
 
 
+_ROADMAPS = {}                # a plan as read, kept until its text changes: every page reads every project's
+
+
 def roadmap(root, text=None):
     """The live shared vision (or legacy goal), milestones and their items."""
-    from . import vision
+    import copy
     if text is None:
         from . import lead
         path = lead.plan_path(root)
         text = path.read_text() if path.exists() else ""
+    from . import lead
+    shared = lead.info(root) if root else None
+    key = (text, json.dumps(shared, sort_keys=True, default=str))   # who owns which item reads into it too
+    got = _ROADMAPS.get(key)
+    if got is None:
+        got = _ROADMAPS[key] = _roadmap(text, shared)
+        while len(_ROADMAPS) > 200:
+            _ROADMAPS.pop(next(iter(_ROADMAPS)))
+    return copy.deepcopy(got)                    # a caller's changes never reach the next reader
+
+
+def _roadmap(text, shared):
+    from . import vision
     part = vision.section(text)
     goal = part['text'] or part['legacy']
     if part['start'] is not None:
         text = text[:part['start']] + text[part['end']:]
     milestones, current, last, prev = [], None, None, None
     from . import lead
-    shared = lead.info(root) if root else None
     heading = None
     for line in text.splitlines():
         if m := MILESTONE.match(line):

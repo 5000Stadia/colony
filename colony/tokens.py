@@ -187,9 +187,21 @@ def _mangled(p):
     return re.sub(r"[^A-Za-z0-9]", "-", str(p))
 
 
+_OWNERS = {}                 # a folder's owner, kept while the projects are the same
+
+
 def owner(cwd, roots, steward):
     """Whose a session was: a project (its own folder, a worktree inside it, or a scratch folder its agent's helper ran
     in), colony itself (the steward, its one-off asks), or outside colony."""
+    key = (cwd, tuple(str(r) for r in roots), str(steward), str(board.home()))
+    if key not in _OWNERS:
+        if len(_OWNERS) > 5000:
+            _OWNERS.clear()
+        _OWNERS[key] = _owner(cwd, roots, steward)
+    return _OWNERS[key]
+
+
+def _owner(cwd, roots, steward):
     if cwd.startswith("colony:"):
         return ("colony", ASKS.get(cwd[7:], "Other asks"))
     if cwd == str(steward) or cwd.startswith(str(steward) + "/"):
