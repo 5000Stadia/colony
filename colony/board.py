@@ -2285,7 +2285,10 @@ BAR = """
     if (getComputedStyle(bar).position !== 'fixed' || document.body.classList.contains('typing') || vv.scale > 1.01) {
       if (shift) { shift = 0; bar.style.transform = ''; } return; }
     // only a keyboard's worth down: the few pixels a toolbar folding away leaves are the phone's to place
-    const base = bar.getBoundingClientRect().bottom - shift, gap = Math.round(vv.offsetTop + vv.height - base);
+    // a bounce past the end (or the top) parts the visible part from the page by just the overshoot (the phone's log,
+    // Oct 27: 52px off, 52px past the end): not a keyboard, and the bar sent down by it left the screen for a frame
+    const over = Math.max(0, scrollY + innerHeight - document.body.scrollHeight) + Math.min(0, scrollY);
+    const base = bar.getBoundingClientRect().bottom - shift, gap = Math.round(vv.offsetTop - over + vv.height - base);
     // never more than a screen: mid-change a phone reports a page-long gap (41515px), which would send the bar off it
     const want = gap > 60 && gap < innerHeight ? gap : 0;
     if (Math.abs(want - shift) < 2) return;
@@ -2792,9 +2795,12 @@ PLAYER = """
   // As the page is (no keyboard, not zoomed), each is held at a set height from the foot (bottom:), steady while a phone's
   // toolbar comes and goes: a frame's odd measure (the person: "Periodic flash for one frame brings floating message
   // box to bottom") moves nothing. Only while the visible part is apart from the page is each placed from its foot.
+  let ndh = 0;
   const placed = () => { gcDraw();
     const v = window.visualViewport, foot = v ? v.offsetTop + v.height : innerHeight;
-    const plain = !v || (Math.abs(v.offsetTop) < 1 && Math.abs(innerHeight - v.height) < 2);
+    // a bounce past the end or the top parts the two by just the overshoot: as the page is, still (it dropped what floats)
+    const over = Math.max(0, scrollY + innerHeight - document.body.scrollHeight) + Math.min(0, scrollY);
+    const plain = !v || (Math.abs(v.offsetTop - over) < 2 && Math.abs(innerHeight - v.height) < 2);
     const shift = -probe.getBoundingClientRect().top;          // what a box's own measure is off the page's by
     let lift = 0;                                              // from the foot to what they sit on
     const tabs = document.querySelector('.tabs');
@@ -2815,7 +2821,16 @@ PLAYER = """
     const mini = bar.classList.contains('cpidle') && !bar.classList.contains('open');
     document.documentElement.classList.toggle('apart', !plain); document.documentElement.classList.toggle('cpsmall', mini && !bar.hidden);
     document.documentElement.style.setProperty('--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight)) + 'px');
-    document.documentElement.style.setProperty('--ndh', (ns && plain ? ns.offsetHeight + 28 : 0) + 'px');
+    // room for it at the chat's end stays put while it hides a moment (a phone bouncing at the end moves its view):
+    // a page that shrank and grew back with each bounce jumped up and down under the finger
+    ndh = !ns ? 0 : ns.offsetHeight ? ns.offsetHeight + 28 : ndh;
+    // an answer being typed in it: the keyboard shrinks the visible part, which hid it, and the box lost the typing;
+    // it stays, at the top of what is visible, over the rest
+    const answering = !!(nd && nd.contains(document.activeElement) && document.activeElement.matches('textarea, input'));
+    document.documentElement.classList.toggle('answering', answering);
+    if (nd) { nd.style.top = answering ? Math.round((v ? v.offsetTop : 0) + 8) + 'px' : '';
+      nd.style.bottom = answering ? 'auto' : ''; nd.style.maxHeight = answering ? Math.round((v ? v.height : innerHeight) - 16) + 'px' : ''; }
+    document.documentElement.style.setProperty('--ndh', ndh + 'px');
     // Next →: always in the one place, at the right on top of the stack, so a thumb taps on through part after part
     // without looking for it (at a part's corner it moved with every part: the person, "the user has to get to the
     // bottom of each message"); the part being read is the marked one
@@ -2823,14 +2838,16 @@ PLAYER = """
     const nb = bar.querySelector('.cpnext'); nb.hidden = !want;
     if (want) { const last = R.cur + 1 >= R.list.length, col = document.querySelector('.chat'), c = col && col.getBoundingClientRect();
       nb.innerHTML = last ? 'Done' + PICON.check : 'Next' + PICON.next; nb.setAttribute('aria-label', last ? 'Read: done' : 'Read: on to the next');
-      nb.style.top = Math.round(innerHeight - (lift + (mini ? 8 : bar.offsetHeight)) - (ns ? ns.offsetHeight + 28 : 0) - nb.offsetHeight - 6) + 'px';
+      const roof = nd && nd.offsetHeight ? nd.getBoundingClientRect().top : innerHeight - (lift + (mini ? 8 : bar.offsetHeight));
+      nb.style.top = Math.round(roof - nb.offsetHeight - 6) + 'px';      // 6px above whatever floats on top, as measured
       nb.style.right = c && c.width ? Math.round(Math.max(12, innerWidth - c.right + 4)) + 'px' : ''; }
     // the end of a page clears all that floats over it, Next too: the last reply's time and buttons are never under it
     document.documentElement.style.setProperty('--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)
-      + (want ? nb.offsetHeight + 6 : 0)) + 'px'); };
+      + (R && playing && R.cur < R.list.length && !gcTyping && !document.body.classList.contains('typing') ? 42 : 0)) + 'px'); };
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
+  on(document, 'focusin', soon); on(document, 'focusout', soon);
   on(document, 'DOMContentLoaded', placed); on(window, 'load', placed);   // it is made before the tabs below it are there
   if (window.visualViewport) { on(window.visualViewport, 'resize', soon); on(window.visualViewport, 'scroll', soon); }
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
@@ -3773,7 +3790,10 @@ CHAT = """
     return typingNow() ? seen - form.offsetHeight >= lastBottom() - 40 : seen >= document.body.scrollHeight - 80; };
   // It follows new messages only while the person is at the end; scrolled up, it stays where they are.
   let stick = true;
-  window.addEventListener('scroll', () => { stick = atEnd(); }, {passive: true});
+  // at the end, a pull further down goes nowhere, with no bounce (it moved what floats and jumped the page about);
+  // at the top the phone's pull to refresh stays
+  const ended = () => document.documentElement.classList.toggle('atend', window.scrollY > 40 && atEnd());
+  window.addEventListener('scroll', () => { stick = atEnd(); ended(); }, {passive: true});
   // The latest is the last message. Typing, the page has room below it (so it never ends above the keyboard, where a
   // phone measures the visible part short), and the latest is brought just above the box.
   const typingNow = () => document.body.classList.contains('typing');
@@ -3979,7 +3999,9 @@ CHAT = """
   // Follow in chat (the player's list): the section being heard is marked, and as each starts it is brought into view
   // below the bar, unless a finger moved the page just now or the box is being typed in
   let fingered = 0;
-  ['touchstart', 'touchmove', 'wheel'].forEach((t) => window.addEventListener(t, () => { fingered = Date.now(); }, {passive: true}));
+  // (a tap on Next or the rest of the player isn't one: tapping on, the page goes with what is read)
+  ['touchstart', 'touchmove', 'wheel'].forEach((t) => window.addEventListener(t, (ev) => {
+    if (!(ev.target.closest && ev.target.closest('#cplayer, #gc'))) fingered = Date.now(); }, {passive: true}));
   const focus = (k, go) => { if (!box.isConnected) return;
     const follow = P.following();
     box.querySelectorAll('.say.reading').forEach((x) => { if (!follow || x.dataset.k !== k) x.classList.remove('reading'); });
@@ -4073,6 +4095,9 @@ CHAT = """
   });
   // opening something (a decision, a run of work) keeps the reader where they are: it no longer follows the end
   box.addEventListener('toggle', () => { stick = atEnd(); P.placed(); }, true);
+  // typing an answer in the floating Needs you: once the keyboard is up, the box scrolls in itself to the text
+  box.addEventListener('focusin', (ev) => { const d = ev.target.closest('details.needs'); if (!d || !ev.target.matches('textarea, input')) return;
+    setTimeout(() => { const by = ev.target.getBoundingClientRect().bottom + 12 - d.getBoundingClientRect().bottom; if (by > 0) d.scrollTop += by; }, 400); });
   // Needs you opened by a tap: read from the start (asked again, from the latest round). Floating on the player, it
   // opens upward and scrolls in itself; a tap outside it folds it again, unless an answer is being written there.
   document.addEventListener('click', (ev) => { const d = box.querySelector('details.needs');
@@ -8388,7 +8413,9 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
   box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .chat:has(details.needs)::after { content:''; display:block; flex:none; height:var(--ndh, 0px) }
 .chat details.needs:not([open]) { padding:2px 12px } html.cpsmall .chat details.needs { right:64px }
+html.atend, html.atend body { overscroll-behavior-y:none }
 html.apart .chat details.needs, body.gctyping .chat details.needs, body.typing .chat details.needs { display:none }
+html.answering .chat details.needs { display:block; z-index:60 }
 @media (min-width: 701px) { .chat details.needs { left:230px } }
 .chat details.need { margin:8px 0 0; padding:8px 10px; border-radius:10px; background:var(--card) }
 .chat details.need > summary { cursor:pointer; list-style:none } .chat details.need > summary::-webkit-details-marker { display:none } .chat details.need .fold, .chat details.need[open] .q { display:none }

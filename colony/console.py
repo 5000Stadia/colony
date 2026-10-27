@@ -127,8 +127,9 @@ def last_conversation(root):
 
 def lingers(cmd):
     """The command, its shell staying half a second after it ends: a program that prints its error and leaves at once
-    can be gone before tmux has read what it printed, and then the error is lost with it."""
-    return f"{cmd}\ns=$?; sleep 0.5; exit $s"
+    can be gone before tmux has read what it printed, and then the error is lost with it. How it ended is also left on
+    its pane (@exit): tmux can mark a pane dead and never learn its status (1 start in 15, empty after 3.5 s)."""
+    return f"{cmd}\ns=$?; tmux set-option -p @exit $s 2>/dev/null; sleep 0.5; exit $s"
 
 
 def contained(cmd):
@@ -164,13 +165,14 @@ def running(name):
     """Whether its program is there. One that has exited stays on its screen (remain-on-exit) until looked at here:
     its last words are kept, then the session closed, so a console that dies as it starts can say why."""
     # list-panes, not display-message: that answers for the client it runs in when the session is gone
-    r = subprocess.run(["tmux", "list-panes", "-t", name, "-F", "#{pane_dead} #{pane_dead_status}"],
+    r = subprocess.run(["tmux", "list-panes", "-t", name, "-F", "#{pane_dead} #{pane_dead_status} #{@exit}"],
                        capture_output=True, text=True)
     if r.returncode != 0:
         return False
-    dead, _, status = (r.stdout.splitlines() or [""])[0].strip().partition(" ")
+    dead, status, told = ((r.stdout.splitlines() or [""])[0] + "  ").split(" ")[:3]
     if dead != "1":
         return True
+    status = status or told                         # what tmux didn't learn, the program's own wrapper left on its pane
     # tmux can say a pane is dead a moment before it knows how it ended: asked again for that, an error is never
     # taken for a clean exit (the suite's flaky test, its record read: status 0 beside the error's own words)
     for _ in range(10):

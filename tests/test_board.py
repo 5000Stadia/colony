@@ -1231,6 +1231,8 @@ class ChatTest(BoardBase):
         self.assertFalse(console.live(self.root), "a program that has ended is not running, though its screen stayed")
         self.assertFalse(console.running(name))
         self.assertEqual(console.died(name)["status"], 1)
+        # tmux can mark a pane dead and never learn how it ended: its wrapper leaves that on the pane itself
+        self.assertIn("tmux set-option -p @exit $s", console.lingers("x"))
         snap = console.snapshot(self.root)
         self.assertEqual(snap["state"], "off")
         self.assertEqual(snap["lines"], ["Its agent stopped with an error (exit 1). Its last words:",
@@ -5681,6 +5683,19 @@ class PhonePageTest(HoursBase):
         self.assertIn("bottom:calc(var(--stk, 64px) + 4px)", board.CSS)
         self.assertIn("html.cpsmall .chat details.needs { right:64px }", board.CSS)
         self.assertIn("'--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight))", board.PLAYER, "on the player, or on the box where it is shut")
+        # an answer typed in it: the keyboard parts the visible part from the page, which hid it and took the typing
+        # (the person: "if I tap it it immediately ejects focus and I can't type anything"); it stays, at the top
+        self.assertIn("nd.contains(document.activeElement) && document.activeElement.matches('textarea, input')", board.PLAYER)
+        self.assertLess(board.CSS.index("html.apart .chat details.needs"), board.CSS.index("html.answering .chat details.needs { display:block"))
+        self.assertIn("on(document, 'focusin', soon)", board.PLAYER)
+        # a bounce past the end parts the two by just the overshoot (the phone's log: 52px off, 52px past the end): the
+        # tabs and what floats stay put (the person: "the bottom menu disappearing for a frame and the floating menus ...
+        # adjusting to the bottom for that moment")
+        over = "const over = Math.max(0, scrollY + innerHeight - document.body.scrollHeight) + Math.min(0, scrollY);"
+        self.assertIn(over, board.PLAYER)
+        self.assertIn("Math.abs(v.offsetTop - over) < 2", board.PLAYER)
+        self.assertIn(over, board.BAR)
+        self.assertIn("vv.offsetTop - over + vv.height - base", board.BAR)
 
     def test_a_reading_goes_on_with_next_and_text_only_waits_for_it(self):
         # the person: "text only ... duration ... pretty arbitrary ... a big next arrow button that pops up over the
@@ -5690,6 +5705,8 @@ class PhonePageTest(HoursBase):
         self.assertIn("if (!R.silent) { hush(); playing = true; } finished(R.cur);", board.PLAYER, "heard: on at once, the part counted heard")
         self.assertIn("'Next' + PICON.next", board.PLAYER)
         self.assertIn("next", board.ICONS)
+        # a tap on Next (or the rest of the player) isn't a finger moving the page: the page goes on with what is read
+        self.assertIn("if (!(ev.target.closest && ev.target.closest('#cplayer, #gc'))) fingered = Date.now();", board.CHAT)
 
     def test_each_question_in_a_chats_needs_you_can_be_read_aloud(self):
         # the person: "a small play button in the needs you box questions by each individual question heading"
@@ -5704,7 +5721,10 @@ class PhonePageTest(HoursBase):
         # the person: "the send now button and the status line at the bottom of the chat ... hide underneath"
         self.assertIn("body .chat { padding-bottom:calc(12px + var(--room, 0px)) }", board.CSS)
         self.assertNotIn("body.cpon .chat { padding-bottom", board.CSS, "the player's room alone no longer wins over the box's")
-        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)\n      + (want ? nb.offsetHeight + 6 : 0))", board.PLAYER)
+        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)\n      + (R && playing && R.cur < R.list.length && !gcTyping && !document.body.classList.contains('typing') ? 42 : 0))", board.PLAYER)
+        # a phone's bounce at the end hides what floats a moment: the room kept for it stays, and there is no bounce
+        self.assertIn("ndh = !ns ? 0 : ns.offsetHeight ? ns.offsetHeight + 28 : ndh;", board.PLAYER)
+        self.assertIn("html.atend, html.atend body { overscroll-behavior-y:none }", board.CSS)
 
     def test_the_status_says_what_the_project_is_at_never_its_consoles_spinner_or_footer(self):
         console.snapshot = lambda root, lines=6, name=None: {
