@@ -223,10 +223,18 @@ def check():
         if blocking:
             window, v = max(blocking.items(), key=lambda x: x[1].get('resets_at') or 0)
             now[str(p)] = {"provider": key, "window": window, "resets_at": v.get("resets_at"),
-                           "windows": blocking}
+                           "windows": blocking, "active": previous.get("active", True) if previous else True}
             if not previous or previous['provider'] != key:
-                others = [(k, x) for k, x in providers.PROVIDERS.items() if k != key and providers.usable(x)]
-                board.add_note(p, None, wind_down(p, prov, window, v, others), author="colony", quiet=True)
+                # Only a project at work is told to wind down, and later to carry on: one idle when the limit came is
+                # held all the same (nothing starts it), but told nothing, so it isn't woken to say again that nothing
+                # was running (the person, of EconomyHumboldt: "It just prompts it to repeat itself. Can we reserve
+                # that feature only for active projects?")
+                from . import console
+                active = console.snapshot(p).get("state") == "working"
+                now[str(p)]["active"] = active
+                if active:
+                    others = [(k, x) for k, x in providers.PROVIDERS.items() if k != key and providers.usable(x)]
+                    board.add_note(p, None, wind_down(p, prov, window, v, others), author="colony", quiet=True)
                 changed.append((p, "paused"))
         elif previous:
             turned = held and all(reset(v) or reset(raw.get(w, {})) for w, v in held.items())
@@ -235,9 +243,10 @@ def check():
                    else f"{prov.label}'s usage limit has reset" if turned
                    else f"{prov.label}'s blocking usage windows have reset or fallen below their pause thresholds")
             calm = any(n.get("kind") == "turbo-end" and not n["delivered_at"] for n in board.open_notes(p))
-            board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped" + (
-                ", at this project's usual posture: turbo is over (its note says how)." if calm else "."),
-                author="colony", kind="resume")
+            if previous.get("active", True):              # it was at work when the pause came: it carries on
+                board.add_note(p, None, f"Safe pause over: {why}. Carry on where you stopped" + (
+                    ", at this project's usual posture: turbo is over (its note says how)." if calm else "."),
+                    author="colony", kind="resume")
             changed.append((p, "resumed"))
     if now != was:
         folder().mkdir(parents=True, exist_ok=True)

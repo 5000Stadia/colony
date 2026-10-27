@@ -183,6 +183,14 @@ def running(name):
             status = again[0]
         elif len(again) > 1 and again[1].isdigit():
             status = str(128 + int(again[1]))          # ended by a signal, as a shell would say it
+    if not status.strip():
+        # still unknown (another look at it closed the session first): its record, written by that look, stands
+        began = (json.loads(_started_path().read_text()).get(name) or {}).get("at", 0) if _started_path().exists() else 0
+        try:
+            if json.loads(_died_path(name).read_text()).get("at", 0) >= began:
+                return False
+        except (OSError, ValueError):
+            pass
     # from its history too: as the pane dies, tmux moves what was on the screen up into it
     shown = subprocess.run(["tmux", "capture-pane", "-p", "-S", "-200", "-t", name], capture_output=True, text=True).stdout
     words = [l.rstrip() for l in shown.splitlines() if l.strip() and not l.startswith("Pane is dead")]  # tmux's own

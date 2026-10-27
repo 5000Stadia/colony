@@ -4379,7 +4379,8 @@ class UsageTest(BoardBase):
         from colony import usage
         board.track(self.root)
         self.claude_at(98)
-        self.assertEqual([s for _, s in usage.check()], ['paused'])
+        with patch.object(console, 'snapshot', return_value={'state': 'working', 'lines': []}):   # at work when it came
+            self.assertEqual([s for _, s in usage.check()], ['paused'])
         with patch.object(providers, 'of', return_value=providers.get('codex')), patch.object(usage, 'read', return_value={}):
             self.assertEqual([s for _, s in usage.check()], ['resumed'])
         self.assertIn('now uses Codex', board.notes(self.root)[-1]['text'])

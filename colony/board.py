@@ -2452,8 +2452,14 @@ PLAYER = """
   const pace = () => rate() + 0.25;               // the voices read slowly: each speed plays a quarter faster than it says
   const aloud = () => { try { return localStorage.getItem('aloud') === '1'; } catch (e) { return false; } };
   const left = (r) => !!r && r.cur < r.list.length;
-  const save = () => { if (R) put('reading:' + R.name, Object.assign({}, R, {saved: Date.now()})); };
+  // kept as it goes, with whether it was sounding: a page refreshed mid-reading goes on, one left and come back to waits
+  const save = () => { if (R) put('reading:' + R.name, Object.assign({}, R, {saved: Date.now(), sounding: playing && !paused})); };
   const forget = (name) => put('reading:' + name, null);
+  // Heard up to: for each project, the time of the latest part heard (or read in its chat with Auto off), shared by
+  // every way of listening (its chat, the one project followed, every project): heard in one, heard in all, so none
+  // reaches back to what was heard (the person: "if I've heard it in any framing, it's heard in every framing")
+  const heardTo = (name) => get('heardto:' + name) || '';
+  const heardUpTo = (name, at) => { if (name && at && at > heardTo(name)) put('heardto:' + name, at); };
   const load = (name) => { const r = name && get('reading:' + name);
     if (r && Array.isArray(r.list) && left(r) && Date.now() - (r.saved || 0) < 12 * 3600e3) return r;
     if (r) put('reading:' + name, null);
@@ -2560,7 +2566,7 @@ PLAYER = """
   // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
   // silence, and from then on new replies may be read by themselves.
   const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
-  let unlocked = false;
+  let unlocked = false, allowing = null;
   const unlock = () => {
     if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
     if (unlocked || playing) return;
@@ -2602,7 +2608,7 @@ PLAYER = """
   };
   // a section heard to its end: on to the next; the last, and the reading is done
   const finished = (i) => { if (!R || R.cur !== i) return;
-    R.list[i].heard = true;
+    R.list[i].heard = true; heardUpTo(R.list[i].name || R.name, R.list[i].at);
     if (i + 1 < R.list.length) return begin(i + 1, 0, true);
     // read to the end: one left unheard before (kept paused when a new reply came) waits there, with Continue
     const back = R.list.findIndex((x) => !x.heard);
@@ -2622,7 +2628,7 @@ PLAYER = """
     // the project read is the one the player follows: with Auto on, its new replies are read wherever the person is
     const f = get('cpfollow');
     if (!R.all && R.key && !(f && f.name === R.name)) put('cpfollow', {name: R.name, key: R.key, href: R.href, since: Date.now()});
-    if (!keep) R.list.forEach((x, n) => { if (n < i) x.heard = true; });
+    if (!keep) R.list.forEach((x, n) => { if (n < i) { x.heard = true; heardUpTo(x.name || R.name, x.at); } });
     loading = !R.silent && !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
     if (!parts.length) return finished(i);
     // Audio + text: the part is shown first, its page changed to where it was said, then heard (3 s at most to wait);
@@ -2640,7 +2646,7 @@ PLAYER = """
   // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } else if (!want && left(R)) begin(R.cur, R.piece); return; }
-    paused = want; ours = Date.now(); byPhone = false;
+    paused = want; ours = Date.now(); byPhone = false; save();
     if (R.silent) { if (!paused) show(R.cur); else O.ct.call(window, dwell); changed(); return; }
     if (R.kokoro && !(talk && talk.speaking)) { if (paused) player.pause(); else player.play().catch(() => { paused = true; changed(); }); }
     else if (talk) { if (paused) talk.pause(); else talk.resume(); }
@@ -2774,21 +2780,30 @@ PLAYER = """
     placed();
   };
   // sits above what is fixed at the foot of the page: the box in Chat, a phone's tabs
+  // Placed from the foot of the part of the page that is visible (an iPhone measures that part apart from the page,
+  // and left the box off it when the two parted: the person's screenshot, Oct 27): the message box on the tabs, the
+  // player on the box, or on the chat's own box where the message box isn't shown.
+  const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;visibility:hidden';
+  document.body.appendChild(probe);
   const placed = () => { gcDraw();
-    let edge = innerHeight;
-    document.querySelectorAll('.composer, .tabs').forEach((x) => { const p = getComputedStyle(x).position;
-      if (p !== 'fixed' && p !== 'sticky') return;
-      const r = x.getBoundingClientRect(); if (r.height && r.top > innerHeight * 0.55 && r.top < edge) edge = r.top; });
-    // the message box sits on the tabs, the player on it
-    if (!gc.hidden && !gcTyping) { gc.style.top = ''; gc.style.bottom = Math.max(0, Math.round(innerHeight - edge)) + 'px'; edge -= gc.offsetHeight; }
+    const v = window.visualViewport, foot = v ? v.offsetTop + v.height : innerHeight;
+    const shift = -probe.getBoundingClientRect().top;          // what a box's own measure is off the page's by
+    let edge = foot;
+    const tabs = document.querySelector('.tabs');
+    if (tabs && getComputedStyle(tabs).position === 'fixed' && tabs.offsetHeight) edge -= tabs.offsetHeight;
+    const own = document.querySelector('.composer');
+    if (own && gc.hidden && ['fixed', 'sticky'].includes(getComputedStyle(own).position)) {
+      const r = own.getBoundingClientRect(), top = r.top + shift;
+      if (r.height && r.top > (v ? v.height : innerHeight) * 0.55 && top < edge) edge = top; }
+    if (!gc.hidden && !gcTyping) { gc.style.bottom = 'auto'; gc.style.top = Math.round(edge - gc.offsetHeight) + 'px'; edge -= gc.offsetHeight; }
     document.documentElement.style.setProperty('--gch', (gc.hidden ? 0 : gc.offsetHeight) + 'px');
-    bar.style.bottom = Math.max(0, Math.round(innerHeight - edge)) + 'px';
+    bar.style.bottom = 'auto'; bar.style.top = Math.round(edge - bar.offsetHeight) + 'px';
     document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px'); };
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
   on(document, 'DOMContentLoaded', placed); on(window, 'load', placed);   // it is made before the tabs below it are there
-  if (window.visualViewport) { on(window.visualViewport, 'resize', soon); }
+  if (window.visualViewport) { on(window.visualViewport, 'resize', soon); on(window.visualViewport, 'scroll', soon); }
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
   function changed() { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
@@ -2848,8 +2863,10 @@ PLAYER = """
     const says = [...box.querySelectorAll('.say')], you = [...box.querySelectorAll('.msg.you')].pop();
     const since = says.filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING));
     const heard = new Set(get('heard:' + p.name) || []);
-    let pick = since.filter((x) => !heard.has(x.dataset.k)).slice(-10);
-    if (!pick.length) { const last = says.length && says[says.length - 1].dataset.t; pick = since.length ? since : says.filter((x) => x.dataset.t === last); }
+    const after = heardTo(p.name);
+    let pick = since.filter((x) => !heard.has(x.dataset.k) && (x.dataset.at || '') > after).slice(-10);
+    // all heard: its latest reply, not everything since the person last wrote there
+    if (!pick.length) { const last = says.length && says[says.length - 1].dataset.t; pick = says.filter((x) => x.dataset.t === last).slice(-3); }
     const secs = pick.map((x) => { x.querySelectorAll('pre').forEach((e) => e.remove());
       return {t: x.dataset.t, k: x.dataset.k, at: x.dataset.at || '', text: x.innerText.replace(/[*_`#>|]/g, '').trim()}; }).filter((x) => x.text);
     box.remove();
@@ -2879,7 +2896,7 @@ PLAYER = """
     if (!got || get('cpsource') !== 'all') return;
     const fresh = [];
     got.projects.forEach((p) => { const heard = get('heard:' + p.name) || [], was = new Set(heard);
-      let parts = p.parts.filter((x) => !was.has(x.k));
+      let parts = p.parts.filter((x) => !was.has(x.k) && x.at > heardTo(p.name));
       const take = first ? parts.filter((x) => Date.now() - Date.parse(x.at) < 6 * 3600e3).slice(-3) : parts;
       if (!parts.length) return;
       put('heard:' + p.name, heard.concat(parts.map((x) => x.k)).slice(-300));
@@ -2964,7 +2981,7 @@ PLAYER = """
       return {active, playing: active && playing, paused: active && paused, loading: active && loading, t: s.t, k: s.k,
         into: r.piece >= 1 || (r.cur > 0 && r.list[r.cur - 1].t === s.t)};
     },
-    now: () => ({playing, paused}),
+    now: () => ({playing, paused}), heardTo, heardUpTo,
     hold, skip, stop, preview,
     // sections from a chat: tapped (read these now) or new ones arriving there (auto). New ones join a reading of
     // their project's already going, or wait after one kept paused; otherwise they take the voice from any other.
@@ -2972,6 +2989,7 @@ PLAYER = """
       if (!secs.length) return;
       const clean = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text}));
       if (how.now) { yieldTo(null); R = blank(v); R.list = clean; via = ''; begin(0); return; }
+      if (get('cpsource') === 'all' && v.name === 'steward') return;      // every project chosen: the steward is not one
       if (get('cpsource') === 'all' && v.name !== 'steward') {
         intoAll(clean.map((x) => Object.assign(x, {name: v.name, key: v.key, href: v.href, kvoice: v.kvoice})), v.kokoro); return; }
       const mine = R && R.name === v.name ? R : load(v.name);
@@ -2994,7 +3012,10 @@ PLAYER = """
     // coming back with Auto-speak on: what came since is read at once where the browser lets a page speak by itself; a
     // phone lets it only after a tap, so there it starts with the first touch anywhere on the page
     whenAllowed(go) { if (unlocked || playing) return go();
-      player.src = SILENT; player.play().then(() => { unlocked = true; go(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; go(); }, {once: true, capture: true})); },
+      // one moment of silence asks for them all: two asking at once would each cut the other's sound short
+      if (!allowing) allowing = new Promise((ok) => { player.src = SILENT;
+        player.play().then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
+      allowing.then(() => { allowing = null; go(); }); },
   };
   document.body.appendChild(bar);
   // With Auto on, the project the player follows (the last one read) is looked at every few seconds, wherever the
@@ -3006,7 +3027,7 @@ PLAYER = """
     const p = got.projects.find((x) => x.key === f.key && x.name === f.name);
     if (!p) return;
     const heard = get('heard:' + p.name) || [], was = new Set(heard);
-    const parts = p.parts.filter((x) => !was.has(x.k) && Date.parse(x.at) > (f.since || 0) - 5000);
+    const parts = p.parts.filter((x) => !was.has(x.k) && Date.parse(x.at) > (f.since || 0) - 5000 && x.at > heardTo(p.name));
     if (!parts.length) return;
     put('heard:' + p.name, heard.concat(parts.map((x) => x.k)).slice(-300));
     P.read({name: p.name, key: p.key, href: p.href, kvoice: p.voice, kokoro: !!got.ready},
@@ -3073,7 +3094,7 @@ PLAYER = """
     fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'gc-' + when, top: Math.round(r.top),
       bottom: Math.round(r.bottom), h: Math.round(r.height), inner: innerHeight, vvh: v && Math.round(v.height), vvtop: v && Math.round(v.offsetTop),
       tabs: tr && Math.round(tr.top), style: gc.style.cssText, path: location.pathname + location.search})})}).catch(() => {}); };
-  on(gta, 'focus', () => { gcTyping = true; document.body.classList.add('gctyping'); cancelAnimationFrame(ridef); ride();
+  on(gta, 'focus', () => { gcTyping = true; glist.hidden = true; document.body.classList.add('gctyping'); cancelAnimationFrame(ridef); ride();
     after(() => gmeasure('typing'), 1200); });
   on(gta, 'blur', () => { gcTyping = false; document.body.classList.remove('gctyping'); cancelAnimationFrame(ridef); placed(); });
   on(gc.querySelector('.gcsend'), 'pointerdown', (ev) => ev.preventDefault());      // the box keeps its focus until it sends
@@ -3097,6 +3118,10 @@ PLAYER = """
   try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
     .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
   draw();
+  // sounding a moment ago, with Auto on (the page refreshed mid-reading): it goes on, from the piece it was at; where a
+  // phone lets a page sound only after a touch, at the first touch
+  if (R && R.sounding && aloud() && Date.now() - (R.saved || 0) < 90e3)
+    P.whenAllowed(() => { if (R && !playing && left(R)) { via = '&auto=1'; begin(R.cur, R.piece); } });
 })();
 """
 
@@ -3939,7 +3964,9 @@ CHAT = """
   let before = null; try { before = JSON.parse(localStorage.getItem(HKEY) || 'null'); } catch (e) {}
   const says = [...box.querySelectorAll('.say')], mineLast = [...box.querySelectorAll('.msg.you')].pop();
   const since = says.filter((x) => !mineLast || (mineLast.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)).slice(-BACK);
-  const heard = new Set(says.filter((x) => !since.includes(x) || (before && before.includes(x.dataset.k))).map((x) => x.dataset.k));
+  const upTo = P.heardTo(box.dataset.name);             // heard anywhere: in the player, every project's, or here
+  const heard = new Set(says.filter((x) => !since.includes(x) || (before && before.includes(x.dataset.k)) || (x.dataset.at || '') <= upTo)
+    .map((x) => x.dataset.k));
   const remember = () => { try { localStorage.setItem(HKEY, JSON.stringify([...heard].slice(-300))); } catch (e) {} };
   try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
   aloud.addEventListener('change', () => { mark();
@@ -3952,6 +3979,8 @@ CHAT = """
   const fresh = () => { if (!box.isConnected) return;
     const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
     news.forEach((x) => heard.add(x.dataset.k)); if (news.length) remember();
+    // read here with Auto off: heard, in every way of listening (the player, every project's) as here
+    if (!aloud.checked && news.length) P.heardUpTo(view.name, news.map((x) => x.dataset.at || '').sort().pop());
     if (!aloud.checked || !news.length) return;    // what came while it was off isn't read later
     P.read(view, news.map(sec), {auto: true});
   };
@@ -8363,6 +8392,10 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
   overflow-y:auto; box-shadow:0 6px 22px rgba(0,0,0,.22) } .gclist li { padding:10px; border-radius:8px; cursor:pointer; font-size:14.5px }
 @media (hover: hover) { .gclist li:hover { background:var(--sunk) } }
 body.gcon #composer { display:none } body.gctyping .cplayer { display:none }
+/* typing in it, as the chat's own box: the tabs step aside, the page has room below, and between the box and the keyboard
+   the page's own ground, where the phone's measure and its keyboard differ, so nothing shows through */
+body.gctyping .tabs { display:none } body.gctyping main { padding-bottom:70vh }
+body.gctyping .gc::after { content:''; position:absolute; left:0; right:0; top:100%; height:420px; background:var(--bg); pointer-events:none }
 body.gcon .chat { padding-bottom:calc(12px + var(--cph, 56px) + var(--gch, 0px)) }
 body.gcon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 0px) + var(--gch, 0px) + 8px) }
 .automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
