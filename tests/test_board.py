@@ -5674,6 +5674,29 @@ class PhonePageTest(HoursBase):
         self.assertIn(f"<link rel='stylesheet' href='/static/board.css?v={board.css_version()}'>", page, "styling, fetched once")
         self.assertIn("nav .navrow { display:flex", board.CSS)
 
+    def test_a_chats_needs_you_floats_on_top_of_the_player_and_box(self):
+        # the person: "Needs you hides behind the player ... put needs you as a floating area ... prioritized to be on
+        # the top of the stack": it sits on whatever is below it (the player, the box, or beside the player's ♪)
+        self.assertIn(".chat details.needs { position:fixed", board.CSS)
+        self.assertIn("bottom:calc(var(--stk, 64px) + 4px)", board.CSS)
+        self.assertIn("html.cpsmall .chat details.needs { right:64px }", board.CSS)
+        self.assertIn("'--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight))", board.PLAYER, "on the player, or on the box where it is shut")
+
+    def test_a_reading_goes_on_with_next_and_text_only_waits_for_it(self):
+        # the person: "text only ... duration ... pretty arbitrary ... a big next arrow button that pops up over the
+        # message", "beneficial for audio as well", "point to the right ... forward momentum"
+        self.assertNotIn("n / 200 * 60000", board.PLAYER, "no reading time reckoned from length")
+        self.assertIn("class='cpnext' hidden", board.PLAYER)
+        self.assertIn("if (!R.silent) { hush(); playing = true; } finished(R.cur);", board.PLAYER, "heard: on at once, the part counted heard")
+        self.assertIn("'Next' + PICON.next", board.PLAYER)
+        self.assertIn("next", board.ICONS)
+
+    def test_the_end_of_a_chat_clears_what_floats_over_it(self):
+        # the person: "the send now button and the status line at the bottom of the chat ... hide underneath"
+        self.assertIn("body .chat { padding-bottom:calc(12px + var(--room, 0px)) }", board.CSS)
+        self.assertNotIn("body.cpon .chat { padding-bottom", board.CSS, "the player's room alone no longer wins over the box's")
+        self.assertIn("'--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight))", board.PLAYER)
+
     def test_the_status_says_what_the_project_is_at_never_its_consoles_spinner_or_footer(self):
         console.snapshot = lambda root, lines=6, name=None: {
             "state": "idle", "lines": ["⏵⏵ bypass permissions on (shift+tab to cycle)"],

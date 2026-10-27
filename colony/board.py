@@ -2536,7 +2536,7 @@ PLAYER = """
     loading = true; changed(); } });
   // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
   // not let it start again)
-  const hush = (keep) => { ours = Date.now(); O.ct.call(window, dwell); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
+  const hush = (keep) => { ours = Date.now(); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
     player.loop = false; resting = 0; line++; };
   // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
   // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
@@ -2653,7 +2653,7 @@ PLAYER = """
   function hold(want) {
     if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } else if (!want && left(R)) begin(R.cur, R.piece); return; }
     paused = want; ours = Date.now(); byPhone = false; save();
-    if (R.silent) { if (!paused) show(R.cur); else O.ct.call(window, dwell); changed(); return; }
+    if (R.silent) { changed(); return; }
     if (R.kokoro && !(talk && talk.speaking)) { if (paused) player.pause(); else player.play().catch(() => { paused = true; changed(); }); }
     else if (talk) { if (paused) talk.pause(); else talk.resume(); }
     changed();
@@ -2694,13 +2694,10 @@ PLAYER = """
         || Date.now() - touched < 8000) return null;
     return colonyNav.go(href);
   }
-  // Text only: no sound; each part stays for as long as reading it takes (200 words a minute, 4 s at least)
-  let dwell = 0;
-  function show(i) {
-    O.ct.call(window, dwell);
-    const n = R.list[i].text.split(' ').length, ms = Math.min(60000, Math.max(4000, n / 200 * 60000));
-    dwell = after(() => { if (playing && !paused && R && R.cur === i) finished(i); }, ms);
-  }
+  // Text only: no sound; each part stays until the person has read it and taps Next → at its end (a time reckoned from its
+  // length never knew when they were done: the person, "That's probably pretty arbitrary"). Heard, Next is there too
+  // (the person: "that would be beneficial for audio as well"): the part counts heard, and the next starts at once.
+  function show(i) { changed(); }
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
   const again = (voiceChanged) => {
     if (!playing || !now || !R || now.i !== R.cur) return;
@@ -2739,6 +2736,7 @@ PLAYER = """
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
+    + "<button type='button' class='cpnext' hidden aria-label='Read: on to the next'></button>"
     + "<div class='cpminirow'><button type='button' class='cpmini' aria-label='Player: choose what to hear, voice, speed'>♪</button></div>"
     + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
     + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpall' hidden>All · </span><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
@@ -2810,7 +2808,25 @@ PLAYER = """
     if (!gc.hidden && !gcTyping) { at(gc, lift); lift += gc.offsetHeight; }
     document.documentElement.style.setProperty('--gch', (gc.hidden ? 0 : gc.offsetHeight) + 'px');
     at(bar, lift);
-    document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px'); };
+    document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px');
+    document.documentElement.style.setProperty('--room', ((gc.hidden || gcTyping ? 0 : gc.offsetHeight) + (bar.hidden ? 0 : bar.offsetHeight)) + 'px');
+    // a chat's Needs you floats on the player: placed from the page's foot, so shown only as the page is
+    const nd = document.querySelector('.chat details.needs'), ns = nd && nd.querySelector('summary');
+    // on top of the stack: on the player, on the box where the player is shut, beside the player's ♪ where only that shows
+    const mini = bar.classList.contains('cpidle') && !bar.classList.contains('open');
+    document.documentElement.classList.toggle('apart', !plain); document.documentElement.classList.toggle('cpsmall', mini && !bar.hidden);
+    document.documentElement.style.setProperty('--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight)) + 'px');
+    document.documentElement.style.setProperty('--ndh', (ns && plain ? ns.offsetHeight + 28 : 0) + 'px');
+    // Next →: at the end of the part being read, kept in reach above the stack while that end is further down
+    const want = !!(R && playing && R.cur < R.list.length) && plain && !gcTyping && !document.body.classList.contains('typing');
+    const nb = bar.querySelector('.cpnext'); nb.hidden = !want; if (!want) return;
+    const last = R.cur + 1 >= R.list.length, el = document.querySelector('.chat .say.reading');
+    nb.innerHTML = last ? 'Done' + PICON.check : 'Next' + PICON.next; nb.setAttribute('aria-label', last ? 'Read: done' : 'Read: on to the next');
+    const hi = innerHeight - (lift + (mini ? 8 : bar.offsetHeight)) - (ns ? ns.offsetHeight + 28 : 0) - nb.offsetHeight - 8;
+    const nav = document.querySelector('nav'), floor = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom + 8 : 8;
+    const b = el && el.getBoundingClientRect(), end = b ? b.bottom - nb.offsetHeight / 2 : -1;
+    nb.style.top = Math.round(end >= floor && end <= hi ? end : hi) + 'px';
+    nb.style.right = b ? Math.round(Math.max(12, innerWidth - b.right)) + 'px' : ''; };
   let placing = 0;
   const soon = () => { if (!placing) placing = requestAnimationFrame(() => { placing = 0; placed(); }); };
   on(window, 'scroll', soon, {passive: true}); on(window, 'resize', soon);
@@ -2820,6 +2836,8 @@ PLAYER = """
   function changed() { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpskip'), 'click', skip);
+  const nextBtn = $('.cpnext');
+  on(nextBtn, 'click', () => { if (!R || !playing) return; if (!R.silent) { hush(); playing = true; } finished(R.cur); });
   on($('.cpstop'), 'click', stop);
   const panels = [[$('.cplist'), panel, () => { drawn = ''; draw(); }], [$('.cpwhat'), $('.cpwho'), () => who()], [$('.cpcog'), $('.cpset'), () => { if (playing && !paused) { hold(true); heldForSettings = true; } sets(); }]];
   // ⚙ open, what was playing pauses (voices are tried there); shut, it goes on, in the voice chosen
@@ -3633,6 +3651,7 @@ ICONS = {"copy": _SVG.format("<rect x='8' y='8' width='12' height='12' rx='2.5'/
          "pause": _SVG.format("<rect x='6.5' y='5' width='3.5' height='14' rx='1' fill='currentColor'/><rect x='14' y='5' width='3.5' height='14' rx='1' fill='currentColor'/>"),
          "skip": _SVG.format("<path d='M4.5 5.5v13l8-6.5z'/><path d='M12.5 5.5v13l8-6.5z'/>"),
          "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>"),
+         "next": _SVG.format("<path d='M4.5 12h15M13 5.5l6.5 6.5-6.5 6.5'/>"),
          "list": _SVG.format("<path d='M4 7h16M4 12h16M4 17h10'/>")}
 
 
@@ -3788,7 +3807,7 @@ CHAT = """
       [...box.children].forEach((c) => { if (!c.classList.contains('mine')) {
         const k = c.outerHTML.replace('class="say reading"', 'class="say"'); have.set(k, (have.get(k) || []).concat([c])); } });
       box.replaceChildren(...[...t.content.children].map((n) => { const same = have.get(n.outerHTML); return same && same.length ? same.shift() : n; }));
-      keep();
+      keep(); if (window.colonyPlayer) window.colonyPlayer.placed();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       shut.forEach((k) => { const d = k && box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = false; });
       const again = mark0 && !end && box.querySelector(`[data-k="${CSS.escape(mark0[0])}"]`);
@@ -4037,10 +4056,15 @@ CHAT = """
   });
   // opening something (a decision, a run of work) keeps the reader where they are: it no longer follows the end
   box.addEventListener('toggle', () => { stick = atEnd(); }, true);
-  // Needs you opened by a tap: its top comes to the top of what is visible, below the bar, to be read from the start
+  // Needs you opened by a tap: read from the start (asked again, from the latest round). Floating on the player, it
+  // opens upward and scrolls in itself; a tap outside it folds it again, unless an answer is being written there.
+  document.addEventListener('click', (ev) => { const d = box.querySelector('details.needs');
+    if (d && d.open && !d.contains(ev.target) && !ev.target.closest('#cplayer, #gc') && getComputedStyle(d).position === 'fixed'
+        && ![...d.querySelectorAll('textarea')].some((t) => t.value.trim())) d.open = false; });
   box.addEventListener('click', (ev) => {
     const s = ev.target.closest('details.needs > summary'); if (!s || s.parentElement.open) return;
     requestAnimationFrame(() => { const d = s.parentElement, bar = document.querySelector('nav');
+      if (getComputedStyle(d).position === 'fixed') { const now = d.querySelector('.round.now'); d.scrollTop = now ? now.offsetTop - 8 : 0; return; }
       const under = bar && getComputedStyle(bar).position === 'sticky' ? bar.getBoundingClientRect().bottom : 0;
       const at = d.querySelector('.round.now') || d;            // asked again: the latest round, where it stands now
       window.scrollBy(0, at.getBoundingClientRect().top - under - 12); stick = false; });
@@ -8335,6 +8359,15 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
 .chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
+/* a chat's Needs you floats on the player (on the message box, where the player isn't shown), its own to that chat:
+   folded to a line, it opens upward over the conversation, the latest of what it waits on in view */
+.chat details.needs { position:fixed; left:10px; right:10px; bottom:calc(var(--stk, 64px) + 4px); z-index:44; max-width:718px;
+  margin:0 auto; max-height:calc(100dvh - var(--stk, 64px) - 120px); overflow:auto; overscroll-behavior:contain;
+  box-shadow:0 4px 18px rgba(0,0,0,.16) }
+.chat:has(details.needs)::after { content:''; display:block; flex:none; height:var(--ndh, 0px) }
+.chat details.needs:not([open]) { padding:2px 12px } html.cpsmall .chat details.needs { right:64px }
+html.apart .chat details.needs, body.gctyping .chat details.needs, body.typing .chat details.needs { display:none }
+@media (min-width: 701px) { .chat details.needs { left:230px } }
 .chat details.need { margin:8px 0 0; padding:8px 10px; border-radius:10px; background:var(--card) }
 .chat details.need > summary { cursor:pointer; list-style:none } .chat details.need > summary::-webkit-details-marker { display:none } .chat details.need .fold, .chat details.need[open] .q { display:none }
 .chat details.need[open] .fold { display:inline }
@@ -8411,8 +8444,10 @@ body.gcon #composer { display:none } body.gctyping .cplayer { display:none }
    the page's own ground, where the phone's measure and its keyboard differ, so nothing shows through */
 body.gctyping .tabs { display:none } body.gctyping main { padding-bottom:70vh }
 body.gctyping .gc::after { content:''; position:absolute; left:0; right:0; top:100%; height:420px; background:var(--bg); pointer-events:none }
-body.gcon .chat { padding-bottom:calc(12px + var(--cph, 56px) + var(--gch, 0px)) }
-body.gcon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 0px) + var(--gch, 0px) + 8px) }
+/* the end of a page clears what floats over its foot (the message box, the player or its ♪), as measured where they
+   are placed: a status line or Send now is never left under them */
+body .chat { padding-bottom:calc(12px + var(--room, 0px)) }
+main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--room, 0px) + 8px) }
 .automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
   border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
 .automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
@@ -8428,8 +8463,14 @@ body.gcon main:not(:has(.composer))::after { content:''; display:block; height:c
 body.typing .cplayer { top:calc(var(--kbtop, 100vh) - var(--boxh, 0px) - var(--cph, 56px) - 8px); bottom:auto !important }
 body.cpon.typing .toend { top:calc(var(--kbtop, 100vh) - 124px - var(--cph, 56px)) } body.cpon.typing .chat { padding-bottom:calc(140px + var(--cph, 56px)) }
 html.going main { opacity:.5; transition:opacity .2s .15s }
-body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + env(safe-area-inset-bottom)) }
+body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + var(--ndh, 0px) + env(safe-area-inset-bottom)) }
 .cplayer > * { pointer-events:auto; max-width:740px; margin:0 auto }
+/* Next →, the reading's way on: a filled pill pointing forward, unlike ↓ (back to the latest), a plain round one */
+.cplayer .cpnext { position:fixed; right:16px; z-index:46; height:52px; min-height:52px; margin:0; padding:0 18px 0 22px; border:0;
+  border-radius:999px; background:var(--accent); color:var(--card); box-shadow:0 4px 18px rgba(0,0,0,.28); display:flex; gap:8px;
+  align-items:center; justify-content:center; font:600 17px/1 inherit; animation:cpnextin .25s ease-out }
+.cplayer .cpnext[hidden] { display:none } .cplayer .cpnext svg { width:24px; height:24px; stroke-width:2.4 }
+@keyframes cpnextin { from { opacity:0; transform:scale(.8) } }
 .cpbar { display:flex; align-items:center; gap:2px; padding:3px 4px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
   border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16) }
@@ -8469,7 +8510,7 @@ table.tokens tr.sub td:first-child { padding-left:16px; color:var(--muted) } tab
 @media (prefers-color-scheme: dark) { .ubar span, .ulegend i, table.tokens i.key { background:var(--cd) } }
 table.tokens tr.sub td:has(> i.key) { position:relative; padding-left:30px } table.tokens i.key { position:absolute; left:14px; top:.62em }
 table.tokens tr.head td { padding-top:12px; font-size:12.5px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; text-align:left }
-body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--cph, 56px) + 8px) }
+
 .chat .say.reading { background:color-mix(in srgb, var(--accent) 9%, transparent); box-shadow:0 0 0 8px color-mix(in srgb, var(--accent) 9%, transparent);
   border-radius:4px }
 .chat .turnacts .spin { transform-origin:12px 12px; animation:spin .9s linear infinite } @keyframes spin { to { transform:rotate(360deg) } }
