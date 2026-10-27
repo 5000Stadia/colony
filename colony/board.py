@@ -2684,6 +2684,7 @@ PLAYER = """
     + "<div class='cppanel cpwho' hidden><div class='cphead'><span>Read from</span><a class='cpopen'>Open its chat ›</a></div><ol class='cprows cpprojs'></ol></div>"
     + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'>Auto <select class='cpauto'><option value='off'>Off</option>"
     + "<option value='both'>Audio + text</option><option value='audio'>Audio only</option><option value='text'>Text only</option></select></label>"
+    + "<label class='cpline'>Across <select class='cpscope'><option value='one'>This project</option><option value='all'>Every project</option></select></label>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
@@ -2822,6 +2823,13 @@ PLAYER = """
   // current with a look every few seconds while it is chosen (one choice of a single project, or ■, ends it). Chosen,
   // it starts with what each project said since the person last wrote there and wasn't heard, from the last six
   // hours, at most three each; the rest it counts heard.
+  // Auto's reach: one project (the page's, or the one last read), or every project, read as one queue in the order
+  // written; back to one project, the queue of them all is let go
+  function setScope(scope) {
+    if (scope === 'all') { if (get('cpsource') !== 'all') startAll(); return; }
+    put('cpsource', null);
+    if (R && R.all) { hush(); playing = false; now = null; forget(R.name); R = null; changed(); }
+  }
   async function startAll() { put('cpsource', 'all'); const r = load('All projects');
     if (r) { yieldTo(r); R = r; R.announce = true; via = ''; begin(R.cur, 0); }
     gather(true, true); }
@@ -2860,7 +2868,7 @@ PLAYER = """
   let whom = null, asking = 0;                     // the project whose voice ⚙ shows, while it is open
   const whose = () => whom || voiced();
   async function sets(fresh = true) {
-    $('.cpauto').value = aloud() ? mode() : 'off'; $('.cprate').value = String(rate());
+    $('.cpauto').value = aloud() ? mode() : 'off'; $('.cprate').value = String(rate()); $('.cpscope').value = P.scope();
     if (fresh) { whom = voiced();
       $('.cpwhom').innerHTML = "<option value='default'>Every project (default)</option>" + listed().map((p) =>
         `<option value="${p.key}">${p.name.replace(/[&<>"]/g, '')}</option>`).join('');
@@ -2876,6 +2884,7 @@ PLAYER = """
   on($('.cpauto'), 'change', () => { const v = $('.cpauto').value;
     if (v === 'off') return setAloud(false);
     P.setMode(v); unlock(); setAloud(true); });
+  on($('.cpscope'), 'change', () => setScope($('.cpscope').value));
   on($('.cpwhom'), 'change', () => { const k = $('.cpwhom').value, p = listed().find((x) => x.key === k);
     whom = p ? {key: p.key, name: p.name} : {key: 'default', name: 'Every project (default)'}; sets(false); });
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
@@ -2900,6 +2909,7 @@ PLAYER = """
     attach(v) { view = v; changed();
       const s = R && R.list[R.cur];                     // arrived at the chat being read: there, at once
       if (s && playing && following() && (s.name || R.name) === v.name) v.focus(s.k, true); },
+    scope: () => get('cpsource') === 'all' ? 'all' : 'one', setScope,
     mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} if (view) view.mark(); },
     leave() { view = null; },
     unlock,
@@ -3885,14 +3895,18 @@ CHAT = """
   });
   // Auto, off: a tap asks how to read, Audio + text, Audio only or Text only, and turns it on that way
   const menu = document.createElement('div'); menu.className = 'automenu'; menu.hidden = true;
-  menu.innerHTML = "<button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
+  menu.innerHTML = "<div class='reach'><button type='button' data-s='one'>This project</button><button type='button' data-s='all'>Every project</button></div>"
+    + "<button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
     + "<button type='button' data-m='text'>Text only</button>";
   document.body.appendChild(menu);
-  const autoMenu = (b) => { const r = b.getBoundingClientRect(); menu.hidden = false;
+  let reach = 'one';
+  const reached = () => menu.querySelectorAll('[data-s]').forEach((x) => x.classList.toggle('on', x.dataset.s === reach));
+  const autoMenu = (b) => { const r = b.getBoundingClientRect(); reach = P.scope(); reached(); menu.hidden = false;
     menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
     menu.style.top = Math.max(8, r.top - menu.offsetHeight - 6) + 'px'; };
   menu.addEventListener('click', (ev) => { const m = ev.target.closest('button'); if (!m) return;
-    menu.hidden = true; P.setMode(m.dataset.m); aloud.checked = true; aloud.dispatchEvent(new Event('change')); });
+    if (m.dataset.s) { reach = m.dataset.s; reached(); return; }
+    menu.hidden = true; P.setMode(m.dataset.m); aloud.checked = true; aloud.dispatchEvent(new Event('change')); P.setScope(reach); });
   document.addEventListener('click', (ev) => { if (!menu.hidden && !ev.target.closest('.automenu, button.auto')) menu.hidden = true; });
   window.addEventListener('scroll', () => { menu.hidden = true; }, {passive: true});
   box.addEventListener('click', async (ev) => {
@@ -8177,6 +8191,9 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
   border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
 .automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
 @media (hover: hover) { .automenu button:hover { background:var(--sunk) } }
+.automenu .reach { display:flex; gap:4px; padding:2px 2px 6px; margin-bottom:4px; border-bottom:1px solid var(--line) }
+.automenu .reach { min-width:236px } .automenu .reach button { flex:1; white-space:nowrap; text-align:center; padding:8px 8px; font-size:13.5px; color:var(--muted); background:var(--sunk) }
+.automenu .reach button.on { color:var(--card); background:var(--accent); font-weight:600 }
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
 .cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpskip, .cplayer.cpidle .cpstop { display:none }
 .cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--accent);
@@ -8235,9 +8252,9 @@ body.cpon .chat { padding-bottom:calc(12px + var(--cph, 56px)) } body.cpon main:
   border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:16px }
-/* Auto on: a small light circles the player's play and pause button, its tail in the rainbow, glowing; in Chat it
-   runs round the border of the part being read, as it starts to play (the person: "only do the auto animation on the
-   section of the chat WHEN that section starts to play") */
+/* Auto on: a small light circles the player's play and pause button, its tail in the rainbow, glowing; in Chat the
+   part being read, while it sounds, has a calm border and a soft glow (the person: "for text highlight ... a gentle
+   border solid maybe light glow but no stark animation too visually busy for readability") */
 .cpbar .cphold, .chat .say.reading { position:relative }
 html.autoon .cpbar .cphold::before {
   content:''; position:absolute; inset:1px; border-radius:50%; padding:2px; pointer-events:none;
@@ -8245,13 +8262,9 @@ html.autoon .cpbar .cphold::before {
   -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
   filter:drop-shadow(0 0 2px #ff9ad5); animation:autoring 1.8s linear infinite }
 @keyframes autoring { to { transform:rotate(360deg) } }
-@property --autospin { syntax:'<angle>'; inherits:false; initial-value:0deg }
-html.autoon.cpgo .chat .say.reading::before { content:''; position:absolute; inset:-8px; border-radius:8px; padding:2px; pointer-events:none;
-  background:conic-gradient(from var(--autospin), transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
-  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
-  filter:drop-shadow(0 0 2px #ff9ad5); animation:autoborder 1.8s linear infinite }
-@keyframes autoborder { to { --autospin:360deg } }
-@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before, html.autoon.cpgo .chat .say.reading::before { animation:none } }
+html.autoon.cpgo .chat .say.reading::before { content:''; position:absolute; inset:-8px; border-radius:8px; pointer-events:none;
+  border:1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); box-shadow:0 0 10px color-mix(in srgb, var(--accent) 25%, transparent) }
+@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cphold::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } @media (hover: hover) {.chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }}
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
