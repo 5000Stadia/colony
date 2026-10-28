@@ -841,6 +841,9 @@ class ChatTest(BoardBase):
         page = board.shell(board.registry(), 0, "")
         self.assertIn("translateY(", page, "the phone's tab bar is moved to the bottom where an iPhone leaves it floating")
         self.assertIn("gap > 60 && gap < innerHeight", page, "a keyboard's worth, never more than a screen")
+        # the phone went on reporting the keyboard's room after it went down: with no box to type in, all sits at the foot
+        self.assertIn("gap > 60 && gap < innerHeight && keyed()", page)
+        self.assertIn("const plain = !v || !keyed ||", page)
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
 

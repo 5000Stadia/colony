@@ -2281,6 +2281,8 @@ BAR = """
   const vv = window.visualViewport, bar = document.querySelector('.tabs');
   if (!vv || !bar) return;
   let shift = 0, told = 0, queued = 0;
+  const keyed = () => { const t = document.activeElement;
+    return vv.scale > 1.01 || !!(t && t.matches('textarea, input:not([type]), input[type=text], input[type=search], [contenteditable]')); };
   const seat = () => { queued = 0;
     if (getComputedStyle(bar).position !== 'fixed' || document.body.classList.contains('typing') || vv.scale > 1.01) {
       if (shift) { shift = 0; bar.style.transform = ''; } return; }
@@ -2289,8 +2291,9 @@ BAR = """
     // Oct 27: 52px off, 52px past the end): not a keyboard, and the bar sent down by it left the screen for a frame
     const over = Math.max(0, scrollY + innerHeight - document.body.scrollHeight) + Math.min(0, scrollY);
     const base = bar.getBoundingClientRect().bottom - shift, gap = Math.round(vv.offsetTop - over + vv.height - base);
-    // never more than a screen: mid-change a phone reports a page-long gap (41515px), which would send the bar off it
-    const want = gap > 60 && gap < innerHeight ? gap : 0;
+    // never more than a screen: mid-change a phone reports a page-long gap (41515px), which would send the bar off it;
+    // and no keyboard without a box to type in: a phone can go on reporting the keyboard's room after it went down
+    const want = gap > 60 && gap < innerHeight && keyed() ? gap : 0;
     if (Math.abs(want - shift) < 2) return;
     shift = want; bar.style.transform = shift ? 'translateY(' + shift + 'px)' : '';
     if (shift && told++ < 3) fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'bar',
@@ -2798,7 +2801,10 @@ PLAYER = """
     const v = window.visualViewport, foot = v ? v.offsetTop + v.height : innerHeight;
     // a bounce past the end or the top parts the two by just the overshoot: as the page is, still (it dropped what floats)
     const over = Math.max(0, scrollY + innerHeight - document.body.scrollHeight) + Math.min(0, scrollY);
-    const plain = !v || (Math.abs(v.offsetTop - over) < 2 && Math.abs(innerHeight - v.height) < 2);
+    // and with no box to type in there is no keyboard, whatever the phone reports: it can go on giving the keyboard's room
+    // after it went down, which floated the box and the player up the screen (the person's screenshot, Oct 27)
+    const t = document.activeElement, keyed = (v && v.scale > 1.01) || !!(t && t.matches('textarea, input:not([type]), input[type=text], input[type=search], [contenteditable]'));
+    const plain = !v || !keyed || (Math.abs(v.offsetTop - over) < 2 && Math.abs(innerHeight - v.height) < 2);
     const shift = -probe.getBoundingClientRect().top;          // what a box's own measure is off the page's by
     let lift = 0;                                              // from the foot to what they sit on
     const tabs = document.querySelector('.tabs');
