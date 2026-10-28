@@ -5945,19 +5945,31 @@ class PhonePageTest(HoursBase):
         self.assertNotIn("Plants question 2?", more, "the first three in sight")
         self.assertIn("<details class='card fold'><summary><h3>What the steward decided</h3>", page, "its log folded")
 
-    def test_on_a_phone_the_row_opens_on_its_own_chip_in_the_boards_order_and_the_steward_counts_what_waits(self):
+    def test_on_a_phone_the_row_opens_on_its_own_chip_in_the_boards_order_led_by_what_needs_you(self):
         shop = self.shop()
         with self.clock(14):
             board.add_gate(shop, "Open on Sundays?")
         board.woke(self.root)                  # plants went to work last: it leads, though shop has something waiting
         with self.clock(14):
             side, page = board.sidebar(board.registry(), 1), board.render(board.registry(), 1)
+            needs = board.needs_page(board.registry())
         self.assertLess(side.index(">plants<"), side.index(">shop<"), "the board's order: what last went to work first")
-        self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>1</span>", side)
+        # the steward is no project: a bar of its own above the row of projects, which scrolls without it; the count
+        # of what waits is no longer on it, but on a chip of its own ahead of the projects, opening onto all of it
+        steward, row = side.split("<div class='navrow'>")
+        self.assertNotIn("badge", steward)
+        self.assertNotIn("proj monitor", row)
+        self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>1</span>", row)
+        self.assertLess(row.index("id='needs-chip' href='/needs-you'>"), row.index(">plants<"), "ahead of the first project")
+        self.assertIn("Open on Sundays?", needs)
+        self.assertIn("class='proj needschip on' id='needs-chip'", needs, "its own chip lit on its page")
+        self.assertIn("keepCurrent(document.getElementById('needs'), '/needs')", needs)
         self.assertIn(board.CHIPS, page, "a page opens with its own chip in view")
-        # the steward is no project: a bar of its own above the row of projects, which scrolls without it
-        self.assertLess(side.index("proj monitor"), side.index("<div class='navrow'>"), "the steward, with the count, above the row")
-        self.assertNotIn("proj monitor", side.split("<div class='navrow'>")[1])
+        board.answer_gate(shop, board.gates(shop)[0]["id"], "yes", tell=False)
+        with self.clock(14):
+            self.assertIn("id='needs-chip' href='/needs-you' hidden>", board.sidebar(board.registry(), 1), "nothing waiting: no chip")
+        self.assertIn("{passive: true, capture: true}", board.CHAT, "a scroll inside the floating Needs you holds off the chat's redraw")
+        self.assertIn("if (d && !d.scrollTop) d.scrollTop = top;", board.CHAT, "and, redrawn, it stays where it was read to")
         self.assertIn(f"<link rel='stylesheet' href='/static/board.css?v={board.css_version()}'>", page, "styling, fetched once")
         self.assertIn("nav .navrow { display:flex", board.CSS)
 

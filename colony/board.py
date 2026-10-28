@@ -2155,6 +2155,9 @@ def nav_order(plist):
     return out
 
 
+NEEDS_PAGE = -3          # the page of everything waiting on the person: no project's, nor the steward's
+
+
 def sidebar(reg, pid):
     from . import monitor
     plist = projects(reg)
@@ -2192,10 +2195,14 @@ def sidebar(reg, pid):
                     f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); colonyNav.go('/nest?n={q}')\">"
                     f"→</span></span></a><span class='members'>{''.join(chips)}<a class='proj nestset' href='/nest?n={q}' "
                     f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙&#xFE0E;</a></span></span>")
-    # the steward first, with what waits on the person in every project: on a phone it stays in reach at the left
+    # then what waits on the person in every project the steward follows, ahead of the projects: shown while anything does
+    side.insert(0, f"<a class='proj needschip{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/needs-you'"
+                   f"{'' if total or pid == NEEDS_PAGE else ' hidden'}><span class='pname'><span class='sdot needs-you'></span>Needs you"
+                   f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>{total}</span></span>"
+                   f"<span class='sline'>across your projects</span></a>")
+    # the steward first: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
-                   f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward"
-                   f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'{'' if total else ' hidden'}>{total}</span></span>"
+                   f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward</span>"
                    f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>")
     from . import providers as pv, usage
     for k, prov in pv.PROVIDERS.items():
@@ -3309,7 +3316,8 @@ async function poll() {
     const r = await fetch('/status', {cache: 'no-store'}); const st = await r.json();
     const md = document.getElementById('dot-m'); if (md) md.className = 'sdot ' + st.monitor.state.replace(' ', '-');
     const all = document.getElementById('badge-all');
-    if (all) { const n = st.projects.reduce((k, s) => k + (s.followed ? s.waiting || 0 : 0), 0); all.hidden = !n; all.textContent = n; }
+    if (all) { const n = st.projects.reduce((k, s) => k + (s.followed ? s.waiting || 0 : 0), 0); all.textContent = n;
+      const chip = document.getElementById('needs-chip'); if (chip && !chip.classList.contains('on')) chip.hidden = !n; }
     st.projects.forEach((s, i) => {
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
       if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
@@ -3845,7 +3853,8 @@ CHAT = """
   // While a finger is on the page, or it still glides from a flick, nothing is redrawn or moved: a phone stops a
   // gliding page at any change. The next look catches up.
   let moving = 0;
-  ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true}));
+  // caught on the way down: a scroll inside a part (the floating Needs you scrolls in itself) never reaches the window
+  ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true, capture: true}));
   async function refresh() {
     if (!box.isConnected || Date.now() - moving < 1200) return;
     // an answer being written in the conversation (to what it needs of the person) is never redrawn away
@@ -3860,6 +3869,8 @@ CHAT = """
       // what the reader is looking at stays where it is, though the oldest turns above drop away as new ones come
       const seen = [...box.querySelectorAll('[data-k]')].find((x) => x.getBoundingClientRect().bottom > 0);
       const mark0 = seen && [seen.dataset.k, seen.getBoundingClientRect().top];
+      // and where they were in a part that scrolls in itself (Needs you), should it come in new
+      const inner = [...box.querySelectorAll('details[data-k]')].filter((d) => d.scrollTop).map((d) => [d.dataset.k, d.scrollTop]);
       // only what changed is redrawn: a part already there stays as it is (a picture is not loaded again, so nothing
       // blinks or shifts), the rest comes in new
       const t = document.createElement('template'); t.innerHTML = last = html;
@@ -3874,6 +3885,7 @@ CHAT = """
       keep(); if (window.colonyPlayer) window.colonyPlayer.placed();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       shut.forEach((k) => { const d = k && box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = false; });
+      inner.forEach(([k, top]) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d && !d.scrollTop) d.scrollTop = top; });
       const again = mark0 && !end && box.querySelector(`[data-k="${CSS.escape(mark0[0])}"]`);
       const moved = again ? again.getBoundingClientRect().top - mark0[1] : 0;
       if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
@@ -6419,6 +6431,12 @@ def model_changes(pending_only=False):
     return ''.join(out)
 
 
+def needs_page(reg):
+    """Needs you on a page of its own, from its chip beside the steward's: kept current as things are answered."""
+    return shell(reg, NEEDS_PAGE, f"<h1>Needs you</h1><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
+                 f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>")
+
+
 NEEDS_SHOWN = 3          # a project's decisions shown in Needs you; the rest fold, its box for answering by number below
 
 
@@ -7503,6 +7521,8 @@ class Handler(BaseHTTPRequestHandler):
             if "p" in q:                                   # one project's Waiting on you
                 return self._send(200, waiting_html(pid, plist[pid]).encode())
             return self._send(200, needs_you(reg).encode())
+        if url.path == "/needs-you":
+            return self._send(200, needs_page(reg).encode())
         if url.path == "/steward":
             return self._send(200, monitor_page(reg, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/status":
@@ -8709,6 +8729,7 @@ main.wide { max-width:none } header.slim { display:flex; align-items:center; gap
 nav .proj { flex-direction:column; align-items:stretch; gap:1px } .pname { display:flex; align-items:center; gap:6px }
 .sline { font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:14px }
 nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0 0; margin-bottom:8px; padding-bottom:9px }
+nav .proj.needschip:not(.on) { background:var(--flag-bg); color:var(--flag) } nav .proj.needschip .pname { font-weight:600 }
 .navfoot { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px; font-size:13px }
 .navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
 @media (max-width: 700px) { ul.dirs { columns:1 } }
