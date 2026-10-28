@@ -207,9 +207,17 @@ def cmd_urls(a):
     else:
         print("From anywhere:        off (colony remote sets it up through Tailscale: your devices only)")
     from . import providers
-    if board.registry()["settings"]["remote"] and providers.installed(providers.get("claude")):
-        # PROVIDER: Remote Control and the Claude app are Claude Code's; name each provider's own way here.
+    # PROVIDER: each program's own app: Claude Code's Remote Control, Codex's pairing with ChatGPT (as last recorded:
+    # listing addresses never makes a pairing code)
+    used = {providers.key(providers.of(p)) for p in board.projects(board.registry()) if p.exists()}
+    if board.registry()["settings"]["remote"] and "claude" in used and providers.installed(providers.get("claude")):
         print("From anywhere:        the Claude app, where each Claude Code session appears")
+    if "codex" in used:
+        from . import codex_remote
+        mine = [p for p in board.projects(board.registry()) if p.exists() and providers.key(providers.of(p)) == "codex"]
+        paired = [p.name for p in mine if codex_remote.pairing_choice(p) == "paired"]
+        print(f"From anywhere:        the ChatGPT app, for each Codex project paired with it ("
+              + (", ".join(paired) if paired else "none paired yet: a project's Settings connects it") + ")")
     return 0
 
 

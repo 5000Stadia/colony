@@ -1663,6 +1663,17 @@ class CodexHelpersTest(BoardBase):
             self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 120, places=2, msg="read on as it grows")
 
 
+    def test_each_program_is_named_by_its_own_app(self):
+        board.track(self.root)
+        board.project_settings(self.root, {"provider": "codex"})
+        self.assertIn("Reach it from ChatGPT", board.project_settings_form(0, board.project_settings(self.root)[1], root=self.root))
+        self.assertEqual(board.app_reach(), "Codex projects are in the ChatGPT app once each is paired.",
+                         "no Claude app named where no project runs on Claude Code")
+        board.project_settings(self.root, {"provider": "claude"})
+        self.assertIn("Remote Control", board.project_settings_form(0, board.project_settings(self.root)[1], root=self.root))
+        self.assertIn("Claude Code projects are also in the Claude app", board.app_reach())
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)

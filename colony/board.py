@@ -5406,7 +5406,7 @@ def settings_panel(pid, root):
     and archiving or deleting it."""
     merged, own = project_settings(root)
     return (f"{project_settings_form(pid, own, root=root)}"
-                f"<p class='muted'>Provider, model, effort and Remote Control apply when its console next starts; helper tiers at once.</p>"
+                f"<p class='muted'>Provider, model, effort and remote access apply when its console next starts; helper tiers at once.</p>"
                 f"{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
                 f"<p class='muted'>Archive takes it off the board and the steward's watch (at work, it finishes that turn "
                 f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
@@ -5415,6 +5415,16 @@ def settings_panel(pid, root):
                 f"<button class='quiet'>Archive</button></form>"
                 f"<form method='post' action='/project/delete' onsubmit=\"return confirm('Delete {e(root.name)}? Its session stops and its folder moves to colony\\'s trash ({e(home() / 'trash')}), where you can restore it.')\">"
                 f"<input type='hidden' name='p' value='{pid}'><button class='danger'>Delete project</button></form></div>")
+
+
+def app_reach():
+    """How each program in use is reached from its own app, besides this board. PROVIDER: Claude Code's Remote Control
+    in the Claude app; Codex's pairing with the ChatGPT app."""
+    from . import providers as pv
+    used = {pv.key(pv.of(p)) for p in projects(registry()) if p.exists()}
+    ways = [w for k, w in (("claude", "Claude Code projects are also in the Claude app when Remote Control is on"),
+                           ("codex", "Codex projects are in the ChatGPT app once each is paired")) if k in used]
+    return "; ".join(ways) + "." if ways else ""
 
 
 def project_settings_form(pid, own, action="/project-settings", root=None):
@@ -5427,7 +5437,9 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
-            f"<label>Remote Control {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
+            # PROVIDER: each program's own way in from its app: Claude Code's Remote Control, Codex's ChatGPT pairing
+            f"<label>{'Reach it from ChatGPT' if (own.get('provider') or g['provider']) == 'codex' else 'Remote Control'} "
+            f"{opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
             + "<div class='swatches'><span>Colour</span>" + "".join(
                 f"<label title='{k}' style='--sw:{light};--swd:{dark}'><input type='radio' name='color' value='{'' if k == 'green' else k}'"
                 f"{' checked' if (own.get('color') or 'green') == k else ''}><span></span></label>" for k, (light, dark) in PALETTE.items())
@@ -7079,8 +7091,7 @@ def settings_page(reg):
                 card("<p>Outside services your projects reach, and how: <a href='/connections'>Connections →</a></p>")),
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
                                          f"{'open on your network' if s['lan'] else 'this machine only'}"),
-                card(f"<ul class='folders'>{where}</ul><p class='muted'>Each project, and the steward, is also in the Claude "
-                     f"app when Remote Control is on.</p>", board_fields)),
+                card(f"<ul class='folders'>{where}</ul><p class='muted'>{e(app_reach())}</p>", board_fields)),
         section("projects", "Project folders", e(f"{len(reg['roots'])} folder{'s' * (len(reg['roots']) != 1)} · "
                                                  f"{len(reg['projects'])} added one by one"
                                                  + (f" · {len(reg['hidden'])} hidden" if reg['hidden'] else "")),
