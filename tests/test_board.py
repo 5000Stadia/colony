@@ -1519,7 +1519,7 @@ class LingeringTest(BoardBase):
                 patch.object(L.console, "snapshot", return_value={"state": "idle", "lines": []}), \
                 patch.object(L.console, "drafting", return_value=False), \
                 patch.object(L.console, "attached", return_value=False), \
-                patch.object(L, "commands", side_effect=lambda name: [dict(c) for c in cmds.values()]), \
+                patch.object(L, "commands", side_effect=lambda root, name: [dict(c) for c in cmds.values()]), \
                 patch("colony.providers.key", return_value="claude"), \
                 patch("colony.usage.paused", return_value={}), \
                 patch.object(L.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
@@ -1546,6 +1546,42 @@ class LingeringTest(BoardBase):
                 out.write_text("tick" * (k + 2)); os.utime(out, (t, t))
                 L.tick(now=t); t += L.EVERY
             self.assertFalse(any("serve.py" in x for x in typed))
+
+
+class CodexHelpersTest(BoardBase):
+    def test_codex_helpers_at_work_come_from_its_thread_store_and_show_as_claude_codes_do(self):
+        import sqlite3
+        from colony import chat, context
+        codex = providers.get("codex")
+        home = self.root / "codexhome"
+        day = home / "sessions" / "2026" / "10" / "27"; day.mkdir(parents=True)
+        parent = "01a0e7ee-e226"
+        own = day / f"rollout-main-{parent}.jsonl"; own.write_text("")
+        def rollout(name, *kinds):
+            path = day / f"rollout-{name}.jsonl"
+            path.write_text("".join(json.dumps({"timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1793152671)), "type": "event_msg", "payload": {"type": k}}) + "\n"
+                                    for k in kinds))
+            return str(path)
+        db = sqlite3.connect(home / "state_5.sqlite")
+        db.execute("CREATE TABLE threads (id TEXT, source TEXT, updated_at INTEGER, agent_nickname TEXT, agent_role TEXT, "
+                   "agent_path TEXT, rollout_path TEXT)")
+        spawn = lambda of: json.dumps({"subagent": {"thread_spawn": {"parent_thread_id": of, "depth": 1}}}, separators=(",", ":"))
+        now = 1793152671
+        db.executemany("INSERT INTO threads VALUES (?,?,?,?,?,?,?)", [
+            ("a", spawn(parent), now, "Rawls", "colony-rote", "/root/codex_ui_subject", rollout("a", "task_started")),
+            ("b", spawn(parent), now, "Epicurus", "colony-routine", "/root/done_review", rollout("b", "task_started", "task_complete")),
+            ("c", spawn("someone-else"), now, "Kant", "colony-rote", "/root/theirs", rollout("c", "task_started")),
+            ("d", spawn(parent), now - 9 * 86400, "Old", "colony-rote", "/root/old", rollout("d", "task_started"))])
+        db.commit(); db.close()
+        codex._helping.clear()
+        with patch.object(context, "session", return_value={"provider": "codex", "id": parent, "path": str(own)}):
+            helping = codex.helpers(self.root, now=now + 600)
+        self.assertEqual([(h["name"], h["what"], h["stats"]) for h in helping], [("Rawls", "codex ui subject", "10m")],
+                         "its own, still in a turn: not one finished, another's, or one untouched for days")
+        snap = {"state": "idle", "lines": ["› Ask Codex to do anything"], "activity": {"line": None, "agents": []}, "helpers": helping}
+        self.assertEqual(board.seen(snap)["behind"], "1 helper running")
+        self.assertEqual(chat.running(["• Working (5m 27s • esc to interrupt) · 2 background terminals running · /ps to view"]),
+                         "2 background terminals running")
 
 
 class GlanceTest(BoardBase):

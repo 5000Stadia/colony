@@ -617,6 +617,10 @@ class ClaudeCode:
         m = re.search(r"\b(\d+) (?:background )?(agents?|tasks?|shells?|monitors?)\b", foot)
         return f"{m.group(1)} {m.group(2)} still at work" if m else None
 
+    def commands(self, pane):
+        from . import lingering
+        return lingering.claude_commands(pane)
+
     def elapsed(self, screen):
         """The timer on its live spinner line: "✶ Flowing… (3m 12s · ↓ 1.7k tokens)" gives "3m 12s"."""
         import re
@@ -1210,6 +1214,65 @@ class Codex:
         if at is None:
             return None
         return plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", lines[at])).strip().lstrip("›").strip()
+
+    _helping = {}
+
+    def commands(self, pane):
+        from . import lingering
+        return lingering.codex_commands(pane)
+
+    def helpers(self, root, now=None):
+        """Its helpers at work: Codex lists none under its box (its picker keeps finished ones too), so they come from
+        its thread store, each spawned with the session's id as its parent, and are at work while their own rollout's
+        last turn has started and not ended. [{name, what, stats, transcript}], kept ten seconds.
+        PROVIDER: Codex's state_5.sqlite threads (source subagent.thread_spawn) and rollouts."""
+        import sqlite3
+        import time
+        from . import context
+        now = time.time() if now is None else now
+        kept = self._helping.get(str(root))
+        if kept and now - kept[0] < 10:
+            return kept[1]
+        out = []
+        try:
+            s = context.session(root)
+            path = Path(s["path"]) if s and s.get("provider") == "codex" and s.get("path") else None
+            home = next((d.parent for d in (path.parents if path else []) if d.name == "sessions"), None)
+            if home and (home / "state_5.sqlite").exists():
+                db = sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True, timeout=1)
+                try:
+                    rows = db.execute("SELECT agent_nickname, agent_role, agent_path, rollout_path FROM threads "
+                                      "WHERE source LIKE ? AND updated_at > ?",
+                                      (f'%"parent_thread_id":"{s["id"]}"%', int(now) - 2 * 86400)).fetchall()
+                finally:
+                    db.close()
+                for nick, role, agent, rollout in rows:
+                    started = self._turn_open(rollout)
+                    if started:
+                        mins = int(max(0, now - started) // 60)
+                        out.append({"name": nick or role or "helper", "what": (agent or "").rsplit("/", 1)[-1].replace("_", " "),
+                                    "stats": f"{mins // 60}h {mins % 60}m" if mins >= 60 else f"{mins}m", "transcript": rollout})
+        except (OSError, sqlite3.Error, KeyError, TypeError):
+            out = []
+        self._helping[str(root)] = (now, out)
+        return out
+
+    @staticmethod
+    def _turn_open(rollout):
+        """When a rollout's last turn started, while it has not ended (task_complete, turn_aborted); else None."""
+        try:
+            for line in _newest_first(rollout, most=1 << 20):
+                if b'"event_msg"' not in line:
+                    continue
+                e = json.loads(line)
+                kind = (e.get("payload") or {}).get("type")
+                if kind in ("task_complete", "turn_aborted"):
+                    return None
+                if kind == "task_started":
+                    return _stamp(e)
+        except (OSError, ValueError):
+            pass
+        return None
 
     # Its own views that the agent may open (the subagent picker, "← for agents") are drawn as a choice, but they are
     # no question for the person: one is open while its heading is on screen with no prompt to type at below it.

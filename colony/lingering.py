@@ -8,7 +8,8 @@ of the project's is stirring. Once something has been quiet two hours and the ag
 nothing typed in its box and no one looking at it), colony types one line into its console naming what is quiet,
 so the agent stops what is done and leaves what is meant to stay. Each thing is named once, ever: that memory is the
 project's lingering.jsonl. Reading costs no tokens: /proc and file times, every five minutes.
-PROVIDER: Claude Code's background commands (its shell snapshot) and helpers (rows under its box, their transcripts).
+PROVIDER: each program's commands(pane) and helpers: Claude Code's shell snapshot, its rows under the box and their
+transcripts; Codex's app-server children and its thread store (quiet by CPU alone: its output is a pipe).
 """
 import os
 import re
@@ -42,26 +43,62 @@ def _output(pid):
         return None
 
 
-def commands(name):
-    """The background commands a console runs: [{pid, start, cpu, what, out}], each with all it started.
-    PROVIDER: Claude Code runs each command in a bash that sources its shell snapshot and evals the command."""
+def _pane(name):
     import subprocess
     pane = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True).stdout.strip()
-    if not pane.isdigit():
-        return []
+    return int(pane) if pane.isdigit() else None
+
+
+def _cmdline(pid):
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace").replace("\0", " ").strip()
+    except OSError:
+        return ""
+
+
+def _entry(pid, what):
+    st = _stat(pid)
+    if not st:
+        return None
+    cpu = sum((_stat(p) or (0, 0))[1] for p in console._descendants(pid))
+    return {"pid": pid, "start": st[0], "cpu": cpu, "what": what, "out": _output(pid)}
+
+
+def commands(root, name):
+    """The background commands a console runs: [{pid, start, cpu, what, out}], each with all it started, as its
+    program runs them (PROVIDER: commands(pane))."""
+    from . import providers
+    pane = _pane(name)
+    p = providers.of(root)
+    return [c for c in (p.commands(pane) if pane and hasattr(p, "commands") else []) if c]
+
+
+def claude_commands(pane):
+    """Claude Code runs each command in a bash that sources its shell snapshot and evals the command."""
     out = []
-    for pid in console._descendants(int(pane)):
-        try:
-            cmd = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace").replace("\0", " ")
-        except OSError:
-            continue
-        st = _stat(pid)
-        if "/shell-snapshots/snapshot-" not in cmd or not st:
-            continue
-        m = re.search(r"eval '(.*?)' < /dev/null && pwd", cmd, re.S) or re.search(r"eval '(.*)", cmd, re.S)
-        what = (m.group(1).replace("'\"'\"'", "'") if m else cmd).strip()
-        cpu = sum((_stat(p) or (0, 0))[1] for p in console._descendants(pid))
-        out.append({"pid": pid, "start": st[0], "cpu": cpu, "what": what, "out": _output(pid)})
+    for pid in console._descendants(pane):
+        cmd = _cmdline(pid)
+        if "/shell-snapshots/snapshot-" in cmd:
+            m = re.search(r"eval '(.*?)' < /dev/null && pwd", cmd, re.S) or re.search(r"eval '(.*)", cmd, re.S)
+            out.append(_entry(pid, (m.group(1).replace("'\"'\"'", "'") if m else cmd).strip()))
+    return out
+
+
+def codex_commands(pane):
+    """Codex's app-server runs each command as its own child, in a session of its own with nothing on its input;
+    its servers (MCP) it talks to through their input. Their output is a pipe the app-server reads: not looked at,
+    since reading it would take it, so a Codex command is quiet by its CPU alone."""
+    out = []
+    for server in (p for p in console._descendants(pane) if re.match(r"(\S*/)?codex app-server\b", _cmdline(p))):
+        for pid in console._descendants(server)[1:]:
+            try:
+                f = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+                own, parent = int(f[3]) == pid, int(f[1]) == server       # its session's leader, the server's child
+                quiet_input = os.readlink(f"/proc/{pid}/fd/0") == "/dev/null"
+            except (OSError, ValueError, IndexError):
+                continue
+            if own and parent and quiet_input:
+                out.append(_entry(pid, _cmdline(pid)))           # its output, a pipe, is no file: None
     return out
 
 
@@ -77,7 +114,7 @@ def quiet(root, name, now, snap):
     seen (the board just started) counts as stirring: it is watched a full QUIET before it can be named."""
     from . import chat, context
     found, stirring = [], False
-    for c in commands(name):
+    for c in commands(root, name):
         key = f"cmd:{c['pid']}:{c['start']}"
         was, wrote = _seen.get((name, key)), _mtime(c["out"])
         if not was or c["cpu"] - was["cpu"] >= STIR or wrote > was["wrote"]:
@@ -89,12 +126,14 @@ def quiet(root, name, now, snap):
             found.append({"key": key, "kind": "command", "what": c["what"], "task": task, "since": was["since"]})
     helping = chat.helpers(snap)
     if helping and not stirring:
+        # each helper's own transcript where its program names it (Codex), else all of the session's (Claude Code's)
         s = context.session(root)
         subs = Path(s["path"]).with_suffix("") / "subagents" if s and s.get("path") else None
         files = list(subs.glob("agent-*.jsonl")) if subs and subs.is_dir() else []
-        last = max((_mtime(f) for f in files), default=0)
-        if last and now - last >= QUIET:
-            for h in helping:
+        every = max((_mtime(f) for f in files), default=0)
+        for h in helping:
+            last = _mtime(h["transcript"]) if h.get("transcript") else every
+            if last and now - last >= QUIET:
                 found.append({"key": f"helper:{h['name']}:{h['what']}", "kind": "helper", "what": h["what"] or h["name"],
                               "name": h["name"], "since": last})
     return found
@@ -130,7 +169,7 @@ def tick(now=None):
             continue
         name, key = console.session_name(root), str(root)
         try:
-            if not console.running(name) or providers.key(providers.of(root)) != "claude":
+            if not console.running(name):
                 _idle.pop(key, None)
                 continue
             snap = console.snapshot(root, lines=4)
@@ -141,7 +180,7 @@ def tick(now=None):
             _idle.pop(key, None)
             continue
         first = _idle.setdefault(key, now)
-        if now - first < IDLE or usage.paused().get("claude"):
+        if now - first < IDLE or usage.paused().get(providers.key(providers.of(root))):
             continue
         fresh = [i for i in items if i["key"] not in told(root)]
         if fresh and console.type_into(name, line(fresh, now)):

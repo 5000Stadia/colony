@@ -656,8 +656,11 @@ def snapshot(root, lines=6, name=None):
             more = [l for l in (p.history_text(root) or "").splitlines() if l.strip()] + shown
         shown = more
     marker = getattr(p, "scrolled_marker", "")
-    return {"state": p.classify(now), "lines": shown[-lines:], "scrolled": bool(marker and marker in now),
-            "activity": p.activity(now) if hasattr(p, "activity") else {"line": None, "agents": []}}
+    out = {"state": p.classify(now), "lines": shown[-lines:], "scrolled": bool(marker and marker in now),
+           "activity": p.activity(now) if hasattr(p, "activity") else {"line": None, "agents": []}}
+    if hasattr(p, "helpers"):                          # a program that lists no helpers on screen says them otherwise
+        out["helpers"] = p.helpers(root)
+    return out
 
 
 # ---------------------------------------------------------------- a minimal WebSocket (RFC 6455)

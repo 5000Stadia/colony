@@ -210,7 +210,10 @@ def worked(steps):
 
 def helpers(snap):
     """The helpers a console has at work, off the rows its program lists under the box (Claude Code: "◯ colony-rote
-    Check the menu   2m 5s · ↓ 41k tokens", gone once it ends): [{name, what, stats}]. PROVIDER: Claude Code's rows."""
+    Check the menu   2m 5s · ↓ 41k tokens", gone once it ends), or as its program says them otherwise (Codex, from
+    its thread store): [{name, what, stats}]. PROVIDER: Claude Code's rows."""
+    if "helpers" in snap:
+        return snap["helpers"]
     out = []
     for a in (snap.get("activity") or {}).get("agents") or []:
         if a["name"] != "main":
@@ -222,10 +225,11 @@ def helpers(snap):
 
 def running(lines, helping=()):
     """What runs in the background while the agent waits, off its console's footer (Claude Code: "· 1 shell",
-    "2 background tasks", "1 local agent") and its helpers: a few words, or "". PROVIDER: Claude Code's footer wording."""
+    "2 background tasks", "1 local agent"; Codex: "2 background terminals running") and its helpers: a few words, or "".
+    PROVIDER: Claude Code's and Codex's footer wording."""
     found = [f"{len(helping)} helper{'s' if len(helping) > 1 else ''}"] if helping else []
     for line in lines:
-        for n, what in re.findall(r"\b(\d+) (shells?|background tasks?|local agents?|running tasks?)\b", line):
+        for n, what in re.findall(r"\b(\d+) (shells?|background tasks?|background terminals?|local agents?|running tasks?)\b", line):
             found.append(f"{n} {what}")
     return ", ".join(dict.fromkeys(found)) + " running" if found else ""
 
