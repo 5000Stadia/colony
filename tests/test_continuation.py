@@ -1,6 +1,8 @@
 """Goal lifecycle checks with a local RPC double and isolated board records."""
 from copy import deepcopy
 import json
+import subprocess
+import sys
 import os
 from pathlib import Path
 import tempfile
@@ -983,6 +985,159 @@ CODEX_WORKING = ("  Worked for 7m 51s • 2:51 AM\n\n› [colony] You have mail 
 CODEX_QUOTED = ("› Show the recorded display example.\n\n\n• An example of the old status display:\n\n"
                 "  • Working (5m 12s • esc to interrupt)\n\n  The operation has finished.\n\n\n"
                 "  Worked for <1s • 02:50\n\n› Ask Codex to do anything\n\n  GPT-6.1-Sol default · /tmp/work\n")
+
+
+class RestartTest(unittest.TestCase):
+    """The machine restarting: no console, boot or systemd is touched; each is a stand-in."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='colony-restart-')
+        self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.roots = [base / n for n in ('busy', 'quiet', 'gone')]
+        for r in self.roots:
+            (r / '.board').mkdir(parents=True)
+        env = patch.dict(os.environ, COLONY_BOARD_HOME=str(base / 'board'), XDG_CONFIG_HOME=str(base / 'config'))
+        env.start()
+        self.addCleanup(env.stop)
+        board.save_registry(dict(projects=[str(r) for r in self.roots], roots=[], settings=dict(messaging=False, active_hours='off')))
+        self.boot, self.running, self.state, self.room = 'b1', set(), 'idle', True
+        self.started, self.typed = [], []
+        names = {console.session_name(r): r for r in self.roots}
+        for target, name, value in ((recovery, '_boot', lambda: self.boot),
+                                    (console, 'running', lambda name: names.get(name) in self.running),
+                                    (console, 'ensure', lambda root, *a, **k: self.started.append(root) or self.running.add(root)),
+                                    (console, 'room', lambda: self.room), (console, 'age', lambda name: 60),
+                                    (console, 'snapshot', lambda root, lines=6, name=None: dict(state=self.state, lines=[])),
+                                    (console, 'drafting', lambda name: False),
+                                    (console, 'type_into', lambda name, text: self.typed.append((names[name], text)) or True)):
+            p = patch.object(target, name, side_effect=value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_after_a_restart_each_console_comes_back_one_at_a_time_and_those_mid_work_are_told_to_carry_on(self):
+        # the person: "if the system is restarted, I want colony to automatically load", "and ... projects to
+        # continue, which is probably just a gentle message nudge to the project"
+        busy, quiet, gone = self.roots
+        self.running = {busy, quiet}
+        t = time.time()                                       # working.json is stamped with the clock
+        board.working_now([busy])
+        recovery.rebooted(t)
+        self.assertEqual(json.loads((board.home() / 'boot.json').read_text())['running'], sorted([str(busy), str(quiet)]))
+        self.running, self.boot = set(), 'b2'                    # the machine restarts: every console ended with it
+        board.save_registry(dict(board.registry(), projects=[str(busy), str(quiet)]))   # one left the board since
+        recovery.rebooted(t + 600)
+        self.assertEqual(len(self.started), 1, 'one at a time')
+        recovery.rebooted(t + 630)
+        self.assertEqual(len(self.started), 1, 'a minute apart')
+        self.room = False
+        recovery.rebooted(t + 700)
+        self.assertEqual(len(self.started), 1, 'and only with memory to spare')
+        self.room = True
+        recovery.rebooted(t + 760)
+        self.assertEqual(sorted(map(str, self.started)), sorted([str(busy), str(quiet)]), 'each that was running, not one gone')
+        self.assertEqual([r for r, _ in self.typed], [busy], 'the one at work is told; the idle one comes back idle')
+        self.assertIn('This machine restarted', self.typed[0][1])
+        self.assertIn('carry on where you were', self.typed[0][1])
+        for k in range(5):
+            recovery.rebooted(t + 800 + 60 * k)
+        self.assertEqual(len(self.typed), 1, 'once')
+        self.assertEqual(len(self.started), 2)
+
+    def test_one_still_working_is_told_once_it_is_back_at_its_prompt_and_not_hours_later(self):
+        busy = self.roots[0]
+        self.running, t = {busy}, time.time()
+        board.working_now([busy])
+        recovery.rebooted(t)
+        self.running, self.boot, self.state = set(), 'b2', 'working'
+        recovery.rebooted(t + 600)
+        self.assertEqual(self.typed, [], 'not over its own turn')
+        self.state = 'idle'
+        recovery.rebooted(t + 600 + recovery.TELL_FOR + 1)
+        self.assertEqual(self.typed, [], 'past the window, the word is dropped')
+
+    def test_a_restart_parks_each_project_in_turn_and_goes_once_all_are_clear_or_at_the_hour(self):
+        # the person: "an option to restart from a colony function, not from an agent, but token free, which does a bit
+        # of a round Robin request to notify projects, and to ask projects to inform a response that restart is OK ...
+        # if it doesn't get parked within the next hour that it will force a restart"
+        from colony import chat, lingering, machine
+        busy, quiet, other = self.roots
+        self.running, states, powered, told = {busy, quiet, other}, {busy: 'working', quiet: 'idle', other: 'working'}, [], []
+        with patch.object(console, 'snapshot', side_effect=lambda root, lines=6, name=None: dict(state=states[root], lines=[])), \
+                patch.object(board, 'at_rest', return_value=True), patch.object(chat, 'helpers', return_value=[]), \
+                patch.object(lingering, 'commands', return_value=[]), \
+                patch.object(machine, '_power', side_effect=lambda mode: powered.append(mode)), \
+                patch.object(monitor, 'queue', side_effect=lambda text, relay=False: told.append(text)):
+            t = time.time()
+            machine.start(now=t)
+            self.assertEqual(machine.tick(t), f'asked {busy.name} to park', 'the idle one is clear unasked; the first at work asked')
+            self.assertEqual([r for r, _ in self.typed], [busy], 'typed, so it reads it within its turn')
+            nid = machine.state()['asked'][str(busy)]
+            self.assertIn(f'colony noted {nid} "parked: where things stand"', self.typed[0][1])
+            self.assertIn('by ' + machine.clock(t + machine.WITHIN) + ' at the latest', self.typed[0][1])
+            self.assertTrue(next(n for n in board.notes(busy) if n['id'] == nid)['delivered_at'], 'not handed over twice')
+            machine.tick(t + 30)
+            self.assertEqual(len(self.typed), 1, 'the next a minute later')
+            machine.tick(t + machine.EVERY)
+            self.assertEqual([r for r, _ in self.typed], [busy, other], 'round robin')
+            self.assertEqual(machine.line(), 'Restarting the machine: 1 of 3 projects parked · by '
+                             + machine.clock(t + machine.WITHIN) + ' at the latest')
+            board.append(busy, 'notes.jsonl', {'type': 'addressed', 'of': nid, 'at': board.now(), 'text': 'parked: R4 committed'})
+            states[other] = 'idle'                                  # its turn ended, nothing left running
+            for k in range(1, 4):
+                machine.tick(t + machine.EVERY + 60 * k)
+            self.assertEqual(powered, ['restart'], 'all clear: it goes')
+            # at the hour, it goes regardless
+            powered.clear(); states[other] = 'working'
+            machine.start(now=t)
+            for k in range(3):
+                machine.tick(t + machine.EVERY * k)
+            self.assertEqual(powered, [])
+            machine.tick(t + machine.WITHIN)
+            self.assertEqual(powered, ['restart'])
+
+    def test_a_restart_cancelled_lets_those_asked_carry_on_and_one_that_cant_go_tells_the_person(self):
+        from colony import chat, lingering, machine
+        busy = self.roots[0]
+        self.running = {busy}
+        with patch.object(console, 'snapshot', return_value=dict(state='working', lines=[])), \
+                patch.object(board, 'at_rest', return_value=True), patch.object(chat, 'helpers', return_value=[]), \
+                patch.object(lingering, 'commands', return_value=[]):
+            t = time.time()
+            machine.start(now=t)
+            machine.tick(t)
+            machine.cancel()
+            self.assertIsNone(machine.state())
+            self.assertIn('cancelled the machine', board.notes(busy)[-1]['text'])
+            told = []
+            with patch.object(machine, '_power', return_value='Access denied'), \
+                    patch.object(monitor, 'queue', side_effect=lambda text, relay=False: told.append(text)):
+                machine.start(off=True, now=t)
+                machine.tick(t + machine.WITHIN)
+            self.assertIn("couldn't shut down the machine (Access denied)", told[0])
+            self.assertIn('Access denied', machine.line())
+
+    def test_colony_can_start_with_the_machine_as_a_systemd_user_service(self):
+        from colony import autostart
+        calls = []
+        ok = lambda *a: calls.append(a) or subprocess.CompletedProcess(a, 0, 'enabled', '')
+        with patch.object(autostart, 'available', return_value=True), patch.object(autostart, '_systemctl', side_effect=ok), \
+                patch.object(autostart, 'lingers', return_value=True), \
+                patch.object(autostart, 'search_path', return_value='/home/k/.local/bin:/usr/bin'):
+            self.assertEqual(autostart.turn(True), 'colony starts with the machine')
+            unit = autostart.path().read_text()
+            self.assertIn('ExecStart=' + sys.executable + ' -m colony board', unit, 'the board, on the port it had')
+            self.assertIn('Environment="PATH=/home/k/.local/bin:/usr/bin"', unit, 'where claude and codex are found')
+            self.assertIn('KillMode=process', unit, 'stopping the service ends no console')
+            self.assertIn('WantedBy=default.target', unit)
+            self.assertIn(('enable', autostart.unit_name()), calls)
+            self.assertNotEqual(autostart.unit_name(), 'colony.service', "a test's board never touches the person's")
+            self.assertTrue(autostart.on())
+            self.assertEqual(autostart.turn(False), 'colony no longer starts with the machine')
+            self.assertFalse(autostart.path().exists())
+            self.assertIn(('disable', autostart.unit_name()), calls)
+        with patch.object(autostart, 'available', return_value=False):
+            with self.assertRaises(ValueError):
+                board.set_setting('autostart', 'on')
 
 
 class FrozenTest(unittest.TestCase):

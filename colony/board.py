@@ -269,6 +269,7 @@ SETTING_HELP = {
     "model_adoption": "when a new model becomes a recommendation: automatic or ask (one decision per model)",
     "helper_models": "provider-specific helper pins; edit the colony helper tiers in Settings",
     "monitor_model": "the steward's model, as MODEL:EFFORT (blank: its program's step-up tier)",
+    "autostart": "colony starts with the machine (a systemd user service): the board, then each console that was running, back in its own conversation, and those that were mid-work told to carry on",
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
@@ -305,6 +306,13 @@ def set_setting(key, value):
             reg["roots"].append(reg["new_root"])
     elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update"):
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
+    elif key == "autostart":                   # kept by systemd, not here: what it says is what holds
+        from . import autostart
+        try:
+            autostart.turn(str(value).lower() in ("on", "true", "yes", "1"))
+        except RuntimeError as err:
+            raise ValueError(str(err))
+        return
     elif key in ("model", "effort", "tailscale"):
         reg["settings"][key] = str(value).strip()
     elif key in ("safe_pause", "safe_pause_session"):
@@ -2054,9 +2062,31 @@ def home_list(reg):
             + ("" if plist else "<p class='muted'>No projects yet.</p>"))
 
 
+def machine_card():
+    """Restarting or shutting down the machine, the projects parked first (machine.py), or the one under way."""
+    from . import autostart, machine
+    if machine.state():
+        return (f"<form method='post' action='/machine' class='options'><p>{e(machine.line())}</p>"
+                "<button name='do' value='cancel' class='quiet'>Cancel</button></form>")
+    return ("<form method='post' action='/machine' class='options'><p class='muted'>Each project at work is asked in turn "
+            "to park (finish or stop at a clean point, commit) and says when it's safe; once all have, the machine goes. "
+            "At the hour it goes regardless.</p><button name='do' value='restart'>Park, then restart</button> "
+            "<button name='do' value='off' class='quiet'>Park, then shut down</button></form>"
+            + ("" if autostart.on() or not autostart.available() else
+               "<p class='muted'>Colony won't start by itself afterwards: tick Start with the machine, under This board.</p>"))
+
+
+def machine_bar():
+    """On the front page while a restart is under way: how far the parking is, with Cancel."""
+    from . import machine
+    said = machine.line()
+    return (f"<div class='card machinebar'><form method='post' action='/machine'><span>{e(said)}</span> "
+            "<button name='do' value='cancel' class='quiet'>Cancel</button></form></div>") if said else ""
+
+
 def home_page(reg):
     """The board's front page: every project and what each needs of the person, answered where it shows."""
-    return shell(reg, -2, "<h1>Projects</h1><div id='home'>" + home_list(reg) + "</div>"
+    return shell(reg, -2, "<h1>Projects</h1>" + machine_bar() + "<div id='home'>" + home_list(reg) + "</div>"
                  f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('home'), '/home/feed');</script>")
 
 
@@ -6974,7 +7004,7 @@ def connection_ticks():
 
 
 def settings_page(reg):
-    from . import selection, voice
+    from . import autostart, machine, selection, voice
     selection.migrate()
     reg = registry()
     rows = []
@@ -7060,7 +7090,10 @@ def settings_page(reg):
         f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
         f"<span class='muted'>(one inbox per project)</span></label>"
         f"<label><input type='checkbox' name='auto_update' value='on'{check('auto_update')}> Keep Claude Code and Codex updated "
-        f"<span class='muted'>(daily; a console moves to the new version once it sits idle, in the same conversation)</span></label>") + save
+        f"<span class='muted'>(daily; a console moves to the new version once it sits idle, in the same conversation)</span></label>"
+        + (f"<label><input type='checkbox' name='autostart' value='on'{' checked' if autostart.on() else ''}> Start with the machine "
+           f"<span class='muted'>(after a restart, the board and each console that was running come back, in the same "
+           f"conversation; those mid-work are told to carry on)</span></label>" if autostart.available() else "")) + save
     steward_on = own(f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the steward with the board</label>") + save
     balance = own(auto_balance_fields()) + save
     port = getattr(settings_page, "port", 8790)
@@ -7168,6 +7201,8 @@ def settings_page(reg):
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
                                          f"{'open on your network' if s['lan'] else 'this machine only'}"),
                 card(f"<ul class='folders'>{where}</ul><p class='muted'>{e(app_reach())}</p>", board_fields)),
+        section("machine", "This machine", e(machine.line() or ("starts with the machine" if autostart.on() else
+                                                                "doesn't start with the machine")), card(machine_card())),
         section("projects", "Project folders", e(f"{len(reg['roots'])} folder{'s' * (len(reg['roots']) != 1)} · "
                                                  f"{len(reg['projects'])} added one by one"
                                                  + (f" · {len(reg['hidden'])} hidden" if reg['hidden'] else "")),
@@ -7826,6 +7861,9 @@ class Handler(BaseHTTPRequestHandler):
             set_setting("messaging", form.get("messaging", "off"))
             set_setting("trust", form.get("trust", "off"))
             set_setting("auto_update", form.get("auto_update", "off"))
+            from . import autostart
+            if autostart.available() and autostart.on() != (form.get("autostart") == "on"):
+                set_setting("autostart", form.get("autostart", "off"))
             if form.get("permissions"):
                 set_setting("permissions", form["permissions"])
             if form.get("provider"):
@@ -8108,6 +8146,18 @@ class Handler(BaseHTTPRequestHandler):
                 left = console.draft(monitor.name() if key == "steward" else console.session_name(src)) or ""
                 return self._send(409, short(" ".join(left.split()), 80).encode())
             self.send_response(204 if sent else 409)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/machine":                         # the person restarting the machine, the projects parked first
+            from . import machine
+            do = form.get("do", "")
+            if do == "cancel":
+                machine.cancel()
+            elif do in ("restart", "off"):
+                machine.start(off=do == "off")
+            self.send_response(303)
+            self.send_header("Location", "/")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

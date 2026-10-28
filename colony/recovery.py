@@ -215,8 +215,106 @@ def frozen(root, now=None):
     return "restarted"
 
 
+# --- The machine restarted, and every console ended with it, mid-work or not. Colony keeps, as it goes, which consoles
+# run and which are at work; the first time the watcher runs on a new boot, each console that was running comes back in
+# its own conversation, one a minute and only with memory to spare (all at once, ten consoles reading their
+# conversations back ran the machine out, 2026-10-28), and one that was at work is told once, when it is back at its
+# prompt, that the machine restarted and to carry on (the person, 2026-10-28: "all of its Tailscale and other
+# continuation elements of projects to continue, which is probably just a gentle message nudge to the project"). One
+# that was idle comes back idle: carry-on wakes it if it has work it can start. With autostart.py, after a power cut too.
+BOOT = Path("/proc/sys/kernel/random/boot_id")
+EVERY_BACK = 60          # seconds between consoles brought back
+TELL_FOR = 3 * 3600      # seconds after the restart within which one that was at work is told
+
+
+def _boot():
+    try:
+        return BOOT.read_text().strip()
+    except OSError:
+        return ""
+
+
+def _boot_path():
+    return board.home() / "boot.json"
+
+
+def _booted_at():
+    """When this machine started, as a clock time ("7:42 AM")."""
+    try:
+        at = int(next(l for l in Path("/proc/stat").read_text().splitlines() if l.startswith("btime")).split()[1])
+    except (OSError, StopIteration, ValueError, IndexError):
+        return "just now"
+    return time.strftime("%I:%M %p", time.localtime(at)).lstrip("0")
+
+
+def rebooted(now=None):
+    """Keep the record of what runs, and after a restart bring it back: what was done this pass, or None."""
+    now = now or time.time()
+    boot = _boot()
+    if not boot:
+        return None
+    try:
+        was = _boot_path().read_text()
+        rec = json.loads(was)
+    except (OSError, ValueError):
+        was, rec = "", {}
+    on = {str(p): p for p in board.projects() if p.exists()}
+    did = None
+    if rec.get("boot") and rec["boot"] != boot:
+        try:
+            w = json.loads((board.home() / "working.json").read_text())
+        except (OSError, ValueError):
+            w = {}
+        at_work = set(w.get("roots") or []) if rec.get("at", 0) - w.get("at", 0) < 300 else set()
+        back = [r for r in rec.get("running", []) if r in on]
+        text = (f"[colony] This machine restarted ({_booted_at()}), and colony started your console again in this "
+                "conversation. Everything that was running then stopped with it: commands, helpers, servers. Check what "
+                "was left mid-way and carry on where you were.")
+        rec = {"boot": boot, "running": back, "back": back, "back_at": 0, "since": now,
+               "tell": {r: text for r in back if str(Path(r).resolve()) in at_work}}
+        did = f"restarted: {len(back)} to bring back"
+    rec["boot"] = boot
+    back = [r for r in rec.get("back", []) if r in on]
+    if back and now - rec.get("back_at", 0) >= EVERY_BACK:
+        root = on[back[0]]
+        if console.running(console.session_name(root)):
+            back.pop(0)
+        elif console.room():
+            console.ensure(root)
+            back.pop(0)
+            rec["back_at"] = now
+            did = f"brought back {root.name}"
+    rec["back"] = back
+    tell = {r: t for r, t in (rec.get("tell") or {}).items() if r in on and now - rec.get("since", now) < TELL_FOR}
+    for r, text in list(tell.items()):
+        root, name = on[r], console.session_name(on[r])
+        g = lead.info(root)
+        if r in back or not console.running(name) or str(root) in usage.paused() or g.get("paused") or g.get("handoff") \
+                or context.refreshing(root) or board.asks(root):
+            continue
+        if console.age(name) > 20 and console.snapshot(root, lines=1)["state"] == "idle" and not console.drafting(name) \
+                and console.type_into(name, text):
+            tell.pop(r)
+            did = f"told {root.name} to carry on"
+    rec["tell"] = tell
+    # what runs now, and what is still to come back: the record a restart is read from
+    if now - rec.get("at", 0) >= 60 or did:
+        rec["running"] = sorted(set(back) | {r for r, p in on.items() if console.running(console.session_name(p))})
+        rec["at"] = now
+    if json.dumps(rec, indent=1) != was:            # written as it changes, not at every look
+        board.home().mkdir(parents=True, exist_ok=True)
+        _boot_path().write_text(json.dumps(rec, indent=1))
+    return did
+
+
 def tick_all():
     """Every project's console. One's trouble stops no other's, nor the rest of the watcher's round."""
+    from . import machine
+    for step in (machine.tick, rebooted):     # the machine's own restart: parked first, then brought back
+        try:
+            step()
+        except Exception:
+            pass
     for p in board.projects():
         if p.exists():
             for check in (tick, frozen):

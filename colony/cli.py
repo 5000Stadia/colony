@@ -395,6 +395,11 @@ def cmd_doctor(a):
     for k, p in providers.PROVIDERS.items():
         if providers.usable(p):
             print(f"note  turbo: {turbo.line(k)}")
+    from . import autostart
+    if autostart.available():
+        print(f"{'ok  ' if autostart.on() else 'note'}  colony "
+              + ("starts with the machine" + ("" if autostart.lingers() else ", once you log in") if autostart.on()
+                 else "doesn't start with the machine: Settings › Start with the machine (colony settings autostart on)"))
     from . import lingering
     try:
         behind = lingering.left()
@@ -1277,7 +1282,7 @@ def cmd_settings(a):
         try:
             board.set_setting(a.key, a.value or "")
         except KeyError:
-            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.SETTING_NAMES.get(k, k) for k in board.DEFAULT_SETTINGS)}, new-folder")
+            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.SETTING_NAMES.get(k, k) for k in board.DEFAULT_SETTINGS)}, autostart, new-folder")
         except ValueError as err:                     # a setting that says what reads (active_hours)
             raise SystemExit(f"colony: {err}")
     reg = board.registry()
@@ -1289,6 +1294,9 @@ def cmd_settings(a):
                  if k == "consultants" else ",".join(f"{f}={'on' if v.get(f, True) else 'off'}" for f in providers.PROVIDERS)
                  if k == "turbo_by" else v or "(colony Auto)")
         print(f"{board.SETTING_NAMES.get(k, k):14} {str(shown):28} {board.SETTING_HELP.get(k, '')}")
+    from . import autostart
+    if autostart.available():                         # kept by systemd: shown as it holds there
+        print(f"{'autostart':14} {'on' if autostart.on() else 'off':28} {board.SETTING_HELP['autostart']}")
     print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
     print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
     return 0
@@ -1505,6 +1513,26 @@ def cmd_ready(a):
     if left:
         print(f"Colony's check: {len(left)} tracked file{'s' * (len(left) != 1)} not committed ({', '.join(left[:5])}"
               f"{', …' if len(left) > 5 else ''}). If they're this item's work, commit them now; it isn't ready until it's in.")
+    return 0
+
+
+def cmd_reboot(a):
+    """Restart the machine, or shut it down, once the projects have parked their work (an hour at most): the person's
+    to start, from a terminal of theirs or Settings, never an agent's (machine.py)."""
+    import os
+    from . import autostart, machine
+    if a.status:
+        print(machine.line() or "no restart under way")
+        return 0
+    if os.environ.get("COLONY_CONSOLE"):
+        raise SystemExit("colony: restarting the machine is the person's to start (Settings › This machine), not an agent's")
+    if a.cancel:
+        print("cancelled: each project asked hears it can carry on" if machine.cancel() else "no restart was under way")
+        return 0
+    machine.start(off=a.off, within=a.within * 60)
+    print(machine.line() + ". Each project at work is asked in turn, a minute apart; colony reboot --cancel stops it.")
+    if not autostart.on() and autostart.available():
+        print("note: colony won't start by itself afterwards (colony settings autostart on)")
     return 0
 
 
@@ -1872,6 +1900,12 @@ def main(argv=None):
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
+    p = sub.add_parser("reboot", help="restart the machine once every project has parked its work (an hour at most)")
+    p.add_argument("--off", action="store_true", help="shut it down instead")
+    p.add_argument("--within", type=int, default=60, help="minutes the projects have to park (default 60)")
+    p.add_argument("--cancel", action="store_true", help="stop it: each project asked carries on")
+    p.add_argument("--status", action="store_true", help="how far the parking is")
+    p.set_defaults(fn=cmd_reboot)
     p = sub.add_parser("close", help="close a project safely: it lands its work, then comes off the board (files and conversation kept)")
     p.add_argument("name"); p.add_argument("--cancel", action="store_true", help="keep it on the board after all")
     p.set_defaults(fn=cmd_close)
