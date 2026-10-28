@@ -119,10 +119,15 @@ You were once called the monitor: older records, files and settings still say `m
   4. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
      permissions (ask, edits, all, plan).
   5. Where new projects go (`colony settings new-folder PATH`).
-  6. Access: the board from their phone on the home network (lan); Remote Control in Claude or ChatGPT. For
-     Codex in ChatGPT, check the saved choice before offering; on Yes, pair now, the board makes a short-lived
-     code in Settings → Agent programs → Codex in ChatGPT, entered in the ChatGPT app under Codex → Add
-     manually, once per Codex project. Never paste codes into notes.
+  6. Access: the board answers this machine only. Every address you give them comes from `colony urls`, never
+     worked out from the settings or the machine's own addresses. Their phone has two ways in; offer both and
+     press neither. The Claude or ChatGPT app (Remote Control) shows each project's own session, not the board.
+     For Codex in ChatGPT, check the saved choice before offering; on Yes, pair now, the board makes a
+     short-lived code in Settings → Agent programs → Codex in ChatGPT, entered in the ChatGPT app under Codex →
+     Add manually, once per Codex project. Never paste codes into notes. Tailscale brings the board itself: set
+     up once on this machine (`colony remote` says each step; what needs sudo or a sign-in is theirs, in a
+     terminal), and in the same walk-through they turn on HTTPS certificates in Tailscale's admin page (DNS →
+     HTTPS Certificates). The home network only if they ask: `colony settings lan on`, then `colony restart`.
   7. Start-up questions: whether new consoles answer them themselves (trust).
   8. The helm: whether you settle routine questions for them.
 
@@ -664,9 +669,13 @@ class Watcher:
         it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
         on a question, is left alone until its turn ends, unless the mail is urgent. The end of a safe pause wakes
         a project whatever its screen seems to say (a misread one stayed asleep all evening), short of a choice on
-        it, which typing would answer; a nudge that doesn't hand it over is tried again."""
+        it, which typing would answer; a nudge that doesn't hand it over is tried again. What a session's start
+        brings (standing context, what was handed over before and is still open) wakes nothing, and consoles that
+        have just started are woken one per look, so a reboot's or an update's worth of them don't all take a turn
+        at the same moment."""
         from . import mail, usage, vision
         closing = board.closing()
+        woke_starting = False
         for p in board.projects():
             if not p.exists():
                 continue
@@ -691,6 +700,10 @@ class Watcher:
             if state == "off":
                 console.ensure(p)
             elif state == "idle" or (urgent and state == "working"):
+                name = console.session_name(p)
+                starting = console.age(name) < STARTUP_WINDOW
+                if starting and woke_starting:
+                    continue                        # another console that has just started was woken this look
                 what = " and ".join(filter(None, [
                     "a note from the person on the board" if any(n.get('author') not in ('colony', 'observation', 'monitor', 'suggestion') for n in notes) else "",
                     f"a note from {board.steward_role()}" if any(n.get('author') == 'monitor' for n in notes) else "",
@@ -699,9 +712,10 @@ class Watcher:
                     "an update from Colony" if any(n.get('author') == 'colony' for n in notes) else "",
                     "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
                     "mail from another project in the colony" if letters else ""]))
-                if console.type_into(console.session_name(p), f"[colony] You have {what}."):
-                    self.nudged |= waiting          # else someone is typing there: tried again next time
+                if console.type_into(name, f"[colony] You have {what}."):
+                    self.nudged |= waiting          # else someone is typing there, or its box isn't up: tried again
                     self.nudged_at.update((i, time.time()) for i in resume)
+                    woke_starting = woke_starting or starting
 
     def close(self):
         """Each project being closed (`colony close`) comes off the board once the turn its note started has ended with
@@ -1004,7 +1018,8 @@ class Watcher:
         board.working_now(seen)                       # the steward on or off: written only as it changes, or each minute
 
     def run(self):
-        while True:
+        mine = board.home()          # the board it was started for: its home changed under it, it stops
+        while board.home() == mine:
             try:
                 self.tick()
                 passed()

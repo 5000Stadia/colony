@@ -366,7 +366,10 @@ def set_setting(key, value):
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
     elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update"):
+        was = reg["settings"].get(key)
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
+        if key == "lan" and reg["settings"][key] != was:
+            save_reach(reg["settings"][key], reg)     # a restart starts the board as it was last started
     elif key == "autostart":                   # kept by systemd, not here: what it says is what holds
         from . import autostart
         try:
@@ -549,14 +552,49 @@ def project_settings(root, changes=None):
     return merged, own
 
 
-def urls(port):
-    """Every address the board can be opened at, for the person to use from each place."""
+def reach(saved=False):
+    """Whether the board answers other devices on the network as it runs now: the running board's own record
+    (listening.json, written as it starts to serve). saved: as it will after its next restart, which repeats the start
+    it saved (server.json). Either way the lan setting is only the default for a start without --lan or --local: read
+    in their place, the steward sent the person to a home-network address of a board started with --local, which
+    answered this machine alone."""
+    if not saved:
+        try:
+            rec = json.loads((home() / "listening.json").read_text())
+            os.kill(rec["pid"], 0)                      # a board that has stopped has no reach of its own
+            return bool(rec["lan"])
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    try:
+        args = json.loads((home() / "server.json").read_text())
+    except (OSError, ValueError):
+        args = []
+    return "--lan" in args if "--lan" in args or "--local" in args else registry()["settings"]["lan"]
+
+
+def save_reach(lan, reg=None):
+    """The saved start answers the network or only this machine, so the next restart does: a change of the lan
+    setting takes effect there. Not while remote access holds the board open to the person's devices
+    (`colony remote --off` gives it back the reach it had)."""
+    saved = home() / "server.json"
+    if (reg or registry())["settings"].get("tailscale") or not saved.exists():
+        return
+    try:
+        args = [x for x in json.loads(saved.read_text()) if x not in ("--lan", "--local")]
+    except ValueError:
+        return
+    saved.write_text(json.dumps(args + ["--lan" if lan else "--local"]))
+
+
+def urls(port, lan=None):
+    """Every address the board can be opened at, for the person to use from each place: beyond this machine only
+    where it answers there (reach(), unless `lan` says)."""
     import socket
     from . import serving, tailscale
     out = [f"http://127.0.0.1:{port}/"]
     if registry()["settings"].get("tailscale") and _https_served(port):
         out.insert(0, tailscale.url(443))
-    if registry()["settings"]["lan"]:
+    if reach() if lan is None else lan:
         seen = set()
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -1007,6 +1045,25 @@ def take_needs_you(root):
     return True
 
 
+def hold_needs_you(root):
+    """A turn said it asks the person, but its words couldn't be read as it ended: the word is kept, so the next turn
+    whose words can be read waits on the person with them, rather than spent on nothing."""
+    path = Path(root) / ".board" / "needs-you"
+    if path.exists():
+        path.write_text("held " + now())
+
+
+def drop_held_needs_you(root):
+    """The person answered (in its console, or a note): a word kept from a turn that ended asking is answered too.
+    One said in the turn now running stays."""
+    path = Path(root) / ".board" / "needs-you"
+    try:
+        if path.read_text().startswith("held "):
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def record_ask(root, key, text, explicit=False):
     """One entry per turn: the turn's whole text. A newer question replaces an unanswered older one. A turn whose
     only questions are open gates restated asks nothing new: the gates already wait on the person."""
@@ -1121,10 +1178,14 @@ def delivered(root, handed, own=()):
 
 def deliver(root, session=False, *, mark=True):
     """What the agent should hear now: notes whose moment has come and that it has not been handed,
-    marked as handed; at the start of a session also the ones handed but not yet acted on, so nothing
-    sits unanswered however the agent works."""
+    marked as handed; at the start of a session instead the ones handed but not yet acted on, so nothing
+    sits unanswered however the agent works. What is new waits for a prompt: handed over as a session starts,
+    which starts no turn, a new project's first note sat in its agent's context while nothing woke it (it
+    counted as handed over), so the agent never spoke first. Left for the prompt, the watcher types one."""
+    if session:
+        return [], [n for n in open_notes(root) if n["delivered_at"]]
     fresh = [n for n in open_notes(root) if not n["delivered_at"]]
-    still = [n for n in open_notes(root) if n["delivered_at"]] if session else []
+    still = []
     if mark:
         delivered(root, fresh)
     return fresh, still
@@ -3753,6 +3814,8 @@ def tabs(pid, view, root=None):
 
 
 SETTLE = 2                   # seconds a console started for a message is watched first: one that dies at once says why
+CHAT_WAIT = 20               # seconds the person's message waits for a console still starting to show its box
+NOT_READY = "Not sent: its console is still starting, so there is nowhere to type it yet. Send this again in a moment."
 
 
 def stopped(root):
@@ -4626,6 +4689,15 @@ CHAT = """
   const seen = (p) => times(p.match) > p.before;
   const keep = () => { pending = pending.filter((p) => !seen(p));
     pending.forEach((p) => { const d = document.createElement('div'); d.className = 'msg you pending mine'; d.textContent = p.show; box.appendChild(d); }); };
+  // Handed over, yet long not in the conversation while its agent isn't at work: it never reached the agent. It comes
+  // back to the box, saying so, rather than showing queued until a reload drops it (the person's first message, Oct 28)
+  const LOST = 90000;
+  const lost = () => { const gone = pending.filter((p) => p.sent && Date.now() - p.sent > LOST && !seen(p));
+    if (!gone.length || box.querySelector('.chatlive.busy')) return;
+    pending = pending.filter((p) => !gone.includes(p)); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep();
+    const back = gone.map((p) => p.text).filter(Boolean).join('\\n\\n');
+    if (back) { ta.value = back + (ta.value.trim() ? '\\n\\n' + ta.value : ''); grow(); busy(); }
+    held.hidden = false; held.textContent = 'Not delivered: it never reached the conversation. It is back in the box: send it again.'; };
   const file = form.querySelector('input[type=file]'), chip = form.querySelector('.attached');
   const chosen = () => { const fs = [...file.files]; chip.hidden = !fs.length;
     chip.innerHTML = ''; if (!fs.length) return;
@@ -4679,7 +4751,7 @@ CHAT = """
     } catch (e) {}
   }
   let tick = 0;                                  // every 3 s; reading aloud, twice as often, so the voice starts sooner
-  setInterval(() => { if (window.colonyPlayer.auto() || ++tick % 2 === 0) refresh(); }, 1500);
+  setInterval(() => { if (window.colonyPlayer.auto() || ++tick % 2 === 0) refresh(); lost(); }, 1500);
   const sendBtn = form.querySelector('button.send');
   let armed = 0;                                  // ■ tapped once: a second tap within 3 s stops the agent
   const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files.length;
@@ -4780,14 +4852,14 @@ CHAT = """
     }
     // it goes out at once: the box clears and the message shows while the board hands it over, however long that takes
     const body = new FormData(form), mine = {show: (fs.length ? '📎 ' + fs.map((x) => x.name).join(', ') + (text ? '\\n' : '') : '') + text,
-      match: text || fs[0].name.replace(/\\.[^.]*$/, '')};
+      match: text || fs[0].name.replace(/\\.[^.]*$/, ''), text};
     if (replyTo && text) body.set('text', '(Replying to: "' + replyTo + '")\\n' + text);
     mine.before = times(mine.match);
     ta.value = ''; grow(); file.value = ''; chosen(); busy(); held.hidden = true;
     ta.blur();                                       // sent: the keyboard goes down, the conversation in view
     pending.push(mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
     const r = await fetch('/chat/send', {method: 'POST', body}).catch(() => null);
-    if (r && r.ok) { answering(''); return setTimeout(refresh, 600); }
+    if (r && r.ok) { answering(''); mine.sent = Date.now(); return setTimeout(refresh, 600); }
     // not sent: it comes back to the box, ahead of anything typed since, its files with it
     pending = pending.filter((p) => p !== mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep();
     if (text) ta.value = text + (ta.value.trim() ? '\\n\\n' + ta.value : '');
@@ -7937,7 +8009,7 @@ def settings_page(reg):
         section("connections", "Connections", e(connections_summary()),
                 card("<p>Outside services your projects reach, and how: <a href='/connections'>Connections →</a></p>")),
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
-                                         f"{'open on your network' if s['lan'] else 'this machine only'}"),
+                                         f"{'open on your network' if reach() else 'this machine only'}"),
                 card(f"<ul class='folders'>{where}</ul><p class='muted'>{e(app_reach())}</p>", board_fields)),
         section("machine", "This machine", e(machine.line() or ("starts with the machine" if autostart.on() else
                                                                 "doesn't start with the machine")), card(machine_card())),
@@ -8919,11 +8991,12 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     return self._send(413, b"that file is too large (25 MB at most)")
                 text = "\n".join(kept) + (f"\n\n{text}" if text else "")
+            # a console still coming up is waited for: 204 only once the message has left its box
             if key == "steward":
-                sent = not text or console.paste_into(monitor.ensure(), text, answer=True)
+                sent = not text or console.paste_into(monitor.ensure(), text, answer=True, wait=CHAT_WAIT)
             else:
                 src = projects(registry())[int(key)]
-                sent = not text or console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True)
+                sent = not text or console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True, wait=CHAT_WAIT)
                 if sent and text:
                     answer_asks(src, "in the console")
                     append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text, "to": "console"})
@@ -8933,7 +9006,9 @@ class Handler(BaseHTTPRequestHandler):
                 where = monitor.name() if key == "steward" else console.session_name(src)
                 if console.asking(where):                 # a choice its program can't put away: answered there first
                     return self._send(409, "Not sent: it is asking you something in its console. Answer it above, then send this again.".encode())
-                left = console.draft(where) or ""
+                left = console.draft(where)
+                if left is None:                          # no box to type into yet: its program is still starting
+                    return self._send(503, NOT_READY.encode())
                 return self._send(409, short(" ".join(left.split()), 80).encode())
             self.send_response(204 if sent else 409)
             self.send_header("Content-Length", "0")
@@ -9241,6 +9316,12 @@ def serve(port, lan=False, monitor=True):
     mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.lan = lan
+    try:                                             # how it answers, for colony urls, colony doctor and Settings (reach)
+        home().mkdir(parents=True, exist_ok=True)
+        (home() / "listening.json").write_text(json.dumps({"pid": os.getpid(), "port": int(httpd.server_address[1]),
+                                                           "lan": bool(lan)}))
+    except (OSError, TypeError, ValueError):
+        pass                                         # a record to read, never a reason the board doesn't start
     where = "every address on this machine (your home network can open it)" if lan else "http://127.0.0.1"
     print(f"board: {where}, port {httpd.server_address[1]}  (ctrl-c to stop)", flush=True)
     try:

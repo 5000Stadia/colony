@@ -20,6 +20,7 @@ import struct
 import subprocess
 import termios
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 def token():
@@ -562,63 +563,151 @@ def dismissed(name, wait=4.0):
     return False
 
 
-def _sent(name, text, tries=3):
+def _sent(name, text, tries=3, ours=None):
     """Press Enter until colony's own line has left the box: a program still starting, or one that read the typing
-    as a paste, can swallow the first Enter and leave the message sitting there unsent."""
+    as a paste, can swallow the first Enter and leave the message sitting there unsent. ours: whether what is in the
+    box is still the message (by default, the box starts as the message does)."""
+    ours = ours or (lambda left: text.startswith(left[:20]))
     for attempt in range(tries):
         time.sleep(0.5 * (attempt + 1))
         left = draft(name)
-        if not left or not text.startswith(left[:20]):
+        if not left or not ours(left):
             return True
         subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
     left = draft(name)
-    return not left or not text.startswith(left[:20])
+    return not left or not ours(left)
 
 
-def type_into(name, text):
-    """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
-    is theirs to send: then nothing is typed, and False says so. Colony's own unsent line left there earlier is
-    sent rather than mistaken for the person's draft. True only once the message has left the box."""
-    if not running(name) or asking(name):            # a choice on screen is the person's: colony's word waits
+STARTING = 60                   # seconds after a console starts in which a screen without its box is still coming up
+
+
+def _start_up(name):
+    """Whether its screen shows a start-up question (its folder's trust, its permission mode, Remote Control, hooks):
+    the watcher answers those as the console was set up, or the person does. Never put away for a message: Esc on a
+    folder's trust question exits the program. PROVIDER: providers.starting reads them."""
+    from . import providers
+    return bool(providers.starting(provider(name), screen(name), fresh=True))
+
+
+def coming_up(name):
+    """Whether a console without its box is still coming up: started a moment ago, with nothing on screen to answer
+    yet (its program still drawing) or a start-up question the watcher answers by itself (Settings → trust)."""
+    from . import board
+    if age(name) >= STARTING:
         return False
+    if provider(name).choice(screen(name)) is None:
+        return True
+    return board.registry()["settings"]["trust"] and _start_up(name)
+
+
+def ready(name, wait=0):
+    """What is in the session's box once it is on screen ("" when it is empty); None while it isn't, looked for up to
+    `wait` seconds while the console is still coming up. Typed into a console still starting, whose blank screen
+    reads as idle, colony's line was counted as sent, though it sat in the box unsent once the program came up: the
+    steward's first-time setup waited on it for minutes."""
+    until = time.time() + wait
+    while True:
+        left = draft(name)
+        if left is not None or time.time() >= until or not running(name) or not coming_up(name):
+            return left
+        time.sleep(0.25)
+
+
+@contextmanager
+def _typing(name, wait=10):
+    """One message typed into a session at a time, across the board's threads and colony's own commands: two typed
+    at once (the watcher's line and the person's message) would land in one box together. Yields False if another
+    is still typing there after `wait` seconds."""
+    from . import board
+    path = board.home() / "consoles" / f"{name}.typing"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        until = time.time() + wait
+        while True:
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.time() >= until:
+                    yield False
+                    return
+                time.sleep(0.05)
+        try:
+            yield True
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _make_way(name):
+    """The session's box cleared for a message: "" once it is on screen and empty; colony's own line if one was left
+    there unsent (an Enter swallowed) and has now been sent; None if nothing may be typed: no box on screen, the
+    person's own draft in it (theirs to send), or colony's leftover that won't go."""
     left = draft(name)
-    if left:
-        if not left.startswith("[colony]"):
+    if not left:
+        return left
+    if not left.startswith("[colony]"):
+        return None
+    unscroll(name)
+    return left if _sent(name, left) else None
+
+
+def type_into(name, text, wait=0):
+    """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
+    is theirs to send, or its box isn't on screen (looked for up to `wait` seconds while it comes up): then nothing
+    is typed, and False says so. Colony's own unsent line left there earlier is sent first, rather than mistaken for
+    the person's draft, and then the message: sending only the leftover lost the person's first message to the
+    steward. True only once the message has left the box."""
+    if not running(name) or ready(name, wait) is None or asking(name):   # a choice on screen is the person's: colony's word waits
+        return False
+    with _typing(name) as mine:
+        before = _make_way(name) if mine else None
+        if before is None:
+            return False
+        if before and " ".join(before.split()) == " ".join(text.split()):
+            return True                                  # it was this very line, left unsent earlier: now it is sent
+        unscroll(name)
+        # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
+        # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
+        # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
+        try:
+            subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
+            time.sleep(provider(name).enter_after)   # typing that arrives at once can read as a paste
+            subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
+            return _sent(name, text)
+        except subprocess.CalledProcessError:              # its program ended as the keys went in
+            return False
+
+
+def paste_into(name, text, answer=False, wait=0):
+    """Send the person's own message, as if they had pasted it into the session and pressed Enter: lines and
+    all, in one piece (a bracketed paste where the program asks for one, as Claude Code does). A console still
+    coming up is waited for, up to `wait` seconds. With a choice on screen, nothing goes into it: as `answer` (the
+    person writing in Chat while it asks) the choice is put away and the message goes as their answer, a start-up
+    question excepted; otherwise, or where it can't be put away, False. As type_into, True only once the message
+    has left the box."""
+    if not running(name):
+        return False
+    ready(name, wait)
+    if asking(name) and not (answer and not _start_up(name) and dismissed(name)):
+        return False
+    if "\n" not in text:
+        return type_into(name, text)
+    if ready(name) is None:
+        return False
+    with _typing(name) as mine:
+        if (_make_way(name) if mine else None) is None:
             return False
         unscroll(name)
-        return _sent(name, left)
-    unscroll(name)
-    # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
-    # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
-    # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
-    try:
-        subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
-        time.sleep(provider(name).enter_after)   # typing that arrives at once can read as a paste
-        subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-        return _sent(name, text)
-    except subprocess.CalledProcessError:              # its program ended as the keys went in
-        return False
-
-
-def paste_into(name, text, answer=False):
-    """Send the person's own message, as if they had pasted it into the session and pressed Enter: lines and
-    all, in one piece (a bracketed paste where the program asks for one, as Claude Code does). With a choice on
-    screen, nothing goes into it: as `answer` (the person writing in Chat while it asks) the choice is put away
-    and the message goes as their answer; otherwise, or where it can't be put away, False."""
-    if running(name) and asking(name) and not (answer and dismissed(name)):
-        return False
-    if "\n" not in text or not running(name) or drafting(name):
-        return type_into(name, text)
-    unscroll(name)
-    buf = f"colony-{secrets.token_hex(4)}"
-    try:
-        subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
-        subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
-        time.sleep(max(0.3, provider(name).enter_after))    # the paste lands before its Enter
-        subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-        return True
-    except subprocess.CalledProcessError:              # its program ended as it was pasted
-        return False
+        buf = f"colony-{secrets.token_hex(4)}"
+        try:
+            subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
+            subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
+            time.sleep(max(0.3, provider(name).enter_after))    # the paste lands before its Enter
+            subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
+            # the box was empty before the paste: whatever is in it now is the paste (or the program's marker for it)
+            return _sent(name, text, ours=lambda left: True)
+        except subprocess.CalledProcessError:              # its program ended as it was pasted
+            return False
 
 
 def queue(name, action, msgs=()):

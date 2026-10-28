@@ -107,8 +107,10 @@ def _lan(a):
 # Who the board answers, said the same by colony urls and colony doctor (and the README and the start script): this
 # machine only unless asked, the person's phone through Tailscale or the Claude app. The person, Oct 28: "No: this
 # machine only; the phone through Tailscale or the Claude app".
+# A restart repeats how the running board was started: `colony board --lan` only says it is already running, and the
+# lan setting was never read again. `colony settings lan on` saves the reach that the restart then takes up.
 MACHINE_ONLY = ("this machine only; from your phone, Tailscale (colony remote, with HTTPS) or the Claude app; "
-                "colony board --lan opens it to your home network")
+                "colony settings lan on, then colony restart, opens it to your home network")
 
 
 def _reach(lan, private, port):
@@ -196,24 +198,27 @@ def cmd_board(a):
     if not _launch(_server_args(a)):
         return 1
     print(f"the board is running (tmux session {server()}); open it at:")
-    for u in board.urls(a.port) if _lan(a) else [f"http://127.0.0.1:{a.port}/"]:
+    for u in board.urls(a.port, lan=_lan(a)):
         print(f"  {u}")
     return 0
 
 
 def cmd_urls(a):
-    """Every address the running board can be opened at."""
+    """Every address the running board can be opened at: as it was started (board.reach), whatever the lan setting
+    says now."""
     from . import board
     saved = board.home() / "server.json"
     args = json.loads(saved.read_text()) if saved.exists() else []
     port = int(args[args.index("--port") + 1]) if "--port" in args else a.port
-    lan = "--lan" in args or (not args and board.registry()["settings"]["lan"])
+    lan = board.reach()
     private = board.registry()["settings"].get("tailscale")
     print(f"On this machine:      http://127.0.0.1:{port}/")
-    for u in (board.urls(port)[1:] if lan and not private else []):
+    for u in (board.urls(port, lan=True)[1:] if lan and not private else []):
         print(f"From your network:    {u}")
     if private:
         print("From your network:    refused while remote access is on: your devices reach it through Tailscale")
+    elif not lan and board.reach(saved=True):
+        print("From your network:    off until colony restart, which opens it to your home network as now set")
     elif not lan:
         print(f"From your network:    off: {MACHINE_ONLY}")
     if private:
@@ -313,6 +318,15 @@ def _saved_reach(lan):
         saved.write_text(json.dumps(args + ["--lan" if lan else "--local"]))
 
 
+def _settle_reach(key):
+    """`colony settings lan on|off`, said in so many words, is how the board answers from its next restart, even
+    where the setting already said so and the board was started otherwise (--local): `colony urls` tells the person
+    to do just that."""
+    from . import board
+    if board.SETTING_ALIASES.get(key, key) == "lan":
+        board.save_reach(board.registry()["settings"]["lan"])
+
+
 def _running_port(default):
     from . import board
     saved = board.home() / "server.json"
@@ -376,8 +390,7 @@ def cmd_doctor(a):
     port = args[args.index("--port") + 1] if "--port" in args else "8790"
     if _answers(port):
         print(f"ok    board answers on port {port}: "
-              + _reach("--lan" in args or (not args and board.registry()["settings"]["lan"]),
-                       board.registry()["settings"].get("tailscale"), port))
+              + _reach(board.reach(), board.registry()["settings"].get("tailscale"), port))
     else:
         problems.append(f"the board does not answer on port {port}: colony board, or colony restart"
                         + ("" if _free(int(port), False) else " (another program holds that port: colony stop, then colony board)"))
@@ -967,12 +980,16 @@ def cmd_turn(a):
     payload.setdefault("hook_event_name", "Stop")
     if context.carry_reply(root, a.console or providers.key(context.program(root)), payload):
         return 0
-    key, text = context.program(root).turn_text(payload)
+    key, text = context.program(root).turn_text(payload)      # PROVIDER: its last words as handed over, else its transcript
     from . import monitor
-    if Path(root).resolve() == monitor.home().resolve() and text.strip():
+    steward = Path(root).resolve() == monitor.home().resolve()
+    if steward and text.strip():
         monitor.said_last(text)                     # the steward's last word, at the top of its page
-    # the turn asks the person when its agent said so (colony needs-you); the steward's, when it ends asking
-    if board.take_needs_you(root) or (Path(root).resolve() == monitor.home().resolve() and board.asks_question(text)):
+    # the turn asks the person when its agent said so (colony needs-you); the steward's, when it ends asking. A turn
+    # whose words can't be read keeps the agent's word for the next one that can be, never spends it on nothing.
+    if not text.strip():
+        board.hold_needs_you(root)
+    elif board.take_needs_you(root) or (steward and board.asks_question(text)):
         board.record_ask(root, key, text, explicit=True)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     from . import continuation
@@ -1010,17 +1027,21 @@ def cmd_notes(a):
             from . import hours
             hours.seen()                                     # they're around, whatever the clock says
             board.answer_asks(root, "in the console")        # the person answered there themselves
+            board.drop_held_needs_you(root)
             board.said(root, prompt)                         # their own words, for the steward to catch up on
         from . import bench, monitor as _monitor
         own_monitor = Path(root).resolve() == _monitor.home().resolve()
         standing = bench.plan_text(root) if a.session and not own_monitor else ""   # the helper tiers, every session
-        # colony's words for the steward: held for this hand-off when delivering, so an overlapping hook skips them
-        handed = (_monitor.claim() if a.deliver else _monitor.inbox()) if own_monitor else []
+        # colony's words for the steward: held for this hand-off when delivering, so an overlapping hook skips them.
+        # Only with a prompt, as for a project's notes (board.deliver): handed over as its session started, the first-
+        # time setup sat in a steward no turn had woken, and the watcher had nothing left to tell it.
+        handed = (_monitor.claim() if a.deliver else _monitor.inbox()) if own_monitor and not a.session else []
         fresh, still = board.deliver(root, session=a.session, mark=False)
         fresh, own = vision.delivery(root, fresh)
         still, earlier_own = vision.delivery(root, still)
         if any(board.answers_ask(n) for n in fresh):
             board.answer_asks(root, "by a note")                 # the person (or their steward) wrote back
+            board.drop_held_needs_you(root)
         new_mail, open_asks = mail.deliver(root, session=a.session, mark=False)
         try:
             engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
@@ -1311,6 +1332,7 @@ def cmd_settings(a):
             raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.SETTING_NAMES.get(k, k) for k in board.DEFAULT_SETTINGS)}, autostart, new-folder")
         except ValueError as err:                     # a setting that says what reads (active_hours)
             raise SystemExit(f"colony: {err}")
+        _settle_reach(a.key)
     reg = board.registry()
     from . import providers
     for k in board.DEFAULT_SETTINGS:

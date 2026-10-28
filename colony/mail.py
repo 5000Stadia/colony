@@ -96,9 +96,12 @@ def unanswered(root):
 
 def deliver(root, session=False, mark=True):
     """Mail the agent has not been handed, marked as handed (mark=False: the caller marks it once shown); at a
-    session's start also the questions it has not answered yet, so nothing waits unseen."""
+    session's start instead the questions it has not answered yet, so nothing waits unseen. New mail waits for a
+    prompt, as new notes do (board.deliver): a session's start starts no turn."""
+    if session:
+        return [], [m for m in unanswered(root) if m["delivered_at"]]
     fresh = [m for m in inbox(root) if not m["delivered_at"]]
-    still = [m for m in unanswered(root) if m["delivered_at"]] if session else []
+    still = []
     if mark:
         delivered(root, fresh)
     return fresh, still

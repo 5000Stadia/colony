@@ -188,12 +188,15 @@ class BoardTest(BoardBase):
     def test_the_monitors_own_hook_hands_over_its_inbox_and_nothing_else_of_colonys(self):
         (monitor.home() / ".board").mkdir(parents=True, exist_ok=True)
         monitor.queue("plants finished a turn")
-        r = subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver", "--session"], cwd=monitor.home(),
-                           input=json.dumps({"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"}),
-                           capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        hook = lambda *args, **payload: subprocess.run(
+            [sys.executable, "-m", "colony", "notes", "--deliver", *args], cwd=monitor.home(), input=json.dumps(payload),
+            capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        r = hook("--session", session_id="s1", hook_event_name="SessionStart", source="startup")
+        self.assertNotIn("plants finished a turn", r.stdout, "a session's start starts no turn: it waits for the inbox line")
+        self.assertNotIn("Your helpers (subagents)", r.stdout, "the helper tiers are a project's, not the monitor's")
+        r = hook(session_id="s1", hook_event_name="UserPromptSubmit", prompt=monitor.INBOX_LINE)
         self.assertIn("From colony, for you (not the person's words", r.stdout, r.stderr)
         self.assertIn("plants finished a turn", r.stdout)
-        self.assertNotIn("Your helpers (subagents)", r.stdout, "the helper tiers are a project's, not the monitor's")
         self.assertEqual(monitor.inbox(), [], "handed over once")
 
     def test_the_inbox_is_handed_over_once_and_survives_a_broken_line_or_a_hook_that_died(self):
@@ -291,6 +294,23 @@ class BoardTest(BoardBase):
             monitor.muted(True)
         monitor.helm(False)
 
+    def test_a_watcher_stops_once_its_boards_home_changes(self):
+        # one a test's serve() started would otherwise act on the person's own board once the test's home is popped
+        home, ticks, watcher = os.environ["COLONY_BOARD_HOME"], [], monitor.Watcher(enabled=False)
+
+        def tick():
+            ticks.append(board.home())
+            if len(ticks) == 2:
+                os.environ["COLONY_BOARD_HOME"] = str(Path(self.tmp.name) / "another")
+            if len(ticks) > 5:
+                raise SystemExit("still running on another board's home")
+        try:
+            with patch.object(watcher, "tick", side_effect=tick), patch.object(monitor.time, "sleep"):
+                watcher.run()
+        finally:
+            os.environ["COLONY_BOARD_HOME"] = home
+        self.assertEqual(ticks, [Path(home)] * 2, "it stopped at the first look after its home changed")
+
     def test_a_watcher_failing_pass_after_pass_shows_on_every_page_until_one_gets_through(self):
         # its loop dropped every error: one step failing would have stopped mail, recovery and nudges in silence
         watcher = monitor.Watcher(enabled=False)
@@ -316,7 +336,8 @@ class BoardTest(BoardBase):
         with patch.object(console, 'running', return_value=True), patch.object(console, 'provider'), \
                 patch.object(console, 'asking', return_value=False), \
                 patch.object(console.time, 'sleep'), patch.object(console.subprocess, 'run', side_effect=run):
-            with patch.object(console, 'draft', side_effect=['', '[colony] You have mail.', '']):
+            # the box read as it is looked for, again under the typing lock, then after each Enter
+            with patch.object(console, 'draft', side_effect=['', '', '[colony] You have mail.', '']):
                 self.assertTrue(console.type_into('s', '[colony] You have mail.'))
             self.assertEqual(keys.count('Enter'), 2, 'the first Enter was swallowed, so it is pressed again')
             keys.clear()
@@ -547,18 +568,17 @@ class BoardTest(BoardBase):
                          "from": "other", "to": self.root.name, "text": text, "ask": True, "re": None})
         board.append(self.root, mail.FILE, {"type": "delivered", "of": "old-mail", "at": board.now()})
         out = self.cli("notes", "--deliver", "--session").stdout
-        for identity in (old["id"], new["id"], "old-mail", "new-mail"):
+        for identity in (old["id"], "old-mail"):
             self.assertEqual(out.count("[" + identity + "]"), 1, out)
-        fresh_notes, backlog = out.split("Still open from earlier", 1)
-        self.assertIn("Fresh note", fresh_notes)
-        self.assertNotIn("Earlier note", fresh_notes)
-        self.assertIn("Earlier note", backlog)
-        self.assertNotIn("Fresh note", backlog)
-        fresh_mail, unanswered = out.split("Questions from the colony you haven't answered yet:", 1)
-        self.assertIn("Fresh question?", fresh_mail)
-        self.assertNotIn("Earlier question?", fresh_mail)
-        self.assertIn("Earlier question?", unanswered)
-        self.assertNotIn("Fresh question?", unanswered)
+        self.assertIn("Earlier note", out.split("Still open from earlier", 1)[1])
+        self.assertIn("Earlier question?", out.split("Questions from the colony you haven't answered yet:", 1)[1])
+        for identity in (new["id"], "new-mail"):
+            self.assertNotIn("[" + identity + "]", out, "what is new waits for a prompt: a session's start starts no turn")
+        prompt = self.cli("notes", "--deliver").stdout
+        for identity in (new["id"], "new-mail"):
+            self.assertEqual(prompt.count("[" + identity + "]"), 1, prompt)
+        for identity in (old["id"], "old-mail"):
+            self.assertNotIn("[" + identity + "]", prompt, "the backlog it already has isn't handed over again")
         self.assertEqual(self.cli("notes", "--deliver").stdout, "")
         repeated = self.cli("notes", "--deliver", "--session").stdout
         for identity in (old["id"], new["id"], "old-mail", "new-mail"):
@@ -1014,7 +1034,8 @@ class ChatTest(BoardBase):
                           board.chat_page("0", self.root), "above the box, hidden till a reply is chosen")
         self.assertIn("body.set('text', '(Replying to: \"' + replyTo + '\")\\n' + text);", board.CHAT, "its first words go with it")
         self.assertIn("'Replying to “' + firstWords(text, 2) + '”'", board.CHAT, "above the box: a word or two")
-        self.assertIn("if (r && r.ok) { answering(''); return setTimeout(refresh, 600); }", board.CHAT, "sent: it's done")
+        self.assertIn("if (r && r.ok) { answering(''); mine.sent = Date.now(); return setTimeout(refresh, 600); }", board.CHAT,
+                      "sent: it's done (and when, should it never reach the conversation)")
 
     def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
         board.track(self.root)
@@ -1385,7 +1406,7 @@ class ChatTest(BoardBase):
             r = urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=Ship+it",
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(r.status, 204)
-            pasted.assert_called_once_with("s", "Ship it", answer=True)
+            pasted.assert_called_once_with("s", "Ship it", answer=True, wait=board.CHAT_WAIT)   # a console coming up waited for
         with patch.object(board.console, "ensure", return_value="s"), patch.object(board.console, "paste_into", return_value=False), \
                 patch.object(board.console, "live", return_value=True), patch.object(board.console, "draft", return_value="/subagents"):
             with self.assertRaises(urllib.error.HTTPError) as held:
@@ -2230,10 +2251,12 @@ class GlanceTest(BoardBase):
         self.assertNotIn("Use blue pots.", run("SessionStart"))
         self.assertIsNone(console.last_conversation(self.root), "personal sessions do not replace the board console")
         env["COLONY_CONSOLE"] = console.session_name(self.root)
-        self.assertIn("Use blue pots.", run("SessionStart"))
+        self.assertNotIn("Use blue pots.", run("SessionStart"), "a session's start starts no turn: new notes wait")
         self.assertEqual(console.last_conversation(self.root), "codex-session")
         board.add_note(self.root, {}, "Use clay pots.", author='person')
-        self.assertIn("Use clay pots.", run("UserPromptSubmit", prompt="[colony] Notes arrived"))
+        prompt = run("UserPromptSubmit", prompt="[colony] Notes arrived")
+        self.assertIn("Use blue pots.", prompt, "handed over with the prompt the watcher types")
+        self.assertIn("Use clay pots.", prompt)
         final = {"turn_id": "turn-1", "last_assistant_message": "Ready. Which pot size do you want?"}
         board.mark_needs_you(self.root)                      # the agent said its turn asks (colony needs-you)
         self.assertEqual(json.loads(run("Stop", **final)), {})
@@ -3717,8 +3740,10 @@ class ReachTest(BoardBase):
         self.assertFalse(cli._lan(argparse.Namespace(lan=False, local=False)))
         self.assertTrue(cli._lan(argparse.Namespace(lan=True, local=False)), "--lan opens it to the home network")
         said = self.urls()
+        # a running board's restart repeats its start, so the advice is the one that takes: the setting, then a restart
         self.assertIn("From your network:    off: this machine only; from your phone, Tailscale (colony remote, with "
-                      "HTTPS) or the Claude app; colony board --lan opens it to your home network", said)
+                      "HTTPS) or the Claude app; colony settings lan on, then colony restart, opens it to your home "
+                      "network", said)
         for text in ((Path(board.__file__).parent.parent / "README.md").read_text(),
                      (Path(board.__file__).parent.parent / "start").read_text()):
             self.assertIn("this machine only", " ".join(text.replace("#", " ").split()))
@@ -7473,3 +7498,312 @@ class LineTest(BoardBase):
         # what the live trial reads off the phone: each pause and let-go with its cause, and how long the page was hidden
         self.assertIn("navigator.sendBeacon('/chat/measure'", js)
         self.assertIn("restStop('two quiet hours')", js)
+
+
+REAL_SLEEP = time.sleep
+# Claude Code 2.1.312's folder trust question: its cancel first and focused, and Esc cancels it, which exits the program
+TRUST = (" Accessing workspace:\n\n /home/tester/new\n\n Is this a project you created or one you trust?\n\n"
+         " ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm · Esc to cancel")
+
+
+class Boxes:
+    """Stand-ins for consoles' typing boxes, as their program shows them: typing goes into a box, Enter sends what is
+    there (or is swallowed), and keys typed at a program not yet up are kept for its box, their Enter lost, as Claude
+    Code did on a fresh machine. Each box: text, up (its box on screen), shown (its screen while it isn't: blank, or a
+    start-up question), age (seconds since its console started), sent (what left it), keys (keys pressed)."""
+
+    def __init__(self, slow=0.0):
+        self.boxes, self.slow, self.guard, self.buffer = {}, slow, threading.Lock(), ""
+
+    def box(self, name, **kw):
+        b = self.boxes.setdefault(name, dict(text="", up=True, shown="", age=100.0, sent=[], keys=[], early="", swallow=0))
+        b.update(kw)
+        return b
+
+    def come_up(self, name):
+        """Its program is up: its box shows, with whatever was typed at it before."""
+        b = self.box(name)
+        b.update(up=True, text=b["early"] + b["text"], early="", shown="")
+
+    def run(self, args, **k):
+        b = self.box(args[args.index("-t") + 1]) if "-t" in args else None
+        if args[:2] == ["tmux", "send-keys"] and "-X" not in args:
+            if "-l" in args:
+                for ch in args[-1]:
+                    with self.guard:
+                        b["text" if b["up"] else "early"] += ch
+                    if self.slow:
+                        REAL_SLEEP(self.slow)
+            else:
+                for key in args[args.index("-t") + 2:]:
+                    b["keys"].append(key)
+                    if key == "Enter" and b["up"]:
+                        if b["swallow"]:
+                            b["swallow"] -= 1
+                        elif b["text"]:
+                            with self.guard:
+                                b["sent"].append(b["text"])
+                                b["text"] = ""
+        elif args[:2] == ["tmux", "load-buffer"]:
+            self.buffer = k.get("input", "")
+        elif args[:2] == ["tmux", "paste-buffer"] and b["up"]:
+            b["text"] += self.buffer
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def on(self):
+        from contextlib import ExitStack
+        stack, claude = ExitStack(), providers.get("claude")
+        for target, attr, fake in ((console, "running", lambda n: True),
+                                   (console, "draft", lambda n: self.box(n)["text"] if self.box(n)["up"] else None),
+                                   (console, "screen", lambda n: "" if self.box(n)["up"] else self.box(n)["shown"]),
+                                   (console, "age", lambda n: self.box(n)["age"]),
+                                   (console, "provider", lambda n: claude),
+                                   (console.subprocess, "run", self.run),
+                                   (console.time, "sleep", lambda s: REAL_SLEEP(min(s, 0.01)))):
+            stack.enter_context(patch.object(target, attr, side_effect=fake))
+        return stack
+
+
+class FirstRunTest(BoardBase):
+    """What a newcomer met on a fresh machine (2026-10-28): the steward's setup waited minutes on a line typed into it
+    before it was up; the person's first message was lost behind that line; a project added on the board never spoke
+    first; the steward named an address the board didn't answer; a question an agent asked never waited on the person."""
+
+    def hook(self, root, *args, payload=None):
+        return subprocess.run([sys.executable, "-m", "colony", *args], cwd=root, capture_output=True, text=True,
+                              input=json.dumps(payload or {}), env=dict(os.environ, PYTHONPATH=str(ROOT)))
+
+    # -- 1. the steward's first-time setup starts by itself, once its box is up
+
+    def test_the_stewards_setup_is_typed_once_its_box_is_up_and_handed_over_with_that_prompt(self):
+        (monitor.home() / ".board").mkdir(parents=True, exist_ok=True)
+        monitor.setup()
+        boxes, watcher = Boxes(), monitor.Watcher()
+        boxes.box(monitor.name(), up=False)                        # just started: a blank screen, which reads as idle
+        with boxes.on(), patch.object(monitor, "snapshot", return_value={"state": "idle"}):
+            watcher.tell()
+            self.assertEqual(boxes.box(monitor.name())["early"], "", "nothing typed into a console that isn't up")
+            self.assertEqual(watcher.told, (0, None), "so it is told at a later look")
+        start = self.hook(monitor.home(), "notes", "--deliver", "--session",
+                          payload={"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"})
+        self.assertNotIn("First-time setup", start.stdout, "a session's start starts no turn: colony's words wait")
+        self.assertEqual(len(monitor.inbox()), 1)
+        boxes.come_up(monitor.name())
+        with boxes.on(), patch.object(monitor, "snapshot", return_value={"state": "idle"}):
+            watcher.tell()
+        self.assertEqual(boxes.box(monitor.name())["sent"], [monitor.INBOX_LINE], "its box up: told, and the line sent")
+        prompt = self.hook(monitor.home(), "notes", "--deliver", payload={"prompt": monitor.INBOX_LINE})
+        self.assertIn("First-time setup: walk the person through it now", prompt.stdout, "handed over with that prompt")
+        self.assertEqual(monitor.inbox(), [])
+
+    def test_a_console_coming_up_is_waited_for_and_its_start_up_question_left_to_the_watcher(self):
+        boxes = Boxes()
+        boxes.box("s", up=False, shown=TRUST, age=2.0)
+        threading.Timer(0.3, boxes.come_up, ["s"]).start()        # the watcher answers its folder's trust
+        with boxes.on():
+            self.assertTrue(console.paste_into("s", "Hi! What should I do first?", answer=True, wait=5))
+        self.assertEqual(boxes.box("s")["sent"], ["Hi! What should I do first?"])
+        self.assertNotIn("Escape", boxes.box("s")["keys"], "Esc on its trust question would have exited the program")
+        boxes.box("t", up=False, shown=TRUST, age=2.0)
+        board.set_setting("trust", "off")                          # the person answers start-up questions themselves
+        with boxes.on():
+            self.assertFalse(console.paste_into("t", "Hi!", answer=True, wait=5))
+        self.assertEqual((boxes.box("t")["keys"], boxes.box("t")["early"]), ([], ""), "left alone, nothing typed")
+
+    # -- 2. the person's first message is never lost behind colony's own line
+
+    def test_colonys_line_left_unsent_is_sent_and_then_the_persons_message(self):
+        boxes = Boxes()
+        boxes.box("s", text=monitor.INBOX_LINE)                   # typed at a program still starting, its Enter lost
+        with boxes.on():
+            self.assertTrue(console.paste_into("s", "Hi! I'm new to colony. What should I do first?", answer=True))
+            self.assertTrue(console.type_into("s", "[colony] You have mail."))
+        self.assertEqual(boxes.box("s")["sent"], [monitor.INBOX_LINE, "Hi! I'm new to colony. What should I do first?",
+                                                  "[colony] You have mail."])
+        boxes.box("u", text="[colony] You have mail.")
+        with boxes.on():
+            self.assertTrue(console.type_into("u", "[colony] You have mail."))
+        self.assertEqual(boxes.box("u")["sent"], ["[colony] You have mail."], "the same line is never sent twice")
+
+    def test_two_messages_typed_at_once_each_arrive_whole(self):
+        boxes = Boxes(slow=0.002)
+        person = "Hi! I'm new to colony and just installed it. What should I do first?"
+        with boxes.on():
+            watcher = threading.Thread(target=console.type_into, args=("s", monitor.INBOX_LINE))
+            watcher.start()
+            while not boxes.box("s")["text"]:
+                REAL_SLEEP(0.001)                                # the watcher's line half typed
+            self.assertTrue(console.paste_into("s", person, answer=True))
+            watcher.join()
+        self.assertEqual(sorted(boxes.box("s")["sent"]), sorted([monitor.INBOX_LINE, person]))
+
+    def test_the_chat_says_a_console_still_starting_has_nowhere_to_type_yet(self):
+        board.track(self.root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        port = httpd.server_address[1]
+        try:
+            with patch.object(board.console, "ensure", return_value="s"), \
+                    patch.object(board.console, "paste_into", return_value=False), \
+                    patch.object(board.console, "live", return_value=True), \
+                    patch.object(board.console, "asking", return_value=False), \
+                    patch.object(board.console, "draft", return_value=None):
+                req = urllib.request.Request(f"http://127.0.0.1:{port}/chat/send", data=b"p=0&text=hello",
+                                             headers={"Host": f"127.0.0.1:{port}"})
+                with self.assertRaises(urllib.error.HTTPError) as err:
+                    urllib.request.urlopen(req)
+            self.assertEqual(err.exception.code, 503)
+            self.assertEqual(err.exception.read().decode(), board.NOT_READY)
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_a_message_handed_over_that_never_reaches_the_conversation_comes_back_to_the_box(self):
+        board.track(self.root)
+        page = board.render(board.registry(), 0, "chat")
+        self.assertIn("mine.sent = Date.now()", page, "the moment the board said it was handed over")
+        self.assertIn("Date.now() - p.sent > LOST && !seen(p)", page, "long not in the conversation")
+        self.assertIn("if (!gone.length || box.querySelector('.chatlive.busy')) return;", page, "nor at work on it")
+        self.assertIn("Not delivered: it never reached the conversation. It is back in the box: send it again.", page)
+        self.assertIn("refresh(); lost(); }, 1500);", page)
+
+    # -- 3. a project added on the board speaks first, and a restart with nothing new types nothing
+
+    def new_project(self, name):
+        root = Path(self.tmp.name) / name
+        root.mkdir()
+        board.track(root)
+        return root
+
+    def test_a_project_added_on_the_board_is_given_its_first_turn(self):
+        root = self.new_project("recipes")
+        [begin] = board.open_notes(root)
+        self.assertEqual(begin.get("onboarding"), "vision")
+        start = self.hook(root, "notes", "--deliver", "--session",
+                          payload={"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup"})
+        self.assertNotIn("The person has just added this project", start.stdout, "not handed over as it starts")
+        self.assertIsNone(board.notes(root)[0]["delivered_at"])
+        boxes = Boxes()
+        with boxes.on(), patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
+            monitor.Watcher().mail()
+        self.assertEqual(boxes.box(console.session_name(root))["sent"], ["[colony] You have an update from Colony."])
+        prompt = self.hook(root, "notes", "--deliver", payload={"prompt": "[colony] You have an update from Colony."})
+        self.assertIn("The person has just added this project", prompt.stdout, "its first turn brings it")
+
+    def test_a_restart_with_no_new_notes_types_nothing(self):
+        board.track(self.root)
+        board.set_setting("messaging", "on")
+        board.add_note(self.root, None, "Earlier note, not yet acted on", author="person")
+        board.append(self.root, mail.FILE, {"type": "message", "id": "m1", "at": board.now(), "from": "other",
+                                            "to": self.root.name, "text": "Which columns?", "ask": True, "re": None})
+        self.hook(self.root, "notes", "--deliver", payload={"prompt": "[colony] You have mail."})   # handed over then
+        start = self.hook(self.root, "notes", "--deliver", "--session",
+                          payload={"session_id": "s2", "hook_event_name": "SessionStart", "source": "resume"})
+        self.assertIn("Still open from earlier", start.stdout, "the backlog comes back as it starts")
+        self.assertIn("Which columns?", start.stdout)
+        (monitor.home() / ".board").mkdir(parents=True, exist_ok=True)
+        boxes = Boxes()
+        boxes.box(console.session_name(self.root), age=5.0)       # just restarted
+        with boxes.on(), patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}), \
+                patch.object(monitor, "snapshot", return_value={"state": "idle"}):
+            watcher = monitor.Watcher()
+            watcher.mail()
+            watcher.tell()
+        self.assertEqual({n: b["sent"] for n, b in boxes.boxes.items() if b["sent"]}, {},
+                         "what it already saw, and standing context, wake nothing")
+
+    def test_consoles_that_start_together_are_woken_one_per_look(self):
+        roots = [self.new_project(n) for n in ("one", "two")]
+        boxes = Boxes()
+        for r in roots:
+            boxes.box(console.session_name(r), age=3.0)
+        watcher = monitor.Watcher()
+        with boxes.on(), patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
+            watcher.mail()
+            woken = [r.name for r in roots if boxes.box(console.session_name(r))["sent"]]
+            self.assertEqual(len(woken), 1, "not both in the same moment")
+            watcher.mail()
+        self.assertEqual([len(boxes.box(console.session_name(r))["sent"]) for r in roots], [1, 1], "the other next look")
+
+    # -- 4. every address given is where the board answers
+
+    def test_where_the_board_answers_is_how_it_runs_not_the_setting(self):
+        board.set_setting("lan", "on")                             # a board from before: its home network on
+        (board.home() / "server.json").write_text(json.dumps(["--port", "8792", "--local"]))
+        (board.home() / "listening.json").write_text(json.dumps({"pid": os.getpid(), "port": 8792, "lan": False}))
+        self.assertFalse(board.reach(), "started with --local: this machine only, whatever the setting says")
+        out = self.cli("urls").stdout
+        self.assertNotIn("From your network:    http", out)
+        self.assertIn("colony settings lan on, then colony restart", out, "advice that works")
+        self.cli("settings", "lan", "on")
+        self.assertIn("--lan", json.loads((board.home() / "server.json").read_text()), "the restart takes it up")
+        self.assertIn("off until colony restart", self.cli("urls").stdout, "until then it answers this machine only")
+        board.set_setting("lan", "off")
+        self.assertIn("--local", json.loads((board.home() / "server.json").read_text()))
+        (board.home() / "listening.json").write_text(json.dumps({"pid": os.getpid(), "port": 8792, "lan": True}))
+        self.assertTrue(board.reach(), "started with --lan, the setting off: the running board answers the network")
+
+    def test_the_stewards_setup_offers_the_phone_without_pressure_and_only_addresses_from_colony_urls(self):
+        role = " ".join(monitor.ROLE.split())
+        step = role[role.index("6. Access"):role.index("7. Start-up questions")]
+        self.assertIn("the board answers this machine only", step)
+        self.assertIn("comes from `colony urls`, never worked out from the settings", step)
+        self.assertIn("shows each project's own session, not the board", step)
+        self.assertIn("HTTPS certificates in Tailscale's admin page", step)
+        self.assertIn("The home network only if they ask: `colony settings lan on`, then `colony restart`", step)
+        self.assertNotIn("home network (lan); Remote Control", step)
+
+    # -- 5. a question the agent said it asks waits on the person, though its transcript lags
+
+    def transcript(self, *rows):
+        path = Path(self.tmp.name) / "turn.jsonl"
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        return path
+
+    def test_the_turns_last_words_come_from_the_hook_while_the_transcript_still_lags(self):
+        board.track(self.root)
+        path = self.transcript({"type": "user", "uuid": "p", "message": {"content": "No mushrooms, please."}},
+                               {"type": "assistant", "uuid": "a1", "message": {"content": [
+                                   {"type": "tool_use", "name": "Bash", "input": {"command": "colony needs-you"}}]}})
+        board.mark_needs_you(self.root)                               # its words are on their way to the transcript
+        last = "Here's my draft of the vision. Does the vision sound right?"
+        r = self.hook(self.root, "turn", payload={"transcript_path": str(path), "last_assistant_message": last})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        [ask] = board.asks(self.root)
+        self.assertEqual(ask["text"], last)
+        self.assertEqual([w["kind"] for w in board.waiting_items(self.root, {"state": "idle", "lines": []})], ["ask"])
+
+    def test_a_turn_whose_words_cant_be_read_keeps_the_agents_word_until_one_can_or_the_person_answers(self):
+        board.track(self.root)
+        path = self.transcript({"type": "user", "uuid": "p", "message": {"content": "go on"}})
+        board.mark_needs_you(self.root)
+        with patch.object(providers, "TURN_WAIT", 0.2):
+            self.assertEqual(providers.get("claude").turn_text({"transcript_path": str(path)}), (None, ""))
+        self.hook(self.root, "turn", payload={"transcript_path": str(path)})
+        self.assertEqual(board.asks(self.root), [])
+        self.assertTrue((self.root / ".board" / "needs-you").exists(), "kept, not spent on nothing")
+        self.hook(self.root, "turn", payload={"last_assistant_message": "Shall I go on with the export?"})
+        self.assertEqual([a["text"] for a in board.asks(self.root)], ["Shall I go on with the export?"])
+        board.mark_needs_you(self.root)
+        self.hook(self.root, "turn", payload={"transcript_path": str(path)})        # unread again: kept
+        self.hook(self.root, "notes", "--deliver", payload={"prompt": "yes, go on"})  # the person answers
+        self.hook(self.root, "turn", payload={"last_assistant_message": "Done: the export has its columns."})
+        self.assertEqual(board.asks(self.root), [], "their answer answered the kept word too")
+
+    def test_a_transcript_written_just_after_the_hook_runs_is_read_again_for_its_words(self):
+        path = self.transcript({"type": "user", "uuid": "p", "message": {"content": "tidy it"}})
+        line = {"type": "assistant", "uuid": "a9", "message": {"content": [{"type": "text", "text": "Keep the old column?"}]}}
+
+        def later(f, row):                                         # written as the hook is already reading
+            with f.open("a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        threading.Timer(0.3, later, [path, line]).start()
+        self.assertEqual(providers.get("claude").turn_text({"transcript_path": str(path)}), ("a9", "Keep the old column?"))
+        rollout = Path(self.tmp.name) / "rollout.jsonl"
+        rollout.write_text(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user",
+                                       "content": [{"type": "input_text", "text": "tidy it"}]}}) + "\n")
+        said = {"type": "response_item", "payload": {"type": "message", "role": "assistant",
+                                                     "content": [{"type": "output_text", "text": "Which format?"}]}}
+        threading.Timer(0.3, later, [rollout, said]).start()
+        self.assertEqual(providers.get("codex").turn_text({"turn_id": "t1", "transcript_path": str(rollout)}),
+                         ("t1", "Which format?"), "Codex without its last words: its rollout, read again")

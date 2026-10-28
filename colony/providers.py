@@ -69,6 +69,25 @@ def _stamp(entry):
         return 0.0
 
 
+TURN_WAIT = 2.0             # seconds an end-of-turn hook reads the transcript again while the turn shows no words yet
+
+
+def turn_prose(provider, path, wait=0):
+    """A turn's prose from its program's transcript (Provider.events): what the agent said since the last message into
+    it, read again for up to `wait` seconds while there is none yet, since a program can still be writing it as its
+    end-of-turn hook runs."""
+    import time
+    until = time.time() + wait
+    while True:
+        there = bool(path) and Path(path).exists()
+        evs = provider.events(path) if there else []
+        start = max((i for i, (kind, _, _) in enumerate(evs) if kind in ("you", "colony", "compact")), default=-1)
+        said = [text for kind, text, _ in evs[start + 1:] if kind == "say"]
+        if said or not there or time.time() >= until:
+            return "\n\n".join(said)
+        time.sleep(0.2)
+
+
 def _keep(path, text):
     """A file colony writes, rewritten only when it differs and removed when there is nothing to write: what changed."""
     if not text:
@@ -601,13 +620,34 @@ class ClaudeCode(Provider):
         """The model a value means, by name: an ID or alias; anything else as typed."""
         return dict(self.models).get(value) or self.aliases.get(str(value).lower()) or value
 
-    def turn_text(self, payload):
+    def turn_text(self, payload, wait=None):
         """What the agent wrote in the turn that just ended, from the Stop hook's payload: every piece of prose
-        since the person's last message, and a key naming that turn. PROVIDER: reads Claude Code's own
-        transcript file; another CLI reports its turn however it can, as the same (key, text)."""
-        path = payload.get("transcript_path")
+        since the person's last message, and a key naming that turn. PROVIDER: Claude Code hands its Stop hook the
+        turn's last words (last_assistant_message) and keeps the rest in its transcript, which it may not have
+        written yet as the hook runs: read 0.2 s after those words, a turn read empty, the agent's `colony
+        needs-you` came to nothing, and its question never waited on the person. So its last words are taken as
+        handed over, the transcript adds what came before them, and a build that hands over none has its transcript
+        read again for a moment (TURN_WAIT) while the turn shows no words."""
+        import hashlib
+        import time
+        last, path = (payload.get("last_assistant_message") or "").strip(), payload.get("transcript_path")
+        until = time.time() + (TURN_WAIT if wait is None else wait)
+        while True:
+            key, prose = self._turn(path)
+            if prose or last or not (path and Path(path).exists()) or time.time() >= until:
+                break
+            time.sleep(0.1)
+        if last and " ".join(last.split()) not in " ".join(" ".join(prose).split()):
+            prose.append(last)                                 # its last words, not in the transcript yet
+            key = key or "said-" + hashlib.sha1(last.encode()).hexdigest()[:12]
+        return key, "\n\n".join(prose)
+
+    @staticmethod
+    def _turn(path):
+        """(key, prose) of the transcript's last turn: the uuid of its last words, and each piece of prose since the
+        person's last message."""
         if not path or not Path(path).exists():
-            return None, ""
+            return None, []
         prose, key = [], None
         for line in Path(path).read_text().splitlines():
             try:
@@ -624,7 +664,7 @@ class ClaudeCode(Provider):
                 if text:
                     prose.append(text)
                     key = e.get("uuid") or key
-        return key, "\n\n".join(prose)
+        return key, prose
 
     def active_seconds(self, root):
         """Time at work in this folder, all told: Claude Code closes each turn with its length (turn_duration) in
@@ -1290,9 +1330,14 @@ class Codex(Provider):
             cfg = {}
         return {"model": cfg.get("model") or None, "effort": cfg.get("model_reasoning_effort") or None}
 
-    def turn_text(self, payload):
-        """The Stop hook supplies the final reply directly, including on sessions with no transcript."""
-        return payload.get("turn_id"), payload.get("last_assistant_message") or ""
+    def turn_text(self, payload, wait=None):
+        """The Stop hook supplies the final reply directly, including on sessions with no transcript. PROVIDER: where
+        it hands over none, the turn's prose is read from its rollout, again for a moment while Codex may still be
+        writing it (turn_prose)."""
+        last = (payload.get("last_assistant_message") or "").strip()
+        if last:
+            return payload.get("turn_id"), last
+        return payload.get("turn_id"), turn_prose(self, payload.get("transcript_path"), TURN_WAIT if wait is None else wait)
 
     def conversation(self, payload):
         return payload.get("session_id"), payload.get("transcript_path")
