@@ -736,6 +736,34 @@ class ServingTest(BoardBase):
         self.assertEqual(self.now, {443: 8791})
         self.serving.ensure_board(8791)
         self.assertEqual([c for c in self.calls if c[0] == "serve"], [("serve", 443, 8791)], "once")
+        self.assertEqual(self.serving.ensure_board(8795), "https://colony.tail1.ts.net/", "its own port moved: followed")
+        self.assertEqual(self.now, {443: 8795})
+
+    def test_something_of_the_persons_own_at_443_stays_and_doctor_says_so(self):
+        board.set_setting("tailscale", "colony.tail1.ts.net")
+        self.now[443] = 8123                              # their own, served before colony
+        self.assertIsNone(self.serving.ensure_board(8791))
+        self.assertEqual(self.now, {443: 8123})
+        self.assertIn("port 8123; colony leaves it", self.serving.trouble)
+        del self.now[443]
+        with patch.object(self.ts, "serve", return_value="Access denied: serve config denied"):
+            self.assertIsNone(self.serving.ensure_board(8791))
+        self.assertEqual(self.serving.trouble, "Access denied: serve config denied", "Tailscale's own reason, kept")
+        self.assertEqual(self.serving.ensure_board(8791), "https://colony.tail1.ts.net/")
+        self.assertEqual(self.serving.trouble, "")
+
+    def test_certificates_turned_on_while_the_board_runs_are_taken_up_with_no_restart(self):
+        board.set_setting("tailscale", "colony.tail1.ts.net")
+        self.certs, looks = False, []
+
+        def later(_):
+            looks.append(dict(self.now))
+            self.certs = True                             # the person tapped Enable meanwhile
+            if len(looks) == 2:
+                raise SystemExit
+        with patch.object(self.serving.time, "sleep", side_effect=later), self.assertRaises(SystemExit):
+            self.serving.keep(8791)
+        self.assertEqual(looks, [{}, {443: 8791}], "served at the next look")
 
     def test_the_live_console_uses_a_secure_socket_on_an_https_page(self):
         import inspect

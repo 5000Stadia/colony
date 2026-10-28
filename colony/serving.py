@@ -3,16 +3,21 @@ machine's on the person's tailnet, with a real certificate; the board at https:/
 (Bookflow's host) at https://<name>:<its port>/, proxied to its localhost port. A project asks with colony serve PORT
 and binds 127.0.0.1 only (Tailscale's advice: what it serves carries the person's identity headers, which a direct
 caller could otherwise forge), taking its external origin from the URL colony prints. Kept across restarts by
-tailscaled itself; checked again each time the board starts; a project's goes when it leaves the board.
+tailscaled itself; looked at again as the board starts and every few minutes while it runs, so certificates turned on
+later are taken up with no restart; a project's goes when it leaves the board.
 
 R119. The person, via Bookflow (2026-10-28): "Yes: turn it on, Colony builds shared https serving", and "We want to do
 this without any friction whatsoever on install, it should just work out of the box."
 """
 import json
 import socket
+import time
 from pathlib import Path
 
 from . import board, tailscale
+
+EVERY = 300                  # seconds between looks while the board runs: a 10 ms question to tailscaled
+trouble = ""                 # why Tailscale refused to serve the board, last it was asked (doctor says it)
 
 
 def _path():
@@ -55,11 +60,24 @@ def _taken(port):
 
 
 def ensure_board(port):
-    """The board at https://<name>/ while remote access is on and the tailnet issues certificates. Its URL, or None."""
+    """The board at https://<name>/ while remote access is on and the tailnet issues certificates. Its URL, or None.
+    Port 443 is taken only when it is free or the board's already (at the port it had last): something of the person's
+    own served there stays, and the board keeps its http address."""
+    global trouble
     if not board.registry()["settings"].get("tailscale") or ready():
         return None
-    if tailscale.served().get(443) != port and tailscale.serve(443, port):
+    now, reg = tailscale.served().get(443), board.registry()
+    if now not in (None, port, reg["settings"].get("https_board")):
+        trouble = f"https://{tailscale.status()['name']}/ already serves this machine's port {now}; colony leaves it"
         return None
+    if now != port:
+        trouble = tailscale.serve(443, port) or ""
+        if trouble:
+            return None
+    if reg["settings"].get("https_board") != port:
+        reg["settings"]["https_board"] = port
+        board.save_registry(reg)
+    trouble = ""
     return tailscale.url(443)
 
 
@@ -111,3 +129,16 @@ def restore(port):
             remove(key)
         elif now.get(r["https"]) != r["port"]:
             tailscale.serve(r["https"], r["port"])
+
+
+def keep(port):
+    """While the board runs (its own thread): served as recorded, then looked at again every EVERY seconds, so the
+    tailnet's certificates turned on (or Tailscale connected) after the board started are taken up with no restart, and
+    a serve tailscaled lost is put back. Nothing is asked of Tailscale while remote access is off and nothing is served."""
+    while True:
+        try:
+            if board.registry()["settings"].get("tailscale") or records():
+                restore(port)
+        except Exception:
+            pass                        # https is extra: its trouble stops nothing else
+        time.sleep(EVERY)

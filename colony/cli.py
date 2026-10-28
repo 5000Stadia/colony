@@ -280,7 +280,7 @@ def cmd_remote(a):
           + f"http://{st['name']}:{port}/" + (")" if secure else f" (or http://{st['ip']}:{port}/)")
           + "\nOpen it with the Tailscale app connected. Nothing is public: only devices "
           "logged in to your Tailscale account reach it, and the open home network no longer does."
-          + ("" if secure else f"\nHTTPS: {serving.ready() or 'not served yet'}."))
+          + ("" if secure else f"\nHTTPS: {serving.ready() or serving.trouble or 'not served yet'}."))
     if restarted.returncode:
         print("The board didn't restart cleanly: " + (restarted.stdout + restarted.stderr).strip()[-400:])
     return restarted.returncode
@@ -403,7 +403,7 @@ def cmd_doctor(a):
     if board.registry()["settings"].get("tailscale"):
         why = serving.ready()
         secure = not why and serving.ensure_board(_running_port(8790))
-        print(f"ok    https: {secure}" if secure else f"note  https: {why or 'the board is not served yet'}")
+        print(f"ok    https: {secure}" if secure else f"note  https: {why or serving.trouble or 'the board is not served yet'}")
     from . import autostart
     if autostart.available():
         print(f"{'ok  ' if autostart.on() else 'note'}  colony "

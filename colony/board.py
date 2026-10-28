@@ -8463,7 +8463,7 @@ def serve(port, lan=False, monitor=True):
     rewire_projects()
     from . import serving, voice
     threading.Thread(target=voice.make_samples, daemon=True).start()   # every voice's sample, made once and kept
-    threading.Thread(target=serving.restore, args=(port,), daemon=True).start()   # https as it was (Tailscale Serve)
+    threading.Thread(target=serving.keep, args=(port,), daemon=True).start()   # https as it was, and once it can be
     mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.lan = lan
