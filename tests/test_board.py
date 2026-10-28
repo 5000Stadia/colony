@@ -1523,6 +1523,17 @@ class GlanceTest(BoardBase):
         self.assertEqual([(a["name"], a["current"]) for a in act["agents"]], [("main", True), ("general-purpose", False)])
         self.assertEqual(act["agents"][1]["detail"], "7m 0s · ↓ 138.2k tokens")
         self.assertEqual(claude.classify("* Waiting for 4 background agents to finish\n❯ "), "working", "its agents are at work")
+        # its turn over, its helpers still at work: listed under the box until each ends, and the board says so
+        from colony import chat
+        rule = "─" * 48
+        helped = (f"✻ Worked for 9s\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on · 2 shells · 1 feedback draft\n\n  ● main\n"
+                  "  ◯ colony-rote  Check the menu" + " " * 40 + "7s · ↓ 41.1k tokens\n")
+        snap = {"state": claude.classify(helped), "lines": ["⏵⏵ bypass permissions on · 2 shells"], "activity": claude.activity(helped)}
+        self.assertEqual(snap["state"], "idle", "what decides when to write to it keeps the screen's own state")
+        self.assertEqual(chat.helpers(snap), [{"name": "colony-rote", "what": "Check the menu", "stats": "7s · ↓ 41.1k tokens"}])
+        self.assertEqual(board.seen(snap)["state"], "working")
+        self.assertEqual(board.seen(snap)["behind"], "1 helper, 2 shells running")
+        self.assertNotIn("behind", board.seen(dict(snap, activity={"agents": []}, lines=["⏵⏵ bypass permissions on"])))
         rule = "─" * 48
         foot = f"\n{rule}\n❯ \n{rule}\n  ⏵⏵ bypass permissions on · 1 shell · ← for agents"
         waited = "✻ Waiting for 2 background agents to finish\n\n● Agent \"R50\" failed: session limit\n  ⎿  resets 5:40pm\n"

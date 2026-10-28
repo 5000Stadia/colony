@@ -208,14 +208,31 @@ def worked(steps):
     return line[:1].upper() + line[1:]
 
 
-def running(lines):
+def helpers(snap):
+    """The helpers a console has at work, off the rows its program lists under the box (Claude Code: "◯ colony-rote
+    Check the menu   2m 5s · ↓ 41k tokens", gone once it ends): [{name, what, stats}]. PROVIDER: Claude Code's rows."""
+    out = []
+    for a in (snap.get("activity") or {}).get("agents") or []:
+        if a["name"] != "main":
+            parts = re.split(r"\s{2,}", a["detail"].strip())
+            stats = parts.pop() if parts and re.match(r"\d+[hms]\b", parts[-1]) else ""
+            out.append({"name": a["name"], "what": " ".join(parts), "stats": stats})
+    return out
+
+
+def running(lines, helping=()):
     """What runs in the background while the agent waits, off its console's footer (Claude Code: "· 1 shell",
-    "2 background tasks", "1 local agent"): a few words, or "". PROVIDER: Claude Code's footer wording."""
-    found = []
+    "2 background tasks", "1 local agent") and its helpers: a few words, or "". PROVIDER: Claude Code's footer wording."""
+    found = [f"{len(helping)} helper{'s' if len(helping) > 1 else ''}"] if helping else []
     for line in lines:
         for n, what in re.findall(r"\b(\d+) (shells?|background tasks?|local agents?|running tasks?)\b", line):
             found.append(f"{n} {what}")
     return ", ".join(dict.fromkeys(found)) + " running" if found else ""
+
+
+def behind(snap):
+    """What runs behind a console, off its footer and its helpers' rows, in a few words, or ""."""
+    return running((snap.get("lines") or []) + [(snap.get("activity") or {}).get("foot") or ""], helpers(snap))
 
 
 def background(path):
@@ -226,13 +243,18 @@ def background(path):
     for e in _tail(path) if path and Path(path).exists() else []:
         at = e.get("timestamp", "")
         content = (e.get("message") or {}).get("content")
-        if e.get("type") == "assistant" and isinstance(content, list):
+        if e.get("type") in ("assistant", "user") and isinstance(content, list):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "tool_use":
                     inp = c.get("input") or {}
-                    started[c.get("id")] = {"id": c.get("id"), "kind": "Shell" if c.get("name") == "Bash" else c.get("name", "Task"),
+                    started[c.get("id")] = {"id": c.get("id"), "kind": {"Bash": "Shell", "Agent": "Helper"}.get(c.get("name"), c.get("name", "Task")),
                                             "what": (inp.get("description") or inp.get("command") or inp.get("prompt") or "").strip(),
                                             "at": at, "bg": bool(inp.get("run_in_background"))}
+                elif isinstance(c, dict) and c.get("type") == "tool_result" and c.get("tool_use_id") in started:
+                    said = c.get("content")
+                    said = said if isinstance(said, str) else " ".join(x.get("text", "") for x in said or [] if isinstance(x, dict))
+                    if said.startswith("Async agent launched"):          # a helper is in the background by default
+                        started[c["tool_use_id"]]["bg"] = True
         texts = [e.get("content")] if e.get("type") == "queue-operation" else \
             [(e.get("attachment") or {}).get("prompt")] if e.get("type") == "attachment" else \
             [content] if isinstance(content, str) else []

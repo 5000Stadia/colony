@@ -655,15 +655,18 @@ class ClaudeCode:
 
     def activity(self, screen):
         """What the session is doing, as Claude Code shows it: its spinner line ("✻ Waiting for 4 background
-        agents to finish", "✻ Worked for 3s") and its background agents with their time and tokens."""
+        agents to finish", "✻ Worked for 3s"), its background agents with their time and tokens, and its footer
+        ("· 2 shells"), which those agents' rows can push off the last lines."""
         import re
-        line, agents = None, []
-        for l in screen.splitlines():
+        line, agents, lines = None, [], screen.splitlines()
+        box = self._box(lines)
+        for l in lines:
             if m := re.match(r"^\s*[✻✶✳✢✽·*+]\s+(\S.*?)\s*$", l):
                 line = m.group(1)
             elif m := re.match(r"^\s*([●○◯◉])\s+([\w.:-]+)(?:\s{2,}(\S.*?))?\s*$", l):
                 agents.append({"name": m.group(2), "detail": m.group(3) or "", "current": m.group(1) in "●◉"})
-        return {"line": line, "agents": agents if len(agents) > 1 else []}
+        foot = " ".join(l.strip() for l in lines[box + 1:] if "·" in l) if box is not None else ""
+        return {"line": line, "agents": agents if len(agents) > 1 else [], "foot": foot}
 
     def choice(self, screen):
         """The choice on screen, if any: (question lines, options, index of the highlighted one). Claude Code

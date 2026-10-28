@@ -2165,7 +2165,7 @@ def sidebar(reg, pid):
         chips, states, waits = [], [], 0
         for i, p in members:
             # its screen read once: its dot, and what waits on the person
-            snap = console.snapshot(p, lines=4) if p.exists() else {"state": "off", "lines": []}
+            snap = seen(console.snapshot(p, lines=4)) if p.exists() else {"state": "off", "lines": []}
             waiting = len(moments(p, snap)) if p.exists() else 0
             total, waits = total + (waiting if p.exists() and monitor.involved(p) else 0), waits + waiting
             badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
@@ -2176,7 +2176,7 @@ def sidebar(reg, pid):
             tint = f" style='--pc:{tint[0]};--pcd:{tint[1]}'" if tint else ""
             chips.append(f"<a class='proj{' on' if i == pid else ''}'{tint} href='/?p={i}'><span class='pname'>"
                          f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
-                         f"<span class='sline' id='sline-{i}'>{e(snap['state'] if snap['state'] != 'off' else '')}"
+                         f"<span class='sline' id='sline-{i}'>{e(snap.get('behind') or snap['state'] if snap['state'] != 'off' else '')}"
                          f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
         if not here or here == PINNED:
             side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here else chips
@@ -3291,12 +3291,12 @@ async function poll() {
       document.querySelectorAll(`.msdot[data-p="${i}"]`).forEach((d) => { d.className = 'sdot msdot ' + s.state.replace(' ', '-'); });
       document.querySelectorAll(`.pwork[data-p="${i}"]`).forEach((x) => { x.textContent = s.work || ''; });
       document.querySelectorAll(`.pbadge[data-p="${i}"]`).forEach((x) => { x.hidden = !s.waiting; x.textContent = s.waiting; });
-      if (line) line.textContent = (s.state === 'off' ? '' : s.state) + (s.work ? (s.state === 'off' ? '' : ' · ') + s.work : '');
+      if (line) line.textContent = (s.state === 'off' ? '' : s.behind || s.state) + (s.work ? (s.state === 'off' ? '' : ' · ') + s.work : '');
       const status = document.getElementById('status-' + i);
       if (status) {
         const act = s.activity || {}, st = s.state.replace(' ', '-');
         status.querySelector('.sdot').className = 'sdot ' + st;
-        status.querySelector('b').textContent = s.state;
+        status.querySelector('b').textContent = s.behind || s.state;
         status.querySelector('.statusline .muted').textContent = s.work ? ' · ' + s.work : '';
         const box = status.querySelector('.agents'); box.textContent = '';
         (act.agents || []).forEach((a) => {
@@ -3580,10 +3580,21 @@ def chat_feed(key, root, shown=40):
     name = monitor.name() if key == "steward" else console.session_name(root)
     snap = monitor.snapshot() if key == "steward" else console.snapshot(root, lines=4)
     # and what it waits on in the background, its turn over or not (a test run, a helper): a tap opens the tasks
-    behind = chat.running(snap.get("lines") or [])
+    helping, behind = chat.helpers(snap), chat.behind(snap)
     tasks = chat.background(s["path"]) if s and s["provider"] == "claude" else []
+    # only as many commands run as its footer counts, the newest: one stopped by hand sends no notice
+    shells = re.search(r"\b(\d+) (?:shells?|background tasks?|running tasks?)\b", behind)
+    keep = {t["id"] for t in [t for t in tasks if t["kind"] == "Shell" and t["state"] == "running"][::-1][:int(shells.group(1)) if shells else 0]}
+    tasks = [dict(t, state="ended") if t["state"] == "running" and t["kind"] == "Shell" and t["id"] not in keep else t for t in tasks]
     if not behind:                                       # nothing runs, whatever the transcript last said
         tasks = [dict(t, state="ended") if t["state"] == "running" else t for t in tasks]
+    # a helper is at work while its program lists it, whatever its notices said (one comes each time it pauses)
+    live = {h["what"]: h for h in helping}
+    tasks = [dict(t, state="running", stats=live[t["what"]]["stats"]) if t["kind"] == "Helper" and t["what"] in live
+             else dict(t, state="completed") if t["kind"] == "Helper" and t["state"] == "running" and behind else t for t in tasks]
+    known = {t["what"] for t in tasks if t["kind"] == "Helper"}
+    tasks += [{"kind": "Helper", "what": h["what"] or h["name"], "at": "", "state": "running", "stats": h["stats"], "exit": None}
+              for h in helping if h["what"] not in known]
     line = ""
     if snap["state"] == "working":
         act = (snap.get("activity") or {}).get("line") or "Working"
@@ -3655,7 +3666,7 @@ def tasks_html(tasks, shown=15):
     word = lambda t: ("Completed" if t["state"] == "completed" and not t["exit"] else
                       f"Failed (exit {t['exit']})" if t["exit"] else t["state"].capitalize())
     return ("<div class='tasklist'>"
-            + (f"<div class='th'>Running</div><ul>{''.join(row(t, e(since(t['at']))) for t in running)}</ul>" if running else "")
+            + (f"<div class='th'>Running</div><ul>{''.join(row(t, e(t.get('stats') or since(t['at']))) for t in running)}</ul>" if running else "")
             + (f"<div class='th'>Finished {len(done)}</div><ul>{''.join(row(t, e(word(t))) for t in done)}</ul>" if done else "")
             + "</div>")
 
@@ -4471,7 +4482,7 @@ def render(reg, pid, view="overview", show_all=""):
     # the day's page opens on the day itself: the vision and the project's state are a tab away. The status says what
     # the project is at, from its roadmap, and whether anything waits on the person.
     waiting = len(moments(root)) if view == "overview" else 0
-    lead_status = status_card(pid, console.snapshot(root), at_work(root), waiting) if view == "overview" else ""
+    lead_status = status_card(pid, seen(console.snapshot(root)), at_work(root), waiting) if view == "overview" else ""
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
                + switch_line(root) + lead_status + f"{vision_box(root, pid)}{rules_box(root, pid) if view == 'overview' else ''}"
                f"<p class='muted'>Roadmap: {done}/{total}{active}</p>" + (project_usage(root) if view == "overview" else "") + "</header>")
@@ -5712,6 +5723,14 @@ def monitor_page(reg, view="overview"):
     return shell(reg, -1, body)
 
 
+def seen(snap):
+    """A console as the board's dots and lines show it: idle on screen while its helpers or background commands are at
+    work is working, saying what runs ("2 helpers running"). What decides when to write to it keeps the screen's own."""
+    from . import chat
+    behind = chat.behind(snap) if snap.get("state") == "idle" else ""
+    return dict(snap, state="working", behind=behind) if behind else snap
+
+
 def status_card(pid, snap, work="", waiting=None):
     """The project's status: working / needs you / idle / off, as its console shows it; what it is at, from its
     roadmap (never its console's spinner words); its background agents; and, given the count, when nothing waits on
@@ -5720,7 +5739,7 @@ def status_card(pid, snap, work="", waiting=None):
     agents = "".join(f"<div class='agent{' current' if a['current'] else ''}'><span>{'●' if a['current'] else '○'} {e(a['name'])}</span>"
                      f"<span class='muted'>{e(a['detail'])}</span></div>" for a in act.get("agents", []))
     return (f"<a class='status' id='status-{pid}' href='/?p={pid}&view=console'><div class='statusline'>"
-            f"<span class='sdot {snap['state'].replace(' ', '-')}'></span><b>{e(snap['state'])}</b>"
+            f"<span class='sdot {snap['state'].replace(' ', '-')}'></span><b>{e(snap.get('behind') or snap['state'])}</b>"
             f"<span class='muted'>{(' · ' + e(work)) if work else ''}</span></div>"
             f"<div class='agents'>{agents}</div>"
             + ("" if waiting is None else f"<div class='waits muted'{' hidden' if waiting else ''}>Nothing waits on you.</div>")
@@ -7444,7 +7463,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/status":
             from . import monitor
             body = json.dumps({"board": str(home()), "projects": [
-                dict(console.snapshot(p), waiting=len(moments(p)), work=at_work(p), followed=monitor.involved(p)) if p.exists()
+                dict(seen(console.snapshot(p)), waiting=len(moments(p)), work=at_work(p), followed=monitor.involved(p)) if p.exists()
                 else {"state": "off", "lines": [], "waiting": 0, "work": "", "followed": False} for p in plist], "monitor": monitor.snapshot(),
                 "nav": nav_order(plist)}).encode()
             self.send_response(200)
