@@ -7533,11 +7533,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(409, b'This completed candidate is no longer current.')
             if candidate['artifact_hash'] is None or candidate['artifact_hash'] != progress.artifact_identity(candidate['artifact']):
                 return self._send(409, b'The completed artifact changed; present a fresh candidate.')
-            import mimetypes
             artifact = Path(candidate['artifact'])
             body = artifact.read_bytes()
             self.send_response(200)
-            self.send_header('Content-Type', mimetypes.guess_type(artifact.name)[0] or 'application/octet-stream')
+            self.send_header('Content-Type', pins.content_type(artifact.name))
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Content-Security-Policy', 'sandbox')
             self.send_header('Cache-Control', 'no-store')
@@ -7648,7 +7647,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(body[start:end + 1])
         if url.path == "/chat/file":                  # a picture or a file the chat shows, from inside the project only
             from . import monitor
-            import mimetypes
             key = (q.get("p") or ["0"])[0]
             try:
                 root = monitor.home() if key == "steward" else plist[int(key)]
@@ -7661,7 +7659,7 @@ class Handler(BaseHTTPRequestHandler):
             if key != "steward" and path.suffix.lower() in (".html", ".htm"):
                 data = page_with_send(key, root, path, data)
             self.send_response(200)
-            self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+            self.send_header("Content-Type", pins.content_type(path.name))
             self.send_header("Content-Disposition", inline(path.name))
             if path.suffix.lower() != ".pdf":         # a phone's PDF viewer is a plugin, which a sandbox refuses: a blank page
                 self.send_header("Content-Security-Policy", SANDBOX)

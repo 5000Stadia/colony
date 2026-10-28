@@ -111,7 +111,14 @@ def is_text(pin):
 
 
 def mime(pin):
-    return mimetypes.guess_type(pin["target"])[0] or "application/octet-stream"
+    return content_type(pin["target"])
+
+
+def content_type(name):
+    """What a file is served as; text says it is UTF-8, as colony and its agents write it: unsaid, a phone read a
+    showcase's .md as Latin-1, its dashes garbled ("$1,730â€"2,540", the sections review, 2026-10-28)."""
+    kind = mimetypes.guess_type(str(name))[0] or "application/octet-stream"
+    return kind + "; charset=utf-8" if kind.startswith("text/") or kind in ("application/json", "application/javascript") else kind
 
 
 def describe(pin):

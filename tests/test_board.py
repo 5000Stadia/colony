@@ -4367,6 +4367,13 @@ class SelfHostTest(BoardBase):
 
 
 class PinTest(BoardBase):
+    def test_text_is_served_as_utf8_so_a_phone_reads_its_dashes(self):
+        from colony import pins
+        self.assertEqual(pins.content_type("report.md"), "text/markdown; charset=utf-8")
+        self.assertEqual(pins.content_type("data.json"), "application/json; charset=utf-8")
+        self.assertEqual(pins.content_type("shot.png"), "image/png")
+        self.assertEqual(pins.content_type("book.pdf"), "application/pdf")
+
     def test_pins_from_either_side_opened_edited_and_told_to_the_agent_as_it_matters(self):
         board.track(self.root)
         (self.root / "notes.md").write_text("# Chapter 2\n")
