@@ -3606,9 +3606,11 @@ def chat_feed(key, root, shown=40):
     snap = monitor.snapshot() if key == "steward" else console.snapshot(root, lines=4)
     # and what it waits on in the background, its turn over or not (a test run, a helper): a tap opens the tasks
     helping, behind = chat.helpers(snap), chat.behind(snap)
-    tasks = chat.background(s["path"]) if s and s["provider"] == "claude" else []
+    # PROVIDER: background(path), each program's reading of its own transcript
+    reader = getattr(providers.get(s["provider"]), "background", None) if s and s.get("provider") in providers.PROVIDERS else None
+    tasks = reader(s["path"]) if reader else []
     # only as many commands run as its footer counts, the newest: one stopped by hand sends no notice
-    shells = re.search(r"\b(\d+) (?:shells?|background tasks?|running tasks?)\b", behind)
+    shells = re.search(r"\b(\d+) (?:shells?|background tasks?|running tasks?|background terminals?)\b", behind)
     keep = {t["id"] for t in [t for t in tasks if t["kind"] == "Shell" and t["state"] == "running"][::-1][:int(shells.group(1)) if shells else 0]}
     tasks = [dict(t, state="ended") if t["state"] == "running" and t["kind"] == "Shell" and t["id"] not in keep else t for t in tasks]
     if not behind:                                       # nothing runs, whatever the transcript last said

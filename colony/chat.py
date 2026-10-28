@@ -276,3 +276,45 @@ def background(path):
             n = notices.get(uid) or {"state": "running", "ended": "", "exit": None}
             out.append(dict(s, **n))
     return out
+
+
+
+def codex_background(path):
+    """What a Codex agent left running, and how each ended, in background()'s form. PROVIDER: Codex's rollout, as
+    colony-codex captured it on 0.165: a code cell (custom_tool_call "exec") calls tools.exec_command, and its output
+    returns a session_id with no exit code while the command runs on; its end is the structured item_completed
+    CommandExecution whose process_id is that session id, with its exit code and duration. A direct exec_command
+    function call reads the same way. One never seen to end stays running (the board trims it by the footer's count)."""
+    calls, started, ended = {}, {}, {}
+    for e in _tail(path) if path and Path(path).exists() else []:
+        at, pl = e.get("timestamp", ""), e.get("payload") or {}
+        kind = pl.get("type")
+        if kind in ("custom_tool_call", "function_call"):
+            calls[pl.get("call_id")] = (at, pl.get("input") or pl.get("arguments") or "")
+        elif kind in ("custom_tool_call_output", "function_call_output") and pl.get("call_id") in calls:
+            when, said = calls[pl["call_id"]]
+            if "exec_command" not in said:
+                continue                                    # a poll (write_stdin) or another tool: nothing started
+            out = pl.get("output")
+            blocks = [b.get("text", "") for b in out if isinstance(b, dict)] if isinstance(out, list) else [str(out or "")]
+            for b in blocks:
+                try:
+                    r = json.loads(b)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("session_id") is not None and r.get("exit_code") is None:
+                    sid = str(r["session_id"])
+                    m = re.search(r'\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")', said)
+                    try:
+                        what = json.loads(m.group(1)) if m else ""
+                    except ValueError:
+                        what = ""
+                    started.setdefault(sid, {"id": "codex-" + sid, "kind": "Shell", "what": what.strip(), "at": when, "bg": True})
+        elif kind == "item_completed" and (pl.get("item") or {}).get("type") == "CommandExecution":
+            item = pl["item"]
+            sid = str(item.get("process_id") or "")
+            if sid in started and sid not in ended:
+                cmd = item.get("command") or []
+                ended[sid] = {"state": "completed" if item.get("status") == "completed" else "failed", "ended": at,
+                              "exit": item.get("exit_code"), "what": started[sid]["what"] or (cmd[-1] if cmd else "")}
+    return [dict(s, **ended.get(sid, {"state": "running", "ended": "", "exit": None})) for sid, s in started.items()]

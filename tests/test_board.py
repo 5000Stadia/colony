@@ -1633,6 +1633,33 @@ class CodexHelpersTest(BoardBase):
                          "2 background terminals running")
 
 
+    def test_codex_commands_left_running_show_in_chat_with_how_they_ended(self):
+        # as colony-codex captured them on 0.165: a code cell starts it, its output gives a session id and no exit code,
+        # polls carry the same id, and its end is the structured CommandExecution with that id as process_id
+        from colony import chat
+        cell = lambda t, cid, js: {"timestamp": t, "type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec",
+                                                                                       "call_id": cid, "input": js}}
+        back = lambda t, cid, *r: {"timestamp": t, "type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": cid,
+            "output": [{"type": "input_text", "text": "Script completed\nOutput:\n"}] + [{"type": "input_text", "text": json.dumps(x)} for x in r]}}
+        done = lambda t, sid, status, code: {"timestamp": t, "type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "process_id": str(sid), "status": status, "exit_code": code, "command": ["/bin/bash", "-lc", "x"]}}}
+        lines = [cell("T1", "c1", 'const r = await tools.exec_command({cmd:"python3 -m pytest -q \\"tests\\"",yield_time_ms:1000}); text(r);'),
+                 back("T2", "c1", {"session_id": 68567, "output": "start\n"}),
+                 cell("T3", "c2", 'text(await tools.write_stdin({session_id:68567,chars:""}));'),
+                 back("T4", "c2", {"session_id": 68567, "output": ""}),
+                 cell("T5", "c3", 'text(await tools.exec_command({cmd:"ls"}));'),
+                 back("T6", "c3", {"exit_code": 0, "output": "a\n"}),                    # done at once: not background
+                 cell("T7", "c4", 'const r = await tools.exec_command({cmd:"sleep 900",yield_time_ms:1000}); text(r);'),
+                 back("T8", "c4", {"session_id": 76533, "output": ""}),
+                 done("T9", 68567, "failed", 7)]
+        path = Path(self.tmp.name) / "rollout.jsonl"
+        path.write_text("".join(json.dumps(l) + "\n" for l in lines))
+        got = providers.get("codex").background(str(path))
+        self.assertEqual([(t["what"], t["state"], t["exit"], t["at"], t["ended"]) for t in got],
+                         [('python3 -m pytest -q "tests"', "failed", 7, "T1", "T9"), ("sleep 900", "running", None, "T7", "")])
+        self.assertEqual(chat.running(["· 1 background terminal running"]), "1 background terminal running")
+
+
     def test_codex_time_at_work_is_its_own_turns_lengths(self):
         import sqlite3
         codex = providers.get("codex")

@@ -24,6 +24,9 @@ what it assumes and what a second provider needs there. What a provider supplies
   own_defaults()           the model and effort the CLI uses when colony names none, or None where it
                            decides itself; the forms show them as "Default (...)"
   history_text(root)       the session's conversation as plain text, for Select on a phone (or None)
+  background(path)         what the agent left running in the background, and how each ended, from its transcript:
+                           [{id, kind, what, at, state, ended, exit}], state running until its end is read; Chat's
+                           task list (optional; without, none)
   active_seconds(root)     how long its agent has spent at work in the project, all told: turns only, not the
                            time it sat waiting for the person (None if it can't tell)
   activity(screen)         what it's doing now, off its screen: {"line": the current activity or None,
@@ -648,6 +651,10 @@ class ClaudeCode:
         from . import lingering
         return lingering.claude_commands(pane)
 
+    def background(self, path):
+        from . import chat
+        return chat.background(path)
+
     def elapsed(self, screen):
         """The timer on its live spinner line: "✶ Flowing… (3m 12s · ↓ 1.7k tokens)" gives "3m 12s"."""
         import re
@@ -1257,6 +1264,10 @@ class Codex:
     def commands(self, pane):
         from . import lingering
         return lingering.codex_commands(pane)
+
+    def background(self, path):
+        from . import chat
+        return chat.codex_background(path)
 
     def helpers(self, root, now=None):
         """Its helpers at work: Codex lists none under its box (its picker keeps finished ones too), so they come from
