@@ -898,6 +898,28 @@ class ChatTest(BoardBase):
         with self.assertRaises(ValueError):
             board.default_voice("nobody")
 
+    def test_a_message_can_answer_one_of_the_agents_replies_by_its_first_words(self):
+        # the person: "a reply to this button at the bottom of a message block that sends to the agent, a small and
+        # simple reference to at least the first few words of that message block with a specification that it is a
+        # reply to that and then ... above the message box ... replying to it may be the first word or two"
+        from colony import chat, context
+        evs = [("you", "How did the night go?", "2026-10-28T17:00:00Z"),
+               ("say", "So what were the problems with the trial servers? Three were left running.", "2026-10-28T17:00:05Z"),
+               ("you", '(Replying to: "So what were the problems with the trial…")\nStop the second one', "2026-10-28T17:01:00Z")]
+        with patch.object(context, "session", return_value={"provider": "claude", "path": str(self.root / "t.jsonl")}), \
+                patch.object(chat, "events", return_value=evs):
+            feed = board.chat_feed("0", self.root)
+        self.assertIn("<button class='reply' data-t='2026-10-28T17:00:00Z' aria-label='Reply to this'>", feed, "under the reply")
+        self.assertIn("<div class='msg you'><div class='re'>↩ So what were the problems with the trial…</div>Stop the second one", feed)
+        self.assertNotIn("(Replying to:", feed, "the reference shows as a small line, not as typed")
+        self.assertTrue(board.REPLY.match(evs[2][1]))
+        with patch.object(context, "session", return_value=None):
+            self.assertIn("<div class='replying' hidden><span></span><button type='button' class='unreply'",
+                          board.chat_page("0", self.root), "above the box, hidden till a reply is chosen")
+        self.assertIn("body.set('text', '(Replying to: \"' + replyTo + '\")\\n' + text);", board.CHAT, "its first words go with it")
+        self.assertIn("'Replying to “' + firstWords(text, 2) + '”'", board.CHAT, "above the box: a word or two")
+        self.assertIn("if (r && r.ok) { answering(''); return setTimeout(refresh, 600); }", board.CHAT, "sent: it's done")
+
     def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
         board.track(self.root)
         from colony import hours
@@ -1548,6 +1570,7 @@ class LingeringTest(BoardBase):
                 patch.object(L.console, "drafting", return_value=False), \
                 patch.object(L.console, "attached", return_value=False), \
                 patch.object(L, "commands", side_effect=lambda root, name: [dict(c) for c in cmds.values()]), \
+                patch.object(L, "look", return_value=[]), \
                 patch("colony.providers.key", return_value="claude"), \
                 patch("colony.usage.paused", return_value={}), \
                 patch.object(L.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
@@ -1581,6 +1604,98 @@ class LingeringTest(BoardBase):
                 cmds["writer"]["wrote"] += 78
                 L.tick(now=t); t += L.EVERY
             self.assertFalse(any("progress.py" in x for x in typed))
+
+
+    def test_what_an_ended_console_left_running_is_found_with_no_tokens_and_told_once_or_listed_with_stop(self):
+        # 2026-10-28: 15 scopes still running from consoles that had ended, 1.3 GB, the oldest from Oct 3. The person:
+        # "a very low profile system that can quickly identify that ... that takes no tokens"; their choice, "Tell, and
+        # list the rest"
+        from colony import lingering as L
+        board.track(self.root)
+        L._seen.clear(); L._idle.clear(); L._looked[0] = 0; L._left.update(at=0.0, seen=set(), found=[])
+        name, trial = console.session_name(self.root), Path(self.tmp.name) / "trial"
+        app = f"/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice/"
+        scopes = {app + f"colony-{name}-1793000000.scope": [21, 22],     # this project's, its console since ended
+                  app + "run-u5.scope": [31],                             # from before scopes were named: a trial's server
+                  app + f"colony-{name}-1793000500.scope": [41, 42],     # its console now, running
+                  app + "run-u6.scope": [51]}                             # a Codex app host, kept on purpose
+        live = {21: (100, 1.0), 22: (101, 0.0), 31: (90, 0.0), 41: (200, 5.0), 42: (201, 0.0), 51: (80, 0.0)}
+        what = {21: "python3 -m http.server 8812", 22: "sleep 600", 31: "bookflow serve --bind 127.0.0.1:8765"}
+        codex = providers.get("codex")
+        with patch.object(L, "_scopes", side_effect=lambda: {k: list(v) for k, v in scopes.items()}), \
+                patch.object(L, "_a_console", return_value=True), patch.object(L, "_panes", return_value={41}), \
+                patch.object(L, "_stat", side_effect=lambda pid: live.get(pid)), \
+                patch.object(L, "_cmdline", side_effect=lambda pid: what.get(pid, "")), \
+                patch.object(L, "_cwd", side_effect=lambda pid: {31: str(trial)}.get(pid, str(self.root))), \
+                patch.object(L, "_rss", return_value=50 * 2**20), patch.object(L, "_ports", return_value={21: ["127.0.0.1:8812"]}), \
+                patch.object(L.console, "_descendants", side_effect=lambda pid: [pid]), \
+                patch.object(codex, "keeps", return_value={51}):
+            found = {g["unit"]: g for g in L.left()}
+            self.assertEqual(sorted(found), [f"colony-{name}-1793000000.scope", "run-u5.scope"],
+                             "neither the running console's scope nor the host kept on purpose")
+            ours = found[f"colony-{name}-1793000000.scope"]
+            self.assertEqual((ours["root"], ours["what"], ours["more"], ours["ports"]),
+                             (self.root, "python3 -m http.server 8812", 1, ["127.0.0.1:8812"]), "named by its server")
+            self.assertIsNone(found["run-u5.scope"]["root"], "a folder no project on the board has: the person's")
+            self.assertEqual(L.look(10**6), [], "a first look counts nothing: a console may be ending as it looks")
+            self.assertEqual(L.look(10**6 + L.LOOK - 1), [], "nor does it look again within the hour")
+            self.assertEqual(len(L.look(10**6 + L.LOOK)), 2, "there on two looks: left behind")
+            self.assertEqual([g["unit"] for g in L.unowned()], ["run-u5.scope"])
+            # this project's: named to its agent once, under the same care as its quiet work
+            typed = []
+            with patch.object(L.board, "projects", return_value=[self.root]), \
+                    patch.object(L.console, "running", return_value=True), \
+                    patch.object(L.console, "snapshot", return_value={"state": "idle", "lines": []}), \
+                    patch.object(L.console, "drafting", return_value=False), patch.object(L.console, "attached", return_value=False), \
+                    patch.object(L, "commands", return_value=[]), patch("colony.providers.key", return_value="claude"), \
+                    patch("colony.usage.paused", return_value={}), \
+                    patch.object(L.console, "type_into", side_effect=lambda n, text: typed.append(text) or True):
+                t = 10**6 + L.LOOK
+                while t < 10**6 + L.LOOK + L.IDLE + 4 * L.LOOK:
+                    L.tick(now=t); t += L.EVERY
+            self.assertEqual(len(typed), 1, "once, ever")
+            self.assertIn("Left running by consoles of yours that have since ended: `python3 -m http.server 8812` and 1 more", typed[0])
+            self.assertIn("listening on 127.0.0.1:8812", typed[0])
+            self.assertNotIn("bookflow serve", typed[0], "another's is not its to stop")
+            # the rest: on All projects, with Stop
+            self.assertIn("bookflow serve --bind 127.0.0.1:8765", board.left_shelf())
+            self.assertIn("value='left:run-u5.scope'", board.left_shelf())
+            killed = []
+
+            def kill(pid, sig):
+                killed.append(pid)
+                live.pop(pid, None)
+            live[22] = (999, 0.0)                         # 22 ended, and its pid went to something else since
+            with patch.object(L.os, "kill", side_effect=kill):
+                self.assertTrue(L.stop(f"left:colony-{name}-1793000000.scope", wait=0.2))
+                self.assertTrue(L.stop("left:run-u5.scope", wait=0.2))
+            self.assertEqual(killed, [21, 31], "only what is still the process listed")
+            self.assertEqual(L.unowned(), [])
+
+    def test_a_project_coming_off_the_board_stops_what_its_consoles_left_running(self):
+        # the person: "Should we make sure that archive automatically closes running elements"
+        from colony import lingering as L
+        board.track(self.root)
+        other = Path(self.tmp.name) / "other"; other.mkdir()
+        board.track(other)
+        app = f"/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice/"
+        scopes = {app + f"colony-{console.session_name(self.root)}-1793000000.scope": [21],
+                  app + f"colony-{console.session_name(other)}-1793000000.scope": [31]}
+        live, killed = {21: (100, 0.0), 31: (90, 0.0)}, []
+        with patch.object(L, "_scopes", return_value=scopes), patch.object(L, "_a_console", return_value=True), \
+                patch.object(L, "_panes", return_value=set()), patch.object(L, "_stat", side_effect=lambda pid: live.get(pid)), \
+                patch.object(L, "_cmdline", return_value="python3 -m http.server"), patch.object(L, "_cwd", return_value=""), \
+                patch.object(L, "_rss", return_value=0), patch.object(L, "_ports", return_value={}), \
+                patch.object(L.os, "kill", side_effect=lambda pid, sig: killed.append(pid) or live.pop(pid, None)):
+            board.remove_project(self.root)
+        self.assertEqual(killed, [21], "its own, not another project's")
+        self.assertNotIn(str(self.root), board.registry()["projects"])
+
+    def test_a_console_runs_in_a_scope_named_for_it(self):
+        if not console.contained("x").startswith("if systemd-run"):
+            self.skipTest("no user systemd here")
+        self.assertIn("--unit=colony-board-plants-1a2b-", console.contained("x", "board-plants-1a2b"))
+        self.assertNotIn("--unit", console.contained("x"))
 
 
 class CodexHelpersTest(BoardBase):

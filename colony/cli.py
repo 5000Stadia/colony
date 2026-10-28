@@ -395,6 +395,16 @@ def cmd_doctor(a):
     for k, p in providers.PROVIDERS.items():
         if providers.usable(p):
             print(f"note  turbo: {turbo.line(k)}")
+    from . import lingering
+    try:
+        behind = lingering.left()
+    except Exception:
+        behind = []                                # what's left behind is a note: its trouble hides nothing else
+    for g in behind:                               # what consoles that have ended still run (no tokens: /proc)
+        whose = f"{g['root'].name}'s agent is told once" if g["root"] else "no project on the board: Stop it on All projects"
+        print(f"note  left running by an ended console: {board.short(' '.join(g['what'].split()), 70)}"
+              + (f" and {g['more']} more" if g["more"] else "") + f" ({g['rss'] // 2**20} MB"
+              + (f", {', '.join(g['ports'])}" if g["ports"] else "") + f"; {whose})")
     if a.tests:
         home = Path(__file__).resolve().parent.parent
         r = subprocess.run([sys.executable, "-m", "unittest", "tests.test_board", "tests.test_selection", "tests.test_effort", "tests.test_codex_remote", "tests.test_vision", "tests.test_context", "tests.test_catalog", "tests.test_catalog_freshness", "tests.test_lead", "tests.test_continuation", "tests.test_turbo"], cwd=home,

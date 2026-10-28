@@ -218,6 +218,11 @@ class Provider:
         board), once that is at rest; the watcher asks every few minutes. The projects let go."""
         return []
 
+    def keeps(self):
+        """The processes it keeps running on purpose past their console's end, for projects still on it: never
+        named as left behind (lingering.left)."""
+        return set()
+
     def helpers(self, root):
         """Its helpers at work, [{name, what, stats}], for a program that doesn't list them on its screen (None:
         its screen says them)."""
@@ -1347,14 +1352,24 @@ class Codex(Provider):
             return "needs you"
         return "idle"
 
-    def let_go(self):
-        """Its app hosts outlive their consoles by design (a restart reconnects to the turn), so one whose project no
-        longer runs on Codex, or left the board, is let go here."""
-        from . import board, codex_remote, monitor
+    def _mine(self):
+        """The folders of the projects that run on it, the steward's too where it does."""
+        from . import board, monitor
         keep = {str(Path(p).resolve()) for p in board.projects() if of(p) is self}
         if monitor.provider() is self:
             keep.add(str(Path(monitor.home()).resolve()))
-        return codex_remote.let_go(keep)
+        return keep
+
+    def let_go(self):
+        """Its app hosts outlive their consoles by design (a restart reconnects to the turn), so one whose project no
+        longer runs on Codex, or left the board, is let go here."""
+        from . import codex_remote
+        return codex_remote.let_go(self._mine())
+
+    def keeps(self):
+        """Its app hosts, for projects that still run on it: each lives on in the scope of the console that started it."""
+        from . import codex_remote
+        return codex_remote.hosts(self._mine())
 
     def unfreeze(self, root):
         """Its app host runs the turn in a session of its own, which a console restart leaves running and reconnects

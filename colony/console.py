@@ -132,10 +132,14 @@ def lingers(cmd):
     return f"{cmd}\ns=$?; tmux set-option -p @exit $s 2>/dev/null; sleep 0.5; exit $s"
 
 
-def contained(cmd):
+UNIT = "colony-"            # a console's scope: colony-<its session>-<when it started>.scope
+
+
+def contained(cmd, name=None):
     """Run a console in its own systemd scope that carries on when the kernel kills one of its processes for
     memory: by default systemd stops the whole unit, which once took a project's session down with the one
-    browser a test had started. Where systemd isn't there, the command runs as it is."""
+    browser a test had started. Named for its session, so what it leaves running once it ends is known as its own
+    (lingering.left). Where systemd isn't there, the command runs as it is."""
     global _SCOPE
     if _SCOPE is None:
         _SCOPE = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "true"], capture_output=True).returncode == 0 \
@@ -144,8 +148,9 @@ def contained(cmd):
         return cmd
     # Asked again where the console starts: a long-lived tmux server can lose the right to make scopes ("Access
     # denied") while the board still has it, and a console that can't get one starts as it is rather than dying.
+    unit = f"--unit={UNIT}{name}-{int(time.time())} " if name else ""
     return (f"if systemd-run --user --scope --quiet true 2>/dev/null; then exec systemd-run --user --scope --quiet "
-            f"-p OOMPolicy=continue -- sh -c {shlex.quote(cmd)}; else exec sh -c {shlex.quote(cmd)}; fi")
+            f"{unit}-p OOMPolicy=continue -- sh -c {shlex.quote(cmd)}; else exec sh -c {shlex.quote(cmd)}; fi")
 
 
 _SCOPE = None
@@ -237,7 +242,7 @@ def ensure(root, name=None, label=None, settle=0):
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
                         "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
-                        contained(lingers(command(label or Path(root).name, None if label else root, folder=root if label else None))),
+                        contained(lingers(command(label or Path(root).name, None if label else root, folder=root if label else None)), name),
                         # in the same breath, before the program can end: if it does, its screen stays to be read
                         ";", "set-option", "-w", "-t", name, "remain-on-exit", "on"],
                        check=True)

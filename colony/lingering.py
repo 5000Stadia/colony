@@ -153,6 +153,193 @@ def quiet(root, name, now, snap):
     return found
 
 
+# --- Left behind: what a console that has ended still runs.
+#
+# Every console runs in a systemd scope of its own (console.contained), and whatever its agent starts stays in that
+# scope however it was started (in the background, detached, in a session of its own); the scope outlives the console
+# while anything in it runs. So a console's scope with no console in it holds exactly what was left behind, whatever
+# program ran it: nothing to register, nothing read but /proc. What a program keeps on purpose past its console
+# (Provider.keeps: a Codex app host its restarted console reconnects to) is not left behind. Seen on two looks an hour
+# apart before it counts, so a console ending as colony looks is not one. A project's own are named to it once, as its
+# quiet work is; those of a project no longer on the board, or of no project colony can tell, are the person's:
+# colony doctor and the board list them, with Stop (their choice, 2026-10-28: "Tell, and list the rest").
+# Found 2026-10-28: 15 scopes, 1.3 GB, the oldest from Oct 3 (old Claude Code and Codex processes, trial servers).
+LOOK = 3600                  # seconds between looks
+_left = {"at": 0.0, "seen": set(), "found": []}
+
+
+def _scopes():
+    """{scope's cgroup: [pids]} of this user's scopes made by systemd-run, from /proc."""
+    mine, out = f"/user@{os.getuid()}.service/", {}
+    for f in Path("/proc").glob("[0-9]*/cgroup"):
+        try:
+            cg = f.read_text().strip().splitlines()[-1].split(":", 2)[2]
+        except (OSError, IndexError):
+            continue
+        unit = cg.rsplit("/", 1)[-1]
+        if mine in cg and unit.endswith(".scope") and unit.startswith(("run-", console.UNIT)):
+            out.setdefault(cg, []).append(int(f.parent.name))
+    return out
+
+
+def _a_console(unit):
+    """Whether a scope was a console's: named as one, or, from before they were named, a shell's as console.contained
+    starts one (sh -c the console's command)."""
+    import subprocess
+    if unit.startswith(console.UNIT):
+        return True
+    try:
+        said = subprocess.run(["systemctl", "--user", "show", "-p", "Description", "--value", unit],
+                              capture_output=True, text=True).stdout
+    except OSError:
+        return False                              # no systemctl to ask: only a named scope is told for sure
+    return bool(re.match(r"(\S*/)?sh -c ", said))
+
+
+def _ports():
+    """{pid: ["127.0.0.1:8812", ...]} of what listens, from ss."""
+    import subprocess
+    out = {}
+    try:
+        said = subprocess.run(["ss", "-ltnpH"], capture_output=True, text=True).stdout
+    except OSError:
+        return out
+    for line in said.splitlines():
+        cols = line.split()
+        for pid in re.findall(r"pid=(\d+)", line):
+            out.setdefault(int(pid), []).append(cols[3] if len(cols) > 3 else "")
+    return out
+
+
+def _since(start):
+    """When a process started, in epoch seconds, from its start in clock ticks since boot."""
+    try:
+        boot = int(next(l for l in Path("/proc/stat").read_text().splitlines() if l.startswith("btime")).split()[1])
+    except (OSError, StopIteration, ValueError, IndexError):
+        return 0
+    return boot + start / os.sysconf("SC_CLK_TCK")
+
+
+def _rss(pid):
+    try:
+        return int(Path(f"/proc/{pid}/statm").read_text().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
+def _panes():
+    """The pids of every console's pane: a scope holding one still has its console."""
+    import subprocess
+    try:
+        said = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_pid}"], capture_output=True, text=True).stdout
+    except OSError:
+        said = ""
+    return {int(p) for p in said.split() if p.isdigit()}
+
+
+def _cwd(pid):
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return ""
+
+
+def left(seats=None, only=None):
+    """What consoles that have ended left running: [{key, unit, root, what, more, rss, ports, since, cwd, pids}], one
+    for each such scope. root: the project it was left by, while that is on the board (else None). only: that
+    project's alone."""
+    from collections import Counter
+    from . import monitor, providers
+    if seats is None:
+        roots = [p for p in board.projects()] + [monitor.home()]
+        shared = Counter(str(board.workdir(p)) for p in roots)
+        seats = {"names": {console.session_name(p): p for p in board.projects()} | {monitor.name(): monitor.home()},
+                 # a folder two projects work in tells neither's apart: only a named scope says whose
+                 "dirs": [(str(board.workdir(p)), p) for p in roots if shared[str(board.workdir(p))] == 1]}
+    panes, kept = _panes(), set()
+    for prog in providers.PROVIDERS.values():
+        try:
+            for pid in prog.keeps():
+                kept.update(console._descendants(pid))
+        except Exception:
+            continue
+    ports, out = None, []
+    for cg, pids in _scopes().items():
+        unit = cg.rsplit("/", 1)[-1]
+        rest = [p for p in pids if p not in kept]
+        if not rest or panes & set(pids):
+            continue
+        procs = [(p, _stat(p)) for p in rest]
+        procs = sorted([(p, st) for p, st in procs if st], key=lambda x: x[1][0])
+        if not procs:
+            continue
+        named = re.match(re.escape(console.UNIT) + r"(.+)-\d+\.scope$", unit)
+        # named, its session says whose; from before, its folder, exactly (a project folder can sit inside another's,
+        # as colony's projects/ do): what can't be told is the person's, never named to the wrong agent
+        cwds = {_cwd(p) for p, _ in procs}
+        root = seats["names"].get(named.group(1)) if named else next((r for d, r in seats["dirs"] if d in cwds), None)
+        if only is not None and (root is None or Path(root).resolve() != Path(only).resolve()):
+            continue
+        if not _a_console(unit):
+            continue
+        ports = _ports() if ports is None else ports
+        top = max(procs, key=lambda x: (bool(ports.get(x[0])), _rss(x[0])))[0]      # named by its server, else its largest
+        cwd = _cwd(top)
+        out.append({"key": f"left:{unit}", "unit": unit, "root": root, "what": _cmdline(top) or "?", "more": len(procs) - 1,
+                    "rss": sum(_rss(p) for p, _ in procs), "ports": [a for p, _ in procs for a in ports.get(p, [])],
+                    "since": _since(procs[0][1][0]), "cwd": cwd, "pids": [[p, st[0]] for p, st in procs]})
+    return out
+
+
+def look(now):
+    """Every LOOK: what was left behind on this look and the one before it (a console ending as colony looks is not
+    one). Kept for the board and the naming."""
+    if now - _left["at"] < LOOK:
+        return _left["found"]
+    _left["at"] = now
+    try:
+        groups = left()
+    except Exception:
+        return _left["found"]
+    _left["found"] = [g for g in groups if g["key"] in _left["seen"]]
+    _left["seen"] = {g["key"] for g in groups}
+    return _left["found"]
+
+
+def unowned():
+    """What was left behind by no project on the board: the person's, with Stop."""
+    return [g for g in _left["found"] if g["root"] is None]
+
+
+def stop(key, wait=3.0, group=None):
+    """Stop what was left behind in one scope, as it was listed: each process still the one listed (its start
+    unchanged: a pid since given to something else is left alone), TERM, then KILL. Whether all of it is gone."""
+    import signal
+    g = group or next((g for g in _left["found"] if g["key"] == key), None) or next((g for g in left() if g["key"] == key), None)
+    if not g:
+        return True
+    live = lambda: [p for p, start in g["pids"] if (_stat(p) or (None,))[0] == start]
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for p in live():
+            try:
+                os.kill(p, sig)
+            except OSError:
+                pass
+        deadline = time.time() + wait
+        while live() and time.time() < deadline:
+            time.sleep(0.1)
+    _left["found"] = [x for x in _left["found"] if x["key"] != key]
+    return not live()
+
+
+def stop_all(root):
+    """Stop everything a project's consoles left running, as it comes off the board (archived, closed, taken off):
+    no agent is left to stop it and no one watches it (the person, 2026-10-28: "make sure that archive automatically
+    closes running elements"). What its program keeps on purpose goes by Provider.let_go, once at rest. What was
+    stopped."""
+    return [g["what"] for g in left(only=root) if stop(g["key"], group=g)]
+
+
 def told(root):
     return {r["key"] for r in board.read(root, "lingering.jsonl") if r.get("key")}
 
@@ -164,11 +351,19 @@ def line(items, now):
     def one(i):
         if i["kind"] == "helper":
             return f"helper {i['name']} \"{board.short(i['what'], 60)}\" (its transcript silent {ago(i['since'])})"
+        if i["kind"] == "left":
+            more = f" and {i['more']} more" if i["more"] else ""
+            on = f", listening on {', '.join(i['ports'])}" if i["ports"] else ""
+            return (f"`{board.short(' '.join(i['what'].split()), 80)}`{more} (pid {i['pids'][0][0]}, running {ago(i['since'])}, "
+                    f"{i['rss'] // 2**20} MB{on})")
         task = f", task {i['task']}" if i["task"] else ""
         return f"`{board.short(' '.join(i['what'].split()), 80)}` (no CPU or output for {ago(i['since'])}{task})"
-    return ("[colony] Still running in the background and quiet: " + "; ".join(one(i) for i in items) + ". Stop what is "
-            "done or forgotten; if one is meant to stay or waits on work still going elsewhere, leave it: it won't be "
-            "named again.")
+    quiet = [i for i in items if i["kind"] != "left"]
+    gone = [i for i in items if i["kind"] == "left"]
+    said = (["Still running in the background and quiet: " + "; ".join(one(i) for i in quiet)] if quiet else []) + \
+        (["Left running by consoles of yours that have since ended: " + "; ".join(one(i) for i in gone)] if gone else [])
+    return ("[colony] " + ". ".join(said) + ". Stop what is done or forgotten; if one is meant to stay or waits on "
+            "work still going elsewhere, leave it: it won't be named again.")
 
 
 def tick(now=None):
@@ -178,6 +373,7 @@ def tick(now=None):
     if now - _looked[0] < EVERY:
         return
     _looked[0] = now
+    behind = look(now)
     for root in board.projects():
         if not root.exists():
             continue
@@ -188,6 +384,7 @@ def tick(now=None):
                 continue
             snap = console.snapshot(root, lines=4)
             items, state = quiet(root, name, now, snap), snap["state"]
+            items += [dict(g, kind="left") for g in behind if g["root"] == root]
         except Exception:
             continue
         if state != "idle" or console.drafting(name) or console.attached(name):

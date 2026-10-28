@@ -427,6 +427,17 @@ def responsive(root, timeout=5):
         return False
 
 
+def hosts(keep):
+    """The pids of the running app hosts whose projects are in `keep`."""
+    from . import board
+    out = set()
+    for home in (board.home() / 'codex-remote').glob('*'):
+        record = read_json(home / 'colony-daemon.json')
+        if record.get('project') and str(Path(record['project']).resolve()) in keep and alive(home):
+            out.add(int(record['pid']))
+    return out
+
+
 def let_go(keep):
     """Stop each app host whose project is not in `keep` (resolved folders): one whose project moved to another
     program or left the board, which nothing ends otherwise (2026-10-28: KidsRPG's ran on for 5 days). Only once it is

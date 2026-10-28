@@ -1160,9 +1160,15 @@ def rewire_projects():
 
 
 def remove_project(root):
-    """Take a project off the board: its session stops, its files stay where they are."""
+    """Take a project off the board: its session stops, and whatever its consoles left running with it, its files
+    staying where they are."""
     root = Path(root)
     console.stop(root)
+    try:
+        from . import lingering
+        lingering.stop_all(root)                       # no one is left to stop it, or to watch it
+    except Exception:
+        pass
     reg = registry()
     if str(root) in reg["projects"]:
         reg["projects"].remove(str(root))
@@ -2060,7 +2066,25 @@ def all_projects_page(reg):
     goal = lambda p: first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"])
     return shell(reg, -2, "<h1>All projects</h1>" + (tokens_html(brief=True) if plist else "")
                  + (f"<div class='card plist'>{project_list(plist, goal)}</div>" if plist else "<p class='muted'>No projects yet.</p>")
-                 + archived_shelf())
+                 + archived_shelf() + left_shelf())
+
+
+def left_shelf():
+    """What consoles that have ended left running, of no project on the board (one taken off it, a trial): the
+    person's to stop, as they chose (2026-10-28). A project's own are named to its agent instead (lingering.left)."""
+    from . import lingering
+    rows, at = [], time.time()
+    for g in lingering.unowned():
+        more = f" and {g['more']} more" if g["more"] else ""
+        facts = [took(at - g["since"]), f"{g['rss'] // 2**20} MB"] + ([", ".join(g["ports"])] if g["ports"] else []) \
+            + ([g["cwd"]] if g["cwd"] else [])
+        rows.append(f"<div class='archrow'><div><code>{e(short(' '.join(g['what'].split()), 90))}</code>{e(more)}"
+                    f"<div class='who'>{e(' · '.join(facts))}</div></div><form method='post' action='/left/stop'>"
+                    f"<input type='hidden' name='key' value='{e(g['key'])}'><button class='quiet'>Stop</button></form></div>")
+    if not rows:
+        return ""
+    return (f"<h2 id='left'>Left running</h2><div class='card'>{''.join(rows)}<p class='muted'>Still running from consoles "
+            "that have ended, of no project on the board. Stop what is done; what you leave is listed until it ends.</p></div>")
 
 
 def woke(root):
@@ -3562,6 +3586,10 @@ def chat_parts(root, shown=12, most=10):
 
 
 _PARTS = {}                  # a project's latest parts, kept until its transcript changes
+# A message sent as a reply to one of the agent's (Chat's ↩) begins with that reply's first words, so the agent knows
+# which it answers (the person, 2026-10-28: "a small and simple reference to at least the first few words of that
+# message block with a specification that it is a reply to that")
+REPLY = re.compile(r'\(Replying to: "(.*?)"\)\n')
 
 
 def chat_feed(key, root, shown=40):
@@ -3580,7 +3608,10 @@ def chat_feed(key, root, shown=40):
             shots = "".join(f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
                             for a in re.findall(r"^Attached: (.+)$", t["text"], flags=re.M)
                             if a.strip().lower().endswith(IMAGES) and (u := chat_file(key, root, e(a.strip()))))
-            out.append(f"<div class='msg you'>{e(t['text'])}{shots}{said_at(t['at'])}</div>")
+            to = REPLY.match(t["text"])
+            said = t["text"][to.end():] if to else t["text"]
+            out.append(f"<div class='msg you'>" + (f"<div class='re'>↩ {e(to.group(1))}</div>" if to else "")
+                       + f"{e(said)}{shots}{said_at(t['at'])}</div>")
         elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
             out.append(f"<div class='msg you pending queued' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
         elif t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
@@ -3611,6 +3642,7 @@ def chat_feed(key, root, shown=40):
                 out.append(f"<div class='say' data-t='{k}' data-k='s{k}-{j}' data-at='{e(when)}'>{chat_prose(text, key, root)}</div>")
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
+                       f"<button class='reply' data-t='{k}' aria-label='Reply to this'>{ICONS['reply']}</button>"
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
                        f"<button class='cont' data-t='{k}' hidden aria-label='Continue where it stopped'>Continue</button>"
                        f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
@@ -3728,7 +3760,8 @@ ICONS = {"copy": _SVG.format("<rect x='8' y='8' width='12' height='12' rx='2.5'/
          "skip": _SVG.format("<path d='M4.5 5.5v13l8-6.5z'/><path d='M12.5 5.5v13l8-6.5z'/>"),
          "check": _SVG.format("<path d='M5 12.5l4.5 4.5L19 7.5'/>"),
          "next": _SVG.format("<path d='M4.5 12h15M13 5.5l6.5 6.5-6.5 6.5'/>"),
-         "list": _SVG.format("<path d='M4 7h16M4 12h16M4 17h10'/>")}
+         "list": _SVG.format("<path d='M4 7h16M4 12h16M4 17h10'/>"),
+         "reply": _SVG.format("<path d='M9.5 6.5L4.5 11.5l5 5'/><path d='M4.5 11.5H14a5.5 5.5 0 0 1 5.5 5.5v1.5'/>")}
 
 
 # The voice Chat reads in is the person's, on every device: one voice of theirs that every project uses, changed from
@@ -3802,6 +3835,7 @@ def chat_page(key, root):
     return (f"<div class='chat' id='chat' data-key='{e(key)}' data-name='{e(Path(root).name if key != 'steward' else 'steward')}' "
             f"data-voice='{1 if voice.ready() else 0}' data-queue='{1 if queue_keys(key, root) else 0}'>{chat_feed(key, root)}</div>"
             f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
+            "<div class='replying' hidden><span></span><button type='button' class='unreply' aria-label='Not a reply'>✕</button></div>"
             "<div class='attached' hidden></div>"
             f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
@@ -3983,6 +4017,14 @@ CHAT = """
   // where the button was, sending nothing. It sends on the lift instead, before anything moves.
   sendBtn.addEventListener('touchend', (ev) => { ev.preventDefault(); form.requestSubmit ? form.requestSubmit() : sendBtn.click(); });
   ta.addEventListener('input', grow);
+  // ↩ under a reply: what is sent next answers it. Its first words go with the message, so the agent knows which;
+  // above the box, the first word or two, until it is sent or ✕
+  const replying = form.querySelector('.replying');
+  let replyTo = '';
+  const firstWords = (s, n) => { const w = s.split(/\\s+/).filter(Boolean); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
+  const answering = (text) => { replyTo = text.trim() ? firstWords(text, 8) : ''; replying.hidden = !replyTo;
+    replying.querySelector('span').textContent = replyTo ? 'Replying to “' + firstWords(text, 2) + '”' : ''; };
+  replying.querySelector('.unreply').addEventListener('click', () => { answering(''); ta.focus(); });
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const text = ta.value.trim(), fs = [...file.files];
@@ -3998,12 +4040,13 @@ CHAT = """
     // it goes out at once: the box clears and the message shows while the board hands it over, however long that takes
     const body = new FormData(form), mine = {show: (fs.length ? '📎 ' + fs.map((x) => x.name).join(', ') + (text ? '\\n' : '') : '') + text,
       match: text || fs[0].name.replace(/\\.[^.]*$/, '')};
+    if (replyTo && text) body.set('text', '(Replying to: "' + replyTo + '")\\n' + text);
     mine.before = times(mine.match);
     ta.value = ''; grow(); file.value = ''; chosen(); busy(); held.hidden = true;
     ta.blur();                                       // sent: the keyboard goes down, the conversation in view
     pending.push(mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep(); toEnd();
     const r = await fetch('/chat/send', {method: 'POST', body}).catch(() => null);
-    if (r && r.ok) return setTimeout(refresh, 600);
+    if (r && r.ok) { answering(''); return setTimeout(refresh, 600); }
     // not sent: it comes back to the box, ahead of anything typed since, its files with it
     pending = pending.filter((p) => p !== mine); box.querySelectorAll('.mine').forEach((m) => m.remove()); keep();
     if (text) ta.value = text + (ta.value.trim() ? '\\n\\n' + ta.value : '');
@@ -4212,6 +4255,8 @@ CHAT = """
   window.addEventListener('scroll', () => { menu.hidden = true; }, {passive: true});
   box.addEventListener('click', async (ev) => {
     if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
+    const rp = ev.target.closest('button.reply');
+    if (rp) { const s = box.querySelector(`.say[data-t="${CSS.escape(rp.dataset.t)}"]`); answering(s ? s.innerText : ''); ta.focus(); return; }
     const cp = ev.target.closest('button.copy');
     if (cp) {                            // the reply as text, code and all; a plain-http page has no clipboard API
       const text = [...box.querySelectorAll(`.say[data-t="${CSS.escape(cp.dataset.t)}"]`)].map((x) => x.innerText).join('\\n\\n');
@@ -8066,6 +8111,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/left/stop":                       # something a console left running, stopped by the person
+            from . import lingering
+            lingering.stop(form.get("key", ""))
+            self.send_response(303)
+            self.send_header("Location", "/projects#left")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in ("/nest/archive", "/bring-back"):
             from . import nest
             name = form.get("name") or form.get("nest") or ""
@@ -8699,6 +8752,10 @@ details.chatlive > summary::-webkit-details-marker { display:none } details.chat
 .composerbar .rate, .composerbar select { height:30px; min-height:30px; padding:0 10px; border-radius:999px; background:var(--sunk);
   color:var(--ink); border:1px solid var(--line); font-size:13px; line-height:1 }
 .composerbar .rate { display:inline-flex; align-items:center; justify-content:center; min-width:48px; width:auto; flex:none }
+.composer .replying { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted);
+  padding:2px 0 } .composer .replying[hidden] { display:none } .composer .replying button { width:26px; height:26px;
+  min-height:26px; padding:0; border:0; font-size:14px; background:transparent; color:var(--muted) }
+.chat .msg.you .re { font-size:12px; color:var(--muted); margin-bottom:3px }
 .composer .attached { flex:1 1 100%; display:flex; align-items:center; gap:6px; font-size:14px;
   color:var(--muted); padding:2px 0 } .composer .attached[hidden] { display:none } .composer .attached button { width:28px; height:28px;
   min-height:28px; font-size:16px; background:var(--sunk); color:var(--ink) }
