@@ -1505,6 +1505,49 @@ class CarryOnTest(BoardBase):
             self.assertEqual(len(typed), 2, "the plan changed: told again")
 
 
+class LingeringTest(BoardBase):
+    def test_background_work_gone_quiet_is_named_once_and_work_that_stirs_is_left_alone(self):
+        from colony import lingering as L
+        board.track(self.root)
+        L._seen.clear(); L._idle.clear(); L._looked[0] = 0
+        out = self.root / "b4cgw7cvi.output"; out.write_text("")
+        cmds = {"suite": {"pid": 11, "start": 5, "cpu": 0.0, "what": "python3 -m pytest", "out": None},
+                "waiter": {"pid": 12, "start": 6, "cpu": 0.1, "what": "while kill -0 99; do sleep 60; done", "out": str(out)}}
+        typed = []
+        with patch.object(L.board, "projects", return_value=[self.root]), \
+                patch.object(L.console, "running", return_value=True), \
+                patch.object(L.console, "snapshot", return_value={"state": "idle", "lines": []}), \
+                patch.object(L.console, "drafting", return_value=False), \
+                patch.object(L.console, "attached", return_value=False), \
+                patch.object(L, "commands", side_effect=lambda name: [dict(c) for c in cmds.values()]), \
+                patch("colony.providers.key", return_value="claude"), \
+                patch("colony.usage.paused", return_value={}), \
+                patch.object(L.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
+            t = 1000
+            while t < 1000 + L.QUIET + 2 * L.EVERY:
+                cmds["suite"]["cpu"] += 60                   # a long suite works the whole time
+                L.tick(now=t); t += L.EVERY
+            self.assertEqual(len(typed), 1, "the waiter, quiet two hours, is named once the agent has sat idle")
+            self.assertIn("while kill -0 99; do sleep 60; done", typed[0])
+            self.assertIn("task b4cgw7cvi", typed[0], "with the task it can stop")
+            self.assertNotIn("pytest", typed[0], "a run that works however long is left alone")
+            for _ in range(30):
+                L.tick(now=t); t += L.EVERY
+            self.assertEqual(sum("kill -0" in x for x in typed), 1, "named once, ever")
+            L._seen.clear()
+            for _ in range(30):
+                L.tick(now=t); t += L.EVERY
+            self.assertEqual(sum("kill -0" in x for x in typed), 1, "not again after the board restarts")
+            self.assertEqual(len(typed), 2, "the suite, once it stopped working, is named in its turn")
+            out.write_text("tick")                           # output that grows is work: never quiet
+            L._seen.clear(); L._idle.clear()
+            cmds = {"server": {"pid": 13, "start": 7, "cpu": 0.0, "what": "python3 serve.py", "out": str(out)}}
+            for k in range(30):
+                out.write_text("tick" * (k + 2)); os.utime(out, (t, t))
+                L.tick(now=t); t += L.EVERY
+            self.assertFalse(any("serve.py" in x for x in typed))
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)

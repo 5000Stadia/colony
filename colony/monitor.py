@@ -908,6 +908,11 @@ class Watcher:
             carryon.tick()                          # idle with work it can start: told so, by rule, steward or not
         except Exception:
             pass
+        try:
+            from . import lingering
+            lingering.tick()                        # background work gone quiet: named to its agent once, steward or not
+        except Exception:
+            pass
         if not self.enabled or muted():
             self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:
