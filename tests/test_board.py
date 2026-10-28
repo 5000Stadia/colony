@@ -844,6 +844,13 @@ class ChatTest(BoardBase):
         # the phone went on reporting the keyboard's room after it went down: with no box to type in, all sits at the foot
         self.assertIn("gap > 60 && gap < innerHeight && keyed()", page)
         self.assertIn("const plain = !v || !keyed ||", page)
+        # the message box sized only while shown (a fresh load shut it on its "Message"), its files let go with a small ×
+        self.assertIn("const grow = () => { if (gc.hidden) return;", page)
+        self.assertIn("else requestAnimationFrame(() => grow())", page)
+        self.assertIn("x.addEventListener('click', () => { gfile.value = ''; chosen(); }); gfiles.append(n, x);", page)
+        # held back by a touch, the read-along looks again once the page is let be, while the same part plays
+        self.assertIn("if (Date.now() - touched < 8000) { later(R.cur, 8200 - (Date.now() - touched)); return null; }", page)
+        self.assertIn("refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); }", board.CHAT)
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
 

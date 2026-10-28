@@ -2684,8 +2684,12 @@ PLAYER = """
   const ring = () => document.documentElement.classList.toggle('autoon', aloud());
   // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice
   // going on), unless the person is typing or touched the page just now (it waits for the next part then)
-  let touched = 0;
+  let touched = 0, looking = 0;
   on(document, 'pointerdown', (ev) => { if (!ev.target.closest('#cplayer')) touched = Date.now(); }, true);
+  // held back by a touch just now, it looks again once the person has let the page be, while that part still plays: it
+  // waited for the next part, and a long one left the page where it was though they had long stopped (the person, Oct 27)
+  const later = (cur, ms) => { clearTimeout(looking);
+    looking = setTimeout(() => { if (playing && R && R.cur === cur) showHere(); }, ms); };
   function showHere() {
     if (!R || !following()) return null;
     const s = R.list[R.cur]; if (!s) return null;
@@ -2693,8 +2697,9 @@ PLAYER = """
     if (view && view.name === who) { view.focus(s.k, true); return null; }
     // never away from something being written: a box with words in it, or one being typed in, keeps the page
     const box = document.body.classList.contains('gcon') ? null : document.querySelector('#composer textarea'), at = document.activeElement;
-    if (!href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select'))
-        || Date.now() - touched < 8000) return null;
+    if (!href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select')))
+      return null;
+    if (Date.now() - touched < 8000) { later(R.cur, 8200 - (Date.now() - touched)); return null; }
     return colonyNav.go(href);
   }
   // Text only: no sound; each part stays until the person has read it and taps Next → at its end (a time reckoned from its
@@ -3095,12 +3100,14 @@ PLAYER = """
   document.body.appendChild(gc);
   const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
   const gfile = gc.querySelector('input[type=file]'), gfiles = gc.querySelector('.gcfiles');
-  const chosen = () => { const fs = [...gfile.files]; gfiles.hidden = !fs.length;
-    gfiles.textContent = fs.length ? '📎 ' + fs.map((f) => f.name).join(', ') : '';
+  const chosen = () => { const fs = [...gfile.files]; gfiles.hidden = !fs.length; gfiles.innerHTML = '';
+    if (fs.length) { const n = document.createElement('span'); n.textContent = '📎 ' + fs.map((f) => f.name).join(', ');
+      // a small × lets them go, as on the chat's own box
+      const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Remove the files');
+      x.addEventListener('click', () => { gfile.value = ''; chosen(); }); gfiles.append(n, x); }
     if (fs.length && !anchor) anchor = target();             // a file ties it to where it is going, as a word does
     placed(); };
   on(gfile, 'change', chosen);
-  on(gfiles, 'click', () => { gfile.value = ''; chosen(); });   // a tap on them lets them go
   const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
   let anchor = null, gcTyping = false, ridef = 0;          // anchor: {key, name, chosen} the words are for
   try { const was = JSON.parse(sessionStorage.getItem('gc') || 'null'); if (was) { anchor = was.to; gta.value = was.text || ''; } } catch (e) {}
@@ -3110,14 +3117,16 @@ PLAYER = """
     const s = R && left(R) ? (R.all ? R.list[R.cur] : R) : null; return s && s.key ? {key: s.key, name: s.name || R.name} : null; };
   function gcDraw() {
     const show = aloud() && mode() !== 'audio';
-    if (gc.hidden === show) { gc.hidden = !show; if (!show) glist.hidden = true; }
+    if (gc.hidden === show) { gc.hidden = !show; if (!show) glist.hidden = true; else requestAnimationFrame(() => grow()); }
     document.body.classList.toggle('gcon', show);
     if (!show) return;
     const t = target(), says = 'To: ' + (t ? t.name : 'choose a project') + ' ▾';
     if (gto.textContent !== says) gto.textContent = says;
     gc.classList.toggle('held', !!anchor);
   }
-  const grow = () => { gta.style.height = 'auto'; gta.style.height = Math.min(gta.scrollHeight, 140) + 'px'; };
+  // sized only while shown: measured hidden (a fresh load) it read nothing, and the box shut on its "Message", which fell
+  // below it (the person's screenshot, Oct 27); it is sized again as it appears
+  const grow = () => { if (gc.hidden) return; gta.style.height = 'auto'; gta.style.height = Math.min(gta.scrollHeight, 140) + 'px'; };
   on(gta, 'input', () => { const words = !!gta.value.trim();
     if (words && !anchor) anchor = target();                 // the first word ties them to where they are going
     if (!words && anchor && !anchor.chosen) anchor = null;
@@ -4019,12 +4028,17 @@ CHAT = """
   // (a tap on Next or the rest of the player isn't one: tapping on, the page goes with what is read)
   ['touchstart', 'touchmove', 'wheel'].forEach((t) => window.addEventListener(t, (ev) => {
     if (!(ev.target.closest && ev.target.closest('#cplayer, #gc'))) fingered = Date.now(); }, {passive: true}));
+  let refocus = 0;
   const focus = (k, go) => { if (!box.isConnected) return;
     const follow = P.following();
+    clearTimeout(refocus);
     box.querySelectorAll('.say.reading').forEach((x) => { if (!follow || x.dataset.k !== k) x.classList.remove('reading'); });
     const el = follow && k && box.querySelector(`.say[data-k="${CSS.escape(k)}"]`); if (!el) return;
     el.classList.add('reading');
-    if (!go || typingNow() || Date.now() - fingered < 4000) return;
+    if (!go || typingNow()) return;
+    // a finger on the page just now: it looks again once they have let it be, while that part is still the one read
+    if (Date.now() - fingered < 4000) { refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); },
+      4200 - (Date.now() - fingered)); return; }
     const nav = document.querySelector('nav'), under = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom : 0;
     stick = false; window.scrollBy({top: el.getBoundingClientRect().top - under - 12, behavior: 'smooth'}); };
   sheet.querySelector('.shut').addEventListener('click', () => { sheet.hidden = true; });
@@ -8514,8 +8528,11 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
   padding:7px 0; max-height:140px; outline:none; box-shadow:none }
 .gcattach { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; flex:none; margin:1px 0;
   border-radius:50%; color:var(--accent); font-size:22px; cursor:pointer; background:var(--sunk) }
-.gcfiles { margin:0 0 4px 14px; padding:4px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
-  background:var(--card); border:1px solid var(--line); cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.gcfiles { margin:0 0 4px 14px; padding:2px 4px 2px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
+  background:var(--card); border:1px solid var(--line); display:flex; align-items:center; gap:4px; white-space:nowrap }
+.gcfiles[hidden] { display:none } .gcfiles span { overflow:hidden; text-overflow:ellipsis }
+.gc .gcfiles button { width:26px; height:26px; min-height:26px; padding:0; flex:none; border:0; border-radius:50%; background:transparent;
+  color:var(--muted); font-size:17px; line-height:1; cursor:pointer }
 .gc .gcsend { width:36px; height:36px; min-height:36px; padding:0; border-radius:50%; border:0; background:var(--accent); color:var(--card); font-size:18px; flex:none }
 .gclist { list-style:none; margin:0 0 6px; padding:4px; background:var(--card); border:1px solid var(--line); border-radius:12px; max-height:42vh;
   overflow-y:auto; box-shadow:0 6px 22px rgba(0,0,0,.22) } .gclist li { padding:10px; border-radius:8px; cursor:pointer; font-size:14.5px }
