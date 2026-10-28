@@ -5777,6 +5777,9 @@ class PhonePageTest(HoursBase):
         self.assertIn("nav .navrow { display:flex", board.CSS)
 
     def test_a_chats_needs_you_floats_on_top_of_the_player_and_box(self):
+        # the keyboard up, the cursor of the box being typed in is re-seated: a phone draws it a line off until a letter
+        self.assertIn("on(document, 'focusin', () => { reseat(); setTimeout(reseat, 450); setTimeout(reseat, 900); });", board.player_js())
+        self.assertIn("on(window.visualViewport, 'resize', reseat)", board.player_js())
         # the person: "Needs you hides behind the player ... put needs you as a floating area ... prioritized to be on
         # the top of the stack": it sits on whatever is below it (the player, the box, or beside the player's ♪)
         self.assertIn(".chat details.needs { position:fixed", board.CSS)

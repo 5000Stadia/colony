@@ -2837,6 +2837,15 @@ PLAYER = """
   on(document, 'focusin', soon); on(document, 'focusout', soon);
   on(document, 'DOMContentLoaded', placed); on(window, 'load', placed);   // it is made before the tabs below it are there
   if (window.visualViewport) { on(window.visualViewport, 'resize', soon); on(window.visualViewport, 'scroll', soon); }
+  // Once the keyboard has come up and what floats has moved with it, the cursor of the box being typed in is re-seated:
+  // a phone draws it where the box was as the keyboard rose, a line off, until the first letter (the person, Oct 27)
+  let seated = 0, forming = false;
+  on(document, 'compositionstart', () => { forming = true; }); on(document, 'compositionend', () => { forming = false; });
+  const reseat = () => { clearTimeout(seated); seated = setTimeout(() => { const t = document.activeElement;
+    if (forming || !t || !t.matches('textarea, input[type=text], input:not([type])')) return;
+    const a = t.selectionStart, z = t.selectionEnd; if (a !== null) t.setSelectionRange(a, z); }, 180); };
+  on(document, 'focusin', () => { reseat(); setTimeout(reseat, 450); setTimeout(reseat, 900); });   // the page pans late
+  if (window.visualViewport) on(window.visualViewport, 'resize', reseat);
   // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
   function changed() { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); }
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
