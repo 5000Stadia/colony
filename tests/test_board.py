@@ -306,6 +306,25 @@ class BoardTest(BoardBase):
             monitor.muted(True)
         monitor.helm(False)
 
+    def test_a_watcher_failing_pass_after_pass_shows_on_every_page_until_one_gets_through(self):
+        # its loop dropped every error: one step failing would have stopped mail, recovery and nudges in silence
+        watcher = monitor.Watcher(enabled=False)
+        with patch.object(watcher, "tick", side_effect=[RuntimeError("screen changed")] * 3 + [None, SystemExit]), \
+                patch.object(monitor.time, "sleep"), self.assertRaises(SystemExit):
+            watcher.run()
+        self.assertIsNone(monitor.trouble(), "a pass got through: cleared")
+        self.assertIn("RuntimeError: screen changed", (board.home() / "watcher-errors.log").read_text(), "kept for the fix")
+        for n in range(3):
+            self.assertEqual(bool(monitor.trouble()), n >= 3)
+            monitor.failed(RuntimeError("screen changed"))
+        self.assertEqual(monitor.trouble()["count"], 3)
+        board.track(self.root)
+        for page in (board.render(board.registry(), 0, "chat"), board.home_page(board.registry())):
+            self.assertIn("Colony's watcher is failing", page)
+            self.assertIn("RuntimeError: screen changed", page)
+        monitor.passed()
+        self.assertNotIn("Colony's watcher is failing", board.render(board.registry(), 0, "chat"))
+
     def test_a_nudge_counts_only_once_it_has_left_the_box_and_a_swallowed_enter_is_pressed_again(self):
         keys = []
         run = lambda args, **k: keys.append(args[-1])

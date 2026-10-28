@@ -2310,11 +2310,23 @@ def player_js():
     return PLAYER.replace("@ICONS@", json.dumps(ICONS)).replace("@SAMPLE@", json.dumps(voice.SAMPLE))
 
 
+def trouble_bar():
+    """On every page while colony's own watcher fails pass after pass (monitor.trouble): what it no longer does, since
+    when, and the error, so a board that looks well while doing nothing is never silent."""
+    from . import monitor
+    t = monitor.trouble()
+    if not t:
+        return ""
+    return (f"<div class='card troublebar'><b>Colony's watcher is failing</b> (every pass since {e(t['since'][11:16])} UTC, "
+            f"{t['count']} in a row): mail between projects, recovery and nudges aren't running. "
+            f"<span class='muted'>{e(t['error'])}</span> Its agent can see why in watcher-errors.log.</div>")
+
+
 def shell(reg, pid, body, wide=False):
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{trouble_bar()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
@@ -8657,6 +8669,7 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
 .chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
 .chat details.needs.blocking { border-width:2px }
 .chat .earlier { text-align:center; margin:4px 0 10px }
+.troublebar { border:2px solid var(--flag); background:var(--flag-bg); margin-bottom:12px }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
 /* a chat's Needs you floats on the player (on the message box, where the player isn't shown), its own to that chat:

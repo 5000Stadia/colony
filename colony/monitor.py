@@ -989,9 +989,58 @@ class Watcher:
         while True:
             try:
                 self.tick()
-            except Exception:
-                pass
+                passed()
+            except Exception as err:
+                failed(err)
             time.sleep(self.interval)
+
+
+# The watcher's pass carries mail, recovery, nudges and the steward's news: one failing in silence every few seconds would
+# leave the board looking well while nothing it does happens (OpenClaw's update failed 182 mornings so; KERNOS lay dead
+# three weeks). Its error is kept, and from the third in a row every page of the board says so, until a pass gets through.
+TROUBLE_AFTER = 3
+
+
+def _trouble_path():
+    return board.home() / "watcher-trouble.json"
+
+
+def trouble():
+    """The watcher failing pass after pass, or None: {"since", "count", "error"}."""
+    try:
+        t = json.loads(_trouble_path().read_text())
+    except (OSError, ValueError):
+        return None
+    return t if t.get("count", 0) >= TROUBLE_AFTER else None
+
+
+def failed(err):
+    """A pass failed: counted, with its error, and its traceback kept in watcher-errors.log for whoever fixes it."""
+    import traceback
+    try:
+        t = json.loads(_trouble_path().read_text())
+    except (OSError, ValueError):
+        t = {}
+    t = {"since": t.get("since") or board.now(), "count": t.get("count", 0) + 1,
+         "error": f"{type(err).__name__}: {err}"[:300]}
+    try:
+        board.home().mkdir(parents=True, exist_ok=True)
+        _trouble_path().write_text(json.dumps(t))
+        log = board.home() / "watcher-errors.log"
+        if log.exists() and log.stat().st_size > 200_000:
+            log.write_text(log.read_text()[-100_000:])
+        with log.open("a") as fh:
+            fh.write(f"--- {board.now()} pass {t['count']} in a row\n{''.join(traceback.format_exception(err))}")
+    except OSError:
+        pass
+
+
+def passed():
+    """A pass got through: whatever was failing no longer is."""
+    try:
+        _trouble_path().unlink()
+    except FileNotFoundError:
+        pass
 
 
 def update_due(now=None):
