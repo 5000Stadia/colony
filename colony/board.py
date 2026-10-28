@@ -2597,7 +2597,7 @@ PLAYER = """
   const upcoming = () => {
     const out = [];
     if (!R || !left(R)) return out;
-    let k = playing && now && now.i === R.cur ? now.at + 1 : R.piece;
+    let k = playing && now && now.s === R.list[R.cur] ? now.at + 1 : R.piece;
     for (let i = R.cur; i < R.list.length && out.length < AHEAD; i++, k = 0) {
       const name = i === R.cur && playing ? R.list[i].named : named(i, i === R.cur ? said : whoAt(i - 1));
       const ps = piecesOf(i, name).filter((p) => p.trim());
@@ -2669,12 +2669,17 @@ PLAYER = """
     unlocked = true; player.src = SILENT; player.play().catch(() => { unlocked = false; });
   };
   on(document, 'pointerdown', () => { if (aloud()) unlock(); }, true);
+  // What is being read is known by the reply itself, not its place: a reading kept to its last 80 lets the oldest go as
+  // new ones land, and every place moves down by one. Known by place, the clip that ended found its reply "gone" and
+  // went on to nothing, and the reading stood still (the person's phone, 68 times, 2026-10-28)
+  const reading = (s) => playing && R && R.list[R.cur] === s;
   const sayK = (i, parts, from) => {
     let j = from;
+    const s = R.list[i], mine = () => reading(s);
     const next = () => {
-      if (!playing || !R || R.cur !== i) return;
-      if (j >= parts.length) return finished(i);
-      now = {i, parts, at: j}; R.piece = j; save(); changed();
+      if (!mine()) return;
+      if (j >= parts.length) return finished(R.cur);
+      now = {i: R.cur, s, parts, at: j}; R.piece = j; save(); changed();
       const u = abs(clip(parts[j]));
       player.src = kept.get(keyOf(u)) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
       j += 1;
@@ -2682,13 +2687,13 @@ PLAYER = """
       // Refused for want of a tap on this page (opened by itself), the phone's voice is refused too: ▷ again, which a
       // tap plays, rather than ■ over silence.
       player.play().catch((err) => { if (err && err.name === 'AbortError') return;
-        if (err && err.name === 'NotAllowedError' && playing && R && R.cur === i) { hush(); playing = false; unlocked = false; changed(); return; }
-        if (playing && R && R.cur === i && now && now.at === j - 1) { hush(); sayPhone(i, parts, j - 1); } });
+        if (err && err.name === 'NotAllowedError' && mine()) { hush(); playing = false; unlocked = false; changed(); return; }
+        if (mine() && now && now.at === j - 1) { hush(); sayPhone(R.cur, parts, j - 1); } });
     };
     player.onended = next;
     player.onerror = () => { const err = player.error;                  // the phone's voice then, for a clip that failed
-      if (!err || err.code === 1 || !playing || !R || R.cur !== i) return;   // 1: stopped on purpose, nothing failed
-      hush(); sayPhone(i, parts, Math.max(0, j - 1)); };
+      if (!err || err.code === 1 || !mine()) return;   // 1: stopped on purpose, nothing failed
+      hush(); sayPhone(R.cur, parts, Math.max(0, j - 1)); };
     next();
   };
   const sayPhone = (i, parts, from) => {
@@ -2696,10 +2701,11 @@ PLAYER = """
     playing = true; changed();
     // a phone that won't speak before a tap on the page says nothing and starts nothing: ▷ again after a moment
     let began = false;
-    after(() => { if (playing && R && R.cur === i && !began && !talk.speaking) { talk.cancel(); playing = false; loading = false; changed(); } }, 2500);
+    const s = R && R.list[i], mine = () => reading(s);
+    after(() => { if (mine() && !began && !talk.speaking) { talk.cancel(); playing = false; loading = false; changed(); } }, 2500);
     parts.slice(from).forEach((p, n) => { const x = from + n, u = new SpeechSynthesisUtterance(p.replace(NAME, '').trim()); if (voice) u.voice = voice; u.rate = pace();
-      u.onstart = () => { began = true; now = {i, parts, at: x}; if (R) { R.piece = x; save(); } loading = false; changed(); };
-      if (x === parts.length - 1) u.onend = () => { if (playing && R && R.cur === i) finished(i); };
+      u.onstart = () => { began = true; now = {i: R ? R.cur : i, s, parts, at: x}; if (R) { R.piece = x; save(); } loading = false; changed(); };
+      if (x === parts.length - 1) u.onend = () => { if (mine()) finished(R.cur); };
       talk.speak(u); });
   };
   // a section heard to its end: on to the next; the last, and the reading is done
@@ -2735,7 +2741,7 @@ PLAYER = """
     if (n && following() && (n.name || R.name) !== (s.name || R.name) && (n.href || R.href)) colonyNav.prefetch(n.href || R.href);
     if (R.silent) return show(i);
     tell(parts[from].replace(NAME, ''));
-    const sound = () => { if (playing && R && R.cur === i) return R.kokoro ? sayK(i, parts, from) : sayPhone(i, parts, from); };
+    const sound = () => { if (reading(s)) return R.kokoro ? sayK(R.cur, parts, from) : sayPhone(R.cur, parts, from); };
     // A part that begins with its project's name: the name waits until the message's first clip is made too, so the two
     // run on with no gap between them (the person: "a delay before first message ... no audio name reading start until
     // message 1 is ready"); 20 s at most, then it goes on regardless
@@ -3272,6 +3278,13 @@ PLAYER = """
   });
   grow();
   after(() => { if (!gc.hidden) gmeasure('resting'); }, 2500);
+  // the player as it stands, once a page, for the board's log: what All, Auto and the queue hold when the person says
+  // a project's reply never came (2026-10-28)
+  after(() => { const q = {}; (R && R.list || []).slice(R ? R.cur : 0).forEach((x) => { const n = x.name || R.name; q[n] = (q[n] || 0) + 1; });
+    const ht = {}; Object.keys(localStorage).filter((k) => k.startsWith('heardto:')).forEach((k) => { ht[k.slice(8)] = get(k); });
+    fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'player-state', cpsource: get('cpsource'),
+      aloud: aloud(), mode: mode(), reading: R ? R.name : null, all: !!(R && R.all), playing, queued: q, heardto: ht,
+      path: location.pathname + location.search})})}).catch(() => {}); }, 6000);
   // the reading last left on this device: here again, paused
   try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
     .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
