@@ -114,7 +114,7 @@ where things stand; `colony remote --off` puts it back as it was.
   entry), never just because a turn ended, and it stays silent when there's nothing new for you. Colony's own words reach it through an inbox
   its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
   hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
-  you, and what's new, closing with `(Steward: On | Helm Control: Off)`; say mute to mute it.
+  you, and what's new; say mute to mute it.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.

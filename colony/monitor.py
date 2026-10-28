@@ -70,8 +70,7 @@ You were once called the monitor: older records, files and settings still say `m
   you"): when a wake leaves nothing new for them, say nothing.
 - **Updates.** Every so often, helm or not, colony hands you what the projects finished and what waits on the
   person (`colony settings updates`, in minutes). Tell them in that order: what was completed, then what was
-  already waiting on them, then new asks at the end, leaving out what's empty, and close with the status line it
-  gives (the steward on or off, the helm). When they say mute: `colony mute on` (holding the helm, `colony settings updates off` instead), then
+  already waiting on them, then new asks at the end, leaving out what's empty. When they say mute: `colony mute on` (holding the helm, `colony settings updates off` instead), then
   reply only with a short offer to pick the updates up again whenever they like.
 
 ## How colony works for you
@@ -1104,8 +1103,8 @@ def update(now=None, digests=None):
             "person, weighed against what they intend, with your own commentary where it helps; open a project's own "
             "transcript only where a digest flags a decision, a stall or a drift): "
             + "; ".join(f"{n}: {d}" for n, d in digests.items())) if digests else ""
-    return ("Update for the person, helm or not: tell them briefly, in this order, leaving out what's empty, and close "
-            f"with this status line as it is: {status_line()} " + " · ".join([
+    return ("Update for the person, helm or not: tell them briefly, in this order, leaving out what's empty: "
+            + " · ".join([
                 part("1) Completed since the last update", done), part("2) Already waiting on them", old),
                 part("3) New asks", new)]) + said)
 
@@ -1140,14 +1139,6 @@ def mentioned(keys=None):
         board.home().mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(state))
     return said | set(keys or [])
-
-
-def status_line():
-    """The update's last line: the steward (mute turns it off) and the helm, on, off, or on for some projects."""
-    ps = [p for p in board.projects() if p.exists()]
-    held = sum(helm_for(p) for p in ps)
-    helm_ = "Off" if not held else "On" if held == len(ps) else f"On for {held} of {len(ps)}"
-    return f"(Steward: {'Off' if muted() else 'On'} | Helm Control: {helm_})"
 
 
 def first_sentence(text, cap=160):

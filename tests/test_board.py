@@ -148,7 +148,6 @@ class BoardTest(BoardBase):
             self.assertIsNone(monitor.update(t0 + 7400), "nothing completed and nothing new: nothing to say")
         self.assertIn("1) Completed since the last update: plants R2: water log.", first)
         self.assertIn("2) Already waiting on them: none · 3) New asks: plants opened a gate: Which pot size?", first)
-        self.assertIn("(Steward: On | Helm Control: Off)", first)
         self.assertIn("1) Completed since the last update: none · 2) Already waiting on them: plants opened a gate: "
                       "Which pot size? · 3) New asks: plants opened a gate: Repot in spring?", second)
         board.set_setting("updates", "off")
@@ -222,20 +221,6 @@ class BoardTest(BoardBase):
         self.assertIn("--dangerously-bypass-hook-trust", codex.local_command("plants", {"permissions": "all"}))
         board.set_setting("trust", "off")
         self.assertNotIn("--dangerously-bypass-hook-trust", codex.local_command("plants", {"permissions": "all"}))
-
-    def test_the_status_line_shows_the_monitor_and_the_helm_whole_or_in_part(self):
-        board.track(self.root)
-        other = Path(self.tmp.name) / "seeds"
-        other.mkdir()
-        (other / "ROADMAP.md").write_text(ROADMAP)
-        board.track(other)
-        monitor.helm(False)
-        self.assertEqual(monitor.status_line(), "(Steward: On | Helm Control: Off)")
-        monitor.helm(True)
-        self.assertEqual(monitor.status_line(), "(Steward: On | Helm Control: On)")
-        monitor.set_posture(other, helm=False)
-        self.assertEqual(monitor.status_line(), "(Steward: On | Helm Control: On for 1 of 2)")
-        monitor.helm(False)
 
     def test_a_gate_the_person_settles_directly_leaves_their_list_and_one_that_no_longer_applies_can_be_withdrawn(self):
         board.track(self.root)
