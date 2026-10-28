@@ -109,7 +109,7 @@ def ask(key, text, model, effort, root):
     from . import bench
     p = providers.get(key, strict=True)
     folder = board.workdir(Path(root))       # the files it may read: a project sharing another's folder reads that one
-    if getattr(p, "reports_cost", True):
+    if p.reports_cost:
         return p.consult(text, model, effort, folder)
     return p.consult(text, model, effort, folder, price=bench.token_price(model))
 
@@ -117,7 +117,7 @@ def ask(key, text, model, effort, root):
 def consultants():
     """One consultant from each of up to two families (ticked and installed), and a note if only one family is
     here: never a second model of the same family passed off as another view."""
-    fams = [k for k, p in providers.PROVIDERS.items() if providers.usable(p) and hasattr(p, "consult")][:2]
+    fams = [k for k, p in providers.PROVIDERS.items() if providers.usable(p) and providers.supplies(p, "consult")][:2]
     note = None if len(fams) != 1 else "only one model family is available here, so one consultant"
     return [(k, *pick(k)) for k in fams], note
 

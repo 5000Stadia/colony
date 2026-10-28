@@ -1,83 +1,14 @@
-"""Who runs a project's agent. Each provider says how to start its CLI, how to wire a project so the agent
-knows the colony and gets its notes and mail, and how to read its screen. Only Claude Code is here; another
-CLI joins by adding an entry to PROVIDERS, and the board, settings and forms offer it from then on.
+"""Who runs a project's agent. Each program colony can run (Claude Code, Codex) is a Provider: how to start its CLI in
+tmux, how to wire a project so the agent knows the colony and gets its notes and mail, and how to read its screen and
+records. Provider below is the one place this is written down: each shape colony asks of a program is a member there,
+saying what it is, with what colony does when a program doesn't supply it. A program joins by subclassing it, filling
+in the required members (REQUIRED) and what it does its own way, and adding an entry to PROVIDERS; the board, settings
+and forms offer it from then on, and `colony doctor` lists each shape as its own, colony's default, or missing.
 
-PROVIDER: for an agent adding another CLI (Codex or any other). Everything outside this file that still
-assumes Claude Code is marked with a `PROVIDER:` comment; `grep -rn "PROVIDER:" .` lists them, each saying
-what it assumes and what a second provider needs there. What a provider supplies here:
-  program, site            the program it runs and where to get it; colony checks it is installed before
-                           offering the provider, starting a console, or making it the default
-  label, models, efforts   shown in the add/create forms and settings (suggestions; any value can be typed);
-                           models as (id, name) pairs
-  model_name(value)        a model ID or alias as the model's own name, for showing "Default (Opus 5.5)"
-  command(label, s)        the shell command that starts its interactive agent with the settings in `s`:
-                           provider, model, effort, permissions (ask|edits|all|plan) and remote (on|off); for
-                           the steward, also autocompact. Map each to the CLI's own flags, and ignore any it has
-                           no equivalent for.
-  wire(root, protocol)     put the colony protocol where the CLI reads project instructions (AGENTS.md for
-                           Codex) and arrange for `colony notes --deliver` output to reach the agent: at
-                           session start (`--session`) and before each turn the person or the board types.
-                           Without a hook system, the protocol can ask the agent to run it itself, weaker.
-  wired(root)              whether wire() has been done (the doctor asks)
-  instructions             the file in a project's folder it reads instructions from; two projects sharing a
-                           folder must read different ones
-  own_defaults()           the model and effort the CLI uses when colony names none, or None where it
-                           decides itself; the forms show them as "Default (...)"
-  history_text(root)       the session's conversation as plain text, for Select on a phone (or None)
-  background(path)         what the agent left running in the background, and how each ended, from its transcript:
-                           [{id, kind, what, at, state, ended, exit}], state running until its end is read; Chat's
-                           task list (optional; without, none)
-  active_seconds(root)     how long its agent has spent at work in the project, all told: turns only, not the
-                           time it sat waiting for the person (None if it can't tell)
-  activity(screen)         what it's doing now, off its screen: {"line": the current activity or None,
-                           "agents": [{"name", "detail", "current"}]}, shown as the project's status
-  scrolled_marker          text on screen while the view is scrolled up from the latest ("" if none); the
-                           phone console's ↓ shows while it's there
-  scrolls_in_tmux          True for a CLI that draws inline and takes no mouse: its history is tmux's, so its
-                           session takes the mouse, and a swipe or wheel scrolls tmux's copy of it (optional)
-  queue_keys               the keys of its queue of messages sent mid-turn, {"now": send them at once, "back": take
-                           them back into the box (nothing sent meanwhile), "clear": one press clearing the box a
-                           line at a time}; Chat's Send now, Edit and reorder use them (optional; without, none)
-  turn_text(payload)       what the agent wrote in the turn that just ended, and a key for that turn, so a
-                           turn that asks the person something shows under "Waiting on you"
-  classify(screen)         "working" | "needs you" | "idle" from its terminal screen; the watcher and the
-                           steward's wake-ups depend on this, so match the CLI's own busy and prompt markers.
-  choice(screen)           the choice on screen (a trust question, a permission prompt): its question, its
-                           options and which is highlighted, or None; the board shows it as buttons
-  consult(brief, model, effort, project)
-                           one fresh, stateless consultation: an empty folder, no settings or hooks, read-only, a
-                           no cap: it takes what it takes; returns {"text", "cost", "usage", "error"} (colony consult uses it)
-  scout(brief, model, effort)
-                           one fresh, stateless scout for the steward (colony scout): an empty folder, no settings,
-                           hooks or project instructions, and only searching the web and reading pages, held there
-                           by the program itself (no shell, edits or other tools), so strangers' text never reaches
-                           the session that speaks for the person; returns {"text", "error"}
-  choose(screen, text)     the keys that pick the option matching `text`; `colony choose` and the buttons use it;
-                           with choice(), it also lets the watcher answer a session's start-up questions (starting())
-  enter_after              seconds to wait between typing a message and pressing Enter (optional; 0 if not set)
-  draft(screen)            what the person has half-typed in its input and not sent, from a screen captured with
-                           its styles; "" if nothing, None if it can't tell. Nothing is typed into a session while
-                           there is one: it would land on the draft and send it.
-  goal_client(root)        a client for the CLI's own goal per conversation, which bounded continuation pauses and
-                           resumes (optional; continuation.py speaks Codex's thread goals). Without it, colony
-                           continues a version by typing a wake into the idle console after work changes.
-  network_stop(path)       what a network drop stopped, read from the session's own transcript: when its last turn
-                           ended on a network error its retries gave up on, {"key", "at", "error"} for that turn,
-                           "helpers": the helpers lost to one since the agent last replied ({"key", "id", "name",
-                           "at", "error"}), and "ok_at": when it last replied; else None. Once the console is idle and
-                           api_host answers again, the watcher types one nudge (recovery.py). Optional.
-  api_host                 a host its requests go to: when it takes a connection again, the network is back
-  elapsed(screen)          the timer its live working line shows ("3m 12s"), or None when no working line it
-                           recognises is on screen; a timer that reads the same for 15 minutes on the same
-                           process means the program froze, and the watcher restarts it (recovery.py). Optional.
-  unfreeze(root)           before a frozen console is restarted, stop what runs its turn outside the console's
-                           own process if that has frozen too, which the restart would otherwise reconnect to; False
-                           when it still answers and was kept, so the turn goes on. Optional.
-  at_rest(root)            whether nothing of its own runs for the project outside what its screen shows (a turn,
-                           a goal it would carry on); False when that can't be told. A project is closed only at
-                           rest (`colony close`). Optional: without it, the screen says.
-The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in
-.board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
+Code outside this file asks a program for a shape by calling it, never by checking which program it is or whether it
+has the member; what only one program can do is marked with a `PROVIDER:` comment where it is used. The colony's own
+mechanisms (notes, gates, mail, the roadmap, the watcher) are provider-agnostic: files in .board/, the `colony`
+command, and text typed into a tmux session. Keep new ones that way.
 """
 import json
 import os
@@ -152,7 +83,212 @@ def _keep(path, text):
     return [path]
 
 
-class ClaudeCode:
+class Provider:
+    """What colony asks of a program, each shape with what stands when the program doesn't supply it."""
+    # --- what it is: shown in the forms and settings, and checked installed before it's offered (all required)
+    program = site = label = instructions = None   # its command, where to get it, its name, the file it reads a
+    #                                                 project's instructions from (two sharing a folder differ)
+    models, efforts = (), ()           # suggestions, any value can be typed: models as (id, name) pairs
+    aliases, efforts_for = {}, {}      # names it takes for models; the efforts a model takes, where they differ
+    reports_cost = True                # whether consult() reports dollars, not only tokens
+
+    def command(self, label, s, resume=None, root=None):
+        """The shell command that starts its interactive agent in tmux with the settings in `s`: provider, model,
+        effort, permissions (ask|edits|all|plan) and remote (on|off); for the steward, also autocompact. Each maps to
+        the CLI's own flags; one it has no equivalent for is ignored. Required."""
+        raise NotImplementedError
+
+    def wire(self, root, protocol):
+        """Put the colony protocol where the CLI reads project instructions, and arrange for `colony notes --deliver`
+        output to reach the agent at session start (`--session`) and before each turn typed to it. Rewritten when it
+        differs, at tracking, at board start and daily (board.deploy). Required."""
+        raise NotImplementedError
+
+    def wired(self, root):
+        """Whether wire() has been done (the doctor asks). Required."""
+        raise NotImplementedError
+
+    def classify(self, screen):
+        """"working" | "needs you" | "idle" from its terminal screen: the watcher and the steward's wake-ups depend
+        on it, so it matches the CLI's own busy and prompt markers. Required."""
+        raise NotImplementedError
+
+    # --- its models
+    def model_name(self, value):
+        """A model ID or alias as the model's own name, for "Default (Opus 5.5)"."""
+        return value
+
+    def own_defaults(self):
+        """The model and effort the CLI uses when colony names none ({"model", "effort"}), shown as "Default (...)"."""
+        return {}
+
+    def discover(self, run=None):
+        """The models it can run here, [(id, name, efforts)], asking the program and confirming each with a trivial
+        call where it has no command that lists them. Without, the cards come from `models`."""
+        return None
+
+    def catalog(self):
+        """discover() from the files it keeps alone, calling nothing (the daily check)."""
+        return self.discover()
+
+    def version(self):
+        """Its installed version, as it prints it (None: unknown)."""
+        return None
+
+    def update(self):
+        """Install its newer version beside the running one; consoles move over when idle (auto update)."""
+
+    def signed_in(self, run=None):
+        """False when it is signed out here, so its consoles can't work (None: can't tell)."""
+        return None
+
+    def sandbox_problem(self, run=None):
+        """Why its sandbox can't run here, in a line (None: it can, or it has none)."""
+        return None
+
+    # --- its console in tmux
+    scrolled_marker = ""               # on screen while its view is scrolled up from the latest; the phone's ↓ follows it
+    scrolls_in_tmux = False            # it draws inline and takes no mouse: its history is tmux's, a swipe scrolls that
+    queue_keys = None                  # its queue of messages sent mid-turn: {"now", "back", "clear"} keys (None: no queue)
+    enter_after = 0.3                  # seconds between typing a message and pressing Enter
+
+    def startup_files(self, root):
+        """Files its console's start reads, so a change to one restarts an idle console."""
+        return []
+
+    def stale(self, root):
+        """Why its running console no longer matches how it should run, only its program knowing (None: it does)."""
+        return None
+
+    def latest_conversation(self, folder):
+        """Its newest conversation in a folder, to resume when colony recorded none (None: start afresh)."""
+        return None
+
+    def draft(self, screen):
+        """What the person half-typed in its box and didn't send, from a screen captured with its styles: "" if
+        nothing, None if it can't tell. Nothing is typed into a session while there is one."""
+        return ""
+
+    def choice(self, screen):
+        """The choice on screen (a trust question, a permission prompt): (question lines, options, highlighted), or
+        None; the board shows it as buttons."""
+        return None
+
+    def choose(self, screen, text):
+        """The keys that pick the option of choice() matching `text` (`colony choose`, the buttons, start-up)."""
+        return None
+
+    def activity(self, screen):
+        """What it's doing now, off its screen: {"line": the current activity or None, "agents": [{"name", "detail",
+        "current"}]}, the project's status."""
+        return {"line": None, "agents": []}
+
+    def elapsed(self, screen):
+        """The timer its live working line shows ("3m 12s"), or None: one reading the same for 15 minutes on the
+        same process means it froze, and the watcher restarts it (recovery.py)."""
+        return None
+
+    def unfreeze(self, root):
+        """Before a frozen console restarts, stop what runs its turn outside the console's own process if that froze
+        too; False when it still answers and was kept, so the turn goes on."""
+        return True
+
+    def busy(self, root, name):
+        """Whether it is at work where its screen doesn't show it (background, a turn run elsewhere), or None."""
+        return None
+
+    def at_rest(self, root):
+        """Whether nothing of its own runs for the project beyond what its screen shows (`colony close` waits for
+        it); False when that can't be told."""
+        return True
+
+    def commands(self, pane):
+        """The commands its agent left running from the console in `pane` (lingering.py)."""
+        return []
+
+    def helpers(self, root):
+        """Its helpers at work, [{name, what, stats}], for a program that doesn't list them on its screen (None:
+        its screen says them)."""
+        return None
+
+    # --- its records
+    def conversation(self, payload):
+        """Which conversation a hook ran in, and where it is kept, (id, path): for a console restarted to resume
+        it (None: it can't say)."""
+        return None
+
+    def turn_text(self, payload):
+        """What the agent wrote in the turn that just ended, and a key for it, (key, text): a turn that asks the
+        person something shows under Waiting on you."""
+        return None, ""
+
+    def events(self, path):
+        """Its conversation, from its transcript, as Chat shows it: the person's messages, the agent's prose, one
+        step per tool it ran (chat.turns reads them)."""
+        return []
+
+    def history_text(self, root):
+        """The session's conversation as plain text, for Select on a phone (None: tmux's own scrollback)."""
+        return None
+
+    def background(self, path):
+        """What the agent left running in the background, and how each ended, from its transcript: [{id, kind,
+        what, at, state, ended, exit}], state running until its end is read; Chat's task list."""
+        return []
+
+    def active_seconds(self, root):
+        """How long its agent has spent at work in the project, all told: turns only, not time waiting for the
+        person (None: it can't tell)."""
+        return None
+
+    api_host = None                    # a host its requests go to: when it takes a connection again, the network is back
+
+    def network_stop(self, path):
+        """What a network drop stopped, from its transcript: when its last turn ended on a network error its retries
+        gave up on, {"key", "at", "error", "helpers", "ok_at"}; else None. The watcher types one nudge once
+        api_host answers again (recovery.py)."""
+        return None
+
+    # --- its helpers, goals and fresh views
+    def helper_name(self, tier):
+        """The name a helper tier is started by in it (None: it has no named helpers)."""
+        return None
+
+    def write_helpers(self, root, tiers):
+        """Keep its helper definitions at the project's tiers; returns the files changed."""
+        return []
+
+    def goal_client(self, root, timeout=15):
+        """A client for its own goal per conversation, which bounded continuation pauses and resumes; a program
+        without one is continued by a wake typed into its idle console (continuation.py)."""
+        raise NotImplementedError
+
+    def consult(self, brief, model, effort, project):
+        """One fresh, stateless consultation: an empty folder, no settings or hooks, read-only; {"text", "cost",
+        "usage", "error"} (colony consult). A program without it isn't offered as a consultant."""
+        raise NotImplementedError
+
+    def scout(self, brief, model, effort, run=None):
+        """One fresh, stateless scout for the steward: only searching the web and reading pages, held there by the
+        program itself, so strangers' text never reaches the session that speaks for the person; {"text", "error"}."""
+        raise NotImplementedError
+
+
+REQUIRED = ("program", "site", "label", "instructions", "models", "efforts", "command", "wire", "wired", "classify")
+
+
+def supplies(provider, shape):
+    """Whether a program does a shape its own way, rather than leaving it to colony's default."""
+    return getattr(type(provider), shape, None) is not getattr(Provider, shape, None)
+
+
+def shapes(provider):
+    """Each shape colony asks of a program: (name, "its own" | "colony's default" | "missing")."""
+    return [(n, "its own" if supplies(provider, n) else "missing" if n in REQUIRED else "colony's default")
+            for n in Provider.__dict__ if not n.startswith("_")]
+
+
+class ClaudeCode(Provider):
     label = "Claude Code"
     # Its queue, from its documentation (interactive mode, v2.1.281 on): Ctrl+X Ctrl+S sends what is queued now
     # (work that can go to the background goes on there), Up on the box's first line takes it back into the box.
@@ -225,9 +361,9 @@ class ClaudeCode:
         elif marker:
             start = marker.start()
             end = have.find("\n## ", start + 5)
-            claude_md.write_text(have[:start] + block + (have[end + 1:] if end != -1 else ""))
+            _keep(claude_md, have[:start] + block + (have[end + 1:] if end != -1 else ""))
         else:
-            claude_md.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
+            _keep(claude_md, have + ("\n" if have and not have.endswith("\n") else "") + block)
         settings = root / ".claude" / "settings.json"
         settings.parent.mkdir(exist_ok=True)
         cfg = json.loads(settings.read_text()) if settings.exists() else {}
@@ -240,7 +376,7 @@ class ClaudeCode:
         # PROVIDER: Claude Code hands its usage limits only to its status line; colony's records them and shows
         # the person's own status line, if they set one. A project that set its own keeps it.
         cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
-        settings.write_text(json.dumps(cfg, indent=2) + "\n")
+        _keep(settings, json.dumps(cfg, indent=2) + "\n")
 
     HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
 
@@ -655,6 +791,10 @@ class ClaudeCode:
         from . import chat
         return chat.background(path)
 
+    def events(self, path):
+        from . import chat
+        return chat.claude_events(path)
+
     def elapsed(self, screen):
         """The timer on its live spinner line: "✶ Flowing… (3m 12s · ↓ 1.7k tokens)" gives "3m 12s"."""
         import re
@@ -749,7 +889,7 @@ class ClaudeCode:
             return None
         return (["Down"] * (hit - here) if hit > here else ["Up"] * (here - hit)) + ["Enter"]
 
-class Codex:
+class Codex(Provider):
     """OpenAI's Codex CLI: AGENTS.md and lifecycle hooks (Codex 0.154).
     Hooks travel with the console command and need review in /hooks before Codex runs them.
     See https://developers.openai.com/codex/hooks for the payload and output contracts."""
@@ -1067,9 +1207,9 @@ class Codex:
         if marker in have:
             start = have.index(marker)
             end = have.find("\n## ", start + 5)
-            path.write_text(have[:start] + block + (have[end + 1:] if end != -1 else ""))
+            _keep(path, have[:start] + block + (have[end + 1:] if end != -1 else ""))
         else:
-            path.write_text(have + ("\n" if have and not have.endswith("\n") else "") + block)
+            _keep(path, have + ("\n" if have and not have.endswith("\n") else "") + block)
         settings = root / ".codex" / "hooks.json"
         if settings.exists():
             cfg = json.loads(settings.read_text())
@@ -1079,7 +1219,7 @@ class Codex:
                 for entry in entries:
                     entry["hooks"] = [h for h in entry.get("hooks", []) if not self._owned_hook(event, h)]
                 cfg["hooks"][event] = [entry for entry in entries if entry.get("hooks")]
-            settings.write_text(json.dumps(cfg, indent=2) + "\n")
+            _keep(settings, json.dumps(cfg, indent=2) + "\n")
 
     def _owned_hook(self, event, hook):
         return (hook.get("type") == "command"
@@ -1268,6 +1408,10 @@ class Codex:
     def background(self, path):
         from . import chat
         return chat.codex_background(path)
+
+    def events(self, path):
+        from . import chat
+        return chat.codex_events(path)
 
     def helpers(self, root, now=None):
         """Its helpers at work: Codex lists none under its box (its picker keeps finished ones too), so they come from
@@ -1513,7 +1657,7 @@ def efforts_of(provider, model):
     for m, _, efforts in found.get("models", []):
         if m == model:
             return efforts
-    return [e[0] if isinstance(e, tuple) else e for e in getattr(provider, "efforts_for", {}).get(model, provider.efforts)]
+    return [e[0] if isinstance(e, tuple) else e for e in provider.efforts_for.get(model, provider.efforts)]
 
 
 def _discovered():
@@ -1534,7 +1678,7 @@ def discover(force=False, run=None, calls=True, only=None):
     for k, p in PROVIDERS.items():
         if only and k != only:
             continue
-        if not usable(p) or not hasattr(p, "discover"):
+        if not usable(p) or not supplies(p, "discover"):
             continue
         ver = p.version() if run is None else "test"
         catalog = {}
@@ -1553,7 +1697,7 @@ def discover(force=False, run=None, calls=True, only=None):
             if not found:
                 continue
         elif run is None and not calls:
-            found = p.catalog() if hasattr(p, "catalog") else p.discover()
+            found = p.catalog()
             if not found:
                 continue
         else:

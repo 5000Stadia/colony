@@ -271,7 +271,7 @@ def brief(name, c, root, folder, about, marks, hosts):
 def reviewer(root):
     """The family that reviews: another than the asking project's agent where one is usable, else its own."""
     asking = providers.key(providers.of(root)) if root else None
-    usable = [k for k, p in providers.PROVIDERS.items() if providers.usable(p) and hasattr(p, "consult")]
+    usable = [k for k, p in providers.PROVIDERS.items() if providers.usable(p) and providers.supplies(p, "consult")]
     return sorted(usable, key=lambda k: k == asking)
 
 
@@ -279,7 +279,7 @@ def ask(key, text, folder):
     from . import bench, consult
     model, effort, _ = consult.pick(key)
     p = providers.get(key, strict=True)
-    out = (p.consult(text, model, effort, folder) if getattr(p, "reports_cost", True)
+    out = (p.consult(text, model, effort, folder) if p.reports_cost
            else p.consult(text, model, effort, folder, price=bench.token_price(model)))
     return out, model
 

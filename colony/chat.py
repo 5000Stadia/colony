@@ -172,9 +172,11 @@ def codex_events(path):
 
 
 def events(provider_key, path):
-    if not path or not Path(path).exists():
+    """A conversation as its own program records it (Provider.events); none from a program colony doesn't know."""
+    from . import providers
+    if not path or not Path(path).exists() or provider_key not in providers.PROVIDERS:
         return []
-    return (codex_events if provider_key == "codex" else claude_events)(path)
+    return providers.PROVIDERS[provider_key].events(path)
 
 
 def turns(evs):

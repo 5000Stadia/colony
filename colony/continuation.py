@@ -357,7 +357,7 @@ def tick(root, *, forced_hold=None, force=False):
     desired = progress.objective(root, root)
     reason = forced_hold or progress.hold(root, root)
     provider = providers.of(root)
-    if not hasattr(provider, 'goal_client'):
+    if not providers.supplies(provider, 'goal_client'):
         return wake(root, g, receipt, desired, reason)
     s = context.session(root)
     if not s or s['provider'] != providers.key(provider):
@@ -497,7 +497,7 @@ def hold(root, reason='context refresh'):
     if not g or (not _engaged(g, root) and not _draining(status(root))):
         return True
     receipt = tick(root, forced_hold=reason, force=True)
-    return (not hasattr(providers.of(root), 'goal_client')
+    return (not providers.supplies(providers.of(root), 'goal_client')
             or bool(receipt.get('native_stopped') and not receipt.get('pending')))
 
 
@@ -508,7 +508,7 @@ def handoff(root):
         return False
     outgoing = Path(hand['outgoing'])
     receipt = tick(outgoing, forced_hold='lead handoff', force=True)
-    if hasattr(providers.of(outgoing), 'goal_client'):
+    if providers.supplies(providers.of(outgoing), 'goal_client'):
         # A stale receipt, absent socket, foreign active goal or uncertain pause
         # is never evidence that the outgoing continuation has stopped.
         if not receipt.get('native_stopped') or receipt.get('pending'):

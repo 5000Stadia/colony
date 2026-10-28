@@ -795,7 +795,7 @@ class Watcher:
             was = {}
         now = {}
         for k, p in providers.PROVIDERS.items():
-            if providers.usable(p) and hasattr(p, "signed_in") and p.signed_in() is False:
+            if providers.usable(p) and p.signed_in() is False:
                 now[k] = was.get(k) or board.now()[:16].replace("T", " ")
                 if k not in was:
                     hint = (" A long-lived sign-in stops this: Settings → Claude Code sign-in." if k == "claude"
@@ -808,10 +808,9 @@ class Watcher:
 
     def models_daily(self):
         from . import bench, intelligence
-        board.rewire_projects()
         if board.registry()["settings"]["auto_update"]:
             for p in providers.PROVIDERS.values():
-                if providers.usable(p) and hasattr(p, "update"):
+                if providers.usable(p):
                     p.update()                          # installed beside the running version: consoles move over when idle
         from . import codex_remote
         if providers.usable(providers.get("codex")):
@@ -825,9 +824,7 @@ class Watcher:
             intelligence.refresh()
         from . import selection
         selection.reconcile()
-        for p in board.projects():
-            if p.exists():
-                bench.write_helpers(p)                  # the tiers follow the data: each project's helpers with them
+        board.rewire_projects()                         # after the updates and the data: each project's files, its helpers' tiers with them
         ready = bench.ready_to_announce()
         if not ready:
             return

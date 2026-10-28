@@ -3243,18 +3243,31 @@ class ProjectSettingsTest(BoardBase):
         finally:
             console.COMMAND = saved
 
+    def test_deploying_again_leaves_what_is_current_as_it_is(self):
+        board.track(self.root)
+        board.deploy(self.root)
+        files = [self.root / "CLAUDE.md", self.root / ".claude" / "settings.json"]
+        before = [f.stat().st_mtime_ns for f in files]
+        time.sleep(0.01)
+        board.rewire_projects()
+        self.assertEqual([f.stat().st_mtime_ns for f in files], before, "nothing rewritten: a console sees no change")
+        (self.root / "CLAUDE.md").write_text("# Plants\n")
+        board.rewire_projects()
+        self.assertIn("This project is part of a colony", (self.root / "CLAUDE.md").read_text(), "what drifted, restored")
+
     def test_a_new_project_names_its_provider_and_model_and_another_provider_can_join(self):
-        class Other:                       # what another CLI supplies to join: start, wire, read the screen
+        from colony import chat
+        class Other(providers.Provider):   # what another CLI supplies to join: only what's required, the rest colony's
             label, models, efforts = "Other CLI", [("big-1", "Big 1")], ["deep"]
             program, site, instructions = "other", "https://example.com/other", "AGENTS.md"
-            own_defaults = lambda self: {"model": None, "effort": None}
-            model_name = lambda self, v: v
-            history_text = lambda self, root: None
-            scrolled_marker = ""
             command = lambda self, label, s, **kw: f"other --model {s.get('model')}"
             wire = lambda self, root, protocol: (root / "AGENTS.md").write_text(protocol)
             wired = lambda self, root: (root / "AGENTS.md").exists()
             classify = lambda self, screen: "idle"
+        self.assertNotIn("missing", dict(providers.shapes(Other())).values(), "nothing it must supply left out")
+        self.assertEqual(dict(providers.shapes(providers.Provider()))["command"], "missing")
+        self.assertEqual(dict(providers.shapes(Other()))["background"], "colony's default")
+        self.assertEqual(chat.events("other", __file__), [], "its conversation read as no other program's")
         providers.PROVIDERS["other"] = Other()
         saved = console.COMMAND
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
@@ -5960,14 +5973,15 @@ class PhonePageTest(HoursBase):
         self.assertNotIn("badge", steward)
         self.assertNotIn("proj monitor", row)
         self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>1</span>", row)
-        self.assertLess(row.index("id='needs-chip' href='/needs-you'>"), row.index(">plants<"), "ahead of the first project")
+        self.assertIn("<div class='navfoot'><a class='needsbtn' id='needs-chip' href='/needs-you' title='Needs you'>", row,
+                      "the first of the links: on a phone, the first icon right of the steward")
         self.assertIn("Open on Sundays?", needs)
-        self.assertIn("class='proj needschip on' id='needs-chip'", needs, "its own chip lit on its page")
+        self.assertIn("class='needsbtn on' id='needs-chip'", needs, "lit on its own page")
         self.assertIn("keepCurrent(document.getElementById('needs'), '/needs')", needs)
         self.assertIn(board.CHIPS, page, "a page opens with its own chip in view")
         board.answer_gate(shop, board.gates(shop)[0]["id"], "yes", tell=False)
         with self.clock(14):
-            self.assertIn("id='needs-chip' href='/needs-you' hidden>", board.sidebar(board.registry(), 1), "nothing waiting: no chip")
+            self.assertIn("id='needs-chip' href='/needs-you' title='Needs you' hidden>", board.sidebar(board.registry(), 1), "nothing waiting: none")
         self.assertIn("{passive: true, capture: true}", board.CHAT, "a scroll inside the floating Needs you holds off the chat's redraw")
         self.assertIn("if (d && !d.scrollTop) d.scrollTop = top;", board.CHAT, "and, redrawn, it stays where it was read to")
         self.assertIn(f"<link rel='stylesheet' href='/static/board.css?v={board.css_version()}'>", page, "styling, fetched once")

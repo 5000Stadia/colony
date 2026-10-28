@@ -59,7 +59,7 @@ def command(label, root=None, folder=None):
         known = context.session(monitor.home())
         if known and known['provider'] == providers.key(providers.of(None)) and Path(known['path']).exists():
             resume = known['id']
-    if not resume and not root and folder and hasattr(providers.of(None), "latest_conversation"):
+    if not resume and not root and folder and providers.supplies(providers.of(None), "latest_conversation"):
         resume = providers.of(None).latest_conversation(folder)
     return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
 
@@ -268,7 +268,7 @@ def scrollable(name, prov):
     """A CLI drawing inline with no mouse of its own (Codex) leaves its history to tmux: its session takes the mouse,
     so a swipe or wheel up scrolls tmux's copy of it, back down returns to the live screen, and a program that takes
     the mouse itself (Claude Code) still gets it."""
-    if getattr(prov, "scrolls_in_tmux", False):
+    if prov.scrolls_in_tmux:
         subprocess.run(["tmux", "set-option", "-t", name, "mouse", "on"], capture_output=True)
 
 
@@ -290,7 +290,7 @@ def fingerprint(root, label=None):
     cmd = command(label or Path(root).name, None if label else root, folder=root if label else None)
     cmd = re.sub(r" (--)?resume \S+", "", cmd)
     p = providers.of(None if label else root)
-    files = [f for f in (p.startup_files(board.workdir(root)) if hasattr(p, "startup_files") and not label else [])
+    files = [f for f in (p.startup_files(board.workdir(root)) if not label else [])
              if f.exists()]
     h = hashlib.sha256(cmd.encode())
     for f in sorted(files):
@@ -354,7 +354,7 @@ def busy(root, name=None, label=None):
     name = name or session_name(root)
     p = providers.PROVIDERS.get(running_program(name)) or providers_of(root, label)
     try:
-        return p.busy(root, name) if hasattr(p, "busy") else None
+        return p.busy(root, name)
     except Exception:
         return "its program couldn't say whether anything still runs"
 
@@ -446,7 +446,7 @@ def stale(root, name=None, label=None):
     ran = running_version(name)
     if now and ran and now.group(0) != ran:
         return f"{p.label} {ran} → {now.group(0)}"
-    why = not label and hasattr(p, "stale") and p.stale(root)       # what only its program knows (Codex's app access)
+    why = not label and p.stale(root)       # what only its program knows (Codex's app access)
     if why:
         return why
     try:
@@ -507,7 +507,7 @@ def draft(name):
     """What is half-typed in the session's box, or "" (None: no box on screen)."""
     p = provider(name)
     styled = subprocess.run(["tmux", "capture-pane", "-p", "-e", "-t", name], capture_output=True, text=True).stdout
-    return p.draft(styled) if hasattr(p, "draft") else ""
+    return p.draft(styled)
 
 
 def drafting(name):
@@ -546,7 +546,7 @@ def type_into(name, text):
     # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
     try:
         subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
-        time.sleep(getattr(provider(name), "enter_after", 0.3))   # typing that arrives at once can read as a paste
+        time.sleep(provider(name).enter_after)   # typing that arrives at once can read as a paste
         subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
         return _sent(name, text)
     except subprocess.CalledProcessError:              # its program ended as the keys went in
@@ -563,7 +563,7 @@ def paste_into(name, text):
     try:
         subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
         subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
-        time.sleep(max(0.3, getattr(provider(name), "enter_after", 0)))    # the paste lands before its Enter
+        time.sleep(max(0.3, provider(name).enter_after))    # the paste lands before its Enter
         subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
         return True
     except subprocess.CalledProcessError:              # its program ended as it was pasted
@@ -574,7 +574,7 @@ def queue(name, action, msgs=()):
     """PROVIDER: queue_keys. Messages sent mid-turn wait in the program's own queue: "now" sends them at once, "back"
     takes them back into its box (none is sent meanwhile; refused over the person's own draft), "put" clears the box
     and queues msgs again in this order. False where it can't, the box left as it was."""
-    keys = getattr(provider(name), "queue_keys", None)
+    keys = provider(name).queue_keys
     if not keys or not running(name):
         return False
     if action == "now":
@@ -652,14 +652,15 @@ def snapshot(root, lines=6, name=None):
         # A CLI drawing in the alternate screen (Claude Code does) leaves tmux no scrollback: then its own
         # record of the conversation is what lies above the screen.
         more = [l for l in (BORDER.sub("", l) for l in history(name).splitlines()) if l.strip()]
-        if len(more) <= len(shown) and hasattr(p, "history_text"):
+        if len(more) <= len(shown):
             more = [l for l in (p.history_text(root) or "").splitlines() if l.strip()] + shown
         shown = more
-    marker = getattr(p, "scrolled_marker", "")
+    marker = p.scrolled_marker
     out = {"state": p.classify(now), "lines": shown[-lines:], "scrolled": bool(marker and marker in now),
-           "activity": p.activity(now) if hasattr(p, "activity") else {"line": None, "agents": []}}
-    if hasattr(p, "helpers"):                          # a program that lists no helpers on screen says them otherwise
-        out["helpers"] = p.helpers(root)
+           "activity": p.activity(now)}
+    helping = p.helpers(root)                          # a program that lists no helpers on screen says them otherwise
+    if helping is not None:
+        out["helpers"] = helping
     return out
 
 
@@ -702,7 +703,7 @@ def bridge(sock, root, name=None, label=None):
     """Attach a terminal to the session and pass bytes both ways until either side leaves. Leaving
     detaches; the session keeps running."""
     name = ensure(root, name, label)
-    inline, up = getattr(providers_of(root, label), "scrolls_in_tmux", False), False
+    inline, up = providers_of(root, label).scrolls_in_tmux, False
     scrollable(name, providers_of(root, label))                 # a session started before it took the mouse too
     pid, fd = pty.fork()
     if pid == 0:

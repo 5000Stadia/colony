@@ -67,7 +67,7 @@ def stop(root):
     """What a network drop stopped in the project's console, as its program reports it, or None; read afresh only
     once its transcript has changed."""
     s, program = context.session(root), providers.of(root)
-    if not s or s.get("provider") != providers.key(program) or not hasattr(program, "network_stop"):
+    if not s or s.get("provider") != providers.key(program) or not providers.supplies(program, "network_stop"):
         return None
     try:
         st = Path(s["path"]).stat()
@@ -176,7 +176,7 @@ def frozen(root, now=None):
             rows[key] = dict(mine, tell=None)
             _frozen_path().write_text(json.dumps(rows, indent=1))
             return "told to carry on"
-    shown = getattr(providers.of(root), "elapsed", lambda screen: None)(console.screen(name))
+    shown = providers.of(root).elapsed(console.screen(name))
     proc = _process(name) if shown else None
     if not shown or not proc or not talk:
         _timers.pop(key, None)
@@ -204,7 +204,7 @@ def frozen(root, now=None):
     program = providers.of(root)
     # What runs the turn apart from the console (Codex's app host) is stopped too if it froze; one that still
     # answers keeps its turn, the console is only reconnected to it, and nothing needs saying.
-    stopped = program.unfreeze(root) if hasattr(program, "unfreeze") else True
+    stopped = program.unfreeze(root)
     console.reload(root, name)
     rows[key] = dict(mine, restarts=recent + [now], conversation=talk[0], tell_until=now + 3600, tell=(
         f"[colony] Your console froze mid-work (its timer stood at {shown} for {FROZEN // 60} minutes), so colony "

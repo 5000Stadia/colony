@@ -20,7 +20,7 @@ class SelectionTest(unittest.TestCase):
         self.a = {'model': 'a-1', 'effort': 'low', 'why': 'Measured'}
         self.b = {'model': 'b-2', 'effort': 'high', 'why': 'Measured'}
         self.picks = {'test:main': self.a, 'test:monitor': self.a}
-        class Provider:
+        class Provider(providers.Provider):
             label = 'Test provider'
             models = [('a-1', 'A'), ('b-2', 'B')]
             efforts = ['low', 'high']

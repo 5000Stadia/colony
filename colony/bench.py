@@ -405,8 +405,6 @@ def write_helpers(root):
     """Keep a project's helper definitions at its tiers, where its program has them (see providers)."""
     from . import board as b, providers
     p = providers.of(root)
-    if not hasattr(p, "write_helpers"):
-        return []
     try:
         return p.write_helpers(b.workdir(root), effective(root))
     except OSError:
@@ -420,9 +418,8 @@ def plan_text(root):
     if not tiers:
         return ""
     p = providers.of(root)
-    named = hasattr(p, "helper_name")
     lines = [f"- {t}: {name(r['model'])} ({r['model']}) at {r['effort'] or 'its default'} effort"
-             + (f", as the `{p.helper_name(t)}` helper" if named else "")
+             + (f", as the `{p.helper_name(t)}` helper" if p.helper_name(t) else "")
              + (" (this project's choice)" if r["own"] else "") for t, r in tiers.items()]
     return ("Your helpers (subagents) run at four tiers, colony's default from the benchmark cards unless this "
             "project set its own (`colony models` shows them): routine for ordinary work; chores for simple work "
@@ -431,7 +428,7 @@ def plan_text(root):
             "the work struggles (stalls, retries, work redone). Step back down once the hard part is done. "
             "For a genuinely hard judgement, hand it to the step-up helper with a tight "
             "brief, accepting that it rebuilds context; ordinary work stays yours. Costly decisions go to consultants (colony consult)."
-            + (f" Each tier is a helper: {p.HELPER_CALL}." if named else "") + "\n" + "\n".join(lines))
+            + (f" Each tier is a helper: {p.HELPER_CALL}." if p.helper_name("routine") else "") + "\n" + "\n".join(lines))
 
 
 # ---------------------------------------------------------------- Artificial Analysis, the one source

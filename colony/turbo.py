@@ -286,7 +286,7 @@ def advice_due(root, key, now):
     """Whether a turned-up project is due research advice: consulting on, none asked for it in the last day, none
     under way for its program (one at a time, so a burst never runs the program's 5-hour window into the safe pause),
     and its last one heard, so none piles up."""
-    if not board.registry()["settings"]["consult"] or not hasattr(providers.get(key), "consult"):
+    if not board.registry()["settings"]["consult"] or not providers.supplies(providers.get(key), "consult"):
         return False
     with _guard:
         if key in _advising.values():

@@ -136,7 +136,7 @@ def recommendations(state):
 def bootstrap(family, rejected=()):
     """No scores yet: freeze a concrete catalog entry, visibly labelled as unmeasured."""
     p = providers.get(family, strict=True)
-    defaults = p.own_defaults() if hasattr(p, 'own_defaults') else {}
+    defaults = p.own_defaults()
     chosen = concrete(family, defaults)
     if chosen and chosen['model'] in rejected:
         chosen = None
@@ -381,7 +381,7 @@ def migrate(root=None):
         return
     family = own.get('provider') or settings['provider']
     provider = providers.get(family)
-    defaults = provider.own_defaults() if hasattr(provider, 'own_defaults') else {}
+    defaults = provider.own_defaults()
     legacy = settings.get('legacy_model_default') or {}
     inherited = legacy.get('model') if legacy.get('provider') == family else None
     inherited = inherited or defaults.get('model')

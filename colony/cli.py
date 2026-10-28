@@ -339,8 +339,15 @@ def cmd_doctor(a):
     for p in providers.PROVIDERS.values():
         print(f"{'ok  ' if p in here else 'note'}  {p.label} ({p.program}) {'installed' if p in here else 'not installed'}"
               + ("" if providers.enabled(p) else "; off in colony's Settings"))
+        # what it does its own way and what it leaves to colony's default, read off its code (Provider)
+        shapes = providers.shapes(p)
+        left = [n for n, how in shapes if how == "colony's default"]
+        print(f"      {p.label} supplies {sum(how == 'its own' for _, how in shapes)} of {len(shapes)} shapes"
+              + (f"; colony's default for {', '.join(left)}" if left else ""))
+        problems += [f"{p.label} doesn't supply {n}, which every program must (providers.Provider)"
+                     for n, how in shapes if how == "missing"]
     for p in here:
-        trouble = providers.enabled(p) and hasattr(p, "sandbox_problem") and p.sandbox_problem()
+        trouble = providers.enabled(p) and p.sandbox_problem()
         if trouble:
             problems.append(trouble)
     if not here:
@@ -955,9 +962,9 @@ def cmd_notes(a):
         if a.session and payload.get('source') != 'compact':
             providers.discover(calls=False, only=a.console or providers.key(context.program(root)))
         vision.observe(root)
-        seen = getattr(providers.of(root), "conversation", None)
-        if seen and os.environ.get("COLONY_CONSOLE") == console.session_name(root):   # the board's console, no other here
-            console.remember(root, *seen(payload))
+        seen = os.environ.get("COLONY_CONSOLE") == console.session_name(root) and providers.of(root).conversation(payload)
+        if seen:                                                                      # the board's console, no other here
+            console.remember(root, *seen)
         prompt = str(payload.get("prompt") or "")
         if _persons(prompt):
             from . import hours

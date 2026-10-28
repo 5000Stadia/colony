@@ -1138,17 +1138,23 @@ def track(path, register=True):
     return root
 
 
+def deploy(root):
+    """What colony installs in a project for its program (Provider.wire, write_helpers), brought up to date in place:
+    its instructions and hooks, its commit stamp, its helpers at their tiers. A file already current is left as it is;
+    a running console takes the rest up at its next idle reload, so no work is interrupted."""
+    from . import bench, lead, providers
+    providers.of(root).wire(workdir(root), protocol(root))
+    lead.install_stamp(root)
+    bench.write_helpers(root)
+
+
 def rewire_projects():
-    """Bring every project's instructions and hooks up to date in place, without restarting a console: a file
-    already current is rewritten unchanged."""
-    from . import providers
+    """deploy() in every project: as the board starts (colony updated) and daily, after its programs update."""
     for root in projects():
         if not root.exists():
             continue
         try:
-            providers.of(root).wire(workdir(root), protocol(root))
-            from . import lead
-            lead.install_stamp(root)
+            deploy(root)
         except (OSError, ValueError):
             continue  # The doctor continues to report a project that could not be wired.
 
@@ -1311,7 +1317,7 @@ def at_rest(root):
     """Whether the project's program runs nothing beyond what its screen shows. PROVIDER: at_rest()."""
     from . import providers
     prov = providers.of(root)
-    return prov.at_rest(root) if hasattr(prov, "at_rest") else True
+    return prov.at_rest(root)
 
 
 def archive_together(roots, why=""):
@@ -2195,11 +2201,6 @@ def sidebar(reg, pid):
                     f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); colonyNav.go('/nest?n={q}')\">"
                     f"→</span></span></a><span class='members'>{''.join(chips)}<a class='proj nestset' href='/nest?n={q}' "
                     f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙&#xFE0E;</a></span></span>")
-    # then what waits on the person in every project the steward follows, ahead of the projects: shown while anything does
-    side.insert(0, f"<a class='proj needschip{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/needs-you'"
-                   f"{'' if total or pid == NEEDS_PAGE else ' hidden'}><span class='pname'><span class='sdot needs-you'></span>Needs you"
-                   f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>{total}</span></span>"
-                   f"<span class='sline'>across your projects</span></a>")
     # the steward first: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward</span>"
@@ -2210,7 +2211,12 @@ def sidebar(reg, pid):
         if ws:
             side.append(f"<div class='sline long' style='padding:2px 10px'>{e(prov.label)}: "
                         + " · ".join(f"{e(w)} {v['used']:g}%" for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly")) + "</div>")
-    side.append("<div class='navfoot'><a href='/projects' title='All projects'><span class='long'>All projects</span><span class='short'>☰</span></a>"
+    # first of the links, the first icon right of the steward on a phone: what waits on the person in every project
+    # the steward follows, its count glowing, shown while anything does
+    side.append(f"<div class='navfoot'><a class='needsbtn{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/needs-you' "
+                f"title='Needs you'{'' if total or pid == NEEDS_PAGE else ' hidden'}><span class='long'>Needs you </span>"
+                f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>{total}</span></a>"
+                "<a href='/projects' title='All projects'><span class='long'>All projects</span><span class='short'>☰</span></a>"
                 "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/connections' title='Connections'><span class='long'>Connections</span><span class='short'>⇄</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
@@ -3615,8 +3621,7 @@ def chat_feed(key, root, shown=40):
     # and what it waits on in the background, its turn over or not (a test run, a helper): a tap opens the tasks
     helping, behind = chat.helpers(snap), chat.behind(snap)
     # PROVIDER: background(path), each program's reading of its own transcript
-    reader = getattr(providers.get(s["provider"]), "background", None) if s and s.get("provider") in providers.PROVIDERS else None
-    tasks = reader(s["path"]) if reader else []
+    tasks = providers.PROVIDERS[s["provider"]].background(s["path"]) if s and s.get("provider") in providers.PROVIDERS else []
     # only as many commands run as its footer counts, the newest: one stopped by hand sends no notice
     shells = re.search(r"\b(\d+) (?:shells?|background tasks?|running tasks?|background terminals?)\b", behind)
     keep = {t["id"] for t in [t for t in tasks if t["kind"] == "Shell" and t["state"] == "running"][::-1][:int(shells.group(1)) if shells else 0]}
@@ -3780,7 +3785,7 @@ def voice_choices(own=""):
 def queue_keys(key, root):
     """PROVIDER: whether this chat's program has a queue the board can work (queue_keys)."""
     from . import monitor
-    return getattr(monitor.provider() if key == "steward" else providers.of(root), "queue_keys", None)
+    return (monitor.provider() if key == "steward" else providers.of(root)).queue_keys
 
 
 def chat_page(key, root):
@@ -4523,7 +4528,7 @@ def render(reg, pid, view="overview", show_all=""):
     pin = (f"<a class='ppin{' on' if pinned else ''}' href='#' onclick='return pinProject(event, {pid}, {0 if pinned else 1})'>"
            f"<span class='ppinmark'>📌</span>{'Unpin' if pinned else 'Pin'}</a>")
     # time its agent has spent at work, all told: turns only, never the time it sat waiting
-    secs = getattr(providers.of(root), "active_seconds", lambda r: None)(root)
+    secs = providers.of(root).active_seconds(root)
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     # the day's page opens on the day itself: the vision and the project's state are a tab away. The status says what
     # the project is at, from its roadmap, and whether anything waits on the person.
@@ -7026,7 +7031,7 @@ def settings_page(reg):
               "(<a href='https://artificialanalysis.ai/' target='_blank' rel='noopener'>artificialanalysis.ai</a>): free for "
               "personal use, with attribution, up to 1,000 requests a day.</p>")
     from . import consult
-    fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p) and hasattr(p, "consult")][:2]
+    fams = [k for k, p in pv.PROVIDERS.items() if pv.usable(p) and pv.supplies(p, "consult")][:2]
 
     def seat(k):
         p, mine = pv.get(k), (s["consultants"] or {}).get(k)
@@ -8729,7 +8734,9 @@ main.wide { max-width:none } header.slim { display:flex; align-items:center; gap
 nav .proj { flex-direction:column; align-items:stretch; gap:1px } .pname { display:flex; align-items:center; gap:6px }
 .sline { font-size:11.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:14px }
 nav .proj.monitor { border-bottom:1px solid var(--line); border-radius:7px 7px 0 0; margin-bottom:8px; padding-bottom:9px }
-nav .proj.needschip:not(.on) { background:var(--flag-bg); color:var(--flag) } nav .proj.needschip .pname { font-weight:600 }
+.navfoot a.needsbtn { color:var(--flag); font-weight:600 } .navfoot a.needsbtn .badge { margin-left:0; font-weight:700;
+  background:var(--flag); color:var(--card); animation:glow 1.6s ease-in-out infinite }
+@keyframes glow { 50% { box-shadow:0 0 6px 2px color-mix(in srgb, var(--flag) 70%, transparent) } }
 .navfoot { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px; font-size:13px }
 .navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
 @media (max-width: 700px) { ul.dirs { columns:1 } }
@@ -8943,6 +8950,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
     gap:0; font-size:17px; z-index:3 }
   /* its five links are 44px each to a finger: the steward's line ends before them, never under them (the person's screenshot, Oct 26) */
   nav .proj.monitor { padding-right:232px }
+  nav:has(#needs-chip:not([hidden])) .proj.monitor { padding-right:276px }   /* and Needs you's, while shown */
   @media (max-width: 440px) { nav .proj.monitor .sline { display:none } }   /* no room for its line there: its dot says it */
   .navfoot a { padding:0 8px; min-height:38px; display:inline-flex; align-items:center; justify-content:center }
   .navfoot .long { display:none } .navfoot .short { display:inline }

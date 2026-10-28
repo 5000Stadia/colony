@@ -79,7 +79,7 @@ def commands(root, name):
     from . import providers
     pane = _pane(name)
     p = providers.of(root)
-    return [c for c in (p.commands(pane) if pane and hasattr(p, "commands") else []) if c]
+    return [c for c in (p.commands(pane) if pane else []) if c]
 
 
 def claude_commands(pane):
