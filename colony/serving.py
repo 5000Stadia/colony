@@ -134,10 +134,16 @@ def restore(port):
 def keep(port):
     """While the board runs (its own thread): served as recorded, then looked at again every EVERY seconds, so the
     tailnet's certificates turned on (or Tailscale connected) after the board started are taken up with no restart, and
-    a serve tailscaled lost is put back. Nothing is asked of Tailscale while remote access is off and nothing is served."""
-    while True:
+    a serve tailscaled lost is put back. Nothing is asked of Tailscale while remote access is off and nothing is served.
+    It keeps the board it was started for and no other: should the board's home change under it, it stops. (A test's
+    board, started in the process that runs the tests, ended and its home went, and this went on with the person's
+    real settings and their real Tailscale Serve.)"""
+    mine = board.home()
+    while board.home() == mine:
         try:
             if board.registry()["settings"].get("tailscale") or records():
+                if board.home() != mine:
+                    break
                 restore(port)
         except Exception:
             pass                        # https is extra: its trouble stops nothing else

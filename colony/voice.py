@@ -71,9 +71,13 @@ def sample(voice):
 
 
 def make_samples():
-    """Every voice's sample, those not made yet, one after another: run in the background as the board starts."""
+    """Every voice's sample, those not made yet, one after another: run in the background as the board starts, for the
+    board it started with (its home changed under it, as a test's board ends in the process running the tests, it stops)."""
+    mine = board.home()
     if ready():
         for v, _ in VOICES:
+            if board.home() != mine:
+                return
             speak(sample(v), v)
 
 

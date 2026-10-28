@@ -440,8 +440,10 @@ class BoardTest(BoardBase):
             settings.write_text(json.dumps(cfg))
         old_wiring()
         self.assertFalse(provider.wired(self.root))
+        # and none of the board's own threads in this process: they would outlive the test, and its home with it
         with patch.object(board, 'ThreadingHTTPServer'), patch.object(monitor, 'start'), patch('colony.vision.install_all'), \
-                patch.object(console, 'reload') as reload:
+                patch.object(console, 'reload') as reload, patch.object(board, 'line_keep'), patch('colony.serving.keep'), \
+                patch('colony.voice.make_samples'):
             board.serve(0, monitor=False)
             reload.assert_not_called()
         self.assertTrue(provider.wired(self.root))
@@ -943,7 +945,7 @@ class ChatTest(BoardBase):
         self.assertIn("else requestAnimationFrame(() => grow())", page)
         self.assertIn("x.addEventListener('click', () => { gfile.value = ''; chosen(); }); gfiles.append(n, x);", page)
         # held back by a touch, the read-along looks again once the page is let be, while the same part plays
-        self.assertIn("if (Date.now() - touched < 8000) { later(R.cur, 8200 - (Date.now() - touched)); return null; }", page)
+        self.assertIn("if (Date.now() - touched < 8000) { later(s, 8200 - (Date.now() - touched)); return null; }", page)
         self.assertIn("refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); }", board.CHAT)
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
@@ -1032,7 +1034,8 @@ class ChatTest(BoardBase):
         with self.assertRaises(ValueError):
             board.add_gate(self.root, "Which pot?", options=["clay"], recommended="glass")
         self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
-        self.assertIn("compositionstart", board.CHAT, "dictating into the box pauses reading")
+        self.assertIn("on(document, 'compositionstart', (ev) => { if (isBox(ev.target)) dictating(); }, true);", board.PLAYER,
+                      "dictating into a box (the chat's, or the one over every page) holds the reading")
         self.assertIn("if (document.hidden) away()", board.CHAT, "leaving the page, the box lets go of the keyboard")
 
     def test_the_project_at_work_leads_the_lists_the_steward_muted_or_not(self):
@@ -1241,8 +1244,9 @@ class ChatTest(BoardBase):
         self.assertNotIn("id='kvoice'", page)
         self.assertIsNone(voice.speak("Hello there."))
         self.assertLess(page.index("window.colonyPlayer = {"), page.index("<nav"), "the player is there before the chat's script looks for it")
-        self.assertIn("P.read(view, news.map(sec), {auto: true})", board.CHAT, "the chat hands new parts to the board's player")
-        self.assertIn("talk.pause()", board.PLAYER, "⏸ between ■ and ⏭ holds the reading, ▷ takes it up")
+        self.assertIn("new MutationObserver(() => { mark(); relight(); P.poke(); })", board.CHAT,
+                      "what lands in a chat has the board's player look at the line at once")
+        self.assertIn("talk.pause()", board.PLAYER, "❚❚ beside ⏭ holds the reading, ▶ takes it up")
         self.assertIn("player.pause()", board.PLAYER)
         self.assertIn("said >= 2 && lead.split(' ').length >= 4", board.PLAYER,
                       "the first clip is two sentences: one alone left a hiccup before the second (the person)")
@@ -6687,7 +6691,7 @@ class PhonePageTest(HoursBase):
         # the top of the stack": it sits on whatever is below it (the player, the box, or beside the player's ♪)
         self.assertIn(".chat details.needs { position:fixed", board.CSS)
         self.assertIn("bottom:calc(var(--stk, 64px) + 4px)", board.CSS)
-        self.assertIn("html.cpsmall .chat details.needs { right:64px }", board.CSS)
+        self.assertIn("html.cpsmall .chat details.needs { right:calc(var(--pillw, 54px) + 18px) }", board.CSS, "beside the pill, however wide")
         self.assertIn("'--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight))", board.PLAYER, "on the player, or on the box where it is shut")
         # an answer typed in it: the keyboard parts the visible part from the page, which hid it and took the typing
         # (the person: "if I tap it it immediately ejects focus and I can't type anything"); it stays, at the top
@@ -6711,25 +6715,26 @@ class PhonePageTest(HoursBase):
     def test_text_only_holds_for_whatever_auto_reads_and_at_once(self):
         # the person: "when I select text, only it actually continues to do audio and text": a reading begun aloud, or
         # taken up again (All projects, a project kept), kept the sound it started with
-        self.assertIn("R.silent = !R.tapped && aloud() && mode() === 'text';", board.PLAYER, "each part asks, not the reading's start")
-        self.assertEqual(len(re.findall(r"R\.silent = (?!=)", board.PLAYER)), 1, "no reading carries a choice of its own")
-        self.assertIn("if (!R.silent) hush(); begin(R.cur, R.piece, false, true); }", board.PLAYER, "chosen mid-reading: at once")
+        self.assertIn("N.silent = !N.tapped && aloud() && mode() === 'text';", board.PLAYER, "each part asks, not the reading's start")
+        self.assertEqual(len(re.findall(r"N\.silent = (?!=)", board.PLAYER)), 1, "no reading carries a choice of its own")
+        self.assertIn("if (!N.silent) hush(); begin(N.j, N.piece); }", board.PLAYER, "chosen mid-reading: at once")
         self.assertIn("if (view) view.mark(); heed(); },", board.PLAYER, "a mode chosen")
-        self.assertIn("if (view) view.mark(); heed(); }\n", board.PLAYER, "Auto turned on")
-        # a reply tapped ▷ on is read aloud whatever Auto's mode; new replies joining a project's reading follow Auto
-        self.assertIn("R = blank(v); R.tapped = true; R.list = clean;", board.PLAYER)
-        self.assertIn("R = r; R.tapped = false; via = '&auto=1';", board.PLAYER)
+        self.assertIn("changed(); heed(); look(); }\n", board.PLAYER, "Auto turned on")
+        # a reply tapped ▷ on is read aloud whatever Auto's mode; what the line reads (Play, a row, Auto) follows Auto's
+        self.assertIn("blocks: secs.map((x) => ({k: x.k, at: x.at, text: x.text})), j: 0, piece: 0, tapped: true, seat: 'chat'};", board.PLAYER)
+        self.assertIn("blocks, j: 0, piece: 0, seat: S && S.auto.has(i) && !S.play.has(i) ? 'auto' : 'line'};", board.PLAYER)
 
     def test_a_reading_goes_on_with_next_and_text_only_waits_for_it(self):
         # the person: "text only ... duration ... pretty arbitrary ... a big next arrow button that pops up over the
         # message", "beneficial for audio as well", "point to the right ... forward momentum"
         self.assertNotIn("n / 200 * 60000", board.PLAYER, "no reading time reckoned from length")
         # one way on, in the player's bar, with Auto's ring (the person: "since it's completely related to the Auto
-        # should be outline play animation ... be over the next button"): ⏭ and a floating Next were the same move
-        self.assertIn("<button type='button' class='cpnext' aria-label='Next part'>\" + PICON.next", board.PLAYER)
+        # should be outline play animation ... be over the next button"): ⏭ and a floating Next were the same move; in
+        # the line it goes on to the next reply, its glyph the lock screen's (R123), the rest of this one counted skipped
+        self.assertIn("<button type='button' class='cpnext' aria-label='Skip to the next reply'>\" + PICON.skip", board.PLAYER)
         self.assertNotIn("cpskip", board.PLAYER)
-        self.assertIn("if (!R.silent) { hush(); playing = true; }\n    finished(R.cur);", board.PLAYER, "heard: on at once, the part counted heard")
-        self.assertIn("nx.innerHTML = last ? PICON.check : PICON.next", board.PLAYER)
+        self.assertIn("function skip() { if (!N) return; markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped');", board.PLAYER)
+        self.assertNotIn("PICON.check", board.PLAYER, "no ✓ on the last: ⏭ is always the way on")
         self.assertIn("html.autoon .cpbar .cpnext::before", board.CSS)
         self.assertNotIn(".cphold::before", board.CSS)
         self.assertIn("next", board.ICONS)
@@ -7139,3 +7144,332 @@ class StewardBriefTest(BoardBase):
                 monitor.ensure()
             self.assertEqual(queued, [], "a start that changed nothing tells the steward nothing")
             self.assertIn("The board is yours to keep healthy", monitor.brief_path().read_text())
+
+
+class LineTest(BoardBase):
+    """R123, the unheard line: one record on the board of what each project's agent said and what of it was heard,
+    which every device and view reads (the person: "if the user hears or reads something in all, it should be
+    eliminated from the valid queue of the individual project ... Vice versa"); a test's own, never the real one."""
+    SINCE = "2026-10-28T09:00:00Z"
+
+    def setUp(self):
+        super().setUp()
+        board._LISTEN.clear()
+        board._TROUBLE.update(said="", at=0.0, n=0)
+        board.home().mkdir(parents=True, exist_ok=True)
+        (board.home() / "line.json").write_text(json.dumps({"since": self.SINCE}))
+        board.track(self.root)
+        self.sessions = {}
+        found = patch("colony.context.session", side_effect=lambda root: self.sessions.get(str(Path(root).resolve())))
+        found.start()
+        self.addCleanup(found.stop)
+
+    @staticmethod
+    def at(h, m, s=0):
+        return f"2026-10-28T{h:02d}:{m:02d}:{s:02d}Z"
+
+    def project(self, name):
+        root = Path(self.tmp.name) / name
+        root.mkdir()
+        (root / "ROADMAP.md").write_text(ROADMAP)
+        board.track(root)
+        return root
+
+    def talk(self, root, *said, session="s1"):
+        """Lines added to root's transcript in this session: (who, time, text), who being you, colony, say or step."""
+        path = Path(self.tmp.name) / f"{Path(root).name}-{session}.jsonl"
+        shape = {"you": lambda at, x: {"type": "user", "message": {"content": x}, "timestamp": at},
+                 "colony": lambda at, x: {"type": "user", "message": {"content": x}, "timestamp": at},
+                 "say": lambda at, x: {"type": "assistant", "message": {"content": [{"type": "text", "text": x}]}, "timestamp": at},
+                 "step": lambda at, x: {"type": "assistant", "message": {"content": [
+                     {"type": "tool_use", "name": "Bash", "input": {"command": x}}]}, "timestamp": at}}
+        with path.open("a") as fh:
+            for who, at, text in said:
+                fh.write(json.dumps(shape[who](at, text)) + "\n")
+        self.sessions[str(Path(root).resolve())] = {"provider": "claude", "id": session, "path": str(path)}
+        return path
+
+    def line(self, dev="", arm=""):
+        return board.line(board.projects(board.registry()), dev, arm)
+
+    def keys(self, got, p=None):
+        return [k for x in got["line"] if p is None or x["p"] == p for k, _ in x["b"]]
+
+    def mark(self, how, keys, dev="desk", view="all"):
+        return board.mark_line(board.projects(board.registry()), how, keys, dev, view)
+
+    def test_a_reply_heard_in_all_is_heard_in_its_project_and_the_other_way_round(self):
+        shop = self.project("shop")
+        self.talk(self.root, ("you", self.at(10, 0), "water?"), ("say", self.at(10, 1), "Watered the fern."))
+        self.talk(shop, ("you", self.at(10, 0), "open?"), ("say", self.at(10, 2), "Open till six."),
+                  ("you", self.at(10, 5), "and sunday?"), ("say", self.at(10, 6), "Closed on Sundays."))
+        got = self.line()
+        self.assertEqual((got["total"], got["projects"]["0"]["n"], got["projects"]["1"]["n"]), (3, 1, 2))
+        self.assertEqual([x["w"] for x in got["line"]], ["Watered the fern.", "Open till six.", "Closed on Sundays."], "oldest first")
+        # heard while every project is read (All): gone from shop's own line, the one its chat and its chip read
+        self.mark("heard", {"1": [f"s{self.at(10, 0)}-0"]}, view="all")
+        got = self.line()
+        self.assertEqual((got["total"], got["projects"]["1"]["n"]), (2, 1))
+        self.assertEqual(self.keys(got, "1"), [f"s{self.at(10, 5)}-0"])
+        # and seen in shop's chat: gone from All
+        self.mark("seen", {"1": [f"s{self.at(10, 5)}-0"]}, view="chat")
+        got = self.line()
+        self.assertEqual((got["total"], list(got["projects"])), (1, ["0"]))
+        rows = board.read(shop, "heard.jsonl")
+        self.assertEqual([(r["how"], r["dev"], r["view"]) for r in rows], [("heard", "desk", "all"), ("seen", "desk", "chat")],
+                         "each row says who wrote it: the device and the view")
+
+    def test_seen_counts_only_when_no_device_reading_by_itself_will_read_it(self):
+        self.talk(self.root, ("you", self.at(10, 0), "go"), ("say", self.at(10, 1), "Before Auto was on."))
+        before = self.keys(self.line())
+        # the phone's Auto is on and able to play from 10:05: what lands after that is its to read, not the desk's to see
+        self.line(dev="phone", arm=self.at(10, 5))
+        self.talk(self.root, ("say", self.at(10, 6), "After it was on."))
+        after = [k for k in self.keys(self.line()) if k not in before]
+        got = self.mark("seen", {"0": before + after})
+        self.assertEqual((got["marked"], got["refused"]), ({"0": before}, {"0": after}), "the backlog the phone won't read is seen")
+        # the phone in "tap to resume" (it let the audio go, or play() was refused) says so as it looks: nothing is held
+        self.line(dev="phone", arm="")
+        self.assertEqual(self.mark("seen", {"0": after})["marked"], {"0": after})
+        self.assertEqual(self.line()["total"], 0)
+        # nor does a phone that stopped looking hold anything a minute on
+        self.talk(self.root, ("say", self.at(10, 7), "Later still."))
+        self.line(dev="phone", arm=self.at(10, 5))
+        board._LISTEN["phone"] = (board._LISTEN["phone"][0], time.time() - board.CLAIM - 1)
+        self.assertEqual(self.mark("seen", {"0": self.keys(self.line())})["refused"], {})
+        # heard and skipped are what the reading device itself writes: never held
+        self.talk(self.root, ("say", self.at(10, 8), "Heard on the phone."))
+        self.line(dev="phone", arm=self.at(10, 5))
+        self.assertEqual(self.mark("heard", {"0": self.keys(self.line())}, dev="phone")["refused"], {})
+
+    def test_arrival_is_judged_by_each_parts_own_time_not_its_turns(self):
+        # a turn begun at 10:00 whose second part came at 10:20: Auto armed at 10:10 reads that part, as it landed after
+        self.talk(self.root, ("you", self.at(10, 0), "long job"), ("say", self.at(10, 1), "Starting."),
+                  ("step", self.at(10, 2), "make"), ("say", self.at(10, 20), "Done after the build."))
+        [reply] = self.line(dev="phone", arm=self.at(10, 10))["line"]
+        self.assertEqual(reply["b"], [[f"s{self.at(10, 0)}-0", self.at(10, 1)], [f"s{self.at(10, 0)}-2", self.at(10, 20)]],
+                         "each part with its own time, the step between counted as Chat counts it")
+        got = self.mark("seen", {"0": [k for k, _ in reply["b"]]})
+        self.assertEqual((got["marked"], got["refused"]), ({"0": [f"s{self.at(10, 0)}-0"]}, {"0": [f"s{self.at(10, 0)}-2"]}))
+
+    def test_the_line_counts_replies_not_their_parts(self):
+        self.talk(self.root, ("you", self.at(10, 0), "go"), ("say", self.at(10, 1), "One."), ("say", self.at(10, 2), "Two."),
+                  ("say", self.at(10, 3), "Three."), ("you", self.at(10, 4), "and?"), ("say", self.at(10, 5), "Four."))
+        got = self.line()
+        self.assertEqual((got["total"], [len(x["b"]) for x in got["line"]]), (2, [3, 1]))
+        self.mark("heard", {"0": [f"s{self.at(10, 0)}-0", f"s{self.at(10, 0)}-1"]})
+        got = self.line()
+        self.assertEqual((got["total"], got["line"][0]["b"]), (2, [[f"s{self.at(10, 0)}-2", self.at(10, 3)]]),
+                         "a reply is heard once every part of it is")
+
+    def test_the_line_begins_when_it_goes_live_and_leaves_out_notices_to_every_project_and_carry_overs(self):
+        (board.home() / "line.json").unlink()
+        self.talk(self.root, ("you", "2026-10-27T10:00:00Z", "old"), ("say", "2026-10-27T10:01:00Z", "Said before the line."))
+        self.assertEqual(self.line()["total"], 0, "what came before it counts as heard")
+        since = json.loads((board.home() / "line.json").read_text())["since"]
+        self.assertAlmostEqual(board.iso_epoch(since), time.time(), delta=60, msg="the moment it went live")
+        (board.home() / "line.json").write_text(json.dumps({"since": self.SINCE}))
+        shop, seeds = self.project("shop"), self.project("seeds")
+        notice = "[colony] Usage is at 98%: winding down."
+        for root in (self.root, shop, seeds):     # one notice to them all: their replies are the same reply many times over
+            self.talk(root, ("colony", self.at(11, 0), notice), ("say", self.at(11, 1), "Noted, pausing."))
+        self.talk(self.root, ("colony", self.at(12, 0), "[colony] Context carry-over (refresh)\n<colony-carry>x</colony-carry>"),
+                  ("say", self.at(12, 1), "Carried over: the fern."),
+                  ("colony", self.at(12, 30), "[colony] You have mail."), ("say", self.at(12, 31), "Read the mail."))
+        self.assertEqual([x["w"] for x in self.line()["line"]], ["Read the mail."], "a notice to one project is its own")
+
+    def test_a_reply_stays_in_the_line_past_the_next_message_its_tenth_part_and_a_new_session(self):
+        self.talk(self.root, ("you", self.at(10, 0), "list them"), *[("say", self.at(10, 1, n), f"Part {n}.") for n in range(12)])
+        self.assertEqual([len(x["b"]) for x in self.line()["line"]], [12], "no cap on its parts")
+        self.talk(self.root, ("you", self.at(10, 5), "thanks"))
+        self.assertEqual(self.line()["total"], 1, "the person's next message doesn't take it")
+        # the session's last words come after the last look, then the session changes, and again while no page is open
+        self.talk(self.root, ("say", self.at(10, 6), "Last words of the first session."))
+        self.talk(self.root, ("you", self.at(10, 7), "new"), ("say", self.at(10, 8), "First of the second."), session="s2")
+        board.feed_all(board.projects(board.registry()))           # the feeder's pass
+        self.talk(self.root, ("you", self.at(10, 9), "third"), ("say", self.at(10, 10), "First of the third."), session="s3")
+        self.assertEqual([x["w"] for x in self.line()["line"]],
+                         ["Part 0.", "Last words of the first session.", "First of the second.", "First of the third."])
+        # and the board restarted: the record is on disk, and the feed goes on from where it was
+        board._REC.clear(), board._FEED.clear(), board._OPEN.clear()
+        self.talk(self.root, ("you", self.at(10, 11), "more"), ("say", self.at(10, 12), "After the restart."), session="s3")
+        self.assertEqual(self.line()["total"], 5)
+        self.assertEqual(len(board.read(self.root, "line.jsonl")), 12 + 4, "every part once")
+
+    def test_the_feed_reads_only_what_was_added_and_a_failed_pass_is_logged(self):
+        from colony import chat
+        path = self.talk(self.root, ("you", self.at(10, 0), "go"), ("say", self.at(10, 1), "One."))
+        self.line()
+        read, real = [], chat.events
+        with patch.object(chat, "events", side_effect=lambda key, p: read.append(Path(p).read_text()) or real(key, p)):
+            self.line()
+            self.assertEqual(read, [], "unchanged: a stat, nothing read")
+            self.talk(self.root, ("say", self.at(10, 2), "Two."))
+            self.line()
+        self.assertEqual(len(read), 1)
+        self.assertNotIn("One.", read[0], "only the line it gained")
+        self.assertIn("Two.", read[0])
+        self.assertEqual(json.loads((self.root / ".board" / "line-feed.json").read_text())["offset"], path.stat().st_size)
+        with patch.object(chat, "events", side_effect=OSError("disk gone")):
+            self.talk(self.root, ("say", self.at(10, 3), "Three."))
+            board.feed_all(board.projects(board.registry()))
+            board.feed_all(board.projects(board.registry()))
+        log = (board.home() / "line-errors.log").read_text().splitlines()
+        self.assertEqual(len(log), 1, "never silent, and not again and again")
+        self.assertIn("plants: OSError: disk gone", log[0])
+
+    def test_clear_undoes_only_its_own_rows_for_ten_minutes(self):
+        shop = self.project("shop")
+        self.talk(self.root, ("you", self.at(10, 0), "a"), ("say", self.at(10, 1), "Fern."))
+        self.talk(shop, ("you", self.at(10, 0), "b"), ("say", self.at(10, 2), "Till six."), ("say", self.at(10, 3), "Sundays off."))
+        got = self.line()
+        fern, six, sun = self.keys(got, "0")[0], *self.keys(got, "1")
+        clear = self.mark("cleared", {"0": [fern], "1": [six, sun]})["clear"]
+        self.assertTrue(clear)
+        self.assertEqual(self.line()["total"], 0)
+        # another device, not yet told, hears one of them: written, so undoing the Clear leaves it heard
+        self.assertEqual(self.mark("heard", {"1": [sun]}, dev="phone")["marked"], {"1": [sun]})
+        self.talk(self.root, ("you", self.at(10, 5), "c"), ("say", self.at(10, 6), "New, heard after the Clear."))
+        self.mark("heard", {"0": self.keys(self.line())})
+        self.assertEqual(board.unclear(board.projects(board.registry()), clear), 2)
+        self.assertEqual(sorted(self.keys(self.line())), sorted([fern, six]), "only that Clear's rows go")
+        self.assertEqual(board.unclear(board.projects(board.registry()), clear), 0, "once")
+        later = self.mark("cleared", {"0": [fern]})["clear"]
+        with patch.object(board.time, "time", return_value=time.time() + board.UNDO + 1):
+            self.assertEqual(board.unclear(board.projects(board.registry()), later), 0, "ten minutes on, it stands")
+        self.assertTrue(all(r["how"] != "unheard" for r in board.read(self.root, "heard.jsonl")), "no row un-hears a part")
+
+    def test_replay_writes_nothing_and_the_heard_list_holds_the_last_heard(self):
+        self.talk(self.root, *[x for n in range(3) for x in (("you", self.at(10, n * 2), f"q{n}"),
+                                                              ("say", self.at(10, n * 2 + 1), f"Answer {n}."))])
+        for x in self.line()["line"]:
+            self.mark("heard", {"0": [k for k, _ in x["b"]]})
+        record = (self.root / ".board" / "heard.jsonl").read_text()
+        heard = board.heard_list(board.projects(board.registry()))["heard"]
+        self.assertEqual([x["w"] for x in heard], ["Answer 2.", "Answer 1.", "Answer 0."], "the last heard first")
+        self.assertEqual(board.line_text(self.root, turn=heard[0]["t"]),
+                         [{"k": heard[0]["b"][0][0], "at": self.at(10, 5), "text": "Answer 2."}])
+        self.mark("heard", {"0": [heard[0]["b"][0][0]]})
+        self.assertEqual((self.root / ".board" / "heard.jsonl").read_text(), record, "heard again: nothing written")
+
+    def test_the_poll_is_small_unchanged_is_a_line_and_two_hundred_waiting_answer_cold_within_300ms(self):
+        at = lambda n, s: f"2026-10-28T1{n // 60}:{n % 60:02d}:{s:02d}Z"
+        self.talk(self.root, *[x for n in range(200) for x in (
+            ("you", at(n, 0), f"question {n}"), ("say", at(n, 1), f"Answer {n}, " + "with words " * 40),
+            ("step", at(n, 2), "ls"), ("say", at(n, 3), f"And more on {n}."))])
+        self.line()                                             # fed, as the feeder would have
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        from colony import chat
+        board._REC.clear(), board._FEED.clear(), board._OPEN.clear(), chat._seen.clear()     # as after a restart
+        t0 = time.time()
+        r = urllib.request.urlopen(base + "/chat/line?dev=phone")
+        body = r.read()
+        took = time.time() - t0
+        got = json.loads(body)
+        self.assertEqual(got["total"], 200)
+        self.assertLess(took, 0.3, f"a cold look with 200 waiting took {took * 1000:.0f} ms")
+        self.assertLess(len(body), 80_000, "keys, counts and first words: the words come as a reply is about to be read")
+        self.assertNotIn("with words " * 10, body.decode())
+        with self.assertRaises(urllib.error.HTTPError) as same:
+            urllib.request.urlopen(urllib.request.Request(base + "/chat/line?dev=phone", headers={"If-None-Match": r.headers["ETag"]}))
+        self.assertEqual(same.exception.code, 304, "unchanged: not sent again")
+        first = got["line"][0]
+        text = json.loads(urllib.request.urlopen(base + "/chat/text?p=0&k=" + ",".join(urllib.parse.quote(k) for k, _ in first["b"])).read())
+        self.assertEqual([b["text"][:9] for b in text["blocks"]], ["Answer 0,", "And more "])
+        r = urllib.request.urlopen(urllib.request.Request(base + "/chat/heard", data=urllib.parse.urlencode(
+            {"how": "cleared", "keys": json.dumps({"0": [k for x in got["line"] for k, _ in x["b"]]}), "dev": "phone"}).encode()))
+        clear = json.loads(r.read())["clear"]
+        self.assertEqual(json.loads(urllib.request.urlopen(base + "/chat/line").read())["total"], 0, "a Clear of all 400 parts")
+        r = urllib.request.urlopen(urllib.request.Request(base + "/chat/unclear", data=urllib.parse.urlencode({"clear": clear}).encode()))
+        self.assertEqual(json.loads(r.read())["back"], 400)
+
+    def test_the_boards_own_threads_stop_when_their_home_changes(self):
+        # a test's board, started in the process running the tests, outlived its test: its feeder and its look at https
+        # went on with the person's real home, their projects and their Tailscale Serve (2026-10-28). Each now keeps the
+        # board it began with; here its home is taken in the middle of a pass, as a test's teardown takes it.
+        from colony import serving, voice
+        mine, other = os.environ["COLONY_BOARD_HOME"], str(Path(self.tmp.name) / "another-home")
+        took = lambda: os.environ.__setitem__("COLONY_BOARD_HOME", other)
+        fed, looked, said = [], [], []
+        with patch.object(board, "feed_all", side_effect=lambda plist, wait=True, only=None: (fed.append((str(board.home()), str(only))), took())):
+            feeder = threading.Thread(target=board.line_keep, args=(0.01,), daemon=True)
+            feeder.start()
+            feeder.join(2)
+        os.environ["COLONY_BOARD_HOME"] = mine
+        self.assertFalse(feeder.is_alive(), "the feeder stops")
+        self.assertEqual(fed, [(mine, mine)], "after one pass, its own board's")
+        with patch.object(board, "line_feed", side_effect=lambda root, wait=True: self.fail("another board's projects fed")):
+            board.feed_all([self.root], only=other)
+        board.set_setting("tailscale", "colony.tail1.ts.net")
+        with patch.object(serving, "restore", side_effect=lambda port: (looked.append(str(board.home())), took())), \
+                patch.object(serving, "EVERY", 0.01):
+            https = threading.Thread(target=serving.keep, args=(8791,), daemon=True)
+            https.start()
+            https.join(2)
+        os.environ["COLONY_BOARD_HOME"] = mine
+        self.assertFalse(https.is_alive(), "the look at https stops: nothing asked of Tailscale for another's settings")
+        self.assertEqual(looked, [mine])
+        with patch.object(voice, "ready", return_value=True), patch.object(voice, "speak", side_effect=lambda text, v=None: (said.append(v), took())):
+            voice.make_samples()
+        os.environ["COLONY_BOARD_HOME"] = mine
+        self.assertEqual(len(said), 1, "the voices' samples stop with their board")
+
+    def test_the_player_is_the_line_a_pill_at_rest_and_a_bar_while_reading(self):
+        js, chat, css = board.player_js(), board.CHAT, board.CSS
+        # gone (plan §3): ■ everywhere, the inline Auto and its menu, Read from and Across, the ⚙ in the bar
+        for gone in ("PICON.stop", "cpstop", "cpcog", "Read from", "Across", "cpsource", "cpfollow"):
+            self.assertNotIn(gone, js)
+        for gone in ("automenu", "button.auto", "P.stop", "button.cont", "button.hold", "button.skip"):
+            self.assertNotIn(gone, chat)
+        self.assertNotIn(".automenu", css)
+        self.talk(self.root, ("you", self.at(10, 0), "go"), ("say", self.at(10, 1), "Done."))
+        with patch("colony.context.session", return_value=self.sessions[str(self.root.resolve())]):
+            feed = board.chat_feed("0", self.root)
+        self.assertIn("class='listen'", feed)
+        for gone in ("class='auto'", "class='cont'", "class='hold'", "class='skip'"):
+            self.assertNotIn(gone, feed, "▷ alone under a reply")
+        # the pill: the count, a ring and "Auto · 5" while Auto is on and able to play, "tap to resume" where it can't
+        self.assertIn("const say = aloud() ? (held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);", js)
+        self.assertIn(".cppill.on { border-color:var(--accent)", css)
+        self.assertIn("on(pill, 'click', () => { if (aloud() && !able()) return resume('the pill'); openSheet(); });", js)
+        # Auto is one switch, every project's: a chip filters the rows and Play, and arrivals are judged by their own time
+        self.assertIn("const shownLine = () => { const xs = visible(), p = chipOf(xs); return p ? xs.filter((x) => x.p === p) : xs; };", js)
+        self.assertIn("const fresh = visible().filter((x) => x.b.some(([, at]) => Date.parse(at) >= armed));", js)
+        self.assertNotIn("chipOf", js.split("function arrivals()")[1].split("\n  }\n")[0], "a chip never narrows Auto")
+        # the trial: this device's own marks are written too, so going back replays nothing
+        self.assertIn("put('heard:' + name,", js)
+        self.assertIn("put('heardto:' + name, top)", js)
+        # ▷ on the reply being read: ❚❚ holds it, ▷ goes on where it stopped (Continue is gone); another reply starts
+        self.assertIn("if (s && s.t === t) return P.hold(s.playing && !s.paused);", chat)
+        self.assertIn("return P.read(view, np ? [{t, k: t, at: '', text: np.dataset.say}] : turn(t)); }", chat)
+        self.assertIn("if (!playing) { if (!want) { takeUp(); prime(); begin(N.j, N.piece); } return; }", js)
+        # the phone's pause while a box has the keyboard is the dictation hold; Send takes it up within its own tap
+        self.assertIn("if (boxed()) { why = 'dictation'; byVoice = true; quietSoon();", js)
+        self.assertIn("on(document, 'submit', () => { if (byVoice || why === 'dictation') { byVoice = true; goOn('Send'); } }, true);", js)
+        # a refused play() says tap to resume, never a silent pause; and the resume window is two hours
+        self.assertIn("const refused = (what, cause) => { if (!N) return; paused = true; why = 'phone'; letGo = {why: 'refused'", js)
+        self.assertIn("const LONG = 2 * 3600e3;", js)
+        self.assertIn("if (stopAt && Date.now() - stopAt >= LONG) {", js)
+        # a locked phone: the silence between replies lets go only after two quiet hours; the lock screen's stop pauses
+        self.assertIn("O.si.call(window, () => { if (resting && Date.now() - resting > LONG) {", js)
+        self.assertIn("['stop', () => hold(true, 'lock screen')]", js)
+        self.assertIn("ms.playbackState = N ? (playing && !paused ? 'playing' : 'paused')", js)
+        self.assertIn("{title: 'Waiting for replies', artist: 'colony', album: 'colony'}", js)
+        self.assertIn("if (waits.length) { bridge(); return Promise.all(waits).then(sound); }", js, "no gap while the next is made")
+        # seen: three seconds to a reply's last part, only where nothing will read it
+        self.assertIn("const SEEN = 3000", chat)
+        self.assertIn("const waiting = document.visibilityState === 'visible' && P.quiet() && !covered ? P.unheard(key) : new Map();", chat,
+                      "and not while the line's sheet covers the chat")
+        self.assertIn("ks.some((k) => P.willRead(key, k, waiting.get(k).at, t))", chat)
+        # Audio + text: each sentence about to be heard in view, never scrolled back up, and marked softly
+        self.assertIn("if (c >= LEAD + had / all * (d - LEAD)) i = m;", js)
+        self.assertIn("if (by > 0) { stick = false; window.scrollBy({top: by, behavior: 'smooth'}); } };", chat)
+        self.assertIn("if (r && lit) lit.set('cpread', new Highlight(r));", chat)
+        self.assertIn("::highlight(cpread)", css)
+        # what the live trial reads off the phone: each pause and let-go with its cause, and how long the page was hidden
+        self.assertIn("navigator.sendBeacon('/chat/measure'", js)
+        self.assertIn("restStop('two quiet hours')", js)

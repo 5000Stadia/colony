@@ -2647,360 +2647,622 @@ PLAYER = """
     if (!out.length && lead) push(lead);
     return out;
   };
-  // The reading: one project's, its sections (each part of a reply as it was written, with its time) in order, the one
-  // being heard and the piece of it reached. Kept on this device as it goes, so a reading left (another chat took the
-  // voice, the page was closed) comes back paused where it stopped, what it hadn't reached still unheard.
-  let R = null, playing = false, paused = false, loading = false, via = '', view = null, now = null;
+  // the sentences of a clip, split as chunks() splits them: what the page turns to and marks as each is heard
+  const sentences = (p) => (p.match(/.+?(?:(?<!\\b(?:e\\.g|i\\.e|vs|Dr|Mr|Mrs|Ms|St|[A-Z]))[.!?]+(?=\\s|$)|$)/g) || [p]).map((x) => x.trim()).filter(Boolean);
+  // The line (R123): every project's replies not yet heard, as the board keeps them for every device and view (keys,
+  // counts and first words; a reply's words are fetched as it is about to be read). Replies you haven't heard wait in
+  // it; Play goes through it, and Auto reads what lands while it is on (the person's pick, B).
+  let L = {line: [], projects: {}, total: 0, since: '', ready: false}, tag = '', off = 0;
+  // parts this page marked, by project and key (two projects' turns can begin in the same millisecond): out of its line
+  // at once, before the board's next answer; and parts another device's Auto will read, as the board said: not seen here
+  const marked = new Set(), held = new Map(), mk = (p, k) => p + ' ' + k;
+  const DEV = (() => { let d = ''; try { d = localStorage.getItem('dev') || ''; if (!d) { d = Math.random().toString(36).slice(2, 8);
+    localStorage.setItem('dev', d); } } catch (e) {} return d || 'nodev'; })();
+  const clock = () => Date.now() + off;   // the board's clock, which a part's own time is set by
+  const id = (x) => x.p + '|' + x.t;
+  // the line as this page has it: the board's, less what this page marked since
+  const visible = () => L.line.map((x) => Object.assign({}, x, {b: x.b.filter(([k]) => !marked.has(mk(x.p, k)))})).filter((x) => x.b.length);
+  // What is being read is one reply, known by its project and turn, never by its place in a list that shifts (a reading
+  // kept by place stood still as replies landed: the person's phone, 68 times, 2026-10-28). N: that reply, its parts'
+  // words and how far it got; S: the session it is in, what Play or a row asked for and what Auto took up as it landed;
+  // back: the line's reading a ▷ under a reply stepped in front of, taken up again after it.
+  let N = null, S = null, back = null, playing = false, paused = false, loading = false, via = '', view = null, now = null;
+  let why = null, stopAt = 0, letGo = null, unlocked = false, said = null, saidAt = 0, sent = -1, hidAt = 0;
   const rate = () => { let r = 1; try { r = +localStorage.getItem('pace') || 1; } catch (e) {} return [1, 1.25, 1.5, 1.75].includes(r) ? r : 1; };
   const pace = () => rate() + 0.25;               // the voices read slowly: each speed plays a quarter faster than it says
   const aloud = () => { try { return localStorage.getItem('aloud') === '1'; } catch (e) { return false; } };
-  const left = (r) => !!r && r.cur < r.list.length;
-  // kept as it goes, with whether it was sounding: a page refreshed mid-reading goes on, one left and come back to waits
-  const save = () => { if (R) put('reading:' + R.name, Object.assign({}, R, {saved: Date.now(), sounding: playing && !paused})); };
-  const forget = (name) => put('reading:' + name, null);
-  // Heard up to: for each project, the time of the latest part heard (or read in its chat with Auto off), shared by
-  // every way of listening (its chat, the one project followed, every project): heard in one, heard in all, so none
-  // reaches back to what was heard (the person: "if I've heard it in any framing, it's heard in every framing")
-  const heardTo = (name) => get('heardto:' + name) || '';
-  const heardUpTo = (name, at) => { if (name && at && at > heardTo(name)) put('heardto:' + name, at); };
-  const load = (name) => { const r = name && get('reading:' + name);
-    if (r && Array.isArray(r.list) && left(r) && Date.now() - (r.saved || 0) < 12 * 3600e3) return r;
-    if (r) put('reading:' + name, null);
-    return null; };
-  const blank = (v) => ({name: v.name, key: v.key, href: v.href, kvoice: v.kvoice, kokoro: v.kokoro, list: [], cur: 0, piece: 0});
-  const abs = (u) => new URL(u, location.href).href;
-  // each section in its own project's voice: reading every project, the projects are different speakers
-  const voiceAt = (i) => (R && R.list[i] && R.list[i].kvoice) || (R && R.kvoice) || 'am_echo';
-  // When the voice moves to another project, it says the project's name first, as a clip of its own (a piece marked
-  // NAME): between projects read in turn, and on a switch to one (from the player's list, or a chat taking the voice);
-  // not before the first reading heard here. Said in each project's own voice, or in one the person chose (⚙).
+  // How it reads, set behind the line's settings row: both (aloud, the page following what is read, into each project's
+  // Chat), audio (aloud alone, the page left as it is), text (no sound: each reply shown in its chat, ⏭ goes on). A reply
+  // tapped is always heard.
+  const mode = () => { try { return localStorage.getItem('automode') || 'both'; } catch (e) { return 'both'; } };
+  const following = () => mode() !== 'audio';
+  // Auto reads what lands while it is on: a part is new when its own time is after Auto was armed (each part's, not its
+  // turn's, as the board judges it). Armed from now when it is turned on, and on a tap after a stop of two hours or
+  // more, so a night's replies wait for Play while the answer that lands a little after the phone is locked is read
+  const LONG = 2 * 3600e3;
+  let armed = +(get('armed') || 0);
+  const arm = () => { armed = clock(); put('armed', armed); };
+  // able: Auto on and the phone letting this page play (a sound played since it opened, and none refused or let go)
+  const able = () => aloud() && unlocked && !letGo;
+  const listening = () => able() && !paused;
+  // The pauses and takings-up, each with its cause and how it went, and each let-go with how long the page had been
+  // hidden, for the player-state report: the live trial says from the phone's own record what still cuts it off
+  const story = [];
+  let logged = 0, told = 0;
+  const hidden = () => hidAt ? Math.round((Date.now() - hidAt) / 1000) + 's hidden' : 'shown';
+  const log = (what, cause, ok) => { story.push([new Date().toISOString().slice(11, 19), what, cause, ok === undefined ? '' : ok ? 'ok' : 'refused', hidden()]);
+    logged += 1; if (story.length > 14) story.shift(); };
+  const measure = (m) => fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {});
+  // Marks: the board's, and during the trial this device's own as well, so going back to the player before it
+  // replays nothing it heard here
+  const owed = [];
+  const send = async (how, byP, seat) => {
+    const r = await fetch('/chat/heard', {method: 'POST', body: new URLSearchParams({how, keys: JSON.stringify(byP), dev: DEV, view: seat || 'line'})}).catch(() => null);
+    if (!r || !r.ok) { if (how !== 'seen') owed.push([how, byP, seat]); return null; }
+    return r.json().catch(() => null); };
+  const legacy = (name, ks, ats) => { if (!name || !ks.length) return;
+    put('heard:' + name, [...new Set((get('heard:' + name) || []).concat(ks))].slice(-300));
+    const top = ats.filter(Boolean).sort().pop(); if (top && top > (get('heardto:' + name) || '')) put('heardto:' + name, top); };
+  // parts of a reply heard or skipped: only those still in the line, so a reply heard before plays again writing nothing
+  function markParts(x, ks, how) {
+    const waiting = new Map(); L.line.forEach((y) => { if (y.p === String(x.p)) y.b.forEach(([k, at]) => waiting.set(k, at)); });
+    const mine = ks.filter((k) => waiting.has(k) && !marked.has(mk(x.p, k)));
+    if (!mine.length) return;
+    mine.forEach((k) => marked.add(mk(x.p, k))); legacy(x.name, mine, mine.map((k) => waiting.get(k)));
+    send(how, {[x.p]: mine}, x.seat);
+  }
+  // Every page looks at the line: every few seconds while Auto is on or a reply is read, now and then otherwise; as it
+  // looks, a device whose Auto is on and able to play says when it was armed, and the board holds what lands for it
+  let looking = false, more = false, nextLook = 0, poked = 0;
+  async function look() {
+    if (looking) { more = true; return; }
+    looking = true; O.ct.call(window, nextLook);
+    try {
+      for (const [how, byP, seat] of owed.splice(0)) await send(how, byP, seat);
+      const u = '/chat/line?dev=' + encodeURIComponent(DEV) + (listening() && armed ? '&arm=' + encodeURIComponent(new Date(armed).toISOString()) : '');
+      const r = await fetch(u, {cache: 'no-store', headers: tag ? {'If-None-Match': tag} : {}}).catch(() => null);
+      if (r) { const d = Date.parse(r.headers.get('Date') || ''); if (d) off = d + 500 - Date.now();
+        if (r.status === 200) { const got = await r.json().catch(() => null); if (got && Array.isArray(got.line)) { L = got; tag = r.headers.get('ETag') || ''; } } }
+      // what the board no longer lists is out for good: this page needn't hold it out any more
+      const listed = new Set(); L.line.forEach((x) => x.b.forEach(([k]) => listed.add(mk(x.p, k))));
+      [...marked].forEach((k) => { if (!listed.has(k)) marked.delete(k); });
+      if (able()) put('alive', Date.now());
+      if (N && !N.tapped && !playing && !N.blocks.slice(N.j).some((b) => listed.has(mk(N.p, b.k)))) { N = null; save(); }   // heard elsewhere meanwhile
+      arrivals(); changed();
+    } finally { looking = false; schedule(); if (more) { more = false; look(); } }
+  }
+  const schedule = () => { O.ct.call(window, nextLook); nextLook = after(look, aloud() || N ? 4000 : document.hidden ? 60000 : 10000); };
+  // a chat whose conversation grew asks for a look at once: a reply read as it lands, not at the next look
+  const poke = () => { if (Date.now() - poked < 1000) return; poked = Date.now(); look(); };
+  // What lands while Auto is on joins the session, read after what is being read (the backlog waits for Play); held by a
+  // pause or a let-go, it waits there quietly until the tap that resumes
+  const session = () => ({want: new Set(), play: new Set(), auto: new Map(), begun: new Set()});
+  let opening = 0, opened = '';
+  function arrivals() {
+    if (!aloud() || !armed) return;
+    const fresh = visible().filter((x) => x.b.some(([, at]) => Date.parse(at) >= armed));
+    if (!fresh.length) return;
+    S = S || session();
+    fresh.forEach((x) => { if (!S.want.has(id(x))) { S.want.add(id(x)); S.auto.set(id(x), Date.now()); } });
+    if (!N && !opened && able()) { const x = nextUp(); if (x) start(x); }
+  }
+  // the reply to read next: the first in the line the session asked for (Play, a row, Auto as it landed), by its keys;
+  // the one being read comes again only for parts that landed in it since it began
+  const nextUp = () => { if (!S) return null;
+    return visible().find((x) => S.want.has(id(x)) && !(N && id(x) === N.id && x.b.every(([k]) => N.blocks.some((b) => b.k === k)))) || null; };
+  const nextAfter = () => (S && visible().find((x) => S.want.has(id(x)) && !(N && id(x) === N.id))) || null;
+  // a reply's words, fetched as it is about to be read (and the next one's, ahead)
+  const words = new Map();
+  const fetched = (u, as) => fetch(u, {cache: 'no-store'}).then((r) => r.ok ? r[as]() : null).catch(() => null);
+  async function texts(p, i, ks) {
+    const have = words.get(i), find = (k) => have.find((b) => b.k === k);
+    if (have && ks.every(find)) return ks.map(find);
+    const got = await fetched('/chat/text?p=' + encodeURIComponent(p) + '&k=' + encodeURIComponent(ks.join(',')), 'json');
+    const bs = (got && got.blocks) || [];
+    if (bs.length) { words.set(i, (have || []).filter((b) => !bs.some((c) => c.k === b.k)).concat(bs));
+      while (words.size > 8) words.delete(words.keys().next().value); }
+    return ks.map((k) => bs.find((b) => b.k === k)).filter(Boolean);
+  }
+  // Each reply in its own project's voice, its project named first as the voice comes to it (from another project, or
+  // after a quiet spell; not before a ▷), as a clip of its own in its own voice or one chosen for names
   const NAME = '@@';
   const herald = () => { try { return localStorage.getItem('announcer') || ''; } catch (e) { return ''; } };
-  const clip = (p, i = R ? R.cur : 0) => '/voice?v=' + encodeURIComponent(p.startsWith(NAME) && herald() || voiceAt(i)) + via
+  const named = (name, tapped) => !tapped && (said !== name || Date.now() - saidAt > 120e3);
+  const abs = (u) => new URL(u, location.href).href;
+  const clip = (p, v) => '/voice?v=' + encodeURIComponent(p.startsWith(NAME) && herald() || v || 'am_echo') + via
     + '&t=' + encodeURIComponent(p.replace(NAME, '').trim());
-  let said = null;
-  const whoAt = (i) => (R.list[i] && R.list[i].name) || R.name;
-  const named = (i, before = said) => whoAt(i) !== before && (before !== null || !!R.all || !!R.announce);
-  // a section's pieces: its name first where it is said (decided as it starts, so a reading taken up again keeps them)
-  const piecesOf = (i, name = R.list[i].named) => (name ? [NAME + whoAt(i) + '.'] : []).concat(chunks(R.list[i].text));
+  const piecesOf = (r, j) => (r.named && !j ? [NAME + r.name + '.'] : []).concat(chunks(r.blocks[j].text));
   // the clips made already: going on to one of them is no wait, so the button stays as it is
   const ready = new Set();
   // A clip made ahead is downloaded whole and kept here as a file of the page's own (a phone's player would fetch
   // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
   const kept = new Map(), failed = new Set();      // the clip's address -> the page's own copy; those not made
   const keyOf = (u) => u.replace('&auto=1', '');  // a clip is the same clip, read by itself or on a tap
-  const make = (p, i) => { const u = abs(clip(p, i)), key = keyOf(u);
+  const make = (p, v) => { const u = abs(clip(p, v)), key = keyOf(u);
     if (kept.has(key)) return Promise.resolve();
     return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) { failed.add(key); return; }
       kept.set(key, URL.createObjectURL(b)); ready.add(key);
       if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } })
       .catch(() => { failed.add(key); }); };
-  // Ahead of what is heard, the next AHEAD clips are made, across sections, one after another as each comes (the
-  // machine makes them back to back with no idle time): from the moment something waits to be read, and topped up as
-  // each clip starts, so the buffer stays AHEAD deep. While the clip about to be heard is still being made over the
-  // network it waits, so that one comes first. A clip that failed isn't asked for again (the phone's voice reads it).
+  // Ahead of what is heard, the next AHEAD clips are made, through this reply and into the next once its words are
+  // here (the machine makes them back to back with no idle time), topped up as each clip starts. While the clip about to
+  // be heard is still being made over the network it waits, so that one comes first. A clip that failed isn't asked
+  // for again (the phone's voice reads it).
   const AHEAD = 5;
-  let warming = false, line = 0;
+  let warming = false;
   const upcoming = () => {
-    const out = [];
-    if (!R || !left(R)) return out;
-    let k = playing && now && now.s === R.list[R.cur] ? now.at + 1 : R.piece;
-    for (let i = R.cur; i < R.list.length && out.length < AHEAD; i++, k = 0) {
-      const name = i === R.cur && playing ? R.list[i].named : named(i, i === R.cur ? said : whoAt(i - 1));
-      const ps = piecesOf(i, name).filter((p) => p.trim());
-      for (; k < ps.length && out.length < AHEAD; k++) out.push([ps[k], i]);
-    }
+    const out = []; if (!N) return out;
+    let k = playing && now && now.s === N.blocks[N.j] ? now.at + 1 : N.piece;
+    for (let j = N.j; j < N.blocks.length && out.length < AHEAD; j++, k = 0) {
+      const ps = piecesOf(N, j).filter((p) => p.trim());
+      for (; k < ps.length && out.length < AHEAD; k++) out.push([ps[k], N.kvoice]); }
+    const x = out.length < AHEAD && nextAfter(), info = x ? L.projects[x.p] || {} : {}, bs = x && words.get(id(x));
+    if (bs) { const r = {name: info.name, named: named(info.name, false), blocks: bs};
+      bs.forEach((b, j) => piecesOf(r, j).filter((p) => p.trim()).forEach((p) => { if (out.length < AHEAD) out.push([p, info.voice]); })); }
     return out; };
   function warm() {
     if (warming || (playing && loading)) return;
-    const next = upcoming().find(([p, i]) => { const key = keyOf(abs(clip(p, i))); return !kept.has(key) && !failed.has(key); });
+    const next = upcoming().find(([p, v]) => { const key = keyOf(abs(clip(p, v))); return !kept.has(key) && !failed.has(key); });
     if (!next) return;
     warming = true;
     make(next[0], next[1]).then(() => { warming = false; warm(); });
   }
-  player.addEventListener('playing', () => { if (!player.loop) ready.add(keyOf(player.src)); if (loading && playing && !player.loop) { loading = false; changed(); } });
-  // The phone stopped the sound itself (locked, a call, another app's audio): shown as paused, ▷ takes it up again,
-  // and coming back to the page, what is shown is checked against what is heard.
-  // Back on the page, a reading the phone stopped (dictation in another app, a call) goes on by itself, and one shown
-  // as playing whose sound has not moved is set going again; a pause the person chose stays.
-  let ours = 0, byPhone = false;
-  player.addEventListener('pause', () => { if (Date.now() - ours < 600 || player.ended || player.loop || !playing || paused) return;
-    paused = true; byPhone = true; loading = false; changed(); });
-  on(document, 'visibilitychange', () => {
-    if (document.hidden) return;
-    if (resting && player.paused) { player.play().catch(() => {}); return; }
-    if (!playing) return;
-    if (!R.kokoro) { if (talk && !talk.speaking && !talk.pending) { playing = false; changed(); } return; }
-    if (paused) { if (byPhone) { byPhone = false; hold(false); } return; }
-    const at = player.currentTime;
-    after(() => { if (playing && !paused && !player.ended && player.currentTime === at) player.play().catch(() => {}); }, 700);
-  });
-  player.addEventListener('waiting', () => { if (playing && !player.loop && !loading && !player.src.startsWith('blob:') && !ready.has(keyOf(player.src))) {
-    loading = true; changed(); } });
-  // keep: on from the silence between replies to the next, the player is not stopped first (locked, a phone would
-  // not let it start again)
-  const hush = (keep) => { ours = Date.now(); if (talk) talk.cancel(); if (!keep) player.pause(); player.onended = player.onerror = null; paused = false; loading = false;
-    player.loop = false; resting = 0; line++; };
-  // Locked, a phone runs the page only while it plays something: between replies it plays silence, so the next one
-  // is heard as it comes, as a music app goes on to the next song; after twenty quiet minutes it lets go.
-  let resting = 0;
-  const rest = () => { if (!R || !R.kokoro || R.silent || !aloud()) return;
-    player.onended = player.onerror = null; player.loop = true; player.src = SILENT; resting = Date.now();
-    player.play().catch(() => { resting = 0; }); };
-  O.si.call(window, () => { if (resting && Date.now() - resting > 20 * 60e3) { player.pause(); player.loop = false; resting = 0; } }, 30e3);
-  // A reading shown as playing whose sound has stood still for a few seconds (stopped by the phone, a clip that ended
-  // without saying so) is set going again, on to the next clip where this one ended; each time goes to the board's log
-  // with what the phone said, so the cause is read from the phone's own numbers.
-  let stood = 0, told = 0;
-  O.si.call(window, () => {
-    if (!playing || paused || loading || !R || R.silent || !R.kokoro || resting || document.hidden || !(player.paused || player.ended)) { stood = 0; return; }
-    if (!stood) { stood = Date.now(); return; }
-    if (Date.now() - stood < 4000) return;
-    stood = 0;
-    if (told++ < 6) fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'stall', ended: player.ended,
-      paused: player.paused, state: player.readyState, net: player.networkState, error: player.error && player.error.code, t: player.currentTime,
-      d: player.duration, cur: R.cur, of: R.list.length, piece: now && now.at, blob: player.src.startsWith('blob:')})})}).catch(() => {});
-    if (player.ended && player.onended) player.onended();
-    else player.play().catch(() => { if (playing && R && now) begin(R.cur, now.at); });
-  }, 2000);
-  // on the lock screen as a song is: what is being read, with pause and skip
-  const tell = (text) => { try { if (ms && window.MediaMetadata) ms.metadata = new MediaMetadata({title: text.slice(0, 90),
-    artist: R.name, album: 'colony'}); } catch (e) {} };
-  // A phone plays a page's audio only after a tap on it: the first tap anywhere (Send included) plays a moment of
-  // silence, and from then on new replies may be read by themselves.
+  player.addEventListener('playing', () => { if (!player.loop) ready.add(keyOf(player.src)); if (loading && playing && !player.loop) { loading = false; changed(); } setState(); });
+  // Locked, a phone runs a page only while it plays something, and lets it start a sound again only from one going: so
+  // the element never stops between clips or replies. Each clip is set going as the last ends, and any wait between (a
+  // reply's words fetched, its name made, its chat opened) is bridged with silence; between replies Auto plays silence,
+  // as a music app goes on to the next song, so the next reply is heard as it lands (the person, 2026-10-28: "when I
+  // lock my phone, the audio keeps playing which is great ... anything you can do to support that kind of usage")
+  let ours = 0, resting = 0;
+  const hush = (keep) => { if (talk) talk.cancel(); if (!keep) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; }
+    player.onended = player.onerror = null; paused = false; loading = false; };
   const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
-  let unlocked = false, allowing = null;
-  const unlock = () => {
-    if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
-    if (unlocked || playing) return;
-    unlocked = true; player.src = SILENT; player.play().catch(() => { unlocked = false; });
-  };
-  on(document, 'pointerdown', () => { if (aloud()) unlock(); }, true);
-  // What is being read is known by the reply itself, not its place: a reading kept to its last 80 lets the oldest go as
-  // new ones land, and every place moves down by one. Known by place, the clip that ended found its reply "gone" and
-  // went on to nothing, and the reading stood still (the person's phone, 68 times, 2026-10-28)
-  const reading = (s) => playing && R && R.list[R.cur] === s;
-  const sayK = (i, parts, from) => {
-    let j = from;
-    const s = R.list[i], mine = () => reading(s);
+  const silent = () => player.loop && player.src === SILENT;
+  const bridge = () => { if (!unlocked || (silent() && !player.paused)) return;
+    player.onended = player.onerror = null; player.loop = true; player.src = SILENT; player.play().catch(() => {}); };
+  // the lock screen and Android's notification as a song is: what is being read, with pause and skip; between replies
+  // "Waiting for replies"; and playing, held or nothing, as the pill says
+  const tell = (text) => { try { if (ms && window.MediaMetadata) ms.metadata = new MediaMetadata(N && text
+    ? {title: text.slice(0, 90), artist: N.name || 'colony', album: 'colony'} : {title: 'Waiting for replies', artist: 'colony', album: 'colony'}); } catch (e) {} };
+  const setState = () => { try { if (ms) ms.playbackState = N ? (playing && !paused ? 'playing' : 'paused')
+    : resting && !letGo ? 'playing' : aloud() && letGo ? 'paused' : 'none'; } catch (e) {} };
+  let lastStop = null, stops = 0;
+  const restStop = (why) => { lastStop = {why, at: new Date().toISOString().slice(11, 19), hidden: hidden()}; log('let go', why);
+    if (stops++ < 4) measure({when: 'rest-stop', why, hidden: hidden(), aloud: aloud(), path: location.pathname + location.search}); };
+  const rest = (cause, then) => {
+    if (!aloud() || N || !L.ready) { if (then) then(false); return; }
+    player.onended = player.onerror = null; player.loop = true;
+    if (player.src !== SILENT) player.src = SILENT;
+    resting = resting || Date.now(); tell(); setState();
+    player.play().then(() => { unlocked = true; if (letGo) { log('silence', cause, true); letGo = null; } if (then) then(true); changed(); })
+      .catch((err) => { if (err && err.name === 'AbortError') return;
+        resting = 0; player.loop = false; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
+        restStop('play() refused: ' + cause); if (then) then(false); changed(); }); };
+  // After two quiet hours it lets go (the window a tap resumes in): long enough for a locked phone to keep Auto through a
+  // long piece of work. A pause, or Auto turned off, lets go at once.
+  O.si.call(window, () => { if (resting && Date.now() - resting > LONG) { ours = Date.now(); player.pause(); player.loop = false; resting = 0;
+    letGo = {why: 'two quiet hours', at: Date.now()}; stopAt = Date.now(); restStop('two quiet hours'); changed(); } }, 30e3);
+  // a tap lets the phone play: a moment of silence, played within it, and from then on this page may sound by itself
+  const prime = () => { if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
+    if ((N && playing) || resting) return;
+    player.loop = false; player.src = SILENT;
+    player.play().then(() => { unlocked = true; if (letGo && letGo.why !== 'paused') letGo = null; changed(); }).catch(() => {}); };
+  const reading = (s) => playing && N && N.blocks[N.j] === s;
+  // a play() the phone refused: held where it is, the pill or the bar saying tap to resume, never a silent pause
+  const refused = (what, cause) => { if (!N) return; paused = true; why = 'phone'; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
+    unlocked = false; log(what, cause, false); save(); changed(); };
+  const sayK = (j, parts, from) => {
+    let n = from;
+    const s = N.blocks[j], mine = () => reading(s);
     const next = () => {
       if (!mine()) return;
-      if (j >= parts.length) return finished(R.cur);
-      now = {i: R.cur, s, parts, at: j}; R.piece = j; save(); changed();
-      const u = abs(clip(parts[j]));
-      player.src = kept.get(keyOf(u)) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
-      j += 1;
-      // refused: the phone's voice; cut short by a stop, a skip or the next clip is no refusal, and nothing is read again.
-      // Refused for want of a tap on this page (opened by itself), the phone's voice is refused too: ▷ again, which a
-      // tap plays, rather than ■ over silence.
-      player.play().catch((err) => { if (err && err.name === 'AbortError') return;
-        if (err && err.name === 'NotAllowedError' && mine()) { hush(); playing = false; unlocked = false; changed(); return; }
-        if (mine() && now && now.at === j - 1) { hush(); sayPhone(R.cur, parts, j - 1); } });
+      if (n >= parts.length) return done(N.j);
+      now = {s, parts, at: n}; N.piece = n; sent = -1; save(); changed();
+      const u = abs(clip(parts[n], N.kvoice));
+      player.loop = false; player.src = kept.get(keyOf(u)) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
+      n += 1;
+      // refused for want of a tap on this page: held there, tap to resume; cut short by a pause, a skip or the next clip
+      // is no refusal, and nothing is read again; a clip that failed is read by the phone's own voice
+      player.play().then(() => { unlocked = true; }).catch((err) => { if (err && err.name === 'AbortError') return;
+        if (err && err.name === 'NotAllowedError' && mine()) { N.piece = n - 1; return refused('play', 'a clip'); }
+        if (mine() && now && now.at === n - 1) { hush(); sayPhone(N.j, parts, n - 1); } });
     };
     player.onended = next;
     player.onerror = () => { const err = player.error;                  // the phone's voice then, for a clip that failed
       if (!err || err.code === 1 || !mine()) return;   // 1: stopped on purpose, nothing failed
-      hush(); sayPhone(R.cur, parts, Math.max(0, j - 1)); };
+      hush(); sayPhone(N.j, parts, Math.max(0, n - 1)); };
     next();
   };
-  const sayPhone = (i, parts, from) => {
+  const sayPhone = (j, parts, from) => {
     if (!talk) { playing = false; changed(); return; }
     playing = true; changed();
-    // a phone that won't speak before a tap on the page says nothing and starts nothing: ▷ again after a moment
+    // a phone that won't speak before a tap on the page says nothing and starts nothing: tap to resume
     let began = false;
-    const s = R && R.list[i], mine = () => reading(s);
-    after(() => { if (mine() && !began && !talk.speaking) { talk.cancel(); playing = false; loading = false; changed(); } }, 2500);
+    const s = N.blocks[j], mine = () => reading(s);
+    after(() => { if (mine() && !began && !talk.speaking) { talk.cancel(); refused('speak', "the phone's voice"); } }, 2500);
     parts.slice(from).forEach((p, n) => { const x = from + n, u = new SpeechSynthesisUtterance(p.replace(NAME, '').trim()); if (voice) u.voice = voice; u.rate = pace();
-      u.onstart = () => { began = true; now = {i: R ? R.cur : i, s, parts, at: x}; if (R) { R.piece = x; save(); } loading = false; changed(); };
-      if (x === parts.length - 1) u.onend = () => { if (mine()) finished(R.cur); };
+      u.onstart = () => { began = true; if (!mine()) return; now = {s, parts, at: x}; N.piece = x; save(); loading = false; changed();
+        if (!p.startsWith(NAME)) { sent = 0; follow(s.k, sentences(p)[0]); } };
+      u.onboundary = (ev) => { if (!mine() || p.startsWith(NAME)) return; const ss = sentences(p); let had = 0, i = 0;
+        ss.forEach((y, m) => { if (ev.charIndex >= had) i = m; had += y.length + 1; }); if (i !== sent) { sent = i; follow(s.k, ss[i]); } };
+      if (x === parts.length - 1) u.onend = () => { if (mine()) done(N.j); };
       talk.speak(u); });
   };
-  // a section heard to its end: on to the next; the last, and the reading is done
-  const finished = (i) => { if (!R || R.cur !== i) return;
-    R.list[i].heard = true; heardUpTo(R.list[i].name || R.name, R.list[i].at);
-    if (i + 1 < R.list.length) return begin(i + 1, 0, true);
-    // read to the end: one left unheard before (kept paused when a new reply came) waits there, with Continue
-    const back = R.list.findIndex((x) => !x.heard);
-    playing = false; R.piece = 0;
-    if (back >= 0) { R.cur = back; save(); } else { R.cur = R.list.length; forget(R.name); }
-    // a reply tapped while every project is chosen: back to them, where they were
-    const them = !R.all && get('cpsource') === 'all' && load('All projects');
-    if (them) { R = them; via = '&auto=1'; return begin(R.cur, R.piece); }
-    changed(); rest(); };
-  // From a section: those before it are counted heard, whether read or skipped past
-  function begin(i, from = 0, flow = false, keep = false) {
-    const s = R && R.list[i]; if (!s) return;
-    // Text only holds for whatever Auto reads, taken up again or not; a reply the person tapped ▷ on is read aloud
-    R.silent = !R.tapped && aloud() && mode() === 'text';
-    if (!from) s.named = named(i);
-    const parts = piecesOf(i).filter((p) => p.trim());
+  // Audio + text: as each sentence is about to be heard, its chat shows it (a page turn where it runs off what shows)
+  // and marks it softly (the person, 2026-10-28: "the specific word that is being read by the audio is visible on the
+  // screen"). Kokoro gives no word times: after the clip's fifth of a second of quiet, each sentence starts at its share
+  // of the clip's letters of what is left, read off the element's own time, so the speed doesn't matter.
+  const LEAD = 0.2;
+  const follow = (k, text) => { if (view && view.follow) view.follow(k, text); };
+  const heedTime = () => {
+    if (!N || !playing || paused || !now || player.loop || N.silent || !N.kokoro) return;
+    const p = now.parts[now.at]; if (!p || p.startsWith(NAME)) return;
+    const ss = sentences(p), d = player.duration, c = player.currentTime + 0.25;   // a moment ahead: about to be heard
+    let i = 0;
+    if (isFinite(d) && d > LEAD && ss.length > 1) { const all = ss.reduce((m, x) => m + x.length, 0); let had = 0;
+      ss.forEach((x, m) => { if (c >= LEAD + had / all * (d - LEAD)) i = m; had += x.length; }); }
+    if (i === sent) return;
+    sent = i; follow(now.s.k, ss[i]); };
+  player.addEventListener('timeupdate', heedTime); player.addEventListener('playing', heedTime);
+  // a part heard to its end: marked heard, on to the next part; the last, on to the next reply
+  const done = (j) => { if (!N || N.j !== j) return;
+    markParts(N, [N.blocks[j].k], 'heard');
+    if (j + 1 < N.blocks.length) return begin(j + 1, 0);
+    replyDone(); };
+  // a reply done (heard, skipped, cleared): back to the line's reading a ▷ stepped in front of, or on to the next the
+  // session asked for; none, and the bar folds back into the pill, Auto waiting in silence for the next to land
+  function replyDone() {
+    follow(null); bridge(); playing = false; paused = false; why = null; now = null; N = null;
+    if (back) { const b = back; back = null; N = b.N; if (b.sounding) return begin(N.j, N.piece); hush(); save(); return changed(); }
+    const x = nextUp();
+    if (x) return start(x);
+    S = null; save(); changed();
+    if (aloud()) rest('between replies'); else hush();
+  }
+  async function start(x) {
+    const mine = ++opening, i = id(x), info = L.projects[x.p] || {};
+    opened = i;
+    // what Auto took up as it landed is read from what landed; what Play or a row asked for, all of it that waits
+    const fresh = S && S.auto.has(i) && !S.play.has(i) ? x.b.filter(([, at]) => Date.parse(at) >= armed) : [];
+    const ks = (fresh.length ? fresh : x.b).map(([k]) => k);
+    bridge(); loading = true; changed();
+    const blocks = await texts(x.p, i, ks);
+    if (mine !== opening) return;
+    opened = ''; loading = false;
+    if (!blocks.length) { if (S) S.want.delete(i); return replyDone(); }      // its words couldn't be had: on to the next
+    N = {id: i, p: x.p, t: x.t, name: info.name || '', href: info.href || '', kvoice: info.voice || 'am_echo', kokoro: !!L.ready,
+      blocks, j: 0, piece: 0, seat: S && S.auto.has(i) && !S.play.has(i) ? 'auto' : 'line'};
+    if (S) S.begun.add(i);
+    begin(0, 0);
+  }
+  // A part begins: shown in its chat as it is heard (Audio + text: the page goes there, 3 s at most to wait, and the
+  // next reply's page and words are fetched meanwhile, so going on is at once), its project named first where the voice
+  // comes to it: the name waits until the first clip of the message is made too, so the two run on with no gap (the
+  // person: "a delay before first message ... no audio name reading start until message 1 is ready"); 20 s at most
+  function begin(j, from = 0) {
+    const s = N && N.blocks[j]; if (!s) return replyDone();
+    // Text only holds for whatever Auto reads; a reply the person tapped ▷ on is read aloud
+    N.silent = !N.tapped && aloud() && mode() === 'text';
+    if (!from && !j) N.named = !!N.say || named(N.name, N.tapped);
+    const parts = piecesOf(N, j).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
-    hush(!!resting); R.cur = i; R.piece = from; playing = true; now = null; said = whoAt(i); R.announce = false;
-    // the project read is the one the player follows: with Auto on, its new replies are read wherever the person is
-    const f = get('cpfollow');
-    if (!R.all && R.key && !(f && f.name === R.name)) put('cpfollow', {name: R.name, key: R.key, href: R.href, since: Date.now()});
-    if (!keep) R.list.forEach((x, n) => { if (n < i) { x.heard = true; heardUpTo(x.name || R.name, x.at); } });
-    loading = !R.silent && !(R.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from]))))); save(); changed(true);
-    if (!parts.length) return finished(i);
-    // Audio + text: the part is shown first, its page changed to where it was said, then heard (3 s at most to wait);
-    // and the next part, where it is in another project, has its page fetched meanwhile, so going there is at once
-    const shown = showHere(), n = R.list[i + 1];
-    if (n && following() && (n.name || R.name) !== (s.name || R.name) && (n.href || R.href)) colonyNav.prefetch(n.href || R.href);
-    if (R.silent) return show(i);
+    hush(true); N.j = j; N.piece = from; playing = true; paused = false; why = null; now = null; sent = -1; said = N.name; saidAt = Date.now();
+    loading = !N.silent && !(N.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from], N.kvoice))))); save(); changed();
+    if (!parts.length) return done(j);
+    const shown = showHere(), x = j + 1 >= N.blocks.length && nextAfter();
+    if (x) { const h = (L.projects[x.p] || {}).href; if (h && following() && x.p !== N.p) colonyNav.prefetch(h);
+      texts(x.p, id(x), x.b.map(([k]) => k)); }
+    if (N.silent) { hush(); return changed(); }
     tell(parts[from].replace(NAME, ''));
-    const sound = () => { if (reading(s)) return R.kokoro ? sayK(R.cur, parts, from) : sayPhone(R.cur, parts, from); };
-    // A part that begins with its project's name: the name waits until the message's first clip is made too, so the two
-    // run on with no gap between them (the person: "a delay before first message ... no audio name reading start until
-    // message 1 is ready"); 20 s at most, then it goes on regardless
-    const titled = R.kokoro && parts[from] && parts[from].startsWith(NAME) && parts[from + 1];
-    const both = titled ? Promise.race([Promise.all([make(parts[from], i), make(parts[from + 1], i)]), new Promise((ok) => after(ok, 20000))]) : null;
+    const sound = () => { if (reading(s)) return N.kokoro ? sayK(j, parts, from) : sayPhone(j, parts, from); };
+    const titled = N.kokoro && parts[from] && parts[from].startsWith(NAME) && parts[from + 1];
+    const both = titled ? Promise.race([Promise.all([make(parts[from], N.kvoice), make(parts[from + 1], N.kvoice)]), new Promise((ok) => after(ok, 20000))]) : null;
     const waits = [shown && Promise.race([shown, new Promise((ok) => after(ok, 3000))]), both].filter(Boolean);
-    if (waits.length) return Promise.all(waits).then(sound);
+    if (waits.length) { bridge(); return Promise.all(waits).then(sound); }
     return sound();
   }
-  // Another project's reading, playing or paused, gives way: kept where it stopped, its unheard sections waiting
-  const yieldTo = (r) => { if (R && R !== r) { if (playing) hush(); playing = false; paused = false; if (left(R)) save(); R = null; } };
-  // ⏸ holds the reading where it is, ▷ takes it up from there; paused in the silence between replies, it lets go
-  function hold(want) {
-    if (!playing) { if (want && resting) { player.pause(); player.loop = false; resting = 0; } else if (!want && left(R)) begin(R.cur, R.piece); return; }
-    paused = want; ours = Date.now(); byPhone = false; save();
-    if (R.silent) { changed(); return; }
-    if (R.kokoro && !(talk && talk.speaking)) { if (paused) player.pause(); else player.play().catch(() => { paused = true; changed(); }); }
-    else if (talk) { if (paused) talk.pause(); else talk.resume(); }
+  // ❚❚ holds the reading where it is, ▶ takes it up from there; held in the silence between replies, Auto lets go at once
+  function hold(want, cause = 'person') {
+    if (!N) {
+      if (!want) return resume(cause);
+      if (aloud()) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; letGo = {why: 'paused', at: Date.now()}; stopAt = Date.now(); log('pause', cause); }
+      return changed(); }
+    if (!playing) { if (!want) { takeUp(); prime(); begin(N.j, N.piece); } return; }
+    if (want) { if (paused) return; paused = true; why = cause; stopAt = Date.now(); follow(null); log('pause', cause); save();
+      if (!N.silent) { if (N.kokoro && !(talk && talk.speaking)) { ours = Date.now(); player.pause(); } else if (talk) talk.pause(); }
+      return changed(); }
+    if (!paused) return;
+    takeUp(); paused = false; why = null; byVoice = false; sent = -1; save();
+    if (N.silent) return changed();
+    if (N.kokoro && !(talk && talk.speaking)) player.play().then(() => { unlocked = true; log('resume', cause, true); changed(); })
+      .catch((err) => { if (!err || err.name !== 'AbortError') refused('resume', cause); });
+    else if (talk && talk.paused) talk.resume(); else begin(N.j, N.piece);
     changed();
   }
-  // ⏭: on to the next section, or, at the last, to the next piece of it
-  // Next: on to the next part, this one counted heard (the last: done). One way on, in the player's bar, from the
-  // lock screen and a reply's own ⏭ alike (the person: "since it's completely related to the Auto")
-  function skip() {
-    if (!R || !playing) return;
-    if (!R.silent) { hush(); playing = true; }
-    finished(R.cur);
+  // the tap that resumes: the reading it held goes on, then what landed meanwhile, if the stop began under two hours ago;
+  // past that Auto is armed from now, and what came waits in the line for Play
+  function takeUp() {
+    if (stopAt && Date.now() - stopAt >= LONG) {
+      if (S) [...S.auto].forEach(([i, t]) => { if (t >= stopAt && !S.play.has(i) && !(N && N.id === i)) { S.want.delete(i); S.auto.delete(i); } });
+      if (aloud()) arm();
+      log('armed again', Math.round((Date.now() - stopAt) / 60e3) + ' min stopped');
+    }
+    stopAt = 0; letGo = null;
   }
-  // ■ is silence: what is read stops and is let go, a voice's sample too, and Auto goes off (its ring with it), so the
-  // next reply to land doesn't start it all again; Auto beside the latest reply, or in ⚙, turns it back on
-  function stop() { heldForSettings = false; hush(); sample.pause(); playing = false; now = null; put('cpsource', null); put('cpfollow', null);
-    if (R) forget(R.name);
-    R = null; setAloud(false); changed(); }
-  function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
-    const box = document.getElementById('aloud'); if (box) box.checked = on;
-    $('.cpauto').value = on ? mode() : 'off'; ring(); placed(); if (view) view.mark(); heed(); }
-  // Text only, or sound again, chosen while Auto reads: at once, on the part being read (the person: picking Text only,
-  // it went on with audio and text)
-  function heed() { if (!R || !playing || paused || R.tapped || !aloud() || !!R.silent === (mode() === 'text')) return;
-    if (!R.silent) hush(); begin(R.cur, R.piece, false, true); }
-  // while Auto is on, a light circles ▷ and ⏸ (the player's, and those beside Auto in Chat)
-  const ring = () => document.documentElement.classList.toggle('autoon', aloud());
-  // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice
-  // going on), unless the person is typing or touched the page just now (it waits for the next part then)
-  let touched = 0, looking = 0;
+  function resume(cause) { takeUp();
+    if (aloud() && L.ready) rest(cause, (ok) => { log('resume', cause, ok); if (ok) look(); }); else prime();
+    changed(); }
+  // ⏭: on to the next reply, the rest of this one counted skipped (the same move in the bar and on the lock screen)
+  function skip() { if (!N) return; markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped'); log('skip', N.name); replyDone(); }
+  // The phone stopped the sound itself. While a box has the keyboard, dictation took it (iOS gives the sound to the
+  // microphone): the dictation hold, taken up when the words stop coming or on Send. Otherwise a call, the lock screen,
+  // another app's audio: held, and taken up again on coming back to the page where the phone lets it.
+  player.addEventListener('pause', () => {
+    if (Date.now() - ours < 600 || player.ended) return;
+    if (player.loop && resting) { if (aloud()) { resting = 0; player.loop = false; letGo = {why: 'phone', at: Date.now()}; stopAt = Date.now();
+      restStop('the phone stopped the silence'); changed(); } return; }
+    if (!playing || paused || !N) return;
+    paused = true; loading = false; stopAt = Date.now(); follow(null);
+    if (boxed()) { why = 'dictation'; byVoice = true; quietSoon(); log('pause', 'the phone, a box being written in'); }
+    else { why = 'phone'; letGo = {why: 'phone', at: Date.now()}; log('pause', 'the phone'); }
+    save(); changed(); });
+  // Dictating into a box (the chat's own, or the one over every page): the voice would be heard by the phone too, so the
+  // reading holds as soon as dictated words arrive (underlined words, or a run of them with no key pressed), and goes on
+  // once they have stopped coming for a couple of seconds, or on Send, within Send's own tap so the phone lets it play
+  // (the person, 2026-10-28: "when I interrupt it, maybe when I'm sending a message ... it goes to pause but then it
+  // doesn't automatically resume sometimes")
+  let keyed = 0, byVoice = false, quiet = 0;
+  const grown = new WeakMap();
+  const isBox = (t) => !!(t && t.matches && t.matches('textarea, input[type=text], input:not([type])'));
+  const boxed = () => isBox(document.activeElement);
+  const goOn = (cause) => { O.ct.call(window, quiet); if (!byVoice) return; byVoice = false; if (N && playing && paused && why === 'dictation') hold(false, cause); };
+  const quietSoon = () => { O.ct.call(window, quiet); quiet = after(() => goOn('the words stopped'), 2200); };
+  const dictating = () => { if (N && playing && !paused) { hold(true, 'dictation'); byVoice = true; } if (byVoice) quietSoon(); };
+  on(document, 'keydown', () => { keyed = Date.now(); }, true);
+  on(document, 'focusin', (ev) => { if (isBox(ev.target)) grown.set(ev.target, ev.target.value.length); }, true);
+  on(document, 'compositionstart', (ev) => { if (isBox(ev.target)) dictating(); }, true);
+  on(document, 'compositionupdate', (ev) => { if (byVoice && isBox(ev.target)) dictating(); }, true);
+  on(document, 'input', (ev) => { const t = ev.target; if (!isBox(t)) return; const grew = t.value.length - (grown.get(t) || 0); grown.set(t, t.value.length);
+    if (ev.inputType !== 'insertFromPaste' && (grew > 12 || byVoice && grew > 0) && Date.now() - keyed > 400) dictating(); }, true);
+  on(document, 'submit', () => { if (byVoice || why === 'dictation') { byVoice = true; goOn('Send'); } }, true);
+  // A reading shown as playing whose sound has stood still for a few seconds (stopped by the phone, a clip that ended
+  // without saying so) is set going again, on to the next clip where this one ended; each time goes to the board's log
+  // with what the phone said, so the cause is read from the phone's own numbers.
+  let stood = 0, stalls = 0;
+  O.si.call(window, () => {
+    if (!playing || paused || loading || !N || N.silent || !N.kokoro || silent() || document.hidden || !(player.paused || player.ended)) { stood = 0; return; }
+    if (!stood) { stood = Date.now(); return; }
+    if (Date.now() - stood < 4000) return;
+    stood = 0;
+    if (stalls++ < 6) measure({when: 'stall', ended: player.ended, paused: player.paused, state: player.readyState, net: player.networkState,
+      error: player.error && player.error.code, t: player.currentTime, d: player.duration, reply: N.id, part: N.j, of: N.blocks.length,
+      piece: now && now.at, blob: player.src.startsWith('blob:')});
+    if (player.ended && player.onended) player.onended();
+    else player.play().catch(() => { if (playing && N && now) begin(N.j, now.at); });
+  }, 2000);
+  // Back on the page: what the phone stopped is taken up again where it lets it (a pause the person chose stays), and a
+  // try that fails says tap to resume, never a ring
+  on(document, 'visibilitychange', () => {
+    if (document.hidden) { hidAt = Date.now(); report(); return; }
+    hidAt = 0; look();
+    if (N && playing && paused && why === 'phone') return hold(false, 'back on the page');
+    if (!N && aloud() && letGo && letGo.why !== 'paused') return rest('back on the page', (ok) => { log('resume', 'back on the page', ok); if (ok) { takeUp(); look(); } });
+    if (N && playing && !paused && N.kokoro && !N.silent) { const at = player.currentTime;
+      after(() => { if (N && playing && !paused && !player.ended && player.currentTime === at)
+        player.play().catch((err) => { if (!err || err.name !== 'AbortError') refused('play', 'stood still on coming back'); }); }, 700); }
+  });
+  // A phone plays a page's audio only after a tap on it: a tap anywhere (Send included) plays a moment of silence, and
+  // from then on new replies may be read by themselves; where Auto was let go, it is the tap that resumes
+  on(document, 'pointerdown', (ev) => { if (!aloud() || (ev.target.closest && ev.target.closest('#cplayer'))) return;
+    if (letGo && !isBox(ev.target)) { if (!N) return resume('a tap'); if (playing && paused && why !== 'person') return hold(false, 'a tap'); }
+    prime(); }, true);
+  if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => hold(false, 'lock screen')], ['nexttrack', () => skip()],
+    ['stop', () => hold(true, 'lock screen')], ['previoustrack', null]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
+  // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice going
+  // on), unless the person is typing or touched the page just now (it looks again once they have let the page be, while
+  // that part still plays: the person, Oct 27)
+  let touched = 0, looking2 = 0;
   on(document, 'pointerdown', (ev) => { if (!ev.target.closest('#cplayer')) touched = Date.now(); }, true);
-  // held back by a touch just now, it looks again once the person has let the page be, while that part still plays: it
-  // waited for the next part, and a long one left the page where it was though they had long stopped (the person, Oct 27)
-  const later = (cur, ms) => { clearTimeout(looking);
-    looking = setTimeout(() => { if (playing && R && R.cur === cur) showHere(); }, ms); };
+  const later = (s, wait) => { clearTimeout(looking2);
+    looking2 = setTimeout(() => { if (reading(s)) showHere(); }, wait); };
   function showHere() {
-    if (!R || !following()) return null;
-    const s = R.list[R.cur]; if (!s) return null;
-    const who = s.name || R.name, href = s.href || R.href;
-    if (view && view.name === who) { view.focus(s.k, true); return null; }
+    if (!N || !following()) return null;
+    const s = N.blocks[N.j]; if (!s) return null;
+    if (view && view.name === N.name) { view.focus(s.k, true); return null; }
     // never away from something being written: a box with words in it, or one being typed in, keeps the page
     const box = document.body.classList.contains('gcon') ? null : document.querySelector('#composer textarea'), at = document.activeElement;
-    if (!href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select')))
+    if (!N.href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select')))
       return null;
-    if (Date.now() - touched < 8000) { later(R.cur, 8200 - (Date.now() - touched)); return null; }
-    return colonyNav.go(href);
+    if (Date.now() - touched < 8000) { later(s, 8200 - (Date.now() - touched)); return null; }
+    return colonyNav.go(N.href);
   }
-  // Text only: no sound; each part stays until the person has read it and taps Next → at its end (a time reckoned from its
-  // length never knew when they were done: the person, "That's probably pretty arbitrary"). Heard, Next is there too
-  // (the person: "that would be beneficial for audio as well"): the part counts heard, and the next starts at once.
-  function show(i) { changed(); }
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
-  const again = (voiceChanged) => {
-    if (!playing || !now || !R || now.i !== R.cur) return;
-    if (R.kokoro && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
-    const {i, parts, at} = now;
-    if (paused) { hush(); playing = false; R.piece = at; save(); changed(); return; }   // ▷ takes it up there, in the new voice
-    hush(); playing = true; changed();
-    if (R.kokoro) sayK(i, parts, at); else sayPhone(i, parts, at);
+  const anew = (voiceChanged) => {
+    if (!playing || !now || !N || now.s !== N.blocks[N.j]) return;
+    if (N.kokoro && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
+    const {parts, at} = now;
+    if (paused) { hush(); playing = false; N.piece = at; save(); changed(); return; }   // ▶ takes it up there, in the new voice
+    hush(true); playing = true; changed();
+    if (N.kokoro) sayK(N.j, parts, at); else sayPhone(N.j, parts, at);
   };
+  // Text only, or sound again, chosen while Auto reads: at once, on the part being read (the person: picking Text only,
+  // it went on with audio and text)
+  function heed() { if (!N || !playing || paused || N.tapped || !aloud() || !!N.silent === (mode() === 'text')) return;
+    if (!N.silent) hush(); begin(N.j, N.piece); }
   // A voice chosen is heard at once, saying its name and a sentence that ranges across the sounds of speech (a
   // question, an exclamation, numbers, a time), so voices are compared by ear. What was being read pauses, and stays
-  // paused: ▷ takes it up again.
+  // paused: ▶ takes it up again.
   const sample = new Audio();
   const SAMPLE = @SAMPLE@;                        // colony/voice.py's: each voice's is made ahead and kept
   function preview(v, label) {
     if (!v) return;
-    if (playing && !paused) hold(true);
-    if (resting) { player.pause(); player.loop = false; resting = 0; }
+    if (playing && !paused) hold(true, 'a voice tried');
+    if (resting) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; }
     sample.src = '/voice?v=' + encodeURIComponent(v) + '&t=' + encodeURIComponent((label || '') + '. ' + SAMPLE);
     sample.playbackRate = sample.defaultPlaybackRate = pace();
     sample.play().catch(() => {});
   }
-  if (ms) { [['pause', () => hold(true)], ['play', () => hold(false)], ['nexttrack', skip], ['stop', stop]].forEach(([a, h]) => {
-    try { ms.setActionHandler(a, h); } catch (e) {} }); }
-  // The player: over every page, above the box and the tabs, while there is something to read or take up again
+  // The player, over every page above the box and the tabs (R123, the person's pick: "Replies you haven't heard wait in
+  // a line. Play goes through the line, and Auto keeps it going as more arrive"). At rest a headphones pill with how
+  // many replies wait: a ring and "Auto · 5" while Auto is on and able to play, "Auto · tap to resume" where the phone
+  // let the sound go. A tap opens the line. Reading, a bar: whose reply and where in the line, its first words, ❚❚ and ⏭.
   const PICON = @ICONS@;
-  const bar = document.createElement('div'); bar.id = 'cplayer'; bar.className = 'cplayer'; bar.hidden = true;
-  // three panels open above it, one at a time: the sections (☰), whose reading it is (its name), and its settings (⚙)
-  bar.innerHTML = "<div class='cppanel cpsecs' hidden><div class='cphead'><span class='cpcount'></span>"
-    + "</div><ol class='cprows'></ol></div>"
-    + "<div class='cppanel cpwho' hidden><div class='cphead'><span>Read from</span><a class='cpopen'>Open its chat ›</a></div><ol class='cprows cpprojs'></ol></div>"
-    + "<div class='cppanel cpset' hidden><div class='cpsets'><label class='cpline'>Auto <select class='cpauto'><option value='off'>Off</option>"
-    + "<option value='both'>Audio + text</option><option value='audio'>Audio only</option><option value='text'>Text only</option></select></label>"
-    + "<label class='cpline'>Across <select class='cpscope'><option value='one'>This project</option><option value='all'>Every project</option></select></label>"
+  const HEAD = "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' aria-hidden='true'>"
+    + "<path d='M4 14v-2a8 8 0 0 1 16 0v2'/><rect x='3' y='14' width='5' height='6' rx='2'/><rect x='16' y='14' width='5' height='6' rx='2'/></svg>";
+  const bar = document.createElement('div'); bar.id = 'cplayer'; bar.className = 'cplayer cpidle'; bar.hidden = true;
+  bar.innerHTML = "<div class='cpminirow'><button type='button' class='cppill' aria-haspopup='dialog'>" + HEAD + "<span class='cpsay'></span></button></div>"
+    + "<div class='cpbar'><button type='button' class='cpwhat' aria-label='The line'><b class='cpname'></b><span class='cpprev'></span></button>"
+    + "<button type='button' class='cphold'></button><button type='button' class='cpnext' aria-label='Skip to the next reply'>" + PICON.skip + "</button></div>"
+    + "<div class='cpshade' hidden></div><div class='cpsheet' role='dialog' aria-label='The unheard line' hidden><button type='button' class='cpgrab' aria-label='Close'></button>"
+    + "<div class='cpmain'><div class='cpchips'></div><ol class='cprows'></ol><p class='cpempty' hidden></p>"
+    + "<div class='cpacts'><button type='button' class='cpplay'></button><button type='button' class='cpclear'>Clear</button></div>"
+    + "<div class='cpundo' hidden><span></span><button type='button' class='cpundobtn'>Undo</button></div>"
+    + "<label class='cpsw'><span class='cptxt'><b>Auto</b><span>Reads new replies as they land, from every project</span></span>"
+    + "<input type='checkbox' class='cpauto' role='switch'><span class='cptoggle' aria-hidden='true'></span></label>"
+    + "<button type='button' class='cplink cpsetopen'>Voice, speed, mode<span>›</span></button>"
+    + "<button type='button' class='cplink cpheardopen'>Heard<span>›</span></button></div>"
+    + "<div class='cpset' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>Reads as</div>"
+    + "<div class='cpseg'><button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
+    + "<button type='button' data-m='text'>Text only</button></div><p class='cpmodesay'></p>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
-    + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div></div>"
-    + "<div class='cpminirow'><button type='button' class='cpmini' aria-label='Player: choose what to hear, voice, speed'>♪</button></div>"
-    + "<div class='cpbar'><button type='button' class='cplist' aria-label='Sections' aria-expanded='false'>" + PICON.list + "</button>"
-    + "<button type='button' class='cpwhat' aria-label='Read from another project' aria-expanded='false'><b><span class='cpall' hidden>All · </span><span class='cpname'></span><span class='cpwait' hidden> · paused</span></b><span class='cpprev'></span></button>"
-    + "<button type='button' class='cphold'></button><button type='button' class='cpnext' aria-label='Next part'>" + PICON.next + "</button>"
-    + "<button type='button' class='cpstop' aria-label='Stop'>" + PICON.stop + "</button>"
-    + "<button type='button' class='cpcog' aria-label='Auto-speak, speed and voice' aria-expanded='false'>⚙&#xFE0E;</button></div>";
-  const $ = (s) => bar.querySelector(s), panel = $('.cpsecs'), rows = $('.cprows');
-  // How it reads, chosen as Auto is turned on (or in ⚙): both (aloud, the page following what is read, into each
-  // project's Chat), audio (aloud alone, the page left as it is), text (no sound: the page moves from part to part at
-  // reading pace). A reply tapped is always heard.
-  const mode = () => { try { return localStorage.getItem('automode') || 'both'; } catch (e) { return 'both'; } };
-  const following = () => mode() !== 'audio';
-  const words = (t, n) => { const w = t.replace(/\\s+/g, ' ').trim().split(' '); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
+    + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div>"
+    + "<div class='cpheard' hidden><button type='button' class='cpback'>‹ The line</button><ol class='cprows cpheardrows'></ol></div></div>";
+  const $ = (s) => bar.querySelector(s), pill = $('.cppill'), sheet = $('.cpsheet'), shade = $('.cpshade'), rows = $('.cpmain .cprows');
+  const MODESAY = {both: "Read aloud, and the page goes with it, into each project's chat", audio: 'Read aloud; the page stays where you are',
+    text: 'No sound: each reply shown in its chat, and ⏭ goes on'};
+  const first = (t, n) => { const w = String(t || '').replace(/\\s+/g, ' ').trim().split(' '); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
   const when = (at) => { const d = new Date(at); if (isNaN(d)) return '';
     const clock = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
     return d.toDateString() === new Date().toDateString() ? clock : d.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ', ' + clock; };
-  let drawn = '';
-  // With nothing to read, the player waits as a small ♪ in the corner: a tap opens it, to choose what to hear (Read
-  // from) or set auto-speak, speed and voice; a tap elsewhere folds it again.
+  // the chips filter what the line shows and what Play plays, never what Auto reads: Auto is every project's
+  let chipName = get('linechip') || '';
+  const chipOf = (xs) => { const p = Object.keys(L.projects).find((k) => L.projects[k].name === chipName); return p && xs.some((x) => x.p === p) ? p : ''; };
+  const shownLine = () => { const xs = visible(), p = chipOf(xs); return p ? xs.filter((x) => x.p === p) : xs; };
+  // the line starts empty when it goes live: said plainly, in its first days
+  const begun = () => { const t = Date.parse(L.since); return t && Date.now() - t < 3 * 86400e3 ? ' The line began ' + when(L.since) + ': replies from before then count as heard.' : ''; };
+  const row = (x, info) => { const li = document.createElement('li'); li.dataset.id = id(x);
+    const a = document.createElement('span'); a.className = 'cpat'; a.textContent = when(x.at);
+    const w = document.createElement('span'); w.className = 'cpwords'; const b = document.createElement('b'); b.textContent = (info && info.name) || '';
+    w.append(b, document.createTextNode(' ' + x.w)); li.append(a, w); return li; };
+  let drawnSheet = '';
+  function drawSheet() {
+    if (sheet.hidden) return;
+    const xs = visible(), p = chipOf(xs), shown = p ? xs.filter((x) => x.p === p) : xs, counts = {};
+    xs.forEach((x) => { counts[x.p] = (counts[x.p] || 0) + 1; });
+    const key = [p, N && N.id, xs.map((x) => id(x) + ':' + x.b.length).join(','), L.since].join('|');
+    if (key !== drawnSheet) { drawnSheet = key;
+      const chip = (k, label) => { const b = document.createElement('button'); b.type = 'button'; b.dataset.p = k; b.textContent = label;
+        if (k === p) b.className = 'on'; return b; };
+      $('.cpchips').replaceChildren(chip('', 'All · ' + xs.length), ...Object.keys(counts).map((k) => chip(k, ((L.projects[k] || {}).name || k) + ' · ' + counts[k])));
+      rows.replaceChildren(...shown.map((x) => { const li = row(x, L.projects[x.p]); if (N && N.id === id(x)) li.className = 'now'; return li; }));
+      $('.cpempty').hidden = !!xs.length; rows.hidden = $('.cpacts').hidden = $('.cpchips').hidden = !xs.length;
+      $('.cpempty').textContent = xs.length ? '' : 'Nothing waiting.' + begun();
+      const label = document.createElement('span'); label.textContent = p ? 'Play ' + ((L.projects[p] || {}).name || '') + ' · ' + shown.length : 'Play all ' + shown.length;
+      $('.cpplay').innerHTML = PICON.play; $('.cpplay').appendChild(label);
+    }
+    $('.cpauto').checked = aloud();
+    const u = get('lineundo'), live = !!(u && Date.now() - u.at < 600e3);
+    $('.cpundo').hidden = !live; if (live) $('.cpundo span').textContent = 'Cleared ' + u.n + (u.n === 1 ? ' reply' : ' replies');
+  }
+  const place = () => { if (!S || !N || N.tapped || !S.begun.has(N.id)) return '';
+    const left = visible().filter((x) => S.want.has(id(x)) && !S.begun.has(id(x))).length;
+    return ' · ' + S.begun.size + ' of ' + (S.begun.size + left); };
   const draw = () => {
-    const show = left(R);
-    ring(); bar.hidden = false;
-    document.documentElement.classList.toggle('cpgo', show && playing && !paused);      // sounding now
-    if (bar.classList.contains('cpidle') === show) { bar.classList.toggle('cpidle', !show); if (show) bar.classList.remove('open'); else shut(); }
-    document.body.classList.toggle('cpon', show);
-    if (!show) { $('.cpall').hidden = $('.cpwait').hidden = true; $('.cpname').textContent = 'Player';
-      $('.cpprev').textContent = 'Choose what to hear'; bar.classList.remove('cppaused'); placed(); return; }
-    const s = R.list[R.cur];
-    // paused (by a tap, or kept from before): said in words, the words being read dimmed, as new replies wait after it
-    $('.cpwait').hidden = playing && !paused; bar.classList.toggle('cppaused', !playing || paused);
-    $('.cpall').hidden = !R.all; $('.cpname').textContent = R.all ? s.name || '' : R.name;
-    $('.cpprev').textContent = words(s.text, 12); $('.cpopen').setAttribute('href', s.href || R.href || '/');
-    const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
-    const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
-    const nx = $('.cpnext'), last = R.cur + 1 >= R.list.length; nx.disabled = !playing;
-    if (nx.dataset.last !== String(last)) { nx.dataset.last = last; nx.innerHTML = last ? PICON.check : PICON.next;
-      nx.setAttribute('aria-label', last ? 'Done' : 'Next part'); }
-    $('.cpcount').textContent = 'Section ' + (R.cur + 1) + ' of ' + R.list.length;
-    const key = R.name + '|' + R.cur + '|' + R.list.map((x) => (x.name || '') + x.k + (x.heard ? '+' : '')).join(',');
-    if (key !== drawn) { drawn = key;
-      rows.replaceChildren(...R.list.map((x, n) => { const li = document.createElement('li'); li.dataset.i = n;
-        li.className = n === R.cur ? 'now' : x.heard ? 'heard' : 'wait';
-        const a = document.createElement('span'); a.className = 'cpat'; a.textContent = when(x.at);
-        const w = document.createElement('span'); w.className = 'cpwords'; w.textContent = (R.all ? x.name + ': ' : '') + words(x.text, 10);
-        li.append(a, w); return li; }));
-      if (!panel.hidden) { const cur = rows.querySelector('.now'); if (cur) cur.scrollIntoView({block: 'nearest'}); } }
-    placed();
-  };
+    bar.hidden = false;
+    const n = visible().length, live = aloud() && able(), held2 = aloud() && !able();
+    document.documentElement.classList.toggle('autoon', live);              // Auto on and able: its ring
+    document.documentElement.classList.toggle('cpgo', !!N && playing && !paused);      // sounding now
+    bar.classList.toggle('cpidle', !N); document.body.classList.toggle('cpon', !!N);
+    pill.classList.toggle('on', live); pill.classList.toggle('held', held2); pill.classList.toggle('none', !aloud() && !n);
+    const say = aloud() ? (held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);
+    if ($('.cpsay').textContent !== say) $('.cpsay').textContent = say;
+    pill.setAttribute('aria-label', held2 ? 'Auto is on, but the phone let the sound go: tap to resume'
+      : n + (n === 1 ? ' reply' : ' replies') + ' waiting' + (live ? ', Auto on' : '') + ': open the line');
+    if (N) {
+      const s = N.blocks[N.j] || N.blocks[0] || {text: ''};
+      $('.cpname').textContent = (N.name || '') + place() + (!playing || paused ? (letGo ? ' · tap to resume' : ' · paused') : '');
+      bar.classList.toggle('cppaused', !playing || paused); bar.classList.toggle('cpheld', !!letGo);
+      $('.cpprev').textContent = first(s.text, 12);
+      const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
+      const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
+    }
+    setState(); drawSheet(); placed(); };
+  const openSheet = () => { sheet.hidden = shade.hidden = false; $('.cpmain').hidden = false; $('.cpset').hidden = $('.cpheard').hidden = true;
+    drawnSheet = ''; draw(); look(); };
+  const shutSheet = () => { sheet.hidden = shade.hidden = true; };
+  on(pill, 'click', () => { if (aloud() && !able()) return resume('the pill'); openSheet(); });
+  on($('.cpwhat'), 'click', openSheet);
+  on(shade, 'click', shutSheet); on($('.cpgrab'), 'click', shutSheet);
+  on(document, 'keydown', (ev) => { if (ev.key === 'Escape' && !sheet.hidden) shutSheet(); });
+  on($('.cphold'), 'click', () => hold(playing ? !paused : false));
+  on($('.cpnext'), 'click', skip);
+  on($('.cpchips'), 'click', (ev) => { const b = ev.target.closest('button'); if (!b) return;
+    chipName = b.dataset.p ? (L.projects[b.dataset.p] || {}).name || '' : ''; put('linechip', chipName || null); drawnSheet = ''; draw(); });
+  on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return;
+    const xs = shownLine(), i = xs.findIndex((x) => id(x) === li.dataset.id); if (i >= 0) playFrom(xs, i); });
+  on($('.cpplay'), 'click', () => playFrom(shownLine(), 0));
+  on($('.cpclear'), 'click', () => clearShown());
+  on($('.cpundobtn'), 'click', () => undoClear());
+  on($('.cpauto'), 'change', () => setAloud($('.cpauto').checked));
+  on($('.cpsetopen'), 'click', () => { $('.cpmain').hidden = true; $('.cpset').hidden = false; sets(); });
+  on($('.cpheardopen'), 'click', () => { $('.cpmain').hidden = true; $('.cpheard').hidden = false; heardList(); });
+  bar.querySelectorAll('.cpback').forEach((b) => on(b, 'click', () => { $('.cpset').hidden = $('.cpheard').hidden = true; $('.cpmain').hidden = false;
+    drawnSheet = ''; draw(); }));
+  on($('.cpseg'), 'click', (ev) => { const b = ev.target.closest('button'); if (b) { P.setMode(b.dataset.m); sets(false); } });
+  // Play: the line as the chips show it, from its first reply or the row tapped, and on down it
+  function playFrom(xs, i) {
+    if (!xs[i]) return;
+    S = session(); xs.slice(i).forEach((x) => { S.want.add(id(x)); S.play.add(id(x)); });
+    back = null; said = null; shutSheet();
+    if (N) { follow(null); hush(true); playing = false; paused = false; N = null; }
+    why = null; stopAt = 0; letGo = null; prime(); start(xs[i]);
+  }
+  // Clear: what the line shows, out of it, with Undo for ten minutes (only that Clear's own rows go)
+  async function clearShown() {
+    const xs = shownLine(); if (!xs.length) return;
+    const byP = {}, all = [];
+    xs.forEach((x) => { const ks = x.b.map(([k]) => k); (byP[x.p] = byP[x.p] || []).push(...ks); ks.forEach((k) => { all.push(mk(x.p, k)); marked.add(mk(x.p, k)); });
+      legacy((L.projects[x.p] || {}).name, ks, x.b.map(([, at]) => at)); });
+    if (N && xs.some((x) => id(x) === N.id)) replyDone(); else changed();
+    const got = await send('cleared', byP, 'line');
+    if (got && got.clear) put('lineundo', {clear: got.clear, n: xs.length, keys: all, at: Date.now()});
+    else all.forEach((k) => marked.delete(k));                 // not taken: back in the line
+    drawnSheet = ''; changed();
+  }
+  async function undoClear() {
+    const u = get('lineundo'); put('lineundo', null);
+    if (!u || Date.now() - u.at > 600e3) return changed();
+    const r = await fetch('/chat/unclear', {method: 'POST', body: new URLSearchParams({clear: u.clear, dev: DEV, view: 'line'})}).catch(() => null);
+    if (r && r.ok) u.keys.forEach((k) => marked.delete(k));
+    tag = ''; drawnSheet = ''; look();
+  }
+  // Heard: the last twenty heard (skipped and seen too), to play one again; playing it writes nothing
+  async function heardList() {
+    const got = await fetched('/chat/line?heard=20', 'json'), list = $('.cpheardrows');
+    const items = (got && got.heard) || [];
+    list.replaceChildren(...items.map((x) => { const info = got.projects[x.p] || {}, li = row(x, info); on(li, 'click', () => again(x, info)); return li; }));
+    if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'Nothing heard yet.'; list.append(li); }
+  }
+  // a ▷ under a reply, or one played again, steps in front of the line's reading, which goes on after it
+  const stepIn = () => { if (N && !N.tapped) back = {N, sounding: playing && !paused}; follow(null);
+    if (N) { hush(true); playing = false; paused = false; } };
+  async function again(x, info) {
+    shutSheet(); prime();
+    const got = await fetched('/chat/text?p=' + encodeURIComponent(x.p) + '&t=' + encodeURIComponent(x.t), 'json');
+    const bs = (got && got.blocks) || []; if (!bs.length) return;
+    stepIn();
+    N = {id: id(x), p: x.p, t: x.t, name: info.name || '', href: info.href || '', kvoice: info.voice || 'am_echo', kokoro: !!L.ready,
+      blocks: bs, j: 0, piece: 0, tapped: true, say: true, seat: 'heard'};
+    via = ''; begin(0, 0);
+  }
+  // Auto: one switch, every project's; on, what lands from now is read as it lands, and the phone is kept able to
+  function setAloud(yes) { try { localStorage.setItem('aloud', yes ? '1' : '0'); } catch (e) {}
+    if (yes) { arm(); letGo = null; stopAt = 0; if (L.ready && !N) rest('Auto on'); else prime(); log('Auto on', ''); }
+    else { if (S) { [...S.auto].forEach(([i]) => { if (!S.play.has(i) && !(N && N.id === i)) S.want.delete(i); }); S.auto.clear(); }
+      if (!N) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; } letGo = null; log('Auto off', ''); }
+    changed(); heed(); look(); }
   // sits above what is fixed at the foot of the page: the box in Chat, a phone's tabs
   // Placed from the foot of the part of the page that is visible (an iPhone measures that part apart from the page,
   // and left the box off it when the two parted: the person's screenshot, Oct 27): the message box on the tabs, the
@@ -3011,6 +3273,10 @@ PLAYER = """
   // toolbar comes and goes: a frame's odd measure (the person: "Periodic flash for one frame brings floating message
   // box to bottom") moves nothing. Only while the visible part is apart from the page is each placed from its foot.
   let ndh = 0;
+  const FIELD = "input:not([type=hidden]), textarea, select, button, [contenteditable='true'], [contenteditable='']";
+  const fieldUnder = (el) => { const r = el.getBoundingClientRect(); if (!r.width || !r.height) return false;
+    return [...document.querySelectorAll(FIELD)].some((f) => { if (bar.contains(f) || f.closest('#gc')) return false;
+      const q = f.getBoundingClientRect(); return q.width && q.height && q.left < r.right && q.right > r.left && q.top < r.bottom && q.bottom > r.top; }); };
   const placed = () => { gcDraw();
     const v = window.visualViewport, foot = v ? v.offsetTop + v.height : innerHeight;
     // a bounce past the end or the top parts the two by just the overshoot: as the page is, still (it dropped what floats)
@@ -3035,10 +3301,14 @@ PLAYER = """
     document.documentElement.style.setProperty('--cph', bar.offsetHeight + 'px');
     // a chat's Needs you floats on the player: placed from the page's foot, so shown only as the page is
     const nd = document.querySelector('.chat details.needs'), ns = nd && nd.querySelector('summary');
-    // on top of the stack: on the player, on the box where the player is shut, beside the player's ♪ where only that shows
+    // on top of the stack: on the player, on the box where the player is at rest, beside the pill where only that shows
     const mini = bar.classList.contains('cpidle') && !bar.classList.contains('open');
     document.documentElement.classList.toggle('apart', !plain); document.documentElement.classList.toggle('cpsmall', mini && !bar.hidden);
     document.documentElement.style.setProperty('--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight)) + 'px');
+    document.documentElement.style.setProperty('--pillw', (mini ? pill.offsetWidth : 0) + 'px');
+    // never over a box, a field or a button (a fresh install's test: the ♪ sat on a reply's Send at a desk, and on the Add
+    // project form on a phone): with one under it, the pill steps aside until the page has moved on
+    bar.classList.toggle('cpaside', mini && !bar.hidden && fieldUnder(pill));
     // room for it at the chat's end stays put while it hides a moment (a phone bouncing at the end moves its view):
     // a page that shrank and grew back with each bounce jumped up and down under the finger
     ndh = !ns ? 0 : ns.offsetHeight ? ns.offsetHeight + 28 : ndh;
@@ -3066,23 +3336,10 @@ PLAYER = """
     const a = t.selectionStart, z = t.selectionEnd; if (a !== null) t.setSelectionRange(a, z); }, 180); };
   on(document, 'focusin', () => { reseat(); setTimeout(reseat, 450); setTimeout(reseat, 900); });   // the page pans late
   if (window.visualViewport) on(window.visualViewport, 'resize', reseat);
-  // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a section starts, there)
-  function changed() { if (R && R.kokoro && !R.silent) warm(); draw(); if (view) view.mark(); }
-  on($('.cphold'), 'click', () => hold(playing ? !paused : false));
-  on($('.cpnext'), 'click', skip);
-  on($('.cpstop'), 'click', stop);
-  const panels = [[$('.cplist'), panel, () => { drawn = ''; draw(); }], [$('.cpwhat'), $('.cpwho'), () => who()], [$('.cpcog'), $('.cpset'), () => { if (playing && !paused) { hold(true); heldForSettings = true; } sets(); }]];
-  // ⚙ open, what was playing pauses (voices are tried there); shut, it goes on, in the voice chosen
-  let heldForSettings = false;
-  function shut() { panels.forEach(([b, p]) => { p.hidden = true; b.setAttribute('aria-expanded', 'false'); });
-    if (heldForSettings) { heldForSettings = false; if (left(R)) hold(false); } }
-  panels.forEach(([b, p, fill]) => on(b, 'click', () => { const was = p.hidden; shut(); if (was) { p.hidden = false; b.setAttribute('aria-expanded', 'true'); fill(); } }));
-  on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li || !R) return; shut(); begin(+li.dataset.i); });
-  on(document, 'click', (ev) => { if (!ev.target.closest('#cplayer')) { shut(); bar.classList.remove('open'); } });
-  on($('.cpmini'), 'click', () => { bar.classList.add('open'); placed(); });
-  // Whose reading it is: the project of the page open first, then the one reading, those with a reading kept paused,
-  // then the rest, as the board lists them. A tap reads from it: a kept reading from where it stopped; otherwise what
-  // came since the person last wrote there and hasn't been read, or, all read, its latest reply.
+  // what is shown changed: the player, and the chat on screen (where it is in that chat, and, as a part starts, there)
+  function changed() { if (N && N.kokoro && !N.silent) warm(); draw(); if (view) view.mark(); }
+  // Whose voice: the project of the page open, else the one being heard, else every project's (the colony's); its name
+  // is a picker, so several projects' voices can be set while there. The projects are read off the page's own menu.
   const listed = () => { const out = new Map();
     if (document.querySelector('nav a.proj.monitor')) out.set('steward', {key: 'steward', name: 'steward', href: '/steward?view=chat'});
     document.querySelectorAll('nav a.proj[href^="/?p="]').forEach((a) => { const k = new URL(a.href).searchParams.get('p'), n = a.querySelector('.pname');
@@ -3091,108 +3348,23 @@ PLAYER = """
       out.set(k, {key: k, name, href: '/?p=' + k + '&view=chat'}); });
     return [...out.values()]; };
   const here = () => location.pathname === '/steward' ? 'steward' : location.pathname === '/' ? new URLSearchParams(location.search).get('p') : null;
-  const who = () => { const all = listed(), mine = here(), rank = (p) => p.key === mine ? 0 : R && p.name === R.name ? 1 : load(p.name) ? 2 : 3;
-    $('.cpprojs').replaceChildren(...all.map((p, n) => [rank(p), n, p]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(([, , p]) => {
-      const li = document.createElement('li'), b = document.createElement('b'), st = document.createElement('span'), kept = load(p.name);
-      li.dataset.key = p.key; b.className = 'cpwords'; b.textContent = p.name; st.className = 'cpstate';
-      st.textContent = [p.key === mine ? 'this page' : '', R && R.name === p.name ? (playing ? 'reading' : 'paused') : kept ? 'paused · ' + (kept.list.length - kept.cur) + ' left' : '']
-        .filter(Boolean).join(' · ');
-      if (R && R.name === p.name) li.className = 'now';
-      li.append(b, st); return li; }));
-    // every project in turn (the steward apart: its summaries are of them), second, after the page's own
-    const every = document.createElement('li'), ab = document.createElement('b'), ast = document.createElement('span');
-    every.dataset.key = '*'; ab.className = 'cpwords'; ab.textContent = 'All projects'; ast.className = 'cpstate';
-    ast.textContent = get('cpsource') === 'all' ? (R && R.all && playing ? 'reading' : 'on') : 'each in turn, named';
-    if (R && R.all) every.className = 'now';
-    every.append(ab, ast);
-    const list = $('.cpprojs'), top = list.firstElementChild;
-    list.insertBefore(every, top && top.dataset.key === mine ? top.nextSibling : top); };
-  on($('.cpprojs'), 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return; shut();
-    if (li.dataset.key === '*') return startAll();
-    const p = listed().find((x) => x.key === li.dataset.key); if (p) switchTo(p); });
-  on($('.cpopen'), 'click', () => shut());
-  const fetched = (u, as) => fetch(u, {cache: 'no-store'}).then((r) => r.ok ? r[as]() : null).catch(() => null);
-  async function switchTo(p) {
-    put('cpsource', null);                           // one project chosen: no longer every project in turn
-    if (R && R.name === p.name) { if (!playing) begin(R.cur, R.piece); return; }
-    const kept = load(p.name);
-    if (kept) { yieldTo(kept); R = kept; R.announce = true; via = ''; begin(R.cur, R.piece); return; }
-    $('.cpprev').textContent = 'Opening ' + p.name + '…';
-    const [feed, vo] = await Promise.all([fetched('/chat/feed?p=' + encodeURIComponent(p.key), 'text'), fetched('/chat/voice?p=' + encodeURIComponent(p.key), 'json')]);
-    // read off the page's own drawing, as the chat does, so its paragraphs stay paragraphs
-    const box = document.createElement('div'); box.className = 'chat'; box.style.cssText = 'position:absolute;left:-9999px;top:0;width:600px';
-    box.innerHTML = feed || ''; document.body.appendChild(box);
-    const says = [...box.querySelectorAll('.say')], you = [...box.querySelectorAll('.msg.you')].pop();
-    const since = says.filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING));
-    const heard = new Set(get('heard:' + p.name) || []);
-    const after = heardTo(p.name);
-    let pick = since.filter((x) => !heard.has(x.dataset.k) && (x.dataset.at || '') > after).slice(-10);
-    // all heard: its latest reply, not everything since the person last wrote there
-    if (!pick.length) { const last = says.length && says[says.length - 1].dataset.t; pick = says.filter((x) => x.dataset.t === last).slice(-3); }
-    const secs = pick.map((x) => { x.querySelectorAll('pre').forEach((e) => e.remove());
-      return {t: x.dataset.t, k: x.dataset.k, at: x.dataset.at || '', text: x.innerText.replace(/[*_`#>|]/g, '').trim()}; }).filter((x) => x.text);
-    box.remove();
-    if (!secs.length) { draw(); $('.cpprev').textContent = 'Nothing to read in ' + p.name + ' yet'; return; }
-    put('heard:' + p.name, [...new Set([...heard, ...pick.map((x) => x.dataset.k)])].slice(-300));
-    yieldTo(null);
-    R = {name: p.name, key: p.key, href: p.href, kvoice: (vo && vo.voice) || 'am_echo', kokoro: vo ? !!vo.ready : false, list: secs, cur: 0, piece: 0,
-      announce: true};
-    via = ''; begin(0);
-  }
-  // All projects: every project's replies in the order they were written, each named as the voice comes to it, kept
-  // current with a look every few seconds while it is chosen (one choice of a single project, or ■, ends it). Chosen,
-  // it starts with what each project said since the person last wrote there and wasn't heard, from the last six
-  // hours, at most three each; the rest it counts heard.
-  // Auto's reach: one project (the page's, or the one last read), or every project, read as one queue in the order
-  // written; back to one project, the queue of them all is let go
-  function setScope(scope) {
-    if (scope === 'all') { if (get('cpsource') !== 'all') startAll(); return; }
-    put('cpsource', null);
-    if (R && R.all) { hush(); playing = false; now = null; forget(R.name); R = null; changed(); }
-  }
-  async function startAll() { put('cpsource', 'all'); const r = load('All projects');
-    if (r) { yieldTo(r); R = r; R.announce = true; via = ''; begin(R.cur, 0); }
-    gather(true, true); }
-  async function gather(first, take) {
-    const got = await fetched('/chat/all', 'json');
-    if (!got || get('cpsource') !== 'all') return;
-    const fresh = [];
-    got.projects.forEach((p) => { const heard = get('heard:' + p.name) || [], was = new Set(heard);
-      let parts = p.parts.filter((x) => !was.has(x.k) && x.at > heardTo(p.name));
-      const take = first ? parts.filter((x) => Date.now() - Date.parse(x.at) < 6 * 3600e3).slice(-3) : parts;
-      if (!parts.length) return;
-      put('heard:' + p.name, heard.concat(parts.map((x) => x.k)).slice(-300));
-      take.forEach((x) => fresh.push({t: x.t, k: x.k, at: x.at, text: x.text, name: p.name, key: p.key, href: p.href, kvoice: p.voice})); });
-    fresh.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-    if (!fresh.length && take && !(R && R.all)) { draw(); $('.cpprev').textContent = 'Nothing new in any project yet: it reads each as it comes'; }
-    intoAll(fresh, got.ready, take);
-  }
-  function intoAll(secs, ready, take) {
-    const r = R && R.all ? R : load('All projects') || {name: 'All projects', all: true, kvoice: 'am_echo', kokoro: !!ready, list: [], cur: 0, piece: 0};
-    const have = new Set(r.list.map((x) => x.name + '|' + x.k)), add = secs.filter((x) => !have.has(x.name + '|' + x.k));
-    if (!add.length) { changed(); return; }
-    r.list.push(...add);
-    while (r.list.length > 80 && r.cur > 0) { r.list.shift(); r.cur -= 1; }
-    const first = r.list.length - add.length;
-    if (r === R && playing) { save(); changed(); return; }                 // reading, or held by a pause: after it
-    if (R && R !== r && playing && !take) { put('reading:All projects', Object.assign(r, {saved: Date.now()})); return; }   // one reply tapped plays first
-    yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
-  }
-  // ⚙: Auto (off, or how it reads), speed and voice, the same as the chat's own (each changed here shows there too).
-  // Whose voice: it starts on the project of the page open, else the one being heard, else every project's (the
-  // colony's); its name is a picker, so several projects' voices can be set while there.
   const voiced = () => { const mine = here(), p = listed().find((x) => x.key === mine);
     if (p) return {key: p.key, name: p.name};
-    const s = R && R.all ? R.list[R.cur] || {} : R || {};
-    return s.key ? {key: s.key, name: s.name || R.name} : {key: 'default', name: 'Every project (default)'}; };
-  let whom = null, asking = 0;                     // the project whose voice ⚙ shows, while it is open
+    return N && L.projects[N.p] ? {key: N.p, name: N.name} : {key: 'default', name: 'Every project (default)'}; };
+  let whom = null, asking = 0;                     // the project whose voice the settings show, while they are open
   const whose = () => whom || voiced();
   async function sets(fresh = true) {
-    $('.cpauto').value = aloud() ? mode() : 'off'; $('.cprate').value = String(rate()); $('.cpscope').value = P.scope();
-    if (fresh) { whom = voiced();
-      $('.cpwhom').innerHTML = "<option value='default'>Every project (default)</option>" + listed().map((p) =>
-        `<option value="${p.key}">${p.name.replace(/[&<>"]/g, '')}</option>`).join('');
-      $('.cpwhom').value = whom.key; }
+    $('.cprate').value = String(rate());
+    bar.querySelectorAll('.cpseg button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode()));
+    $('.cpmodesay').textContent = MODESAY[mode()] || '';
+    if (!fresh) return;
+    whom = voiced();
+    $('.cpwhom').innerHTML = "<option value='default'>Every project (default)</option>" + listed().map((p) =>
+      `<option value="${p.key}">${p.name.replace(/[&<>"]/g, '')}</option>`).join('');
+    $('.cpwhom').value = whom.key;
+    voices();
+  }
+  async function voices() {
     const who = whose(), ask = ++asking;
     const vo = await fetched('/chat/voice?p=' + encodeURIComponent(who.key), 'json');
     if (ask !== asking) return;                    // another project chosen meanwhile: its answer is the one shown
@@ -3201,12 +3373,8 @@ PLAYER = """
     $('.cpkvoice').dataset.voice = vo.voice;
     $('.cpherald').innerHTML = "<option value=''>Each project's own voice</option>" + vo.voices; $('.cpherald').value = herald();
   }
-  on($('.cpauto'), 'change', () => { const v = $('.cpauto').value;
-    if (v === 'off') return setAloud(false);
-    P.setMode(v); unlock(); setAloud(true); });
-  on($('.cpscope'), 'change', () => setScope($('.cpscope').value));
   on($('.cpwhom'), 'change', () => { const k = $('.cpwhom').value, p = listed().find((x) => x.key === k);
-    whom = p ? {key: p.key, name: p.name} : {key: 'default', name: 'Every project (default)'}; sets(false); });
+    whom = p ? {key: p.key, name: p.name} : {key: 'default', name: 'Every project (default)'}; voices(); });
   on($('.cprate'), 'change', () => { P.setRate(+$('.cprate').value || 1); const r = document.getElementById('rate'); if (r) r.value = $('.cprate').value; });
   const keepVoice = async (body) => { const {key, name} = whose(); if (!key) return;
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
@@ -3219,84 +3387,56 @@ PLAYER = """
     preview(v || $('.cpkvoice').dataset.voice, label($('.cpkvoice'))); keepVoice({voice: v}); });
   on($('.cpherald'), 'change', () => { try { localStorage.setItem('announcer', $('.cpherald').value); } catch (e) {}
     preview($('.cpherald').value, label($('.cpherald'))); });
+  // coming back with Auto on: what came since is read at once where the browser lets a page speak by itself; a phone
+  // lets it only after a tap, so there it starts with the first touch anywhere on the page
+  let allowing = null;
+  const whenAllowed = (go) => { if (unlocked || playing) return go();
+    // one moment of silence asks for them all: two asking at once would each cut the other's sound short
+    if (!allowing) allowing = new Promise((ok) => { player.src = SILENT;
+      player.play().then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
+    allowing.then(() => { allowing = null; go(); }); };
+  const save = () => { put('linenow', N ? {N, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
+    sounding: playing && !paused, saved: Date.now()} : null); };
   const P = window.colonyPlayer = {
-    busy: () => left(R), placed, rate, following,
-    setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} again(false); },
-    setVoice(name, v) { if (R && R.all) { const mine = R.list.filter((x) => x.name === name && x.kvoice !== v);
-        mine.forEach((x) => { x.kvoice = v; }); if (mine.length) { save(); if (whoAt(R.cur) === name) again(true); } return; }
-      if (R && R.name === name && R.kvoice !== v) { R.kvoice = v; save(); again(true); }
-      else { const r = load(name); if (r) { r.kvoice = v; put('reading:' + name, r); } } },
+    busy: () => !!N || resting > 0, placed, rate, following, mode, auto: aloud, unlock: prime, poke, hold, skip, preview,
+    setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} anew(false); },
+    setVoice(name, v) { Object.values(L.projects).forEach((x) => { if (x.name === name) x.voice = v; });
+      if (N && N.name === name && N.kvoice !== v) { N.kvoice = v; save(); anew(true); } },
     attach(v) { view = v; changed();
-      const s = R && R.list[R.cur];                     // arrived at the chat being read: there, at once
-      if (s && playing && following() && (s.name || R.name) === v.name) v.focus(s.k, true); },
-    scope: () => get('cpsource') === 'all' ? 'all' : 'one', setScope,
-    mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); heed(); },
-    leave() { view = null; },
-    unlock,
-    // where a project's reading is: the one in play, or one kept paused for it
-    of(name) {
-      // reading every project, the part being read is its project's: its chat marks it as its own
-      if (R && R.all && left(R) && R.list[R.cur].name === name) { const s = R.list[R.cur];
-        return {active: true, playing, paused, loading, t: s.t, k: s.k, into: R.piece >= 1}; }
-      const r = R && R.name === name ? R : load(name); if (!left(r)) return null;
-      const s = r.list[r.cur], active = r === R;
-      return {active, playing: active && playing, paused: active && paused, loading: active && loading, t: s.t, k: s.k,
-        into: r.piece >= 1 || (r.cur > 0 && r.list[r.cur - 1].t === s.t)};
-    },
-    now: () => ({playing, paused}), heardTo, heardUpTo,
-    hold, skip, stop, preview,
-    // sections from a chat: tapped (read these now) or new ones arriving there (auto). New ones join a reading of
-    // their project's already going, or wait after one kept paused; otherwise they take the voice from any other.
-    read(v, secs, how = {}) {
-      if (!secs.length) return;
-      const clean = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text}));
-      if (how.now) { yieldTo(null); R = blank(v); R.tapped = true; R.list = clean; via = ''; begin(0); return; }
-      if (get('cpsource') === 'all' && v.name === 'steward') return;      // every project chosen: the steward is not one
-      if (get('cpsource') === 'all' && v.name !== 'steward') {
-        intoAll(clean.map((x) => Object.assign(x, {name: v.name, key: v.key, href: v.href, kvoice: v.kvoice})), v.kokoro); return; }
-      const mine = R && R.name === v.name ? R : load(v.name);
-      const add = (r) => { const have = new Set(r.list.map((x) => x.k)); clean.forEach((x) => { if (!have.has(x.k)) r.list.push(x); });
-        while (r.list.length > 60 && r.cur > 0) { r.list.shift(); r.cur -= 1; } };
-      if (mine && mine === R && playing) { add(R); save(); changed(); return; }    // being read, or held by a pause: after it
-      // otherwise they are read as they land; a reading kept paused stays listed before them, unheard
-      const r = mine || blank(v), fresh = new Set(clean.map((x) => x.k));
-      add(r);
-      const first = r.list.findIndex((x, n) => n >= r.cur && fresh.has(x.k) && !x.heard);
-      if (first < 0) { if (r !== R) put('reading:' + v.name, Object.assign(r, {saved: Date.now()})); changed(); return; }
-      yieldTo(r); R = r; R.tapped = false; via = '&auto=1'; begin(first, 0, false, true);
-    },
-    // ▷ on a reply kept paused: from its start, what waited after it still waiting
-    again(v, secs) { const r = R && R.name === v.name ? R : load(v.name), ks = new Set(secs.map((x) => x.k));
-      const rest = left(r) ? r.list.slice(r.cur).filter((x) => !ks.has(x.k)) : [];
-      yieldTo(null); R = blank(v); R.tapped = true; R.list = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text})).concat(rest); via = ''; begin(0); },
-    // Continue: from the piece it stopped at
-    resume(name) { const r = R && R.name === name ? R : load(name); if (!left(r)) return; yieldTo(r); R = r; R.tapped = true; via = ''; begin(R.cur, R.piece); },
-    // coming back with Auto-speak on: what came since is read at once where the browser lets a page speak by itself; a
-    // phone lets it only after a tap, so there it starts with the first touch anywhere on the page
-    whenAllowed(go) { if (unlocked || playing) return go();
-      // one moment of silence asks for them all: two asking at once would each cut the other's sound short
-      if (!allowing) allowing = new Promise((ok) => { player.src = SILENT;
-        player.play().then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
-      allowing.then(() => { allowing = null; go(); }); },
+      const s = N && N.blocks[N.j];                     // arrived at the chat being read: there, at once
+      if (s && playing && following() && N.name === v.name) v.focus(s.k, true); },
+    setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); heed(); },
+    leave() { follow(null); view = null; },
+    // where a chat's project is being read: the reply and part, playing or held
+    of(name) { if (!N || N.name !== name) return null; const s = N.blocks[N.j] || {};
+      return {active: true, playing, paused, loading, t: N.t, k: s.k}; },
+    now: () => ({playing, paused}),
+    // ▷ under a reply in Chat: that reply alone, from the page's own words (the person: "sometimes the last message is
+    // all I want to hear"); a line's reading it steps in front of goes on after it, and one heard before writes nothing
+    read(v, secs) { if (!secs.length) return;
+      prime(); stepIn();
+      N = {id: v.key + '|' + secs[0].t, p: String(v.key), t: secs[0].t, name: v.name, href: v.href, kvoice: v.kvoice, kokoro: v.kokoro,
+        blocks: secs.map((x) => ({k: x.k, at: x.at, text: x.text})), j: 0, piece: 0, tapped: true, seat: 'chat'};
+      via = ''; begin(0, 0); },
+    // a chat's seen: its project's parts still in the line, whether anything will read one, and marking them seen
+    unheard(p) { const m = new Map(); visible().forEach((x) => { if (x.p === String(p)) x.b.forEach(([k, at]) => m.set(k, {t: x.t, at})); }); return m; },
+    quiet: () => !(aloud() && able() && !paused),
+    willRead(p, k, at, t) { p = String(p);
+      if (N && N.p === p && N.blocks.some((b) => b.k === k)) return true;               // being read
+      if (S && S.want.has(p + '|' + t)) return true;                                      // waiting to be, in this session
+      if (aloud() && armed && Date.parse(at) >= armed && !(stopAt && Date.now() - stopAt >= LONG)) return true;   // Auto's, as it landed
+      return (held.get(mk(p, k)) || 0) > Date.now(); },                                            // another device's Auto's
+    async seen(p, ks) { p = String(p); const name = (L.projects[p] || {}).name, ats = P.unheard(p);
+      ks.forEach((k) => marked.add(mk(p, k))); changed();
+      const got = await send('seen', {[p]: ks}, 'chat'), took = new Set(((got && got.marked) || {})[p] || []);
+      ks.forEach((k) => { if (!took.has(k)) { marked.delete(mk(p, k)); held.set(mk(p, k), Date.now() + 10000); } });
+      legacy(name, [...took], [...took].map((k) => (ats.get(k) || {}).at));
+      changed(); },
+    // what the player holds, for a look from outside (the board's own checks)
+    state: () => ({reading: N && {id: N.id, j: N.j, piece: N.piece, k: (N.blocks[N.j] || {}).k}, playing, paused, why, letGo: letGo && letGo.why,
+      able: able(), resting: !!resting, sent, clip: now && now.parts[now.at], waiting: visible().length, story: story.slice()}),
   };
   document.body.appendChild(bar);
-  // With Auto on, the project the player follows (the last one read) is looked at every few seconds, wherever the
-  // person is, as every project is when All projects is chosen: its chat need not be open for its replies to be read.
-  // What it says from the moment it was followed counts; its chat, open, reads its own as they come.
-  async function keepUp() {
-    const f = get('cpfollow'), got = f && await fetched('/chat/all', 'json');
-    if (!got || !aloud() || get('cpsource') === 'all' || (view && view.name === f.name)) return;
-    const p = got.projects.find((x) => x.key === f.key && x.name === f.name);
-    if (!p) return;
-    const heard = get('heard:' + p.name) || [], was = new Set(heard);
-    const parts = p.parts.filter((x) => !was.has(x.k) && Date.parse(x.at) > (f.since || 0) - 5000 && x.at > heardTo(p.name));
-    if (!parts.length) return;
-    put('heard:' + p.name, heard.concat(parts.map((x) => x.k)).slice(-300));
-    P.read({name: p.name, key: p.key, href: p.href, kvoice: p.voice, kokoro: !!got.ready},
-      parts.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text})), {auto: true});
-  }
-  O.si.call(window, () => { if (get('cpsource') === 'all') gather(false); else if (aloud()) keepUp(); }, 12000);
-  after(() => { if (get('cpsource') !== 'all' && aloud()) keepUp(); }, 2000);    // a page opened looks at once
   // The message box over every page while Auto reads with text (Audio + text, Text only; R112): a line on it names
   // the project it sends to. Empty, it follows the project on screen (on a page of none, the one being read); with
   // words in it, it keeps the project they were begun for until sent, the page changing under it as the voice moves
@@ -3323,7 +3463,7 @@ PLAYER = """
   const keepDraft = () => { try { sessionStorage.setItem('gc', JSON.stringify({to: anchor, text: gta.value})); } catch (e) {} };
   const onPage = () => { const k = here(); return listed().find((x) => x.key === k) || null; };
   const target = () => { if (anchor) return anchor; const p = onPage(); if (p) return p;
-    const s = R && left(R) ? (R.all ? R.list[R.cur] : R) : null; return s && s.key ? {key: s.key, name: s.name || R.name} : null; };
+    return N && L.projects[N.p] ? {key: N.p, name: N.name} : null; };
   function gcDraw() {
     const show = aloud() && mode() !== 'audio';
     if (gc.hidden === show) { gc.hidden = !show; if (!show) glist.hidden = true; else requestAnimationFrame(() => grow()); }
@@ -3390,21 +3530,27 @@ PLAYER = """
   });
   grow();
   after(() => { if (!gc.hidden) gmeasure('resting'); }, 2500);
-  // the player as it stands, once a page, for the board's log: what All, Auto and the queue hold when the person says
-  // a project's reply never came (2026-10-28)
-  after(() => { const q = {}; (R && R.list || []).slice(R ? R.cur : 0).forEach((x) => { const n = x.name || R.name; q[n] = (q[n] || 0) + 1; });
-    const ht = {}; Object.keys(localStorage).filter((k) => k.startsWith('heardto:')).forEach((k) => { ht[k.slice(8)] = get(k); });
-    fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'player-state', cpsource: get('cpsource'),
-      aloud: aloud(), mode: mode(), reading: R ? R.name : null, all: !!(R && R.all), playing, queued: q, heardto: ht,
-      path: location.pathname + location.search})})}).catch(() => {}); }, 6000);
-  // the reading last left on this device: here again, paused
-  try { R = Object.keys(localStorage).filter((k) => k.startsWith('reading:')).map((k) => load(k.slice(8))).filter(Boolean)
-    .sort((a, b) => b.saved - a.saved)[0] || null; } catch (e) {}
+  // the player as it stands, once a page and again as the page is put away after it held, took up or let go, for the
+  // board's log: Auto, the line, whether it can play and what last stopped it, and the pauses with their causes
+  const state = (when) => ({when, aloud: aloud(), mode: mode(), line: L.total, waiting: visible().length, able: able(), letGo: letGo && letGo.why,
+    stop: lastStop, armed: armed ? new Date(armed).toISOString().slice(0, 19) : '', reading: N && N.name, playing, paused, why, resting: !!resting,
+    story: story.slice(-10), path: location.pathname + location.search});
+  after(() => { told = logged; measure(state('player-state')); }, 6000);
+  function report() { if (logged <= told) return; told = logged;
+    try { navigator.sendBeacon('/chat/measure', new URLSearchParams({m: JSON.stringify(state('player-story'))})); } catch (e) {} }
+  // the reading last left on this device: here again, held
+  try { const was = get('linenow');
+    if (was && was.N && Array.isArray(was.N.blocks) && Date.now() - (was.saved || 0) < 12 * 3600e3) { N = was.N;
+      if (was.S) S = {want: new Set(was.S.want), play: new Set(was.S.play), auto: new Map(was.S.auto), begun: new Set(was.S.begun)};
+      // sounding a moment ago with Auto on (the page refreshed mid-reading): it goes on from the piece it was at, at the
+      // first touch where a phone lets a page sound only after one
+      if (was.sounding && aloud() && Date.now() - was.saved < 90e3) whenAllowed(() => { if (N && !playing) begin(N.j, N.piece); });
+    } else put('linenow', null); } catch (e) {}
+  // Auto on as the page opens: armed again where this device was last able to play two hours ago or more, so a night's
+  // replies wait for Play; its silence started where the phone lets it, and where it doesn't the pill says tap to resume
+  if (aloud() && (!armed || Date.now() - (+(get('alive') || 0)) >= LONG)) arm();
   draw();
-  // sounding a moment ago, with Auto on (the page refreshed mid-reading): it goes on, from the piece it was at; where a
-  // phone lets a page sound only after a touch, at the first touch
-  if (R && R.sounding && aloud() && Date.now() - (R.saved || 0) < 90e3)
-    P.whenAllowed(() => { if (R && !playing && left(R)) { via = '&auto=1'; begin(R.cur, R.piece); } });
+  Promise.resolve(look()).then(() => { if (aloud() && !N && !resting) rest('the page opened'); });
 })();
 """
 
@@ -3747,35 +3893,424 @@ def colony_wide(started):
     return {b for b, n in seen.items() if n >= 3}
 
 
-def chat_parts(root, shown=12, most=10):
-    """What the agent said since the person last wrote to it, part by part as Chat shows them (the same keys and
-    times), for the player reading every project in turn."""
-    from . import chat, context
-    s = context.session(root)
+# ---------------------------------------------------------------- the unheard line (R123)
+# Replies the person hasn't heard wait in a line, kept on the board, so every device and view reads the same one: heard
+# in All, a reply is heard in its project's chat too, and the other way round (the person, 2026-10-28: "if the user hears
+# or reads something in all, it should be eliminated from the valid queue of the individual project ... Vice versa").
+# Each project keeps its own copy of what its agent said, a row the first time a part is read from its transcript
+# (.board/line.jsonl), so a reply stays in the line past the person's next message, its tenth part and a new session;
+# and what of it was heard, skipped, seen or cleared (.board/heard.jsonl). The line is what the first has and the second
+# doesn't. A reply is one turn's prose (one ▷ in Chat): its parts are marked one by one, and it is heard once all are.
+LINE_EVERY = 5               # seconds between the feeder's looks at every project's transcript
+UNDO = 600                   # seconds a Clear can be undone
+CLAIM = 60                   # seconds a device reading by itself holds what lands for it, from its last look
+MARKS = ("heard", "skipped", "seen", "cleared")
+
+
+def line_since():
+    """When the line began (R123 going live): what was said before it counts as heard; no past listening is rebuilt."""
+    path = home() / "line.json"
+    for _ in range(2):
+        try:
+            return json.loads(path.read_text())["since"]
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        with board_lock("line"):
+            if not path.exists():
+                save_json(path, {"since": now()})
+    return now()
+
+
+_REC, _RECLOCK = {}, threading.RLock()       # each record as read so far, and one reader at a time
+
+
+def _record(path, fresh, add):
+    """One of the line's records (append-only), read once and then only what was added since, as a chat's transcript is;
+    `add` folds each row into what is kept of it, with its place in the file. Replaced or cut short, it is read afresh."""
+    with _RECLOCK:
+        c = _REC.get(str(path))
+        try:
+            st = os.stat(path)
+        except OSError:
+            _REC.pop(str(path), None)
+            return fresh()
+        if not c or c["ino"] != st.st_ino or st.st_size < c["off"]:
+            c = _REC[str(path)] = {"ino": st.st_ino, "off": 0, "kept": fresh()}
+        if st.st_size > c["off"]:
+            with open(path, "rb") as fh:
+                fh.seek(c["off"])
+                data = fh.read(st.st_size - c["off"])
+            at = c["off"]
+            for row in data[:data.rfind(b"\n") + 1].splitlines(keepends=True):   # a row half-written waits
+                try:
+                    add(c["kept"], json.loads(row), at)
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    pass
+                at += len(row)
+            c["off"] = at
+        return c["kept"]
+
+
+def first_words(text, n=12):
+    w = text.split()
+    return " ".join(w[:n]) + ("…" if len(w) > n else "")
+
+
+def _said(kept, row, at):
+    k = row.get("k")
+    if k and k not in kept["rows"]:
+        kept["rows"][k] = {"t": row["t"], "at": row["at"], "e": iso_epoch(row["at"]), "w": first_words(row["text"]),
+                           "pos": at, **({"colony": row["colony"]} if "colony" in row else {})}
+        kept["order"].append(k)
+        kept["turns"].setdefault(row["t"], []).append(k)
+        if "colony" in row:
+            kept["spans"].add(row["colony"])
+
+
+def line_rows(root):
+    """What the project's agent said since the line began, part by part: {rows: key -> its turn, time and first words,
+    order, turns: turn -> its parts, spans: the WIDE spans of colony's notices it replied to}."""
+    return _record(Path(root) / ".board" / "line.jsonl",
+                   lambda: {"rows": {}, "order": [], "turns": {}, "spans": set()}, _said)
+
+
+def _marked(kept, row, at):
+    how, k = row.get("how"), row.get("k")
+    if how == "undone":
+        kept["undone"].add(row.get("clear"))
+    elif how == "cleared" and k:
+        kept["cleared"].setdefault(k, []).append(row.get("clear"))
+        kept["clears"].setdefault(row.get("clear"), iso_epoch(row.get("at", "")))
+    elif how in MARKS and k:
+        kept["marks"].setdefault(k, how)
+        kept["recent"].append((iso_epoch(row.get("at", "")), k, how))
+        if len(kept["recent"]) > 800:
+            del kept["recent"][:-400]
+
+
+def heard_state(root):
+    """What of the project's line was heard, skipped or seen (the first mark of each part), cleared (by which Clear), and
+    which Clears were undone."""
+    return _record(Path(root) / ".board" / "heard.jsonl",
+                   lambda: {"marks": {}, "cleared": {}, "undone": set(), "clears": {}, "recent": []}, _marked)
+
+
+def _gone(hs, k):
+    """Out of the line: heard, skipped or seen, or cleared by a Clear not undone."""
+    return k in hs["marks"] or any(c not in hs["undone"] for c in hs["cleared"].get(k, ()))
+
+
+def append_rows(root, name, rows):
+    """Several lines, whole, under one lock (as append)."""
+    import fcntl
+    path = Path(root) / ".board" / name
+    path.parent.mkdir(exist_ok=True)
+    with path.open("a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+        fh.flush()
+
+
+_FEED, _FEEDING = {}, {}     # each project's place in its transcript; one look at a project at a time
+
+
+def _feed_state(root):
+    st = _FEED.get(str(root))
+    if st is None:
+        try:
+            st = json.loads((Path(root) / ".board" / "line-feed.json").read_text())
+        except (OSError, ValueError):
+            st = {}
+        _FEED[str(root)] = st = st if isinstance(st, dict) else {}
+    return st
+
+
+def line_feed(root, wait=True):
+    """What the agent said since the last look, into its project's line, read from where that look stopped. A session
+    changed, the one before is read to its end first, so no reply is lost to it. It waits on another look at the same
+    project only when asked to (the feeder does; a page's look takes the line as it stands)."""
+    lock = _FEEDING.setdefault(str(root), threading.Lock())
+    if not lock.acquire(blocking=wait):
+        return
     try:
-        st = Path(s["path"]).stat() if s else None
+        _line_feed(Path(root))
+    finally:
+        lock.release()
+
+
+def _line_feed(root):
+    from . import context
+    s = context.session(root)
+    if not s or not s.get("path") or not s.get("provider"):
+        return
+    st, since = _feed_state(root), iso_epoch(line_since())
+    was = json.dumps(st, sort_keys=True)
+    rows = []
+    if st.get("session") != s["path"]:
+        if st.get("session"):
+            rows += _feed_file(root, st, since, rows)            # the session before, to its end
+        st.clear()
+        st.update(session=s["path"], provider=s["provider"])
+    rows += _feed_file(root, st, since, rows)
+    if rows:                                                     # the parts first, then where it got to
+        append_rows(root, "line.jsonl", rows)
+    if json.dumps(st, sort_keys=True) != was:
+        save_json(root / ".board" / "line-feed.json", st)
+
+
+def _feed_file(root, st, since, fresh):
+    """The parts one transcript gained since st's place in it, as the line's rows; st moves on past them. Only what was
+    added is read (unchanged, the look is a stat), its lines read by its own program as Chat reads them."""
+    from . import chat
+    path = Path(st["session"])
+    try:
+        size = path.stat().st_size
     except OSError:
-        st = None
-    mark = (s and s["path"], st and st.st_mtime_ns, st and st.st_size)
-    if _PARTS.get(str(root), (None,))[0] == mark:
-        return _PARTS[str(root)][1]                     # its transcript unchanged since the last look
-    turns = chat.turns(chat.events(s["provider"], s["path"])) if s else []
-    turns = turns[-shown:]
-    last = max((i for i, t in enumerate(turns) if t["from"] == "you"), default=-1)
+        return []
+    off, cut = st.get("offset"), False
+    if off is None or size < off:            # a first look, or one written anew: from where Chat begins reading it
+        off, st["turn"] = max(0, size - chat.TAIL), None
+        cut = off > 0
+    if size == off:
+        return []
+    scratch = home() / "line-scratch" / (hashlib.sha1(str(root).encode()).hexdigest()[:12] + ".jsonl")
+    scratch.parent.mkdir(parents=True, exist_ok=True)
+    end = off
+    with open(path, "rb") as fh, open(scratch, "wb") as out:
+        fh.seek(off)
+        if cut:
+            end += len(fh.readline())        # mid-line there: the first is not whole
+        for line in fh:
+            if not line.endswith(b"\n"):
+                break                        # still being written: the next look takes it whole
+            end += len(line)
+            if len(line) <= chat.BIG:        # a picture or a long tool output, which no reader reads
+                out.write(line)
+    try:
+        # PROVIDER: events(path), each program's reading of its own transcript, here of the lines it gained
+        evs = chat.events(st["provider"], scratch)
+    finally:
+        chat.forget(scratch)
+        scratch.unlink(missing_ok=True)
+    st["offset"] = end
+    return _parts_of(evs, st, since, line_rows(root)["rows"], fresh)
+
+
+def _parts_of(evs, st, since, known, fresh):
+    """A transcript's new events, as the line's rows: its prose part by part with the keys and times Chat gives them (a
+    turn begun by the person's message, colony's or a compaction, its items counted in order), going on from the turn
+    the last look ended in. What colony's notices carried over a refresh is never read aloud."""
+    out, have, t = [], {r["k"] for r in fresh}, st.get("turn")
+    for kind, text, at in evs:
+        if kind == "queued":
+            continue                         # sent mid-turn, not taken up yet: listed after all, never a turn's start
+        if kind in ("you", "colony", "compact"):
+            t = {"at": at, "from": kind, "n": 0, "last": "",
+                 "carry": kind == "colony" and text.lstrip().startswith("[colony] Context carry-over (")}
+            continue
+        if t is None:
+            t = {"at": at, "from": None, "n": 0, "last": ""}
+        j, when = t["n"], at or t["last"] or t["at"]
+        t["n"] += 1
+        t["last"] = at or t["last"]
+        k = f"s{t['at']}-{j}"
+        if kind != "say" or t.get("carry") or not t["at"] or k in known or k in have or iso_epoch(when) < since:
+            continue
+        if words := spoken_text(text):
+            out.append({"k": k, "t": t["at"], "at": when, "text": words,
+                        **({"colony": int(iso_epoch(t["at"]) // WIDE)} if t["from"] == "colony" else {})})
+            have.add(k)
+    st["turn"] = t
+    return out
+
+
+_TROUBLE = {"said": "", "at": 0.0, "n": 0}
+
+
+def line_trouble(said):
+    """A look at the line that failed: a line in the board's line-errors.log, never silence; the same failure again
+    within ten minutes is counted, and the count written with the next line."""
+    t = time.time()
+    if said == _TROUBLE["said"] and t - _TROUBLE["at"] < 600:
+        _TROUBLE["n"] += 1
+        return
+    home().mkdir(parents=True, exist_ok=True)
+    with open(home() / "line-errors.log", "a") as fh:
+        if _TROUBLE["n"]:
+            fh.write(f"{now()} (the one before, {_TROUBLE['n']} more times)\n")
+        fh.write(f"{now()} {said[:600]}\n")
+    _TROUBLE.update(said=said, at=t, n=0)
+
+
+def feed_all(plist, wait=True, only=None):
+    failed = []
+    for root in plist:
+        if only is not None and home() != only:
+            return                              # the board it fed is gone: not another's projects
+        try:
+            if Path(root).exists():
+                line_feed(root, wait)
+        except Exception as x:                  # one project's unreadable transcript never stops the rest
+            failed.append(f"{Path(root).name}: {x.__class__.__name__}: {x}")
+    if failed:
+        line_trouble("feeding the line failed: " + "; ".join(failed))
+
+
+def line_keep(every=LINE_EVERY):
+    """The feeder: every few seconds each project's transcript is looked at, so what an agent says reaches the line
+    whether or not a page is open, and a session changing twice while none is leaves no reply out. It feeds the board it
+    was started for and no other: should the board's home change under it, it stops. (A test's board, started in the
+    process that runs the tests, ended and its home went, and the feeder went on with the person's real one.)"""
+    mine = home()
+    while home() == mine:
+        try:
+            reg = registry()
+            if home() != mine:
+                break
+            feed_all(projects(reg), only=mine)
+        except Exception as x:
+            line_trouble(f"a pass of the feeder failed: {x.__class__.__name__}: {x}")
+        time.sleep(every)
+
+
+_LISTEN = {}                 # a device reading by itself, able to -> (when its Auto was armed, its last look)
+_OPEN = {}                   # each project's parts not gone as of the last look, kept to look on from
+
+
+def _waiting(root, rec, hs):
+    """The project's parts still in the line, in order: from those waiting at the last look and those added since; an
+    Undo, which brings parts back, has them all looked at again."""
+    c = _OPEN.get(str(root))
+    if not c or c["rec"] is not rec or c["hs"] is not hs or c["undone"] != len(hs["undone"]):
+        c = {"rec": rec, "hs": hs, "undone": len(hs["undone"]), "n": 0, "keys": []}     # (a record read afresh too)
+    keys = c["keys"] + rec["order"][c["n"]:]
+    c["keys"], c["n"] = [k for k in keys if not _gone(hs, k)], len(rec["order"])
+    _OPEN[str(root)] = c
+    return c["keys"]
+
+
+def line(plist, dev="", arm=""):
+    """The line: every project's replies not heard since it began, oldest first, each with its parts' keys and times
+    and its first words (its words are fetched when it is about to be read), and how many wait in each project. A
+    device whose Auto is on and able to play says so as it looks (arm: when it was armed), and holds what lands."""
+    from . import voice
+    if dev:
+        if arm and iso_epoch(arm):
+            _LISTEN[dev[:16]] = (iso_epoch(arm), time.time())
+        else:
+            _LISTEN.pop(dev[:16], None)
+    feed_all(plist, wait=False)
+    since, items, info = iso_epoch(line_since()), [], {}
+    with _RECLOCK:
+        got = [(str(i), root, line_rows(root), heard_state(root)) for i, root in enumerate(plist) if Path(root).exists()]
+        # a notice colony gave them all is answered by each: none of those replies is read among the projects
+        wide = colony_wide({p: rec["spans"] for p, _, rec, _ in got})
+        for p, root, rec, hs in got:
+            mine = {}
+            for k in _waiting(root, rec, hs):
+                r = rec["rows"][k]
+                if r["e"] < since or r.get("colony") in wide:
+                    continue
+                it = mine.get(r["t"]) or mine.setdefault(r["t"], {"p": p, "t": r["t"], "b": [], "at": r["at"], "w": r["w"], "e": r["e"]})
+                it["b"].append([k, r["at"]])
+            if mine:
+                info[p] = {"name": root.name, "href": f"/?p={p}&view=chat", "voice": voice_of(p, root)[0], "n": len(mine)}
+                items += mine.values()
+    items.sort(key=lambda x: x["e"])
+    return {"since": line_since(), "ready": voice.ready(), "total": len(items), "projects": info,
+            "line": [{k: v for k, v in x.items() if k != "e"} for x in items]}
+
+
+def mark_line(plist, how, keys, dev="", view=""):
+    """Parts of the line marked heard, skipped, seen or cleared ({project: [keys]}), in their projects' records; a
+    Clear's rows carry its id, for Undo. Seen never takes what a device reading by itself will read: a part landed
+    after its Auto was armed, while it still looks in. A part already out of the line isn't marked again, though one
+    a Clear took is, so undoing the Clear leaves it heard."""
+    if how not in MARKS:
+        raise ValueError(how)
+    clear, t, at = (secrets.token_hex(4) if how == "cleared" else None), time.time(), now()
+    held = [a for a, looked in _LISTEN.values() if t - looked <= CLAIM]
+    out = {"marked": {}, "refused": {}, **({"clear": clear} if clear else {})}
+    for p, ks in (keys or {}).items():
+        try:
+            root = plist[int(p)]
+        except (ValueError, IndexError, TypeError):
+            continue
+        rows = []
+        with _RECLOCK:
+            rec, hs = line_rows(root), heard_state(root)
+            for k in dict.fromkeys(ks if isinstance(ks, list) else []):
+                r = rec["rows"].get(k)
+                if not r or (_gone(hs, k) if clear else k in hs["marks"]):
+                    continue                     # not a part of the line (before it began, a question's), or out already
+                if how == "seen" and any(r["e"] >= a for a in held):
+                    out["refused"].setdefault(p, []).append(k)
+                    continue
+                rows.append({"k": k, "how": how, "at": at, "dev": str(dev)[:16], "view": str(view)[:24],
+                             **({"clear": clear} if clear else {})})
+        if rows:
+            append_rows(root, "heard.jsonl", rows)
+            out["marked"][p] = [r["k"] for r in rows]
+    return out
+
+
+def unclear(plist, clear, dev="", view=""):
+    """A Clear undone, within ten minutes of it: only its own rows are let go, so a part heard since stays heard. How
+    many parts came back."""
+    n, t = 0, time.time()
+    for root in plist:
+        if not Path(root).exists():
+            continue
+        with _RECLOCK:
+            hs = heard_state(root)
+            due = clear and clear in hs["clears"] and clear not in hs["undone"] and t - hs["clears"][clear] <= UNDO
+            # those it took that nothing else took out: heard since, or cleared by another Clear, they stay out
+            back = sum(1 for k, ids in hs["cleared"].items() if clear in ids and k not in hs["marks"]
+                       and not any(c != clear and c not in hs["undone"] for c in ids)) if due else 0
+        if due:
+            n += back
+            append(root, "heard.jsonl", {"how": "undone", "clear": clear, "at": now(), "dev": str(dev)[:16], "view": str(view)[:24]})
+    return n
+
+
+def heard_list(plist, most=20):
+    """The replies heard last (skipped and seen too), newest first, to be played again; playing them writes nothing."""
+    got, info = [], {}
+    for i, root in enumerate(plist):
+        if not Path(root).exists():
+            continue
+        with _RECLOCK:
+            rec, hs = line_rows(root), heard_state(root)
+            latest = {}
+            for n, (when, k, how) in enumerate(hs["recent"]):       # its place in the record decides a tie of seconds
+                if k in rec["rows"]:
+                    latest[rec["rows"][k]["t"]] = (when, n, how)
+            for turn, (when, n, how) in latest.items():
+                ks = rec["turns"][turn]
+                got.append({"p": str(i), "t": turn, "b": [[k, rec["rows"][k]["at"]] for k in ks], "at": rec["rows"][ks[0]]["at"],
+                            "w": rec["rows"][ks[0]]["w"], "h": when, "n": n, "how": how})
+        if any(x["p"] == str(i) for x in got):
+            info[str(i)] = {"name": root.name, "href": f"/?p={i}&view=chat", "voice": voice_of(str(i), root)[0]}
+    got.sort(key=lambda x: (-x["h"], -x["n"]))
+    got = [{k: v for k, v in x.items() if k != "n"} for x in got[:most]]
+    return {"heard": got, "projects": {p: v for p, v in info.items() if any(x["p"] == p for x in got)}}
+
+
+def line_text(root, keys=(), turn=""):
+    """A reply's words as the line keeps them: the parts asked for, or all of one turn's, in order."""
+    with _RECLOCK:
+        rec = line_rows(root)
+        ks = list(rec["turns"].get(turn, [])) if turn else [k for k in keys if k in rec["rows"]]
+        where = [(k, rec["rows"][k]["pos"], rec["rows"][k]["at"]) for k in ks]
     out = []
-    for t in turns[max(last, 0):]:                     # the turn of their last message holds the reply to it
-        if t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
-            continue                                    # what it carried over a refresh is never read aloud
-        for j, (kind, text) in enumerate(t["items"]):
-            if kind == "say" and (words := spoken_text(text)):
-                when = (t.get("times") or [])[j] if j < len(t.get("times") or []) else t.get("last") or t["at"]
-                out.append({"t": t["at"], "k": f"s{t['at']}-{j}", "at": when, "text": words,
-                            **({"colony": int(iso_epoch(t["at"]) // WIDE)} if t["from"] == "colony" else {})})
-    _PARTS[str(root)] = (mark, out[-most:])
-    return out[-most:]
-
-
-_PARTS = {}                  # a project's latest parts, kept until its transcript changes
+    try:
+        with open(Path(root) / ".board" / "line.jsonl", "rb") as fh:
+            for k, pos, at in where:
+                fh.seek(pos)
+                out.append({"k": k, "at": at, "text": json.loads(fh.readline()).get("text", "")})
+    except (OSError, ValueError):
+        pass
+    return out
 # A message sent as a reply to one of the agent's (Chat's ↩) begins with that reply's first words, so the agent knows
 # which it answers (the person, 2026-10-28: "a small and simple reference to at least the first few words of that
 # message block with a specification that it is a reply to that")
@@ -3800,7 +4335,6 @@ def chat_feed(key, root, shown=SHOWN):
                    f"data-n='{min(MOST, shown + MORE)}'>Show earlier</button></div>")
     turns = turns[-shown:]
     letters = mail_by_turn(root, turns)
-    last_say = max((i for i, t in enumerate(turns) if any(kind == "say" for kind, _ in t["items"])), default=-1)
     for i, t in enumerate(turns):
         k = f"{e(t['at'])}"
         if t["from"] == "you":                          # with the pictures it sent, as pictures
@@ -3842,14 +4376,9 @@ def chat_feed(key, root, shown=SHOWN):
         if any(kind == "say" for kind, _ in t["items"]):
             out.append(f"<div class='turnacts'><button class='copy' data-t='{k}' aria-label='Copy this reply'>{ICONS['copy']}</button>"
                        f"<button class='reply' data-t='{k}' aria-label='Reply to this'>{ICONS['reply']}</button>"
+                       # ▷ alone: it holds the reply as it is read and goes on where it stopped; Auto is the line's (R123)
                        f"<button class='listen' data-t='{k}' aria-label='Read this reply aloud'>{ICONS['play']}</button>"
-                       f"<button class='cont' data-t='{k}' hidden aria-label='Continue where it stopped'>Continue</button>"
-                       f"<button class='hold' data-t='{k}' hidden aria-label='Pause'>{ICONS['pause']}</button>"
-                       f"<button class='skip' data-t='{k}' hidden aria-label='Skip ahead'>{ICONS['skip']}</button>"
-                       # the latest reply's Auto: new replies read as they come, on or off with a tap (the person's, kept)
-                       + ("<button class='auto' aria-pressed='false' aria-label='Read new replies aloud as they come'>Auto</button>"
-                          if i == last_say else "")
-                       + f"{said_at(t.get('last') or t['at'])}</div>")
+                       f"{said_at(t.get('last') or t['at'])}</div>")
     if not turns:
         out.append("<p class='muted'>No conversation yet: what you send here starts one.</p>")
     # what it is doing now: at work, or a choice in its console, answered here
@@ -4051,9 +4580,8 @@ def chat_page(key, root):
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
             "<div class='composerbar'><label class='attach' aria-label='Attach photos or files'>+<input type='file' name='file' multiple hidden></label>"
             "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
-            # reading aloud's settings, opened from ⋯ beside a reply's ▷
-            "<div class='voicesheet' id='voicesheet' hidden><label class='aloud' title='Speak each new reply as it arrives'>"
-            "<input type='checkbox' id='aloud'> Auto-speak</label>"
+            # this chat's voice and speed, kept for the player (Auto is the line's, R123)
+            "<div class='voicesheet' id='voicesheet' hidden>"
             "<select class='rate' id='rate' aria-label='Reading speed'>"
             + "".join(f"<option value='{r}'>{r:g}×</option>" for r in (1, 1.25, 1.5, 1.75)) + "</select>"
             + (f"<select id='kvoice' aria-label='Voice' data-voice='{e(voice_of(key, root)[0])}'>"
@@ -4151,7 +4679,7 @@ CHAT = """
     } catch (e) {}
   }
   let tick = 0;                                  // every 3 s; reading aloud, twice as often, so the voice starts sooner
-  setInterval(() => { if (aloud.checked || ++tick % 2 === 0) refresh(); }, 1500);
+  setInterval(() => { if (window.colonyPlayer.auto() || ++tick % 2 === 0) refresh(); }, 1500);
   const sendBtn = form.querySelector('button.send');
   let armed = 0;                                  // ■ tapped once: a second tap within 3 s stops the agent
   const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files.length;
@@ -4270,38 +4798,35 @@ CHAT = """
     held.textContent = r && r.status === 409 ? (left.startsWith('Not sent') ? left : 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console. Send or clear it there, then send this again.')
       : r && r.status === 503 ? await r.text() : r ? 'Not sent: the board could not hand it over (' + r.status + ').' : 'Not sent: the board could not be reached.';
   });
-  // Read aloud: the board's player, over every page, reads; this chat hands it the replies and shows where it is
-  const P = window.colonyPlayer, aloud = document.getElementById('aloud'), sheet = document.getElementById('voicesheet');
+  // Read aloud: the board's player, over every page, reads; this chat hands it a reply on its ▷ and shows where the
+  // reading is: the part being heard marked, and in Audio + text the page going with it, the sentence about to be heard
+  // in view and softly marked
+  const P = window.colonyPlayer, sheet = document.getElementById('voicesheet');
+  // a part's words for the voice, code left out: a copy apart from the page has no layout, so its innerText ran each
+  // paragraph into the next ("twice.A command"), and its sentences could not be told apart; each paragraph, item and
+  // heading now ends with a blank line, so a clip is a sentence or two as the voice is meant to start
   const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
-    return c.innerText; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
+    c.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, tr, br').forEach((b) => b.after('\\n\\n'));
+    return c.textContent; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
   const KOKORO = box.dataset.voice === '1', picker = document.getElementById('kvoice');
   let kvoice = picker ? picker.dataset.voice : 'am_echo';         // what it reads in: its own, or the colony's
   const view = {name: box.dataset.name, key, href: location.pathname + location.search, kokoro: KOKORO, get kvoice() { return kvoice; },
-    mark: () => mark(), focus: (k, go) => focus(k, go)};
+    mark: () => mark(), focus: (k, go) => focus(k, go), follow: (k, said) => trace(k, said), followed: () => followed};
   // a section: one part of a reply as it was written, with its time
   const sec = (x) => ({t: x.dataset.t, k: x.dataset.k, at: x.dataset.at || '', text: plain([x])});
   // ▷ reads the reply it is under, and only that one: read back to the person's last message, the newest reply came
   // after three long ones with no way to hear it alone (the person, 2026-10-28)
   const turn = (t) => [...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)].map(sec);
-  // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
-  // ▷, then a spinner while the voice is being made, then ■ once it is heard; pause and skip come with the sound
+  // ▷ under each reply: a spinner while its voice is being made, ❚❚ while it is heard (a tap holds it), ▷ while it is
+  // held (a tap goes on from where it stopped); no ■, and the bar has the rest
   const mark = () => { if (!box.isConnected) return;
-    document.documentElement.classList.toggle('autoon', !!(aloud && aloud.checked));
     const s = P.of(view.name), on = s && s.playing ? s.t : null;
     box.querySelectorAll('button.listen, button.needplay').forEach((b) => {
-      const st = b.dataset.t !== on ? 'play' : s.loading ? 'load' : 'stop';
+      const st = b.dataset.t !== on || s.paused ? 'play' : s.loading ? 'load' : 'pause';
       if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } });
-    box.querySelectorAll('button.skip, button.hold').forEach((b) => { b.hidden = b.dataset.t !== on || s.loading; });
-    box.querySelectorAll('button.cont').forEach((b) => { b.hidden = !s || s.playing || b.dataset.t !== s.t || !s.into; });
-    box.querySelectorAll('button.hold').forEach((b) => { const p = !!(s && s.paused); if (b.dataset.p !== String(p)) { b.dataset.p = p;
-      b.innerHTML = p ? ICON.play : ICON.pause; b.setAttribute('aria-label', p ? 'Resume' : 'Pause'); } });
-    box.querySelectorAll('button.auto').forEach((b) => { const on = !!(aloud && aloud.checked);
-      const say = on ? {both: 'Auto', audio: 'Auto · audio', text: 'Auto · text'}[P.mode()] || 'Auto' : 'Auto';
-      if (b.getAttribute('aria-pressed') !== String(on) || b.textContent !== say) {
-        b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); b.textContent = say; } });
     focus(s && s.active ? s.k : null, false); };
-  // Follow in chat (the player's list): the section being heard is marked, and as each starts it is brought into view
-  // below the bar, unless a finger moved the page just now or the box is being typed in
+  // Follow in chat: the part being heard is marked, and as each starts it is brought into view below the bar, unless a
+  // finger moved the page just now or the box is being typed in
   let fingered = 0;
   // (a tap on Next or the rest of the player isn't one: tapping on, the page goes with what is read)
   ['touchstart', 'touchmove', 'wheel'].forEach((t) => window.addEventListener(t, (ev) => {
@@ -4319,6 +4844,59 @@ CHAT = """
       4200 - (Date.now() - fingered)); return; }
     const nav = document.querySelector('nav'), under = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom : 0;
     stick = false; window.scrollBy({top: el.getBoundingClientRect().top - under - 12, behavior: 'smooth'}); };
+  // The sentence about to be heard, in Audio + text (the person, 2026-10-28: "if the sentence that is about to be read,
+  // continues off the visible page then the page should adjust such that the first visible sentence in the viewer window
+  // becomes that sentence"): where any of it is below what shows (above the box and the player), the page turns to put
+  // its top just under the bar at the top, never back up; not within 4 s of a finger on the page, nor while the box is
+  // typed in (it looks again once they are let be). In Audio only the page stays put. It is marked softly with the
+  // browser's own highlight, which changes nothing on the page, so no redraw of the chat undoes it. It is found by its
+  // letters and digits in the part as the page draws it (code left out, as plain() reads it), on from where the last
+  // was found; not found, the part's start is what the page turns to.
+  const lit = window.CSS && CSS.highlights && window.Highlight ? CSS.highlights : null;
+  const letters = new WeakMap();
+  const lettersOf = (el) => { let x = letters.get(el); if (x && x.len === el.textContent.length) return x;
+    const map = [], keep = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT,
+      {acceptNode: (n) => n.parentElement && n.parentElement.closest('pre') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT});
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) { const t = n.nodeValue;
+      for (let i = 0; i < t.length; i++) if (/[\\p{L}\\p{N}]/u.test(t[i])) { keep.push(t[i].toLowerCase()); map.push([n, i]); } }
+    x = {text: keep.join(''), map, len: el.textContent.length}; letters.set(el, x); return x; };
+  const squash = (s) => String(s).toLowerCase().replace(/[^\\p{L}\\p{N}]/gu, '');
+  let foundIn = '', foundAt = 0, foundFrom = 0, turning = 0, followed = null;
+  const find = (k, said, same) => {         // the part, and a Range of the sentence in it (null: not found)
+    const el = box.querySelector(`.say[data-k="${CSS.escape(k)}"]`); if (!el) return [null, null];
+    const x = lettersOf(el), want = squash(said);
+    if (foundIn !== k) { foundIn = k; foundAt = foundFrom = 0; }
+    let a = want ? x.text.indexOf(want.slice(0, 40), same ? foundFrom : foundAt) : -1;
+    if (a < 0 && want) a = x.text.indexOf(want.slice(0, 40));         // drawn again, or read again from its start
+    if (a < 0 || !x.map.length) return [el, null];
+    const tail = want.slice(-24), e = x.text.indexOf(tail, a + Math.max(0, want.length - tail.length - 8));
+    const z = Math.min(x.map.length - 1, e >= 0 ? e + tail.length - 1 : a + want.length - 1);
+    foundFrom = a; foundAt = a + 1;
+    const [en, eo] = x.map[z], tail2 = en.nodeValue.slice(eo + 1).match(/^[.!?…:;,"'”’)\\]]*/)[0].length;   // its stop marked too
+    const r = document.createRange(); r.setStart(x.map[a][0], x.map[a][1]); r.setEnd(en, eo + 1 + tail2);
+    return [el, r]; };
+  const viewTop = () => { const nav = document.querySelector('nav'); return nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom : 0; };
+  const viewBottom = () => { const v = window.visualViewport; let b = v ? v.height : innerHeight;
+    [form, document.getElementById('gc'), document.querySelector('#cplayer:not(.cpidle) .cpbar')].forEach((el) => {
+      if (el && !el.hidden && el.offsetHeight) { const r = el.getBoundingClientRect(); if (r.top > 0 && r.top < b) b = r.top; } });
+    return b; };
+  const trace = (k, said) => { clearTimeout(turning); if (lit) lit.delete('cpread');
+    followed = k && said && P.following() ? {k, said} : null;
+    if (!followed || !box.isConnected) return;
+    const [el, r] = find(k, said, false); if (!el) return;
+    if (r && lit) lit.set('cpread', new Highlight(r));
+    turnTo(k, said); };
+  const turnTo = (k, said) => {
+    const again = () => { if (followed && followed.k === k && followed.said === said) turnTo(k, said); };
+    if (typingNow()) { turning = setTimeout(again, 1500); return; }
+    if (Date.now() - fingered < 4000) { turning = setTimeout(again, 4200 - (Date.now() - fingered)); return; }
+    const [el, r] = find(k, said, true), what = r || el; if (!what) return;
+    if (r && lit) lit.set('cpread', new Highlight(r));              // found afresh: the chat may have drawn it again
+    const rs = [...what.getClientRects()]; if (!rs.length) return;
+    if (Math.max(...rs.map((q) => q.bottom)) <= viewBottom()) return;  // all of it shows
+    const by = Math.min(...rs.map((q) => q.top)) - viewTop() - 12;
+    if (by > 0) { stick = false; window.scrollBy({top: by, behavior: 'smooth'}); } };
+  const relight = () => { if (!followed || !lit) return; const [, r] = find(followed.k, followed.said, true); if (r) lit.set('cpread', new Highlight(r)); };
   sheet.querySelector('.shut').addEventListener('click', () => { sheet.hidden = true; });
   document.addEventListener('click', (ev) => { if (!sheet.hidden && !ev.target.closest('#voicesheet, button.vset')) sheet.hidden = true; });
   // its speed, remembered on this device
@@ -4338,33 +4916,28 @@ CHAT = """
     else if (d.colony && !picker.value) kvoice = d.voice; });         // the colony's changed, and this one follows it
   if (picker) picker.addEventListener('change', () => { P.preview(picker.value || picker.dataset.voice, (picker.selectedOptions[0] || {}).textContent);
     keepVoice({voice: picker.value}); });
-  // What has been read is remembered on this device, for each project: coming back (a reload, another project and
-  // back) with Auto-speak on, it reads what came since, up to the last ten parts after the person's own last message.
-  const HKEY = 'heard:' + box.dataset.name, BACK = 10;
-  let before = null; try { before = JSON.parse(localStorage.getItem(HKEY) || 'null'); } catch (e) {}
-  const says = [...box.querySelectorAll('.say')], mineLast = [...box.querySelectorAll('.msg.you')].pop();
-  const since = says.filter((x) => !mineLast || (mineLast.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)).slice(-BACK);
-  const upTo = P.heardTo(box.dataset.name);             // heard anywhere: in the player, every project's, or here
-  const heard = new Set(says.filter((x) => !since.includes(x) || (before && before.includes(x.dataset.k)) || (x.dataset.at || '') <= upTo)
-    .map((x) => x.dataset.k));
-  const remember = () => { try { localStorage.setItem(HKEY, JSON.stringify([...heard].slice(-300))); } catch (e) {} };
-  try { aloud.checked = localStorage.getItem('aloud') === '1'; } catch (e) {}
-  aloud.addEventListener('change', () => { mark();
-    try { localStorage.setItem('aloud', aloud.checked ? '1' : '0'); } catch (e) {}
-    if (aloud.checked) P.unlock();                 // a tap lets the phone speak later
-    else { const s = P.of(view.name); if (s && s.active) P.stop(); }
-  });
-  // Each part of a reply is read as it lands (the transcript holds a part only once it is written whole), after any
-  // still being read: waiting for the turn to end would hold the voice back for as long as the work takes.
-  const fresh = () => { if (!box.isConnected) return;
-    const news = [...box.querySelectorAll('.say')].filter((x) => !heard.has(x.dataset.k));
-    news.forEach((x) => heard.add(x.dataset.k)); if (news.length) remember();
-    // read here with Auto off: heard, in every way of listening (the player, every project's) as here
-    if (!aloud.checked && news.length) P.heardUpTo(view.name, news.map((x) => x.dataset.at || '').sort().pop());
-    if (!aloud.checked || !news.length) return;    // what came while it was off isn't read later
-    P.read(view, news.map(sec), {auto: true});
-  };
-  new MutationObserver(() => { mark(); fresh(); }).observe(box, {childList: true});
+  // Seen (R123): a reply shown here for three seconds, to its last part, counts as heard everywhere; but only where
+  // nothing will read it, Auto off or held, and the reply neither being read nor waiting to be (in Audio + text a part
+  // shown ahead of the voice is never seen). One another device's Auto will read, the board holds for that one. This
+  // replaces the rule that counted a chat's new replies heard as it showed them with Auto off.
+  const SEEN = 3000, shownSince = new Map();
+  setInterval(() => {
+    if (!box.isConnected) return;
+    // (the line's sheet open over the chat hides it: what is behind the shade isn't being read)
+    const covered = !!document.querySelector('#cplayer .cpsheet:not([hidden])');
+    const waiting = document.visibilityState === 'visible' && P.quiet() && !covered ? P.unheard(key) : new Map();
+    if (!waiting.size) { shownSince.clear(); return; }
+    const top = viewTop(), bottom = viewBottom(), t0 = Date.now(), turns = new Map(), last = new Map();
+    waiting.forEach((w, k) => { if (!turns.has(w.t)) turns.set(w.t, []); turns.get(w.t).push(k); });
+    box.querySelectorAll('.say[data-k]').forEach((el) => { if (!turns.has(el.dataset.t)) return; last.set(el.dataset.t, el);
+      const r = el.getBoundingClientRect(), shows = Math.min(r.bottom, bottom) - Math.max(r.top, top) >= Math.min(r.height, 60);
+      if (!shows) shownSince.delete(el.dataset.k); else if (!shownSince.has(el.dataset.k)) shownSince.set(el.dataset.k, t0); });
+    turns.forEach((ks, t) => { const el = last.get(t), from = el && shownSince.get(el.dataset.k);
+      if (!from || t0 - from < SEEN || ks.some((k) => P.willRead(key, k, waiting.get(k).at, t))) return;
+      shownSince.delete(el.dataset.k); P.seen(key, ks); });
+  }, 1000);
+  // what lands here asks the player to look at the line at once, so a reply is read as it lands
+  new MutationObserver(() => { mark(); relight(); P.poke(); }).observe(box, {childList: true});
   // What waits in its queue, sent mid-turn: Send now, or Edit and reorder, taken back out of the queue meanwhile so
   // none of it goes; Done puts it back in the new order. PROVIDER: queue_keys (where its program has none, no bar).
   const qpost = (body) => fetch('/chat/queue', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
@@ -4420,23 +4993,8 @@ CHAT = """
       const at = d.querySelector('.round.now') || d;            // asked again: the latest round, where it stands now
       window.scrollBy(0, at.getBoundingClientRect().top - under - 12); stick = false; });
   });
-  // Dictating into the box: the voice would be heard by the phone too, so reading pauses as soon as dictated words
-  // arrive (as underlined words, or a run of them with no key pressed), and goes on once they have stopped coming
-  // for a couple of seconds, or the message is sent.
-  let keyed = 0, was = ta.value.length, byVoice = false, quiet = 0;
-  ta.addEventListener('keydown', () => { keyed = Date.now(); });
-  const goOn = () => { clearTimeout(quiet); if (byVoice && P.now().paused) P.hold(false); byVoice = false; };
-  const dictating = () => { const n = P.now(); if (n.playing && !n.paused) { P.hold(true); byVoice = true; }
-    if (byVoice) { clearTimeout(quiet); quiet = setTimeout(goOn, 2200); } };
-  ta.addEventListener('compositionstart', dictating);
-  ta.addEventListener('compositionupdate', () => { if (byVoice) dictating(); });
-  ta.addEventListener('input', (ev) => { const grew = ta.value.length - was; was = ta.value.length;
-    if (ev.inputType !== 'insertFromPaste' && (grew > 12 || byVoice && grew > 0) && Date.now() - keyed > 400) dictating(); });
-  form.addEventListener('submit', goOn);
-  // On coming back, what came since is read at once where the browser lets a page speak by itself; a phone lets it only
-  // after a tap, so there it starts with the first touch anywhere on the page.
+  // dictating into the box holds the reading, and Send takes it up within its own tap: the player's, for every box
   P.attach(view);
-  if (aloud.checked && says.some((x) => !heard.has(x.dataset.k))) P.whenAllowed(fresh);
   // an answer to what it needs goes from here, the page staying where it is
   box.addEventListener('submit', async (ev) => {
     const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
@@ -4447,22 +5005,6 @@ CHAT = """
     f.querySelectorAll('textarea, input[type=file]').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
     refresh();
   });
-  // Auto, off: a tap asks how to read, Audio + text, Audio only or Text only, and turns it on that way
-  const menu = document.createElement('div'); menu.className = 'automenu'; menu.hidden = true;
-  menu.innerHTML = "<div class='reach'><button type='button' data-s='one'>This project</button><button type='button' data-s='all'>Every project</button></div>"
-    + "<button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
-    + "<button type='button' data-m='text'>Text only</button>";
-  document.body.appendChild(menu);
-  let reach = 'one';
-  const reached = () => menu.querySelectorAll('[data-s]').forEach((x) => x.classList.toggle('on', x.dataset.s === reach));
-  const autoMenu = (b) => { const r = b.getBoundingClientRect(); reach = P.scope(); reached(); menu.hidden = false;
-    menu.style.left = Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8)) + 'px';
-    menu.style.top = Math.max(8, r.top - menu.offsetHeight - 6) + 'px'; };
-  menu.addEventListener('click', (ev) => { const m = ev.target.closest('button'); if (!m) return;
-    if (m.dataset.s) { reach = m.dataset.s; reached(); return; }
-    menu.hidden = true; P.setMode(m.dataset.m); aloud.checked = true; aloud.dispatchEvent(new Event('change')); P.setScope(reach); });
-  document.addEventListener('click', (ev) => { if (!menu.hidden && !ev.target.closest('.automenu, button.auto')) menu.hidden = true; });
-  window.addEventListener('scroll', () => { menu.hidden = true; }, {passive: true});
   box.addEventListener('click', async (ev) => {
     const more = ev.target.closest('button.more');       // earlier turns, above where the reader is, who stays put
     if (more) { shown = +more.dataset.n; tag = ''; moving = 0; more.textContent = 'Loading…'; refresh(); return; }
@@ -4479,23 +5021,13 @@ CHAT = """
       if (!ok && navigator.clipboard) { try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {} }
       cp.innerHTML = ok ? ICON.check : '✗'; setTimeout(() => { cp.innerHTML = ICON.copy; }, 1500); return;
     }
-    // ⏸ holds the reading where it is, ▷ takes it up from there
-    const au = ev.target.closest('button.auto');
-    if (au) { if (aloud.checked) { aloud.checked = false; aloud.dispatchEvent(new Event('change')); } else autoMenu(au); return; }
-    if (ev.target.closest('button.hold')) return P.hold(!P.now().paused);
-    if (ev.target.closest('button.skip')) return P.skip();
-    if (ev.target.closest('button.cont')) return P.resume(view.name);           // from the piece it stopped at
-    // ▷ by a question in Needs you: it is read, as a reply is (a tap again, while it is read, stops it)
+    // ▷ by a question in Needs you, or under a reply: that one read, alone. On the one being read, ❚❚ holds it and ▷
+    // goes on from where it stopped (with Continue gone, never from its start); on any other, that one starts
     const np = ev.target.closest('button.needplay');
-    if (np) { ev.preventDefault(); const s = P.of(view.name), t = np.dataset.t;
-      if (s && s.playing && s.t === t) P.stop(); else P.read(view, [{t, k: t, at: '', text: np.dataset.say}], {now: true});
-      return; }
-    const l = ev.target.closest('button.listen');
-    if (l) { const s = P.of(view.name), t = l.dataset.t;
-      if (s && s.playing && s.t === t) P.stop();
-      else if (s && !s.playing && s.t === t) P.again(view, turn(t));               // from the start, what waited after it
-      else P.read(view, turn(t), {now: true});
-      return; }
+    const l = np || ev.target.closest('button.listen');
+    if (l) { if (np) ev.preventDefault(); const s = P.of(view.name), t = l.dataset.t;
+      if (s && s.t === t) return P.hold(s.playing && !s.paused);
+      return P.read(view, np ? [{t, k: t, at: '', text: np.dataset.say}] : turn(t)); }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
     await fetch('/choose', {method: 'POST', body: new URLSearchParams({p: key, option: b.dataset.option})}).catch(() => {});
     setTimeout(refresh, 600);
@@ -7737,21 +8269,34 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
-        if url.path == "/chat/all":                   # every project's latest parts, for the player reading them all in turn
-            from . import voice
-            got = []
-            for i, root in enumerate(plist):
-                if root.exists():
-                    try:
-                        got.append({"name": root.name, "key": str(i), "href": f"/?p={i}&view=chat",
-                                    "voice": voice_of(str(i), root)[0], "parts": chat_parts(root)})
-                    except Exception:
-                        continue                         # one project's unreadable transcript never stops the rest
-            # a notice colony gave them all is answered by each: none of those replies is read among the projects
-            wide = colony_wide({g["name"]: [p["colony"] for p in g["parts"] if "colony" in p] for g in got})
-            for g in got:
-                g["parts"] = [{k: v for k, v in p.items() if k != "colony"} for p in g["parts"] if p.get("colony") not in wide]
-            return self._send(200, json.dumps({"ready": voice.ready(), "projects": got}).encode())
+        if url.path == "/chat/line":                  # the unheard line, every project's; or the replies heard last
+            if q.get("heard"):
+                n = q["heard"][0]
+                return self._send(200, json.dumps(heard_list(plist, min(50, int(n)) if n.isdigit() else 20)).encode())
+            body = json.dumps(line(plist, (q.get("dev") or [""])[0], (q.get("arm") or [""])[0])).encode()
+            # unchanged since the page last looked: said in a line, so the phone neither fetches nor compares it again
+            tag = '"' + hashlib.sha1(body).hexdigest()[:16] + '"'
+            if self.headers.get("If-None-Match") == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("ETag", tag)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
+        if url.path == "/chat/text":                  # a reply's words, fetched as it is about to be read
+            try:
+                root = plist[int((q.get("p") or [""])[0])]
+            except (ValueError, IndexError):
+                return self._send(404, b"no such project")
+            keys = [k for k in (q.get("k") or [""])[0].split(",") if k]
+            return self._send(200, json.dumps({"name": root.name, "voice": voice_of((q.get("p") or [""])[0], root)[0],
+                                               "blocks": line_text(root, keys, (q.get("t") or [""])[0])}).encode())
         if url.path == "/chat/voice":                 # the voice a chat reads in, for the player: picked, pinned, the choices
             from . import monitor, voice
             key, ready = (q.get("p") or ["0"])[0], voice.ready()
@@ -7876,7 +8421,9 @@ class Handler(BaseHTTPRequestHandler):
             values = {k: [v] for k, v in form.items()}
         else:
             upload = None
-            length = min(int(self.headers.get("Content-Length") or 0), 64 * 1024)
+            # a Clear names every part it takes: a long day's line runs past what a form holds
+            most = (1 << 20) if urllib.parse.urlparse(self.path).path == "/chat/heard" else 64 * 1024
+            length = min(int(self.headers.get("Content-Length") or 0), most)
             body_text = self.rfile.read(length).decode("utf-8", "replace")
             values = urllib.parse.parse_qs(body_text, keep_blank_values=True)
             if urllib.parse.urlparse(self.path).path == "/answer" and any(
@@ -8321,8 +8868,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/chat/heard":                        # parts of the line heard, skipped, seen or cleared
+            try:
+                keys = json.loads(values.get("keys", ["{}"])[0])
+                got = mark_line(projects(registry()), values.get("how", [""])[0], keys if isinstance(keys, dict) else {},
+                                values.get("dev", [""])[0], values.get("view", [""])[0])
+            except ValueError:
+                return self._send(400, b"heard, skipped, seen or cleared, and the parts as {project: [keys]}")
+            return self._send(200, json.dumps(got).encode())
+        if path == "/chat/unclear":                      # Undo, on a Clear of the last ten minutes
+            n = unclear(projects(registry()), values.get("clear", [""])[0], values.get("dev", [""])[0], values.get("view", [""])[0])
+            return self._send(200 if n else 410, json.dumps({"back": n}).encode())
         if path == "/chat/measure":                      # where the box landed on the person's phone, typing
-            line = f"{now()} {values.get('m', [''])[0][:400]} {self.headers.get('User-Agent', '')[:60]}\n"
+            # the player's report carries its last pauses and let-goes, with their causes: room for them
+            line = f"{now()} {values.get('m', [''])[0][:1500]} {self.headers.get('User-Agent', '')[:60]}\n"
             with open(home() / "chat-measure.log", "a") as fh:
                 fh.write(line)
             self.send_response(204)
@@ -8678,6 +9237,7 @@ def serve(port, lan=False, monitor=True):
     from . import serving, voice
     threading.Thread(target=voice.make_samples, daemon=True).start()   # every voice's sample, made once and kept
     threading.Thread(target=serving.keep, args=(port,), daemon=True).start()   # https as it was, and once it can be
+    threading.Thread(target=line_keep, daemon=True).start()            # the unheard line, fed with no page open
     mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.lan = lan
@@ -8838,7 +9398,7 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
   margin:0 auto; max-height:calc(100dvh - var(--stk, 64px) - 120px); overflow:auto; overscroll-behavior:contain;
   box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .chat:has(details.needs)::after { content:''; display:block; flex:none; height:var(--ndh, 0px) }
-.chat details.needs:not([open]) { padding:2px 12px } html.cpsmall .chat details.needs { right:64px }
+.chat details.needs:not([open]) { padding:2px 12px } html.cpsmall .chat details.needs { right:calc(var(--pillw, 54px) + 18px) }
 html.atend, html.atend body { overscroll-behavior-y:none }
 html.apart .chat details.needs, body.gctyping .chat details.needs, body.typing .chat details.needs { display:none }
 html.answering .chat details.needs { display:block; z-index:60 }
@@ -8887,8 +9447,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat details.ran li { overflow-wrap:anywhere }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .stamp { font-size:10.5px; color:var(--muted); opacity:.8; white-space:nowrap }
-.chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px } .chat .turnacts .auto, .chat .turnacts .cont { width:auto; min-width:36px; font-size:13px; padding:0 10px } .chat .turnacts .cont { color:var(--accent) }
-.chat .turnacts .auto.on { color:var(--accent); font-weight:600; background:var(--sunk) }
+.chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px }
 /* The player: over every page while something is being read or waits to be taken up, above the box and the tabs */
 .cplayer { position:fixed; left:0; right:0; bottom:0; z-index:45; padding:0 10px 8px; pointer-events:none }
 .cplayer[hidden], .cppanel[hidden] { display:none }
@@ -8930,18 +9489,17 @@ body.gctyping .gc::after { content:''; position:absolute; left:0; right:0; top:1
    are placed: a status line or Send now is never left under them */
 body .chat { padding-bottom:calc(12px + var(--room, 0px)) }
 main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--room, 0px) + 8px) }
-.automenu { position:fixed; z-index:60; display:flex; flex-direction:column; min-width:160px; padding:4px; background:var(--card);
-  border:1px solid var(--line); border-radius:12px; box-shadow:0 6px 22px rgba(0,0,0,.22) } .automenu[hidden] { display:none }
-.automenu button { text-align:left; padding:10px 12px; border:0; border-radius:8px; background:transparent; color:var(--ink); font-size:15px; cursor:pointer }
-@media (hover: hover) { .automenu button:hover { background:var(--sunk) } }
-.automenu .reach { display:flex; gap:4px; padding:2px 2px 6px; margin-bottom:4px; border-bottom:1px solid var(--line) }
-.automenu .reach { min-width:236px } .automenu .reach button { flex:1; white-space:nowrap; text-align:center; padding:8px 8px; font-size:13.5px; color:var(--muted); background:var(--sunk) }
-.automenu .reach button.on { color:var(--card); background:var(--accent); font-weight:600 }
-.cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cpmini { pointer-events:auto } .cplayer.cpidle:not(.open) .cpminirow { display:flex }
-.cplayer.cpidle:not(.open) .cpbar { display:none } .cplayer.cpidle .cplist, .cplayer.cpidle .cphold, .cplayer.cpidle .cpnext, .cplayer.cpidle .cpstop { display:none }
-.cpmini { width:44px; height:44px; min-height:44px; padding:0; border-radius:50%; border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  background:color-mix(in srgb, var(--accent) 8%, var(--card)); color:var(--accent);
-  font-size:20px; box-shadow:0 3px 12px rgba(0,0,0,.16); display:inline-flex; align-items:center; justify-content:center; cursor:pointer }
+/* At rest, the pill (R123): headphones and how many replies wait; Auto on and able to play, a ring and "Auto · 5"; Auto
+   on but the sound let go, "Auto · tap to resume" in the colour of what waits on the person */
+.cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cppill { pointer-events:auto } .cplayer.cpidle .cpminirow { display:flex }
+.cplayer.cpidle .cpbar { display:none }
+.cpminirow { transition:opacity .15s } .cplayer.cpaside .cpminirow { opacity:0 } .cplayer.cpaside .cppill { pointer-events:none }
+.cppill { display:inline-flex; align-items:center; gap:8px; width:auto; height:40px; min-height:40px; padding:0 14px; border-radius:999px;
+  border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:14px; font-weight:600; white-space:nowrap;
+  box-shadow:0 3px 12px rgba(0,0,0,.16); cursor:pointer } .cppill svg { flex:none; color:var(--accent) }
+.cppill.none, .cppill.none svg { color:var(--muted) }
+.cppill.on { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), 0 3px 12px rgba(0,0,0,.16) }
+.cppill.held, .cppill.held svg { color:var(--flag) } .cppill.held { border-color:var(--flag); background:var(--flag-bg) }
 body.typing .cplayer { top:calc(var(--kbtop, 100vh) - var(--boxh, 0px) - var(--cph, 56px) - 8px); bottom:auto !important }
 body.cpon.typing .toend { top:calc(var(--kbtop, 100vh) - 124px - var(--cph, 56px)) } body.cpon.typing .chat { padding-bottom:calc(140px + var(--cph, 56px)) }
 html.going main { opacity:.5; transition:opacity .2s .15s }
@@ -8952,30 +9510,67 @@ body.cpon:not(.typing) .toend { bottom:calc(190px + var(--cph, 56px) + var(--ndh
   border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .cpbar button { width:40px; height:40px; min-height:40px; padding:0; border:0; border-radius:10px; background:transparent; color:var(--ink);
   display:inline-flex; align-items:center; justify-content:center; flex:none; cursor:pointer } @media (hover: hover) {.cpbar button:hover { background:var(--sunk) }}
-.cpbar button:disabled { opacity:.35 } .cpbar .cphold { color:var(--accent) }
-/* Next, the reading's way on: the bar's one filled button, pointing forward (✓ on the last part) */
-.cpbar .cpnext { padding:4px; border-radius:50%; background:var(--accent) content-box; color:var(--card) }
-.cpbar .cpnext svg { stroke-width:2.4 } @media (hover: hover) {.cpbar .cpnext:hover { background:var(--accent) content-box; filter:brightness(1.1) }} .cpbar .cplist[aria-expanded=true] { color:var(--accent); background:var(--sunk) }
+.cpbar button:disabled { opacity:.35 }
+/* ❚❚, the reading's own button, filled and largest (a pause, where Next was once the big one: the fresh look's finding);
+   ⏭ beside it, the lock screen's glyph, Auto's ring circling it while Auto is on */
+.cpbar .cphold { width:48px; height:48px; min-height:48px; border-radius:50%; background:var(--accent); color:var(--card) }
+@media (hover: hover) {.cpbar .cphold:hover { background:var(--accent); filter:brightness(1.1) }}
+.cpbar .cpnext { border-radius:50% } .cpbar .cpnext svg { stroke-width:2.2 }
 .cpbar .cpwhat { flex:1; min-width:0; width:auto; height:auto; display:flex; flex-direction:column; align-items:stretch; justify-content:center;
   padding:2px 6px; line-height:1.25; text-align:left; color:inherit; font:inherit }
 .cpwhat b { font-size:12px; color:var(--accent); font-weight:600 } .cpwhat b::after { content:' ▾'; opacity:.7 }
-.cppaused .cpprev { opacity:.55 } .cppaused .cpwait { color:var(--flag) }
-.cpbar .cpcog { font-size:19px; color:var(--muted) } .cpbar .cpcog[aria-expanded=true], .cpbar .cpwhat[aria-expanded=true] { background:var(--sunk) }
-.cphead a.cpopen { color:var(--accent); text-decoration:none; font-size:13px }
-.cpprojs li { align-items:center } .cpprojs .cpstate { margin-left:auto; font-size:12px; color:var(--muted); white-space:nowrap }
-.cpsets { display:flex; flex-direction:column; gap:12px; padding:12px 14px }
+.cppaused .cpprev { opacity:.55 } .cplayer.cpheld .cpwhat b { color:var(--flag) }
 .cpline { display:flex; align-items:center; gap:10px; margin:0; font-size:14px } .cpline select { flex:1; min-width:0 } .cpprev { font-size:13.5px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
-.cppanel { display:flex; flex-direction:column; max-height:min(52vh, 420px); margin-bottom:6px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
-  border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius:16px; box-shadow:0 4px 18px rgba(0,0,0,.16); overflow:hidden }
-.cphead { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 12px; font-size:13px; color:var(--muted); border-bottom:1px solid var(--line) }
-.cpfollow { display:flex; align-items:center; gap:6px; margin:0; color:var(--ink) }
-.cprows { list-style:none; margin:0; padding:4px; overflow-y:auto }
-.cprows li { display:flex; gap:10px; align-items:baseline; padding:9px 8px; border-radius:10px; cursor:pointer; font-size:14px; line-height:1.35 }
-@media (hover: hover) { .cprows li:hover { background:var(--sunk) } } .cprows li.now { background:var(--sunk); font-weight:600 } .cprows li.now .cpat { color:var(--accent) }
-.cprows li.heard { color:var(--muted) } .cprows li.heard .cpwords::before { content:'✓ ' }
-.cpat { flex:none; min-width:62px; font-size:11.5px; color:var(--muted); white-space:nowrap }
-.cpwords { flex:1; min-width:0 }
+/* The line (R123): a sheet from the foot of the page over a shade. Chips filter it (never Auto), a row starts there and
+   goes on down, Play goes through what shows, Clear takes it out (Undo for ten minutes), Auto is one switch, and the
+   voice, speed and mode are one row away */
+.cplayer > .cpshade { position:fixed; inset:0; z-index:58; max-width:none; margin:0; background:rgba(0,0,0,.35) }
+.cpshade[hidden], .cpsheet[hidden], .cpsheet [hidden] { display:none }
+.cplayer > .cpsheet { position:fixed; left:0; right:0; bottom:0; z-index:59; max-height:82dvh; overflow-y:auto; overscroll-behavior:contain;
+  padding:4px 18px calc(18px + env(safe-area-inset-bottom)); background:var(--card); border:1px solid var(--line); border-bottom:0;
+  border-radius:20px 20px 0 0; box-shadow:0 -10px 30px rgba(0,0,0,.18) }
+@media (min-width: 701px) { .cplayer > .cpsheet { left:220px } }
+.cpgrab { display:block; width:64px; height:22px; min-height:22px; margin:0 auto 4px; padding:0; border:0; background:transparent; cursor:pointer }
+.cpgrab::before { content:''; display:block; width:40px; height:5px; margin:0 auto; border-radius:3px; background:var(--line) }
+.cpchips { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; margin:2px -18px 8px; padding:0 18px } .cpchips::-webkit-scrollbar { display:none }
+.cpchips button { flex:none; width:auto; height:32px; min-height:32px; padding:0 12px; border:0; border-radius:999px; background:var(--sunk);
+  color:var(--muted); font-size:14px; white-space:nowrap; cursor:pointer } .cpchips button.on { background:var(--accent); color:var(--card); font-weight:600 }
+.cprows { list-style:none; margin:0; padding:0; overflow-y:auto } .cpsheet .cprows { max-height:38dvh; margin:0 -6px }
+.cprows li { display:flex; gap:10px; align-items:baseline; padding:10px 6px; border-bottom:1px solid var(--line); cursor:pointer; font-size:14px; line-height:1.35 }
+.cprows li:last-child { border-bottom:0 } .cprows li.cpnone { color:var(--muted); cursor:default }
+@media (hover: hover) { .cprows li:hover { background:var(--sunk) } } .cprows li.now { background:var(--sunk); border-radius:8px } .cprows li.now .cpat { color:var(--accent) }
+.cpat { flex:none; min-width:62px; font-size:12px; color:var(--muted); white-space:nowrap }
+.cpwords { flex:1; min-width:0 } .cpwords b { color:var(--accent); font-weight:600 }
+.cpempty { margin:8px 0 4px; font-size:14.5px; color:var(--muted) }
+.cpacts { display:flex; gap:8px; margin-top:12px }
+.cpacts .cpplay { flex:1; display:flex; align-items:center; justify-content:center; gap:8px; min-height:48px; border:0; border-radius:14px;
+  background:var(--accent); color:var(--card); font-size:15px; font-weight:700; cursor:pointer } .cpacts .cpplay svg { width:18px; height:18px; fill:currentColor }
+.cpacts .cpclear { flex:none; width:auto; min-height:48px; padding:0 18px; border:1px solid var(--line); border-radius:14px; background:transparent;
+  color:var(--ink); font-size:15px; cursor:pointer }
+.cpundo { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:14px; color:var(--muted) }
+.cpundo button { width:auto; height:32px; min-height:32px; padding:0 14px; border:0; border-radius:999px; background:var(--sunk); color:var(--accent); font-weight:600; cursor:pointer }
+.cpsw { position:relative; display:flex; align-items:center; gap:12px; margin:12px 0 0; padding:12px 0; border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line); cursor:pointer }
+.cptxt { flex:1; display:flex; flex-direction:column } .cptxt b { font-size:16px } .cptxt span { font-size:13px; color:var(--muted) }
+.cpsw input { position:absolute; opacity:0; width:1px; height:1px; pointer-events:none }
+.cptoggle { flex:none; position:relative; width:52px; height:32px; border-radius:16px; background:var(--line); transition:background .15s }
+.cptoggle::after { content:''; position:absolute; top:3px; left:3px; width:26px; height:26px; border-radius:50%; background:var(--card);
+  box-shadow:0 1px 2px rgba(0,0,0,.3); transition:left .15s }
+.cpsw input:checked + .cptoggle { background:var(--accent) } .cpsw input:checked + .cptoggle::after { left:23px }
+.cpsw input:focus-visible + .cptoggle { outline:2px solid var(--accent); outline-offset:2px }
+.cplink { display:flex; justify-content:space-between; align-items:center; width:100%; min-height:46px; padding:0; border:0;
+  border-bottom:1px solid var(--line); border-radius:0; background:transparent; color:var(--ink); font-size:15px; text-align:left; cursor:pointer }
+.cplink span { color:var(--muted); font-size:18px }
+.cpback { width:auto; min-height:36px; padding:0 2px; border:0; background:transparent; color:var(--accent); font-size:15px; cursor:pointer }
+.cplbl { margin:12px 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted) }
+.cpseg { display:flex; padding:3px; border-radius:12px; background:var(--sunk) }
+.cpseg button { flex:1; min-height:38px; padding:0 4px; border:0; border-radius:9px; background:transparent; color:var(--muted); font-size:14px; cursor:pointer }
+.cpseg button.on { background:var(--card); color:var(--ink); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.15) }
+.cpmodesay { margin:6px 2px 10px; font-size:13px; color:var(--muted) } .cpset .cpline { margin:10px 0 }
+.cpheard .cprows { max-height:60dvh }
+/* the sentence being heard, in Audio + text: a soft mark of the browser's own, in the page's colour, light or dark */
+::highlight(cpread) { background-color:color-mix(in srgb, var(--accent) 24%, transparent) }
+@media (prefers-color-scheme: dark) { ::highlight(cpread) { background-color:color-mix(in srgb, var(--accent) 34%, transparent) } }
 table.tokens { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums }
 table.tokens th { text-align:right; font-weight:600; color:var(--muted); font-size:12.5px; padding:2px 6px } table.tokens th:first-child { text-align:left }
 table.tokens td { text-align:right; padding:3px 6px; white-space:nowrap } table.tokens td:first-child { text-align:left; white-space:normal; overflow-wrap:anywhere }

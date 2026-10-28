@@ -68,6 +68,12 @@ def _tail(path, keep, limit=TAIL):
         return list(c["entries"]) + ([e] if e is not None else [])
 
 
+def forget(path):
+    """A file no longer read (the line's copy of the lines a transcript gained, read once): what was kept of it goes."""
+    with _lock:
+        _seen.pop(str(path), None)
+
+
 SHORT = 400                # a tool's argument, kept this long: a step's line, a task's name
 
 
