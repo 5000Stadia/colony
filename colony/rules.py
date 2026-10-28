@@ -15,12 +15,10 @@ FILE = "rules.jsonl"
 
 
 def home(root):
-    """Where a project's rules are kept: its canonical home, shared by all its seats."""
+    """Where a project's rules are kept: its canonical home, shared by all its seats (a project not shared is its own).
+    A home that can't be found fails aloud: a rule kept anywhere else would fork the one source (colony-codex)."""
     from . import lead
-    try:
-        return lead.plan_root(root)
-    except Exception:
-        return root
+    return lead.plan_root(root)
 
 
 def rules(root):
