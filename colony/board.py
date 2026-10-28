@@ -2640,6 +2640,8 @@ PLAYER = """
   // From a section: those before it are counted heard, whether read or skipped past
   function begin(i, from = 0, flow = false, keep = false) {
     const s = R && R.list[i]; if (!s) return;
+    // Text only holds for whatever Auto reads, taken up again or not; a reply the person tapped ▷ on is read aloud
+    R.silent = !R.tapped && aloud() && mode() === 'text';
     if (!from) s.named = named(i);
     const parts = piecesOf(i).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
@@ -2692,7 +2694,11 @@ PLAYER = """
     R = null; setAloud(false); changed(); }
   function setAloud(on) { try { localStorage.setItem('aloud', on ? '1' : '0'); } catch (e) {}
     const box = document.getElementById('aloud'); if (box) box.checked = on;
-    $('.cpauto').value = on ? mode() : 'off'; ring(); placed(); if (view) view.mark(); }
+    $('.cpauto').value = on ? mode() : 'off'; ring(); placed(); if (view) view.mark(); heed(); }
+  // Text only, or sound again, chosen while Auto reads: at once, on the part being read (the person: picking Text only,
+  // it went on with audio and text)
+  function heed() { if (!R || !playing || paused || R.tapped || !aloud() || !!R.silent === (mode() === 'text')) return;
+    if (!R.silent) hush(); begin(R.cur, R.piece, false, true); }
   // while Auto is on, a light circles ▷ and ⏸ (the player's, and those beside Auto in Chat)
   const ring = () => document.documentElement.classList.toggle('autoon', aloud());
   // Audio + text, Text only: as a part starts the page shows it, in its project's Chat (changed in place, the voice
@@ -2980,7 +2986,7 @@ PLAYER = """
     const first = r.list.length - add.length;
     if (r === R && playing) { save(); changed(); return; }                 // reading, or held by a pause: after it
     if (R && R !== r && playing && !take) { put('reading:All projects', Object.assign(r, {saved: Date.now()})); return; }   // one reply tapped plays first
-    yieldTo(r); R = r; R.silent = aloud() && mode() === 'text'; via = '&auto=1'; begin(first, 0, false, true);
+    yieldTo(r); R = r; via = '&auto=1'; begin(first, 0, false, true);
   }
   // ⚙: Auto (off, or how it reads), speed and voice, the same as the chat's own (each changed here shows there too).
   // Whose voice: it starts on the project of the page open, else the one being heard, else every project's (the
@@ -3034,7 +3040,7 @@ PLAYER = """
       const s = R && R.list[R.cur];                     // arrived at the chat being read: there, at once
       if (s && playing && following() && (s.name || R.name) === v.name) v.focus(s.k, true); },
     scope: () => get('cpsource') === 'all' ? 'all' : 'one', setScope,
-    mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); },
+    mode, setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); heed(); },
     leave() { view = null; },
     unlock,
     // where a project's reading is: the one in play, or one kept paused for it
@@ -3054,7 +3060,7 @@ PLAYER = """
     read(v, secs, how = {}) {
       if (!secs.length) return;
       const clean = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text}));
-      if (how.now) { yieldTo(null); R = blank(v); R.list = clean; via = ''; begin(0); return; }
+      if (how.now) { yieldTo(null); R = blank(v); R.tapped = true; R.list = clean; via = ''; begin(0); return; }
       if (get('cpsource') === 'all' && v.name === 'steward') return;      // every project chosen: the steward is not one
       if (get('cpsource') === 'all' && v.name !== 'steward') {
         intoAll(clean.map((x) => Object.assign(x, {name: v.name, key: v.key, href: v.href, kvoice: v.kvoice})), v.kokoro); return; }
@@ -3067,14 +3073,14 @@ PLAYER = """
       add(r);
       const first = r.list.findIndex((x, n) => n >= r.cur && fresh.has(x.k) && !x.heard);
       if (first < 0) { if (r !== R) put('reading:' + v.name, Object.assign(r, {saved: Date.now()})); changed(); return; }
-      yieldTo(r); R = r; R.silent = mode() === 'text'; via = '&auto=1'; begin(first, 0, false, true);
+      yieldTo(r); R = r; R.tapped = false; via = '&auto=1'; begin(first, 0, false, true);
     },
     // ▷ on a reply kept paused: from its start, what waited after it still waiting
     again(v, secs) { const r = R && R.name === v.name ? R : load(v.name), ks = new Set(secs.map((x) => x.k));
       const rest = left(r) ? r.list.slice(r.cur).filter((x) => !ks.has(x.k)) : [];
-      yieldTo(null); R = blank(v); R.list = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text})).concat(rest); via = ''; begin(0); },
+      yieldTo(null); R = blank(v); R.tapped = true; R.list = secs.map((x) => ({t: x.t, k: x.k, at: x.at, text: x.text})).concat(rest); via = ''; begin(0); },
     // Continue: from the piece it stopped at
-    resume(name) { const r = R && R.name === name ? R : load(name); if (!left(r)) return; yieldTo(r); R = r; via = ''; begin(R.cur, R.piece); },
+    resume(name) { const r = R && R.name === name ? R : load(name); if (!left(r)) return; yieldTo(r); R = r; R.tapped = true; via = ''; begin(R.cur, R.piece); },
     // coming back with Auto-speak on: what came since is read at once where the browser lets a page speak by itself; a
     // phone lets it only after a tap, so there it starts with the first touch anywhere on the page
     whenAllowed(go) { if (unlocked || playing) return go();

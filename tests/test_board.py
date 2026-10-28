@@ -6018,6 +6018,18 @@ class PhonePageTest(HoursBase):
         self.assertIn(over, board.BAR)
         self.assertIn("vv.offsetTop - over + vv.height - base", board.BAR)
 
+    def test_text_only_holds_for_whatever_auto_reads_and_at_once(self):
+        # the person: "when I select text, only it actually continues to do audio and text": a reading begun aloud, or
+        # taken up again (All projects, a project kept), kept the sound it started with
+        self.assertIn("R.silent = !R.tapped && aloud() && mode() === 'text';", board.PLAYER, "each part asks, not the reading's start")
+        self.assertEqual(len(re.findall(r"R\.silent = (?!=)", board.PLAYER)), 1, "no reading carries a choice of its own")
+        self.assertIn("if (!R.silent) hush(); begin(R.cur, R.piece, false, true); }", board.PLAYER, "chosen mid-reading: at once")
+        self.assertIn("if (view) view.mark(); heed(); },", board.PLAYER, "a mode chosen")
+        self.assertIn("if (view) view.mark(); heed(); }\n", board.PLAYER, "Auto turned on")
+        # a reply tapped ▷ on is read aloud whatever Auto's mode; new replies joining a project's reading follow Auto
+        self.assertIn("R = blank(v); R.tapped = true; R.list = clean;", board.PLAYER)
+        self.assertIn("R = r; R.tapped = false; via = '&auto=1';", board.PLAYER)
+
     def test_a_reading_goes_on_with_next_and_text_only_waits_for_it(self):
         # the person: "text only ... duration ... pretty arbitrary ... a big next arrow button that pops up over the
         # message", "beneficial for audio as well", "point to the right ... forward momentum"
