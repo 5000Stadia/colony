@@ -1616,6 +1616,16 @@ class GlanceTest(BoardBase):
         self.assertEqual(codex.classify(trust), "needs you")
         self.assertEqual(codex.choice(trust)[1:], (["Yes, continue", "No, quit"], 0))
         self.assertEqual(codex.choose(trust, "No"), ["Down", "Enter"])
+        # its subagent picker, opened by the agent, is drawn as a choice: no question for the person while it is open
+        picker = ("    ASSISTANT_MESSAGE_PHASES [{'phase': 'commentary', 'status':\n    +64 lines (^t to view transcript)\n"
+                  "Subagents\nSelect an agent to watch. alt+← previous, alt+→ next.\n"
+                  "› 1. Main [default] (current) 01a0e7ee-e226\n  2. /root/codex_ui_subject 01a18035-69ac\n")
+        self.assertEqual(codex.classify(picker), "idle")
+        self.assertIsNone(codex.choice(picker))
+        asked = picker.replace("Select an agent", "Watched an agent") + "• Ran ls\n" + trust
+        self.assertEqual(codex.classify(asked), "needs you")
+        self.assertEqual(codex.classify(picker + "› Ask Codex to do anything\n" + trust), "needs you",
+                         "an approval asked after the picker closed is the person's")
         self.assertEqual(codex.draft(idle), "", "its dim hint isn't a draft; a past prompt above isn't either")
         self.assertEqual(codex.draft(idle.replace("\x1b[2mAsk Codex to do anything\x1b[0m", "half written")), "half written")
         self.assertIsNone(codex.draft(trust.replace("›", " ")))

@@ -1137,7 +1137,7 @@ class Codex:
         import re
         if "esc to interrupt" in screen.lower() or re.search(r"^\s*• Working \(", screen, re.M):
             return "working"
-        if re.search(r"^\s*› \d+\. ", screen, re.M):
+        if re.search(r"^\s*› \d+\. ", screen, re.M) and not self.viewing(screen):
             return "needs you"
         return "idle"
 
@@ -1211,7 +1211,19 @@ class Codex:
             return None
         return plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", lines[at])).strip().lstrip("›").strip()
 
-    choice = ClaudeCode.choice
+    # Its own views that the agent may open (the subagent picker, "← for agents") are drawn as a choice, but they are
+    # no question for the person: one is open while its heading is on screen with no prompt to type at below it.
+    VIEWS = ("Select an agent to watch",)
+
+    def viewing(self, screen):
+        import re
+        lines = screen.splitlines()
+        at = max((i for i, l in enumerate(lines) if any(v in l for v in self.VIEWS)), default=None)
+        return at is not None and not any(re.match(r"^\s*›(?!\s*\d+\.)", l) for l in lines[at + 1:])
+
+    def choice(self, screen):
+        return None if self.viewing(screen) else ClaudeCode.choice(self, screen)
+
     choose = ClaudeCode.choose
 
 
