@@ -676,9 +676,70 @@ class BoardTest(BoardBase):
                 {"p": 0, "kind": "item", "ref": "R3", "text": "from the page"}).encode())
             urllib.request.urlopen(ok)
             self.assertEqual([n["text"] for n in board.notes(self.root)], ["from the page"])
+            # through Tailscale Serve the page is https on the board's own name: still this board (R119)
+            host = f"127.0.0.1:{port}"
+            secure = urllib.request.Request(f"http://{host}/note", data=urllib.parse.urlencode(
+                {"p": 0, "kind": "item", "ref": "R3", "text": "over https"}).encode(), headers={"Host": host, "Origin": f"https://{host}"})
+            urllib.request.urlopen(secure)
+            self.assertEqual(board.notes(self.root)[-1]["text"], "over https")
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(urllib.request.Request(f"http://{host}/note", data=data, headers={"Origin": "https://evil.example"}))
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class ServingTest(BoardBase):
+    """HTTPS through Tailscale Serve (R119): tailscale itself is a stand-in."""
+    def setUp(self):
+        super().setUp()
+        from colony import serving, tailscale
+        self.serving, self.ts, self.now, self.calls = serving, tailscale, {}, []
+        for name, value in (("status", lambda: {"installed": True, "running": True, "name": "colony.tail1.ts.net", "ip": "100.1.1.1"}),
+                            ("certs", lambda: self.certs), ("served", lambda: dict(self.now)),
+                            ("serve", lambda https, local: self.calls.append(("serve", https, local)) or self.now.update({https: local})),
+                            ("unserve", lambda https: self.calls.append(("off", https)) or self.now.pop(https, None))):
+            p = patch.object(tailscale, name, side_effect=value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = patch.object(serving, "_taken", return_value=False)
+        p.start()
+        self.addCleanup(p.stop)
+        self.certs = True
+
+    def test_each_project_that_serves_gets_an_https_port_of_its_own_kept_and_let_go_with_it(self):
+        # the person, via Bookflow: "Yes: turn it on, Colony builds shared https serving", "without any friction
+        # whatsoever on install, it should just work out of the box"
+        board.track(self.root)
+        other = Path(self.tmp.name) / "bookflow"; other.mkdir()
+        board.track(other)
+        self.assertEqual(self.serving.add(self.root, 8766), "https://colony.tail1.ts.net:8443/")
+        self.assertEqual(self.serving.add(other, 5000), "https://colony.tail1.ts.net:8444/", "a port of its own")
+        self.assertEqual(self.serving.add(self.root, 8767), "https://colony.tail1.ts.net:8443/", "asked again: the same address")
+        self.assertEqual(self.now, {8443: 8767, 8444: 5000})
+        self.now.clear()                                  # tailscaled lost its config: the board's start puts it back
+        board.remove_project(other)
+        self.serving.restore(8791)
+        self.assertEqual(self.now, {8443: 8767}, "the one still on the board, served again; the one gone, let go")
+        self.assertIsNone(self.serving.of(other))
+        self.serving.remove(self.root)
+        self.assertEqual(self.now, {})
+        self.certs = False
+        with self.assertRaises(ValueError) as said:
+            self.serving.add(self.root, 8766)
+        self.assertIn("HTTPS Certificates", str(said.exception), "what stands in the way, and where to change it")
+
+    def test_the_board_itself_is_served_at_443_while_remote_access_is_on(self):
+        self.assertIsNone(self.serving.ensure_board(8791), "remote access off: nothing served")
+        board.set_setting("tailscale", "colony.tail1.ts.net")
+        self.assertEqual(self.serving.ensure_board(8791), "https://colony.tail1.ts.net/")
+        self.assertEqual(self.now, {443: 8791})
+        self.serving.ensure_board(8791)
+        self.assertEqual([c for c in self.calls if c[0] == "serve"], [("serve", 443, 8791)], "once")
+
+    def test_the_live_console_uses_a_secure_socket_on_an_https_page(self):
+        import inspect
+        self.assertIn("location.protocol === 'https:' ? 'wss' : 'ws'", inspect.getsource(console))
 
 
 class ConsoleTest(BoardBase):

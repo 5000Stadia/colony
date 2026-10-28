@@ -484,7 +484,10 @@ def project_settings(root, changes=None):
 def urls(port):
     """Every address the board can be opened at, for the person to use from each place."""
     import socket
+    from . import serving, tailscale
     out = [f"http://127.0.0.1:{port}/"]
+    if registry()["settings"].get("tailscale") and _https_served(port):
+        out.insert(0, tailscale.url(443))
     if registry()["settings"]["lan"]:
         seen = set()
         try:
@@ -499,6 +502,17 @@ def urls(port):
                 seen.add(ip)
         out += [f"http://{ip}:{port}/" for ip in sorted(seen) if not ip.startswith("127.")]
     return out
+
+
+_HTTPS = {"at": 0.0, "on": False}
+
+
+def _https_served(port):
+    """Whether Tailscale serves the board over https now (looked up at most once a minute)."""
+    from . import tailscale
+    if time.time() - _HTTPS["at"] > 60:
+        _HTTPS.update(at=time.time(), on=shutil.which("tailscale") is not None and tailscale.served().get(443) == port)
+    return _HTTPS["on"]
 
 
 def projects(reg=None):
@@ -1173,8 +1187,9 @@ def remove_project(root):
     root = Path(root)
     console.stop(root)
     try:
-        from . import lingering
+        from . import lingering, serving
         lingering.stop_all(root)                       # no one is left to stop it, or to watch it
+        serving.remove(root)                           # nor to serve it: its https port goes too
     except Exception:
         pass
     reg = registry()
@@ -7281,7 +7296,7 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         if not getattr(self.server, "lan", False) and host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
             return self._send(403, b"not from this board")
-        if self.headers.get("Origin") not in (None, "null", f"http://{host}"):
+        if self.headers.get("Origin") not in (None, "null", f"http://{host}", f"https://{host}"):
             return self._send(403, b"not from a page of this board")
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         key, rel, sig = (q.get("p") or [""])[0], (q.get("f") or [""])[0], (q.get("sig") or [""])[0]
@@ -7309,7 +7324,7 @@ class Handler(BaseHTTPRequestHandler):
         if not getattr(self.server, "lan", False) and host not in {f"127.0.0.1:{port}", f"localhost:{port}"}:
             return False
         origin = self.headers.get("Origin")
-        return origin is None or origin == f"http://{host}"
+        return origin is None or origin in (f"http://{host}", f"https://{host}")   # https: through Tailscale Serve
 
     def _console(self, root, token, name=None, label=None):
         """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a
@@ -8446,8 +8461,9 @@ def serve(port, lan=False, monitor=True):
     from . import monitor as mon, vision
     vision.install_all()
     rewire_projects()
-    from . import voice
+    from . import serving, voice
     threading.Thread(target=voice.make_samples, daemon=True).start()   # every voice's sample, made once and kept
+    threading.Thread(target=serving.restore, args=(port,), daemon=True).start()   # https as it was (Tailscale Serve)
     mon.start(enabled=monitor and registry()["settings"]["monitor"])
     httpd = ThreadingHTTPServer(("0.0.0.0" if lan else "127.0.0.1", port), Handler)
     httpd.lan = lan

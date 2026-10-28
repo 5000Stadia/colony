@@ -816,7 +816,7 @@ const refit = () => {{
   fit.fit(); send({{r: [term.cols, term.rows]}});
 }};
 function connect() {{
-  ws = new WebSocket(`ws://${{location.host}}/console/ws?p={pid}&t={token}`);
+  ws = new WebSocket(`${{location.protocol === 'https:' ? 'wss' : 'ws'}}://${{location.host}}/console/ws?p={pid}&t={token}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {{ tries = 0; term.reset(); send({{r: [term.cols, term.rows]}}); term.focus(); }};
   ws.onmessage = (ev) => term.write(new Uint8Array(ev.data), () => {{ if (typeof showJump === 'function') showJump(); }});

@@ -274,9 +274,13 @@ def cmd_remote(a):
     board.set_setting("lan", "on")              # it listens beyond this machine, and answers only your devices
     _saved_reach(True)
     restarted = _restart_board()
-    print(f"The board is reachable from your own devices, anywhere: http://{st['name']}:{port}/ "
-          f"(or http://{st['ip']}:{port}/)\nOpen it with the Tailscale app connected. Nothing is public: only devices "
-          "logged in to your Tailscale account reach it, and the open home network no longer does.")
+    from . import serving
+    secure = serving.ensure_board(port)
+    print(f"The board is reachable from your own devices, anywhere: " + (f"{secure} (or " if secure else "")
+          + f"http://{st['name']}:{port}/" + (")" if secure else f" (or http://{st['ip']}:{port}/)")
+          + "\nOpen it with the Tailscale app connected. Nothing is public: only devices "
+          "logged in to your Tailscale account reach it, and the open home network no longer does."
+          + ("" if secure else f"\nHTTPS: {serving.ready() or 'not served yet'}."))
     if restarted.returncode:
         print("The board didn't restart cleanly: " + (restarted.stdout + restarted.stderr).strip()[-400:])
     return restarted.returncode
@@ -395,6 +399,11 @@ def cmd_doctor(a):
     for k, p in providers.PROVIDERS.items():
         if providers.usable(p):
             print(f"note  turbo: {turbo.line(k)}")
+    from . import serving
+    if board.registry()["settings"].get("tailscale"):
+        why = serving.ready()
+        secure = not why and serving.ensure_board(_running_port(8790))
+        print(f"ok    https: {secure}" if secure else f"note  https: {why or 'the board is not served yet'}")
     from . import autostart
     if autostart.available():
         print(f"{'ok  ' if autostart.on() else 'note'}  colony "
@@ -1516,6 +1525,32 @@ def cmd_ready(a):
     return 0
 
 
+def cmd_serve(a):
+    """A project's own server over HTTPS, through Tailscale: https://<this machine's tailnet name>:<its port>/ to its
+    port on this machine (serving.py). Run from the project's console, or with --project."""
+    from . import board, serving
+    here = Path.cwd().resolve()
+    root = _project(a.project) if a.project else Path(os.environ["COLONY_PROJECT"]) if os.environ.get("COLONY_PROJECT") \
+        else max((p for p in board.projects() if board.workdir(p).resolve() in (here, *here.parents)),
+                 key=lambda p: len(board.workdir(p).resolve().parts), default=None)   # the deepest: projects/ sits in colony's
+    if root is None:
+        raise SystemExit("colony serve: run it from a project's folder or console, or name it with --project")
+    if a.off:
+        print(f"{Path(root).name}: https off" if serving.remove(root) else f"{Path(root).name} wasn't served over https")
+        return 0
+    if a.port is None:
+        print(serving.of(root) or f"{Path(root).name} isn't served over https (colony serve PORT)")
+        return 0
+    try:
+        url = serving.add(root, a.port)
+    except ValueError as err:
+        raise SystemExit(f"colony serve: {err}")
+    print(f"{url}  ->  http://127.0.0.1:{a.port}/\nBind 127.0.0.1 only, and take your external origin (links, redirects, "
+          "Origin checks) from this URL. It's reached only from the person's own devices, kept across restarts, and ends "
+          "with colony serve --off or when the project leaves the board.")
+    return 0
+
+
 def cmd_reboot(a):
     """Restart the machine, or shut it down, once the projects have parked their work (an hour at most): the person's
     to start, from a terminal of theirs or Settings, never an agent's (machine.py)."""
@@ -1900,6 +1935,11 @@ def main(argv=None):
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
     p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
+    p = sub.add_parser("serve", help="serve a project's own local port over https, through Tailscale")
+    p.add_argument("port", nargs="?", type=int, help="the local port it listens on (127.0.0.1)")
+    p.add_argument("--off", action="store_true", help="stop serving it")
+    p.add_argument("--project", help="the project (default: the one this runs in)")
+    p.set_defaults(fn=cmd_serve)
     p = sub.add_parser("reboot", help="restart the machine once every project has parked its work (an hour at most)")
     p.add_argument("--off", action="store_true", help="shut it down instead")
     p.add_argument("--within", type=int, default=60, help="minutes the projects have to park (default 60)")

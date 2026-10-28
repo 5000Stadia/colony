@@ -51,3 +51,59 @@ def own_device(ip):
     except ValueError:
         return False
     return addr.is_loopback or any(addr in ipaddress.ip_network(r) for r in RANGES)
+
+
+# --- HTTPS through Tailscale Serve: a real certificate for this machine's tailnet name, issued by Tailscale (Let's
+# Encrypt), proxied to a port on this machine, so a phone gets a secure context (a camera, the clipboard) with no
+# warning and nothing installed. Reached only from the person's own devices, as the rest. The tailnet's certificates
+# are the person's to turn on (its admin: DNS > HTTPS Certificates); colony serves once they are. The board at 443;
+# a project that serves, on a port of its own from FIRST (colony serve). The config is tailscaled's, kept across
+# restarts (--bg). R119; the person, via Bookflow: "Yes: turn it on, Colony builds shared https serving".
+FIRST = 8443                 # a project's first https port; the board's is 443
+
+
+def certs():
+    """Whether the tailnet issues HTTPS certificates to this machine."""
+    if not shutil.which("tailscale"):
+        return False
+    try:
+        return bool(json.loads(_run("status", "--json").stdout or "{}").get("CertDomains"))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
+def served():
+    """{https port: local port} of what Tailscale Serve proxies here now."""
+    import re
+    try:
+        conf = json.loads(_run("serve", "status", "--json").stdout or "{}")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+    out = {}
+    for where, web in (conf.get("Web") or {}).items():
+        proxy = ((web.get("Handlers") or {}).get("/") or {}).get("Proxy", "")
+        local = re.search(r":(\d+)/?$", proxy)
+        if local and ":" in where:
+            out[int(where.rsplit(":", 1)[1])] = int(local.group(1))
+    return out
+
+
+def serve(https, local):
+    """Serve this machine's local port at https://<its tailnet name>:<https>/, kept across restarts. The error, or None."""
+    try:
+        r = _run("serve", "--bg", f"--https={https}", f"http://127.0.0.1:{local}")
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return str(err)
+    return None if r.returncode == 0 else (r.stderr or r.stdout).strip()[:300]
+
+
+def unserve(https):
+    try:
+        _run("serve", f"--https={https}", "off")
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def url(https):
+    name = status().get("name", "")
+    return f"https://{name}/" if https == 443 else f"https://{name}:{https}/"
