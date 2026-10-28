@@ -4160,12 +4160,9 @@ CHAT = """
     mark: () => mark(), focus: (k, go) => focus(k, go)};
   // a section: one part of a reply as it was written, with its time
   const sec = (x) => ({t: x.dataset.t, k: x.dataset.k, at: x.dataset.at || '', text: plain([x])});
-  // ▷ reads all the agent said since the person's own message before it, across colony's notices in between
-  const turn = (t) => {
-    const all = [...box.querySelectorAll('.say')], end = all.map((x) => x.dataset.t).lastIndexOf(t);
-    const you = [...box.querySelectorAll('.msg.you:not(.mine)')].filter((m) => m.compareDocumentPosition(all[end]) & Node.DOCUMENT_POSITION_FOLLOWING).pop();
-    return all.slice(0, end + 1).filter((x) => !you || (you.compareDocumentPosition(x) & Node.DOCUMENT_POSITION_FOLLOWING)).map(sec);
-  };
+  // ▷ reads the reply it is under, and only that one: read back to the person's last message, the newest reply came
+  // after three long ones with no way to hear it alone (the person, 2026-10-28)
+  const turn = (t) => [...box.querySelectorAll(`.say[data-t="${CSS.escape(t)}"]`)].map(sec);
   // ▷ or ■ on each reply; the newest reply's ⋯ says Auto while new replies are read by themselves
   // ▷, then a spinner while the voice is being made, then ■ once it is heard; pause and skip come with the sound
   const mark = () => { if (!box.isConnected) return;
