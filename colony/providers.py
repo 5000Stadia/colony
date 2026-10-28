@@ -157,6 +157,7 @@ class Provider:
     scrolled_marker = ""               # on screen while its view is scrolled up from the latest; the phone's ↓ follows it
     scrolls_in_tmux = False            # it draws inline and takes no mouse: its history is tmux's, a swipe scrolls that
     queue_keys = None                  # its queue of messages sent mid-turn: {"now", "back", "clear"} keys (None: no queue)
+    dismiss_keys = None                # keys that put away a choice on its screen, so a message can go instead (None: none)
     enter_after = 0.3                  # seconds between typing a message and pressing Enter
 
     def startup_files(self, root):
@@ -310,6 +311,9 @@ class ClaudeCode(Provider):
     # Its queue, from its documentation (interactive mode, v2.1.281 on): Ctrl+X Ctrl+S sends what is queued now
     # (work that can go to the background goes on there), Up on the box's first line takes it back into the box.
     queue_keys = {"now": ["C-x", "C-s"], "back": ["Up"], "clear": "C-u"}
+    # PROVIDER: Esc cancels a choice (its "Esc to cancel"): a question it asked ends its turn unanswered, a permission
+    # is refused, and its box is back within a second for the person's message
+    dismiss_keys = ["Escape"]
 
     @staticmethod
     def config_home():
@@ -777,7 +781,8 @@ class ClaudeCode(Provider):
         # A choice takes the typing box's place. While the box is there, "Do you want…" above it is the agent's
         # own prose, a question for the person to answer by typing, so only what's below the box counts.
         low = "\n".join(lines[box + 1:] if box is not None else lines).lower()
-        if any(k in low for k in ("do you want", "❯ 1.", "trust this folder", "yes, proceed")):
+        if any(k in low for k in ("do you want", "trust this folder", "yes, proceed", "enter to select")) \
+                or re.search(r"^\s*❯ \d+\.", low, re.M):
             return "needs you"
         return "idle"
 
@@ -874,11 +879,14 @@ class ClaudeCode(Provider):
         import re
         lines, mark = screen.splitlines(), self.mark
         # the choice on screen is the lowest one, and a numbered option beats an earlier prompt in the history
-        marked = [i for i, l in enumerate(lines) if re.match(rf"^\s*{mark} \S", l)]
+        marked = [i for i, l in enumerate(lines) if re.match(rf"^\s*{mark}\s+\S", l)]
         cur = next((i for i in reversed(marked) if re.match(rf"^\s*{mark} \d+\.", lines[i])), marked[-1] if marked else None)
         if cur is None:
             return None
         col = lines[cur].index(mark) + 2
+        if re.match(rf"^\s*{mark}\s+Submit\s*$", lines[cur]):          # a multi-select's Submit, highlighted once ticked:
+            cur = next((k for k in range(cur - 1, max(-1, cur - 30), -1) if re.match(r"^\s*\d+\.", lines[k])), cur)
+            col = len(lines[cur]) - len(lines[cur].lstrip()) if cur != marked[-1] else col   # its options are read from above it
         numbered = re.match(r"\d+\.", lines[cur][col:])      # then only numbered lines are options
         row = lambda l: len(l) > col and l[col] != " " and l[:col].strip() in ("", mark)
         is_option = lambda l: row(l) and (not numbered or re.match(r"\d+\.", l[col:]))
@@ -887,17 +895,28 @@ class ClaudeCode(Provider):
             i -= 1                                                       # up to the first option
         block = []
         for k, l in enumerate(lines[i:], i):
-            # a multi-select's Submit is an unnumbered row among the numbered ones
-            if is_option(l) or (row(l) and any(is_option(x) for x in lines[k + 1:k + 4])):
+            # a multi-select's Submit is an unnumbered row among the numbered ones, or set in just under them
+            if is_option(l) or (row(l) and any(is_option(x) for x in lines[k + 1:k + 4])) \
+                    or (block and re.match(rf"^\s*(?:{mark}\s+)?Submit\s*$", l)):
                 block.append(l)
             elif l[:col + 1].strip():                                    # shallower text: the list has ended
                 break
         if len(block) < 2:
             return None                                                  # the input prompt, not a choice
-        label = lambda l: re.sub(r"^\d+\.\s*", "", l[col:].strip())
-        question = [l.strip() for l in lines[max(0, i - 8):i] if l.strip()][-4:]
+        def label(l):
+            text = re.sub(r"^\d+\.\s*", "", l[col:].strip())
+            box = re.match(r"\[([ ✔✓xX])\]\s*", text)                  # a multi-select's checkbox, ticked or not
+            return ("☑ " if box.group(1).strip() else "☐ ") + text[box.end():] if box else text
+        # its question, up to the rule the menu opens with: not its tabs ("←  ☐ Fruit  ✔ Submit  →"), its header chip,
+        # nor what was on screen above it
+        question = []
+        for l in reversed(lines[max(0, i - 8):i]):
+            if re.match(r"^\s*[─━═]{3,}", l):
+                break
+            if l.strip() and not re.match(r"^\s*←.*→\s*$", l) and not re.match(r"^\s*[☐☒]\s+\S[^.?!]{0,30}$", l):
+                question.insert(0, l.strip())
         here = next(k for k, l in enumerate(block) if l.lstrip().startswith(mark))
-        return question, [label(l) for l in block], here
+        return question[-4:], [label(l) for l in block], here
 
     def choose(self, screen, text):
         """The keys that pick the on-screen option containing `text`: arrows to it, then Enter; or None."""
@@ -905,7 +924,7 @@ class ClaudeCode(Provider):
         if not found:
             return None
         _, options, here = found
-        want = text.lower().strip()
+        want = text.lower().strip().lstrip("☐☑ ")             # an option by its words, ticked or not
         hit = next((k for k, o in enumerate(options) if want in o.lower()), None)
         if hit is None:
             return None

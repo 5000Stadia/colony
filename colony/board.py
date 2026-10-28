@@ -3243,6 +3243,9 @@ PLAYER = """
     after(() => gmeasure('typing'), 1200); });
   on(gta, 'blur', () => { gcTyping = false; document.body.classList.remove('gctyping'); cancelAnimationFrame(ridef); placed(); });
   on(gc.querySelector('.gcsend'), 'pointerdown', (ev) => ev.preventDefault());      // the box keeps its focus until it sends
+  // a phone still drops the keyboard as the finger lifts, the box moves, and the tap lands where ↑ was: it sends on the
+  // lift instead, as Chat's own box does (the person, 2026-10-28: "a singular tap retracts the keyboard and does not send")
+  on(gc.querySelector('.gcsend'), 'touchend', (ev) => { ev.preventDefault(); gc.requestSubmit ? gc.requestSubmit() : gc.querySelector('.gcsend').click(); });
   on(gc, 'submit', async (ev) => { ev.preventDefault();
     const t = target(), text = gta.value.trim(), fs = [...gfile.files];
     if (!text && !fs.length) return;
@@ -3255,7 +3258,7 @@ PLAYER = """
     gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = {key: t.key, name: t.name, chosen: true}; keepDraft(); grow(); placed();
     if (fs.length) { try { const dt = new DataTransfer(); fs.forEach((f) => dt.items.add(f)); gfile.files = dt.files; chosen(); } catch (e) {} }
     const left = r && r.status === 409 ? await r.text() : '';
-    gsaid.textContent = r && r.status === 409 ? 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console'
+    gsaid.textContent = r && r.status === 409 ? (left.startsWith('Not sent') ? left : 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console')
       : r && r.status === 503 ? (await r.text()).slice(0, 140) : 'Not sent: the board could not be reached';
   });
   grow();
@@ -3736,18 +3739,29 @@ def chat_feed(key, root, shown=40):
     asks = [g for g in gates(root) if due(g)] if key != "steward" else []
     # and the rest the project waits on them for, as its Overview shows it (a sign-off, a question asked in its console)
     rest = waiting_parts(key, root, f"/?p={key}&view=chat", label=False, with_gates=False)[2] if key != "steward" else []
+    # A choice on its console (a question with options, a permission) holds the agent until it is answered: Needs you
+    # comes open with it first, stays open as the page is tapped, and a new choice opens it again. The person, 2026-10-28:
+    # "it should be ever present on the project page until it is answered"
+    held_up = snap["state"] == "needs you" and key != "steward"
     if asks or rest:
-        out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · {len(asks) + len(rest)}</summary>"
-                   + "".join(f"<details class='need' open data-k='g{e(g['id'])}'><summary>"
-                             f"<button type='button' class='needplay' data-t='g{e(g['id'])}' data-say='{e(gate_spoken(g))}' "
-                             f"aria-label='Read this question aloud'>{ICONS['play']}</button><span class='q'>{e(short(g['question'], 110))}</span>"
-                             f"<span class='fold muted'>Fold ▴</span></summary>"
-                             f"{gate_body(root, key, g, '/')}</details>" for g in asks) + "".join(rest) + "</details>")
+        decided = "".join(f"<details class='need' open data-k='g{e(g['id'])}'><summary>"
+                          f"<button type='button' class='needplay' data-t='g{e(g['id'])}' data-say='{e(gate_spoken(g))}' "
+                          f"aria-label='Read this question aloud'>{ICONS['play']}</button><span class='q'>{e(short(g['question'], 110))}</span>"
+                          f"<span class='fold muted'>Fold ▴</span></summary>"
+                          f"{gate_body(root, key, g, '/')}</details>" for g in asks)
+        if held_up:
+            found = providers.of(root).choice(console.screen(name))
+            k = "needs-" + hashlib.sha1(repr(found).encode()).hexdigest()[:8]
+            out.append(f"<details class='needs blocking' data-k='{k}' open><summary><span class='sdot needs-you'></span>"
+                       f"Needs your answer · {len(asks) + len(rest)}</summary>" + "".join(rest) + decided + "</details>")
+        else:
+            out.append(f"<details class='needs' data-k='needs'><summary><span class='sdot needs-you'></span>Needs you · "
+                       f"{len(asks) + len(rest)}</summary>" + decided + "".join(rest) + "</details>")
     if line and tasks:
         out.append(f"<details class='chatlive tasks{busy}' data-k='tasks'><summary>{line}</summary>{tasks_html(tasks)}</details>")
     elif line:
         out.append(f"<div class='chatlive{busy}'>{line}</div>")
-    elif snap["state"] == "needs you" and key != "steward":
+    elif held_up and not (asks or rest):
         found = providers.of(root).choice(console.screen(name))
         if found:
             question, options, _ = found
@@ -4099,7 +4113,7 @@ CHAT = """
     grow(); chosen(); busy();
     held.hidden = false;
     const left = r && r.status === 409 ? await r.text() : '';
-    held.textContent = r && r.status === 409 ? 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console. Send or clear it there, then send this again.'
+    held.textContent = r && r.status === 409 ? (left.startsWith('Not sent') ? left : 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console. Send or clear it there, then send this again.')
       : r && r.status === 503 ? await r.text() : r ? 'Not sent: the board could not hand it over (' + r.status + ').' : 'Not sent: the board could not be reached.';
   });
   // Read aloud: the board's player, over every page, reads; this chat hands it the replies and shows where it is
@@ -4245,7 +4259,7 @@ CHAT = """
   // Needs you opened by a tap: read from the start (asked again, from the latest round). Floating on the player, it
   // opens upward and scrolls in itself; a tap outside it folds it again, unless an answer is being written there.
   document.addEventListener('click', (ev) => { const d = box.querySelector('details.needs');
-    if (d && d.open && !d.contains(ev.target) && !ev.target.closest('#cplayer, #gc') && getComputedStyle(d).position === 'fixed'
+    if (d && d.open && !d.classList.contains('blocking') && !d.contains(ev.target) && !ev.target.closest('#cplayer, #gc') && getComputedStyle(d).position === 'fixed'
         && ![...d.querySelectorAll('textarea')].some((t) => t.value.trim())) d.open = false; });
   box.addEventListener('click', (ev) => {
     const s = ev.target.closest('details.needs > summary'); if (!s || s.parentElement.open) return;
@@ -6314,11 +6328,15 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
                                     tail=f"<div class='needfoot'>{clear_form(hidden, keys, 'Clear without an answer')}</div>" if folded else "")
                         + ("" if folded else foot) + "</div>")
         elif w["kind"] == "choice":
+            # its own way to write an answer, or to talk it over, is the message box: a message sent now answers it
+            shown = [o for o in w["options"] if not re.match(r"(?:[☐☑] )?(?:type something|chat about this)", o, re.I)]
             rows.append(f"<div class='need'>{who('asking in its console')}"
                         + "".join(f"<div>{e(q)}</div>" for q in w["question"])
                         + "<div class='choices'>" + "".join(
                             f"<form method='post' action='/choose'>{hidden}<input type='hidden' name='option' value='{e(o)}'>"
-                            f"<button class='quiet'>{e(o)}</button></form>" for o in w["options"]) + f"</div>{foot}</div>")
+                            f"<button class='quiet'>{e(o)}</button></form>" for o in shown) + "</div>"
+                        + ("<div class='muted'>Or answer in a message: sending one closes this, and it goes as your reply.</div>"
+                           if providers.of(p).dismiss_keys else "") + f"{foot}</div>")
         elif w["kind"] == "screen":
             rows.append(f"<div class='need'>{who('needs you in its console')}<pre>{e(chr(10).join(w['lines']))}</pre>"
                         f"<a class='go' href='/?p={pid}&view=console'>Open its console →</a>{foot}</div>")
@@ -7916,7 +7934,7 @@ class Handler(BaseHTTPRequestHandler):
                     files.append(str(dst / pins.save_upload(dst, *upload)))
                 if files:
                     text = "\n".join(f"Attached: {f}" for f in files) + (f"\n\n{text}" if text else "")
-                sent = not text or (console.paste_into(console.ensure(src, settle=SETTLE), text) if dst == src
+                sent = not text or (console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True) if dst == src
                                     else console.type_into(console.ensure(src, settle=SETTLE), mail.instruction(mail.address(dst), text)))
                 if not sent:
                     return self._send(409, held(src.name, f"/?p={form.get('p', '0')}", src).encode())
@@ -8148,17 +8166,20 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(413, b"that file is too large (25 MB at most)")
                 text = "\n".join(kept) + (f"\n\n{text}" if text else "")
             if key == "steward":
-                sent = not text or console.paste_into(monitor.ensure(), text)
+                sent = not text or console.paste_into(monitor.ensure(), text, answer=True)
             else:
                 src = projects(registry())[int(key)]
-                sent = not text or console.paste_into(console.ensure(src, settle=SETTLE), text)
+                sent = not text or console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True)
                 if sent and text:
                     answer_asks(src, "in the console")
                     append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text, "to": "console"})
                 if not sent and not console.live(src):        # not a draft in the way: its agent isn't there
                     return self._send(503, stopped(src).encode())
             if not sent:                                  # what is in the way, so a leftover (a command left typed) shows
-                left = console.draft(monitor.name() if key == "steward" else console.session_name(src)) or ""
+                where = monitor.name() if key == "steward" else console.session_name(src)
+                if console.asking(where):                 # a choice its program can't put away: answered there first
+                    return self._send(409, "Not sent: it is asking you something in its console. Answer it above, then send this again.".encode())
+                left = console.draft(where) or ""
                 return self._send(409, short(" ".join(left.split()), 80).encode())
             self.send_response(204 if sent else 409)
             self.send_header("Content-Length", "0")
@@ -8610,6 +8631,7 @@ details.item > summary .jd { vertical-align:middle; margin-right:4px } .ititle {
 .mdtable th { font-weight:600; border-bottom-width:2px } .mdtable td code { white-space:nowrap }
 blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--line); color:var(--muted) }
 .chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
+.chat details.needs.blocking { border-width:2px }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
 /* a chat's Needs you floats on the player (on the message box, where the player isn't shown), its own to that chat:

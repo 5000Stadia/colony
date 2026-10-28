@@ -310,6 +310,7 @@ class BoardTest(BoardBase):
         keys = []
         run = lambda args, **k: keys.append(args[-1])
         with patch.object(console, 'running', return_value=True), patch.object(console, 'provider'), \
+                patch.object(console, 'asking', return_value=False), \
                 patch.object(console.time, 'sleep'), patch.object(console.subprocess, 'run', side_effect=run):
             with patch.object(console, 'draft', side_effect=['', '[colony] You have mail.', '']):
                 self.assertTrue(console.type_into('s', '[colony] You have mail.'))
@@ -1345,7 +1346,7 @@ class ChatTest(BoardBase):
             r = urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=Ship+it",
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(r.status, 204)
-            pasted.assert_called_once_with("s", "Ship it")
+            pasted.assert_called_once_with("s", "Ship it", answer=True)
         with patch.object(board.console, "ensure", return_value="s"), patch.object(board.console, "paste_into", return_value=False), \
                 patch.object(board.console, "live", return_value=True), patch.object(board.console, "draft", return_value="/subagents"):
             with self.assertRaises(urllib.error.HTTPError) as held:
@@ -2017,6 +2018,29 @@ class GlanceTest(BoardBase):
         self.assertEqual(claude.choose(multi, "county"), ["Down", "Enter"])
         self.assertEqual(claude.classify(f"❯ fix the bug\n\n● Editing.\n{dialog}"), "needs you",
                          "a choice takes the box's place; a past prompt above doesn't hide it")
+        rule = "─" * 60
+        fruit = (f"❯ [colony] You have mail from another project.\n{rule}\n←  ☐ Fruit  ✔ Submit  →\n\n"
+                 "Which fruits should I pack for the trip tomorrow?\n\n❯ 1. [ ] Apples\n         crisp and sweet\n"
+                 "  2. [ ] Bananas\n         soft\n  3. [ ] Cherries\n         small\n  4. [ ] Type something\n     Submit\n"
+                 f"{rule}\n  5. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel")
+        question, options, here = claude.choice(fruit)
+        self.assertEqual(question, ["Which fruits should I pack for the trip tomorrow?"],
+                         "its question alone: not its tabs, its rules, nor what was typed above it (the person's screenshot)")
+        self.assertEqual(options, ["☐ Apples", "☐ Bananas", "☐ Cherries", "☐ Type something", "Submit"])
+        self.assertEqual(claude.choose(fruit, "Submit"), ["Down"] * 4 + ["Enter"], "Submit, set in under the options")
+        self.assertEqual(claude.choose(fruit, "☐ Bananas"), ["Down", "Enter"], "an option by its words, ticked or not")
+        ticked = fruit.replace("❯ 1. [ ]", "  1. [✔]").replace("     Submit", "❯    Submit")
+        self.assertEqual(claude.choice(ticked)[1][0], "☑ Apples")
+        self.assertEqual(claude.choice(ticked)[2], 4)
+        self.assertEqual(claude.classify(ticked), "needs you", "still asking with its last row highlighted")
+        drink = (f"{rule}\n ☐ Drink\n\nWhich drink?\n\n❯ 1. Tea\n     hot\n  2. Coffee\n     strong\n"
+                 f"  3. Type something.\n{rule}\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel")
+        self.assertEqual(claude.choice(drink)[:2], (["Which drink?"], ["Tea", "Coffee", "Type something."]))
+        self.assertEqual(claude.classify(drink.replace("❯ 1.", "  1.").replace("  2. Coffee", "❯ 2. Coffee")), "needs you",
+                         "asking with any option highlighted, not only the first")
+        review = (f"{rule}\n←  ☒ Fruit  ✔ Submit  →\n\nReview your answers\n\n ● Which fruits should I pack?\n   → Apples\n\n"
+                  "Ready to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel")
+        self.assertEqual(claude.choice(review)[1], ["Submit answers", "Cancel"])
 
     def test_codex_screens_are_read_as_codex_draws_them(self):
         codex = providers.get("codex")
@@ -3551,7 +3575,7 @@ class MessagingTest(BoardBase):
         typed, pasted = [], []
         saved = (console.type_into, console.paste_into, console.ensure)
         console.type_into = hearing(typed)
-        console.paste_into = lambda name, text: pasted.append((name, text)) or True
+        console.paste_into = lambda name, text, answer=False: pasted.append((name, text)) or True
         console.ensure = lambda root, name=None, label=None, settle=0: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -3737,6 +3761,28 @@ class MailWakeTest(BoardBase):
         checked.assert_called_once()
 
 
+class MenuTest(BoardBase):
+    """A choice on a console's screen takes its box's place: typing there picks options (the person's message, 2026-10-28,
+    ticked one and was lost). Colony's own word waits; the person's message puts the choice away and goes as their answer."""
+    def test_nothing_is_typed_into_a_menu_and_the_persons_message_answers_it(self):
+        menu = [True]
+        with patch.object(console, "running", return_value=True), \
+                patch.object(console, "asking", side_effect=lambda name: menu[0]), \
+                patch.object(console, "press", side_effect=lambda name, keys: menu.__setitem__(0, keys != ["Escape"])) as pressed, \
+                patch.object(console, "draft", return_value=""), \
+                patch.object(console, "provider", return_value=providers.get("claude")), \
+                patch.object(console.subprocess, "run") as run:
+            self.assertFalse(console.type_into("s", "[colony] You have mail."), "colony's own word waits its turn")
+            self.assertFalse(console.paste_into("s", "a message"), "nothing lands in it")
+            run.assert_not_called()
+            self.assertTrue(console.paste_into("s", "Are any of those in use?", answer=True))
+            pressed.assert_called_once_with("s", ["Escape"])
+            self.assertIn(["tmux", "send-keys", "-t", "s", "-l", "Are any of those in use?"], [c.args[0] for c in run.call_args_list])
+            menu[0] = True
+            with patch.object(console, "provider", return_value=providers.get("codex")):
+                self.assertFalse(console.paste_into("s", "hello", answer=True), "a program with no way to put it away: refused")
+
+
 class NeedsYouTest(BoardBase):
     """Everything waiting on the person, across projects, answerable where it stands."""
     CHOICE = " Do you want to make this edit to ledger.py?\n ❯ 1. Yes\n   2. Yes, and don't ask again\n   3. No\n"
@@ -3758,6 +3804,29 @@ class NeedsYouTest(BoardBase):
     def post(self, port, path, **form):
         data = urllib.parse.urlencode(form).encode()
         urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data))
+
+    def test_a_menu_in_its_console_opens_needs_you_with_it_first_and_coherent(self):
+        # the person, 2026-10-28: "it should be ever present on the project page until it is answered", and the box
+        # "needs to be addressed so that it looks coherent"
+        board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(), "question": "Keep the old export?"})
+        rule = "─" * 60
+        self.CHOICE = (f"❯ [colony] You have mail.\n{rule}\n←  ☐ Clean up  ✔ Submit  →\n\nWhat should I clean up?\n\n"
+                       "❯ 1. [ ] OpenClaw off\n         Stop it.\n  2. [ ] Old agents\n  3. [ ] Type something\n     Submit\n"
+                       f"{rule}\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel")
+        quiet = board.chat_feed("0", self.root)
+        self.assertIn("<details class='needs' data-k='needs'>", quiet, "nothing on screen: folded as before")
+        self.state["state"] = "needs you"
+        feed = board.chat_feed("0", self.root)
+        self.assertIn("<details class='needs blocking'", feed)
+        self.assertRegex(feed, r"class='needs blocking' data-k='needs-[0-9a-f]{8}' open>")
+        self.assertIn("Needs your answer", feed)
+        self.assertLess(feed.index("What should I clean up?"), feed.index("Keep the old export?"), "the menu first")
+        for gone in ("─", "←", "You have mail", "Type something", "Chat about this"):
+            self.assertNotIn(gone, feed.split("Needs your answer")[1])
+        self.assertIn(">☐ OpenClaw off<", feed)
+        self.assertIn(">Submit<", feed)
+        self.assertIn("sending one closes this", feed)
+        self.assertNotIn("class='chatask'", feed, "shown once, in Needs you")
 
     def test_a_gate_a_choice_a_finished_turn_and_an_item_to_verify_are_all_answerable_in_one_place(self):
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))

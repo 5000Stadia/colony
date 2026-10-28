@@ -537,6 +537,28 @@ def drafting(name):
     return bool(draft(name))
 
 
+def asking(name):
+    """Whether a choice is on the session's screen (a question with options, a permission): it takes the box's place,
+    so whatever is typed there lands in it, and its Enter picks an option (the person's message, 2026-10-28, ticked
+    one and was lost)."""
+    return running(name) and provider(name).classify(screen(name)) == "needs you"
+
+
+def dismissed(name, wait=4.0):
+    """Put away the choice on screen (PROVIDER: dismiss_keys), so the person's message goes as their answer instead.
+    True once its box is back."""
+    keys = provider(name).dismiss_keys
+    if not keys:
+        return False
+    press(name, keys)
+    end = time.time() + wait
+    while time.time() < end:
+        time.sleep(0.25)
+        if not asking(name) and draft(name) is not None:
+            return True
+    return False
+
+
 def _sent(name, text, tries=3):
     """Press Enter until colony's own line has left the box: a program still starting, or one that read the typing
     as a paste, can swallow the first Enter and leave the message sitting there unsent."""
@@ -554,7 +576,7 @@ def type_into(name, text):
     """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
     is theirs to send: then nothing is typed, and False says so. Colony's own unsent line left there earlier is
     sent rather than mistaken for the person's draft. True only once the message has left the box."""
-    if not running(name):
+    if not running(name) or asking(name):            # a choice on screen is the person's: colony's word waits
         return False
     left = draft(name)
     if left:
@@ -575,9 +597,13 @@ def type_into(name, text):
         return False
 
 
-def paste_into(name, text):
+def paste_into(name, text, answer=False):
     """Send the person's own message, as if they had pasted it into the session and pressed Enter: lines and
-    all, in one piece (a bracketed paste where the program asks for one, as Claude Code does)."""
+    all, in one piece (a bracketed paste where the program asks for one, as Claude Code does). With a choice on
+    screen, nothing goes into it: as `answer` (the person writing in Chat while it asks) the choice is put away
+    and the message goes as their answer; otherwise, or where it can't be put away, False."""
+    if running(name) and asking(name) and not (answer and dismissed(name)):
+        return False
     if "\n" not in text or not running(name) or drafting(name):
         return type_into(name, text)
     unscroll(name)
