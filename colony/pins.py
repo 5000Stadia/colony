@@ -77,7 +77,7 @@ def add(root, target, title="", why="", by="person", kind=None, group=""):
         if not path or not path.is_file():
             raise FileNotFoundError(target)
         target = str(path.relative_to(Path(root).resolve()))
-    pin = {"type": "pin", "id": "p" + secrets.token_hex(3), "at": board.now(), "by": by, "kind": kind,
+    pin = {"type": "pin", "id": "p" + secrets.token_hex(4), "at": board.now(), "by": by, "kind": kind,
            "target": target, "title": (title or Path(target).name or target).strip(), "why": why.strip(),
            **({"group": group.strip()} if group.strip() else {})}
     board.append(root, FILE, pin)

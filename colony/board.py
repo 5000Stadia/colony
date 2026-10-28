@@ -642,19 +642,15 @@ def git(root, *args):
 
 
 def root_of(path="."):
-    """The project a command runs in: the one whose console it runs in (a second project sharing a folder is
-    told apart this way), else the nearest folder upward that is on the board (it has a .board). Not git's
-    top level: a project can live inside another repository, like colony's own projects/."""
+    """The project a command runs in: the one whose console it runs in, wherever that console has changed folder to
+    (a second project sharing a folder is told apart this way too), else the nearest folder upward that is on the
+    board (it has a .board). Not git's top level: a project can live inside another repository, like colony's own
+    projects/. Taken by the folder, a console's `cd ../Bookflow && colony send` went as Bookflow and filed its gates
+    there, and one in /tmp grew a .board of its own: agentpost's silent misattribution, which it fixed the same way."""
     here = Path(path).resolve()
     mine = os.environ.get("COLONY_PROJECT")
     if mine and (Path(mine) / ".board").is_dir():
-        try:
-            here.relative_to(workdir(mine).resolve())
-            return Path(mine)
-        except ValueError:
-            from . import lead
-            if any(here.is_relative_to(p.resolve()) for p in lead.workspaces(mine, active=False)):
-                return Path(mine)                       # an assigned sibling worktree, never an arbitrary folder
+        return Path(mine)
     for d in (here, *here.parents):
         if (d / ".board").is_dir():
             return d
@@ -951,7 +947,7 @@ def record_ask(root, key, text, explicit=False):
     if not explicit and all(restates_gate(q, root) for q in questions(text) or [text]):
         return None
     answer_asks(root, "superseded by a later turn")
-    ask = {"type": "ask", "id": "a" + secrets.token_hex(3), "at": now(), "key": key, "text": text.strip()}
+    ask = {"type": "ask", "id": "a" + secrets.token_hex(4), "at": now(), "key": key, "text": text.strip()}
     until = hours.held_until(epoch(ask["at"]))       # asked at night: the person's when their hours begin
     if until:
         ask["held_until"] = until
@@ -1135,7 +1131,7 @@ def track(path, register=True):
     vision.observe(root)
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if first_track and not paired and not any(n.get('onboarding') == 'vision' for n in notes(root)):
-        append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(3), at=now(),
+        append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(4), at=now(),
                author='colony', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
     from . import providers
     providers.of(root).wire(workdir(root), protocol(root))
@@ -1468,7 +1464,7 @@ def said_reply(root, text):
 
 def add_note(root, anchor, text, *, author, quiet=False, kind=None):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
-    note = {"type": "note", "id": "n" + secrets.token_hex(3), "at": now(), "author": author,
+    note = {"type": "note", "id": "n" + secrets.token_hex(4), "at": now(), "author": author,
             "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {}), **({"kind": kind} if kind else {})}
     append(root, "notes.jsonl", note)
     return note
@@ -1497,7 +1493,7 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
     """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
     (stand_defaults); one with consultant points never does, since each point needs their decision."""
     default = (default or "").strip()
-    gate = dict(type="gate", id="g" + secrets.token_hex(3), at=now(), question=question.strip(), item=item or when,
+    gate = dict(type="gate", id="g" + secrets.token_hex(4), at=now(), question=question.strip(), item=item or when,
                 why=why.strip(), **({"when": when} if when else {}), **({"default": default} if default else {}))
     if not gate["question"]:
         raise ValueError("A gate needs its question.")
@@ -1571,7 +1567,7 @@ def _answer_gate(root, gate_id, text, *, tell, decisions):
         raise ValueError("This gate has no consultant points.")
     elif not text:
         raise ValueError("Give your answer to this gate.")
-    answer["note_id"] = "n" + secrets.token_hex(3) if tell else None
+    answer["note_id"] = "n" + secrets.token_hex(4) if tell else None
     append(root, "gates.jsonl", answer)
     if tell:
         _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"], author="person")
@@ -1613,7 +1609,7 @@ def clear_gate(root, gate_id):
             return  # A choice saved before Clear wins; it is never erased.
         if not gate["answer"]:
             answer = dict(type="answer", of=gate_id, at=now(), cleared=True,
-                          text="(cleared by the person without an answer)", note_id="n" + secrets.token_hex(3))
+                          text="(cleared by the person without an answer)", note_id="n" + secrets.token_hex(4))
             append(root, "gates.jsonl", answer)
             gate.update(answer=answer["text"], answered_at=answer["at"], note_id=answer["note_id"], cleared=True)
         _gate_note(root, gate, gate["note_id"],
@@ -1663,7 +1659,7 @@ def stand_defaults(root, gs=None):
             for g in gates(root):
                 if g["id"] in ripe and not g["answer"]:
                     answer = dict(type="answer", of=g["id"], at=now(), author="colony",
-                                  text=f"Default stood (skipped): {g['default']}", note_id="n" + secrets.token_hex(3))
+                                  text=f"Default stood (skipped): {g['default']}", note_id="n" + secrets.token_hex(4))
                     append(root, "gates.jsonl", answer)
                     _gate_note(root, g, answer["note_id"], answer["text"], answer["at"], author="colony")
                     stood.append(g)

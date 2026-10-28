@@ -505,11 +505,14 @@ class LeadTest(unittest.TestCase):
         self.assertIn('merge already in progress', lead.engage(self.helper))
         self.assertEqual(lead.git(work, 'ls-files', '-u'), stages)
 
-    def test_unrelated_worktree_is_not_a_logical_agent_scope(self):
+    def test_a_helper_console_acts_as_itself_in_an_unrelated_worktree_and_leaves_it_alone(self):
+        # a console's commands are its own project's wherever it stands: taken by the folder, they acted as another
+        # project or grew a .board in a folder that is no project's (agentpost's silent misattribution)
         self.pair(); work = self.base / 'unrelated'
         lead.git(self.root, 'worktree', 'add', '-b', 'unrelated', str(work))
         with patch.dict(os.environ, COLONY_PROJECT=str(self.helper)):
-            self.assertNotEqual(board.root_of(work), self.helper)
+            self.assertEqual(board.root_of(work), self.helper)
+        self.assertFalse((work / '.board').exists())
 
     def test_delete_modify_conflict_records_absent_version(self):
         self.pair(); job = self.helper_job(); work = Path(job['workspace'])

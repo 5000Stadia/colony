@@ -59,7 +59,7 @@ def send(to, text, ask=False, re=None, urgent=False):
         raise PermissionError("messaging between projects is off (colony settings messaging on)")
     dest = resolve(to)
     src_root, src = sender()
-    msg = {"type": "message", "id": "m" + secrets.token_hex(3), "at": board.now(), "from": src, "to": to,
+    msg = {"type": "message", "id": "m" + secrets.token_hex(4), "at": board.now(), "from": src, "to": to,
            "text": text.strip(), "ask": ask, "re": re, "urgent": urgent}
     board.append(dest, FILE, msg)
     if src_root and src_root != dest:

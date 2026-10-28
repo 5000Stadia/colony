@@ -56,7 +56,7 @@ def propose(action, text, evidence, by, project=None):
     if not evidence.strip():
         raise ValueError("Say what happened that taught it (--evidence): the person adopts it on that.")
     rows = load()
-    row = {"id": "l" + secrets.token_hex(3), "action": action, "text": text, "evidence": evidence.strip(),
+    row = {"id": "l" + secrets.token_hex(4), "action": action, "text": text, "evidence": evidence.strip(),
            "scope": _scope(project), "by": Path(by).name if by else "steward", "state": "proposed",
            "at": board.now(), "shown": 0}
     rows.append(row)

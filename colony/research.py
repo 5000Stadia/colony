@@ -56,7 +56,7 @@ def add(path, title, question, by, recheck_days=90, tags=(), today=None):
     today = today or date.today()
     if supports.NOTICE not in text and "Internet sources" not in text:
         text += "\n\n" + supports.NOTICE
-    rid = "r" + secrets.token_hex(3)
+    rid = "r" + secrets.token_hex(4)
     entry = {"id": rid, "title": title.strip(), "question": question.strip(), "tags": [t.strip() for t in tags if t.strip()],
              "by": Path(by).name, "done": today.isoformat(), "recheck": (today + timedelta(days=int(recheck_days))).isoformat(),
              "source": str(Path(path).resolve()), "text": text}

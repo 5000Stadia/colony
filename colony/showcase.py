@@ -44,7 +44,7 @@ def add(root, title, what, try_="", link="", item=None):
         if not path or not path.is_file():
             raise FileNotFoundError(link)
         link = str(path.relative_to(Path(root).resolve()))
-    entry = {"type": "entry", "id": "s" + secrets.token_hex(3), "at": board.now(), "title": title, "what": what,
+    entry = {"type": "entry", "id": "s" + secrets.token_hex(4), "at": board.now(), "title": title, "what": what,
              "try": try_.strip(), "link": link, **({"item": item} if item else {})}
     board.append(root, FILE, entry)
     return entry

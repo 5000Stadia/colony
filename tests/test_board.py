@@ -3648,6 +3648,10 @@ class MessagingTest(BoardBase):
         self.assertTrue((outer / "projects" / "a" / ".board").is_dir())
         self.assertFalse((outer / ".board").exists(), "the outer repository is not made a project")
         self.assertEqual(board.root_of(outer / "projects" / "a"), outer / "projects" / "a")
+        # a console's commands are its own project's wherever it has gone: another project's folder, or /tmp
+        with patch.dict(os.environ, COLONY_PROJECT=str(outer / "projects" / "a")):
+            self.assertEqual(board.root_of(outer / "projects" / "b"), outer / "projects" / "a")
+            self.assertEqual(board.root_of(Path(self.tmp.name)), outer / "projects" / "a")
         run = lambda cwd, *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=cwd, capture_output=True,
                                              text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
         run(outer / "projects" / "a", "send", "b", "hello from a")

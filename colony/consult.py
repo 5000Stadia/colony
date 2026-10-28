@@ -178,7 +178,7 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
         futs = [(k, m, e, why, ex.submit(ask, k, text, m, e, root)) for k, m, e, why in who]
         answers = [dict(f.result(), provider=k, model=m, effort=e, why=why) for k, m, e, why, f in futs]
     cost = sum(a.get("cost") or 0 for a in answers)
-    rec = {"type": "consult", "id": "c" + secrets.token_hex(3), "at": board.now(), "decision": decision, "round": rnd,
+    rec = {"type": "consult", "id": "c" + secrets.token_hex(4), "at": board.now(), "decision": decision, "round": rnd,
            "question": question.strip(), "answers": answers, "cost": round(cost, 4), "note": note}
     if rnd == 2:
         rec["checked"] = dict(consult=accepted["id"], gate=accepted.get("gate"), words=accepted["adopted"],

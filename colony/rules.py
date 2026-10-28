@@ -40,7 +40,7 @@ def add(root, text, words, by="agent", why="", context="", given=None):
         raise ValueError("Say the rule.")
     if not words:
         raise ValueError("Give the person's own words for it (--words): a standing rule is theirs.")
-    row = {"type": "rule", "id": "u" + secrets.token_hex(3), "at": board.now(), "text": text, "words": words, "by": by}
+    row = {"type": "rule", "id": "u" + secrets.token_hex(4), "at": board.now(), "text": text, "words": words, "by": by}
     row.update({k: " ".join(v.split()) for k, v in (("why", why), ("context", context), ("given", given or "")) if v and v.strip()})
     board.append(home(root), FILE, row)
     return row

@@ -289,7 +289,7 @@ def install(root):
                        "--words \"the person's words\" --context \"your reading\"`; brainstorming and what-ifs never update it. "
                        "Unrecorded file edits or merges also arrive as change notes.\n\n" + SCOPE if text else
                        MIGRATION + ('\n\nStarting draft from the existing goal (not yet published as Vision):\n' + draft if draft else ''))
-            board.append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(3), at=board.now(),
+            board.append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(4), at=board.now(),
                          author='colony', anchor=None, text=message, quiet=True, migration='vision'))
         marker.touch()
 

@@ -132,7 +132,7 @@ def tick(now=None):
             elif now - s["asked_at"] >= EVERY:
                 # a note, so its answer (colony noted) is kept with it; typed at once, so an agent at work reads it within
                 # its turn, and marked handed over, so its hooks don't hand it over again
-                nid = "n" + secrets.token_hex(3)
+                nid = "n" + secrets.token_hex(4)
                 text = words(s, nid)
                 board.append(p, "notes.jsonl", {"type": "note", "id": nid, "at": board.now(), "author": "colony",
                                                 "anchor": None, "text": text, "kind": "park"})

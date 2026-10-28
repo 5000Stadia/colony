@@ -126,7 +126,7 @@ def standard(name, words, source="", replaces=None):
                 raise ValueError(f"The {name} nest has no standard {replaces}; colony nest lists them.")
             rows.pop(replaces - 1)
         if words.strip():
-            rows.append({"id": "s" + secrets.token_hex(3), "words": words.strip(), "from": source.strip(), "at": board.now(), "told": {}})
+            rows.append({"id": "s" + secrets.token_hex(4), "words": words.strip(), "from": source.strip(), "at": board.now(), "told": {}})
         _save(data)
         return len(rows)
 
