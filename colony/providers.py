@@ -800,15 +800,24 @@ class Codex:
                 "printf '" + self.APPARMOR.replace("\n", "\\n") + "' | sudo tee /etc/apparmor.d/codex-bwrap && "
                 "sudo apparmor_parser -r /etc/apparmor.d/codex-bwrap")
 
+    # PROVIDER: a consult keeps the shell (in its read-only sandbox, to read the project) and loses all else it could
+    # reach out through or spend on: the person's apps, plugins and hooks, image making, goals, helpers of its own
+    # (colony-codex's audit, Oct 27; checked on Codex 0.165: only its own built-in tools, none of the person's servers).
+    CONSULT_OFF = ("hooks", "apps", "plugins", "image_generation", "goals", "multi_agent")
+
     def consult(self, brief, model, effort, project, price=None, popen=None):
-        """One fresh, stateless consultation in its read-only sandbox, in an empty folder, with hooks off. Codex
-        reports tokens, not dollars: price (per 1M tokens in, out) turns its usage into what it cost."""
+        """One fresh, stateless consultation in its read-only sandbox, in an empty folder: none of the person's config
+        (its MCP servers, plugins, connectors) or rules, hooks off, no web, nothing it could act through; it reads the
+        project's files by path, as Claude Code's consult does. Codex reports tokens, not dollars: price (per 1M tokens
+        in, out) turns its usage into what it cost."""
         import subprocess
         import tempfile
         here = tempfile.mkdtemp(prefix="colony-consult-")
         last = Path(here) / "answer.txt"
         cmd = [self.program, "exec", "-m", model, "-c", f"model_reasoning_effort={effort}", "-s", "read-only",
-               "--skip-git-repo-check", "--ephemeral", "--ignore-rules", "--disable", "hooks", "--json", "-o", str(last), "-C", here, "-"]
+               "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+               *[a for f in self.CONSULT_OFF for a in ("--disable", f)], "-c", 'web_search="disabled"',
+               "--json", "-o", str(last), "-C", here, "-"]
         pin, pout = price or (0, 0)
         cost = lambda u: ((u.get("input_tokens", 0) - u.get("cached_input_tokens", 0)) * pin
                           + u.get("cached_input_tokens", 0) * pin * 0.1 + u.get("output_tokens", 0) * pout) / 1e6

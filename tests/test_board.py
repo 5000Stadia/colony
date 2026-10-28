@@ -2395,6 +2395,10 @@ class MonitorTest(BoardBase):
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders\n- [x] R4 pots\n- [x] R5 soil"))
         clock.write_text(json.dumps(dict(json.loads(clock.read_text()), at=time.time() - 4000)))
         w.tick()                                                        # due in the same tick as the wake
+        for _ in range(200):                                            # the update is made on a thread of its own
+            if not w.updating:
+                break
+            time.sleep(0.05)
         for line in ("plants R3: reminders", "plants R4: pots", "plants R5: soil"):
             self.assertEqual(" ".join(sent).count(line), 1, f"{line}: once, not by both")
         (self.root / "ROADMAP.md").write_text(ROADMAP)
@@ -5077,6 +5081,12 @@ class ConsultCallTest(unittest.TestCase):
         self.assertFalse(Proc.killed)
         self.assertAlmostEqual(out["cost"], 4.5)                 # 300k in at $10, 30k out at $50
         self.assertIn("read-only", seen["cmd"])
+        # none of the person's config, servers, plugins or apps, no web, no helpers of its own (colony-codex's audit)
+        cmd = seen["cmd"]
+        self.assertIn("--ignore-user-config", cmd)
+        self.assertEqual({cmd[i + 1] for i, a in enumerate(cmd) if a == "--disable"},
+                         {"hooks", "apps", "plugins", "image_generation", "goals", "multi_agent"})
+        self.assertIn('web_search="disabled"', cmd)
 
     def test_claude_code_runs_in_an_empty_folder_with_no_settings_and_its_own_cap(self):
         seen = {}
