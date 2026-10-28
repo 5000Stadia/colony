@@ -1633,6 +1633,36 @@ class CodexHelpersTest(BoardBase):
                          "2 background terminals running")
 
 
+    def test_codex_time_at_work_is_its_own_turns_lengths(self):
+        import sqlite3
+        codex = providers.get("codex")
+        home = self.root / "codexhome2"
+        home.mkdir()
+        at = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+        ev = lambda t, kind, **kw: json.dumps({"timestamp": at(t), "type": "event_msg", "payload": dict(type=kind, **kw)}) + "\n"
+        item = lambda t: json.dumps({"timestamp": at(t), "type": "response_item", "payload": {"type": "message"}}) + "\n"
+        main = home / "main.jsonl"
+        main.write_text(ev(1000, "task_started") + ev(1006, "task_complete", duration_ms=6000)
+                        + ev(2000, "task_started") + ev(2003, "turn_aborted", started_at=2000, completed_at=2003, duration_ms=3664)
+                        + ev(9000, "task_started") + item(9030) + item(9060) + item(9060 + 2 * 3600))   # open: 60 s, then a day-long gap
+        helper = home / "helper.jsonl"
+        helper.write_text(ev(1000, "task_started") + ev(1500, "task_complete", duration_ms=500000))
+        db = sqlite3.connect(home / "state_5.sqlite")
+        db.execute("CREATE TABLE threads (rollout_path TEXT, cwd TEXT, source TEXT)")
+        here = str(board.workdir(self.root).resolve())
+        db.executemany("INSERT INTO threads VALUES (?,?,?)", [
+            (str(main), here, '"cli"'),
+            (str(helper), here, json.dumps({"subagent": {"thread_spawn": {"parent_thread_id": "x"}}}, separators=(",", ":"))),
+            (str(helper), "/elsewhere", '"cli"')])
+        db.commit(); db.close()
+        with patch.object(type(codex), "config_home", lambda self: home):
+            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 60, places=2,
+                                   msg="its turns as Codex timed them, an open one by its lines; not its helpers, nor elsewhere")
+            with main.open("a") as f:
+                f.write(ev(9000 + 2 * 3600 + 10, "task_complete", duration_ms=120000) + '{"timestamp":"half a li')
+            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 120, places=2, msg="read on as it grows")
+
+
 class GlanceTest(BoardBase):
     def tearDown(self):
         console.stop(self.root)

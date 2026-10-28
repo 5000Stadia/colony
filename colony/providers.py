@@ -1305,6 +1305,75 @@ class Codex:
         self._helping[str(root)] = (now, out)
         return out
 
+    def active_seconds(self, root):
+        """Time at work in this folder, all told, as Claude Code's: each turn's own length as Codex closes it (task_complete
+        or turn_aborted, duration_ms), and a turn not closed by the time between its own lines, leaving out any gap over
+        IDLE_GAP. Its conversations here, not its helpers' (theirs run inside its turns), from each thread store's
+        record of where each ran; rollouts only grow, so each is read on from where the last look stopped.
+        PROVIDER: Codex's state_5.sqlite threads (cwd, source) and rollouts, in its own home and colony's hosts."""
+        import sqlite3
+        from . import board
+        here = str(board.workdir(root).resolve())
+        total = 0.0
+        for home in [self.config_home(), *(board.home() / "codex-remote").glob("*")]:
+            if not (home / "state_5.sqlite").exists():
+                continue
+            try:
+                db = sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True, timeout=1)
+                try:
+                    rows = db.execute("SELECT rollout_path FROM threads WHERE cwd = ? AND source NOT LIKE '%\"thread_spawn\"%'",
+                                      (here,)).fetchall()
+                finally:
+                    db.close()
+            except sqlite3.Error:
+                continue
+            for (rollout,) in rows:
+                total += self._worked(rollout)
+        return total
+
+    IDLE_GAP = ClaudeCode.IDLE_GAP
+    _worked_in = {}                               # rollout -> (bytes read, ms of turns ended, open turn's time, its latest)
+
+    @classmethod
+    def _worked(cls, rollout):
+        import re
+        try:
+            size = os.path.getsize(rollout)
+        except (OSError, TypeError):
+            return 0.0
+        at, ms, open_, last = cls._worked_in.get(rollout, (0, 0, 0.0, None))
+        if size < at:
+            at, ms, open_, last = 0, 0, 0.0, None                   # rewritten: read it afresh
+        if size > at:
+            with open(rollout, "rb") as fh:
+                fh.seek(at)
+                chunk = fh.read()
+            whole = chunk[:chunk.rfind(b"\n") + 1]                   # a line still being written waits
+            for line in whole.splitlines():
+                try:
+                    if b'"event_msg"' in line and (b'"task_complete"' in line or b'"turn_aborted"' in line):
+                        e = (json.loads(line).get("payload") or {})
+                        if e.get("type") in ("task_complete", "turn_aborted"):
+                            took = e.get("duration_ms")
+                            if took is None and e.get("started_at") and e.get("completed_at"):
+                                took = (e["completed_at"] - e["started_at"]) * 1000
+                            ms, open_, last = ms + (took or 0), 0.0, None
+                            continue
+                    if b'"event_msg"' in line and b'"task_started"' in line:
+                        open_, last = 0.0, _stamp(json.loads(line))
+                        continue
+                    if last is not None:                              # within a turn still open
+                        found = re.match(rb'\{"timestamp":\s*"([^"]+)"', line)
+                        t = _stamp({"timestamp": found[1].decode()}) if found else 0
+                        if t and 0 < t - last <= cls.IDLE_GAP:
+                            open_ += t - last
+                        last = max(last, t) if t else last
+                except (ValueError, KeyError, TypeError):
+                    pass
+            at += len(whole)
+            cls._worked_in[rollout] = (at, ms, open_, last)
+        return ms / 1000 + open_
+
     _turns = {}
 
     @classmethod
