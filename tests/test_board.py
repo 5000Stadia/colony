@@ -3142,7 +3142,7 @@ class MonitorTest(BoardBase):
         try:
             helm_tab = board.monitor_page(board.registry(), "helm")
             self.assertIn("never push", helm_tab)
-            self.assertIn("steward holds the helm", helm_tab)
+            self.assertIn("steward decides", helm_tab)
             overview = board.monitor_page(board.registry(), "overview")
             for part in ("Needs you", "Projects", "What the steward decided", ">Helm<", ">Console<"):
                 self.assertIn(part, overview)
@@ -3575,6 +3575,171 @@ class StewardNameTest(BoardBase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class FirstHalfHourTest(BoardBase):
+    """What a newcomer's first half hour on the board found (design/fresh-install-review): colony's own brief shown as
+    theirs, times in UTC, a "since you were last here" before they had been, and the steward's state said three ways."""
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.state = {"state": "idle", "lines": [], "activity": {}}
+        for target, attr, value in ((console, "ensure", lambda root, name=None, label=None, settle=0: name),
+                                    (console, "snapshot", lambda root, lines=6, name=None: self.state),
+                                    (monitor, "snapshot", lambda: self.state)):
+            p = patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    @contextmanager
+    def pacific(self):
+        """This machine's clock in California, as the person's is."""
+        was = os.environ.get("TZ")
+        os.environ["TZ"] = "America/Los_Angeles"
+        time.tzset()
+        try:
+            yield
+        finally:
+            if was is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = was
+            time.tzset()
+
+    def test_colonys_own_notes_are_named_as_colonys_and_kept_off_the_persons_list(self):
+        board.add_note(self.root, None, board.BEGIN, author="colony")
+        board.add_note(self.root, None, "Go large.", author="monitor")
+        board.add_note(self.root, {"item": "R2"}, "keep a year of it", author="person")
+        board.add_note(self.root, None, "a quiet word to the agent", author="colony", quiet=True)
+        for named in ("", "Jarvis"):
+            board.set_setting("steward_name", named)
+            page = board.render(board.registry(), 0, "roadmap")
+            mine = page.split("Your notes, not yet acted on (1)</h2>")[1].split("</div></div>")[0]
+            self.assertIn("keep a year of it", mine)
+            self.assertNotIn("first piece of work", mine, "colony's brief is not the person's note")
+            others = page.split("<h3>Left for the agent by others</h3>")[1].split("</details>")[0]
+            self.assertIn("<span class='muted'>2</span>", others, "counted, the quiet one left out")
+            self.assertIn("colony · on the whole project", others)
+            self.assertIn(html.escape("first piece of work", quote=True), others)
+            self.assertIn(f"{named or 'the steward'}, for you · on the whole project", others)
+            self.assertNotIn("a quiet word", others, "a quiet one was never for the person to read")
+
+    def test_every_time_the_person_reads_is_on_this_machines_clock(self):
+        with self.pacific():
+            self.assertEqual(board.local_day("2026-10-28T23:00:00Z", clock=True), "2026-10-28 16:00")
+            self.assertEqual(board.local_day("2026-10-29T03:00:00Z"), "2026-10-28", "an evening is still that day")
+            with patch.object(board, "now", return_value="2026-10-28T23:00:00Z"):
+                board.record_ask(self.root, "u1", "Which format do you want?")
+            asked = board.needs_you(board.registry())
+            self.assertRegex(asked, r"asked in its console · <span class='stamp'[^>]*>(Oct 28, )?4:00 PM</span>",
+                             "as Chat shows the same moment")
+            self.assertNotIn("23:00", asked)
+            with patch.object(board, "now", return_value="2026-10-29T03:00:00Z"):
+                board.add_note(self.root, None, "an evening's note", author="person")
+            page = board.render(board.registry(), 0, "roadmap")
+            self.assertIn("on the whole project · 2026-10-28</span><div>an evening&#x27;s note", page)
+
+    def test_since_you_were_last_here_waits_for_a_first_visit(self):
+        self.commit("work before they ever looked")
+        first = board.render(board.registry(), 0)
+        self.assertNotIn("Since you were last here", first, "never here: nothing to be 'since'")
+        self.commit("work after their first look")
+        tomorrow = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 86400))
+        with patch.object(board, "now", return_value=tomorrow):
+            again = board.render(board.registry(), 0)
+        self.assertIn("Since you were last here", again, "the next day, from their first look")
+        self.assertIn("work after their first look", again)
+        self.assertNotIn("work before they ever looked", again.split("Since you were last here")[1])
+
+    def test_the_stewards_state_reads_the_same_wherever_it_shows_and_says_who_decides(self):
+        def where():
+            page = board.monitor_page(board.registry(), "overview")
+            menu = re.search(r"id='dot-m'></span>[^<]*</span><span class='sline'>([^<]*)</span>", page).group(1)
+            badge = re.search(r"<span class='badge stance'[^>]*>([^<]*)</span>", page).group(1)
+            return html.unescape(menu), html.unescape(badge), board.monitor_page(board.registry(), "helm")
+        menu, badge, helm = where()
+        self.assertEqual((menu, badge), ("idle · you decide", "idle · you decide"))
+        self.assertIn("<b>You decide.</b> Every decision comes to you.", helm)
+        for gone in ("Asleep", "helm with you", "holds the helm"):
+            self.assertNotIn(gone, helm + board.monitor_page(board.registry(), "overview"))
+        monitor.muted(True)
+        self.assertEqual(where()[:2], ("idle · you decide · muted",) * 2)
+        monitor.helm(True)
+        menu, badge, helm = where()
+        self.assertEqual((menu, badge), ("idle · steward decides", "idle · steward decides"))
+        self.assertIn(">steward decides</span></div>", helm, "each project's card, the same words")
+        board.set_setting("steward_name", "Jarvis")
+        self.state["state"] = "working"
+        menu, badge, helm = where()
+        self.assertEqual((menu, badge), ("working · Jarvis decides", "working · Jarvis decides"))
+        self.assertIn(">Jarvis decides</span></div>", helm)
+        self.assertIn("Jarvis settles routine questions", helm)
+        monitor.helm(False)
+        self.state["state"] = "off"
+        self.assertEqual(where()[:2], ("not running · you decide",) * 2)
+
+    def test_lists_within_lists_keep_their_indent(self):
+        self.assertEqual(board.prose("- **Permissions**:\n  - all: anything\n  - edits:\n    - deeper\n- back"),
+                         "<ul><li><strong>Permissions</strong>:<ul><li>all: anything</li><li>edits:<ul><li>deeper</li></ul>"
+                         "</li></ul></li><li>back</li></ul>")
+        self.assertEqual(board.prose("- one\n- two"), "<ul><li>one</li><li>two</li></ul>", "a flat list as before")
+
+    def test_at_a_desk_the_menu_stays_put_and_enter_sends(self):
+        css = board.CSS
+        self.assertRegex(css, r"@media \(min-width: 701px\) \{ nav \{ position:sticky; top:0;[^}]*height:100vh; overflow-y:auto")
+        player = board.PLAYER
+        self.assertIn("matchMedia('(min-width: 701px) and (hover: hover) and (pointer: fine)')", player)
+        self.assertRegex(player, r"on\(gta, 'keydown', \(ev\) => \{ if \(ev.key !== 'Enter' \|\| ev.shiftKey")
+
+
+class ReachTest(BoardBase):
+    """Who the board answers. The person, Oct 28: "No: this machine only; the phone through Tailscale or the Claude
+    app". A new board answers this machine only; one from before keeps what it had."""
+    def urls(self):
+        from colony import cli
+        import argparse, io
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli.cmd_urls(argparse.Namespace(port=8790))
+        return out.getvalue()
+
+    def test_a_new_board_answers_this_machine_only_and_says_how_a_phone_reaches_it(self):
+        (board.home() / "board.json").unlink()
+        self.assertFalse(board.registry()["settings"]["lan"])
+        self.assertFalse((board.home() / "board.json").exists(), "nothing written for a board not yet made")
+        from colony import cli
+        import argparse
+        self.assertFalse(cli._lan(argparse.Namespace(lan=False, local=False)))
+        self.assertTrue(cli._lan(argparse.Namespace(lan=True, local=False)), "--lan opens it to the home network")
+        said = self.urls()
+        self.assertIn("From your network:    off: this machine only; from your phone, Tailscale (colony remote, with "
+                      "HTTPS) or the Claude app; colony board --lan opens it to your home network", said)
+        for text in ((Path(board.__file__).parent.parent / "README.md").read_text(),
+                     (Path(board.__file__).parent.parent / "start").read_text()):
+            self.assertIn("this machine only", " ".join(text.replace("#", " ").split()))
+            self.assertNotIn("8791", text)
+
+    def test_a_board_from_before_keeps_its_home_network(self):
+        (board.home() / "board.json").write_text(json.dumps({"roots": [], "settings": {"messaging": False}}))
+        self.assertTrue(board.registry()["settings"]["lan"], "it answered the network before; it still does")
+        self.assertIs(json.loads((board.home() / "board.json").read_text())["settings"]["lan"], True, "pinned")
+        board.set_setting("lan", "off")
+        self.assertFalse(board.registry()["settings"]["lan"], "their own choice stands after")
+
+    def test_a_board_with_remote_access_binds_and_answers_as_it_did(self):
+        reg = board.registry()
+        reg["settings"].update(lan=True, tailscale="colony.taildd35a8.ts.net", tailscale_lan_before=True)
+        board.save_registry(reg)
+        (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--lan"]))
+        from colony import cli
+        import argparse
+        self.assertTrue(cli._lan(argparse.Namespace(lan=False, local=False)), "it listens beyond this machine")
+        self.assertEqual(cli._server_args(argparse.Namespace(port=8791, lan=False, local=False, no_monitor=False)),
+                         ["--port", "8791", "--lan"], "and restarts the same way")
+        said = self.urls()
+        self.assertIn("http://colony.taildd35a8.ts.net:8791/", said)
+        self.assertIn("refused while remote access is on", said)
+        self.assertIn("through Tailscale (http://colony.taildd35a8.ts.net:8791/)", cli._reach(True, "colony.taildd35a8.ts.net", "8791"))
 
 
 class ProjectSettingsTest(BoardBase):
@@ -4486,19 +4651,26 @@ class PinTest(BoardBase):
                           "a name beyond Latin-1 opens")
             self.assertEqual(board.notes(self.root), [], "showing it waits on nobody")
             street = xs["The London street at night"]["id"]
-            post("/showcase/rate", p=0, id=street, stars=2)
-            post("/showcase/rate", p=0, id=street, stars=4)
+            # stars are gone (the person: "Drop them"; in 22 entries none was given): a rating stored before stays in
+            # the log, unread, and the old address for one records nothing
+            board.append(self.root, showcase.FILE, {"type": "rate", "of": street, "at": board.now(), "stars": 4})
+            try:
+                post("/showcase/rate", p=0, id=street, stars=2)
+            except urllib.error.HTTPError:
+                pass
             post("/showcase/comment", p=0, id=street, text="The far windows flicker")
-            post("/showcase/rate", p=0, id=street, stars=9)
             x = showcase.get(self.root, street)
-            self.assertEqual((x["stars"], [c["text"] for c in x["comments"]]), (4, ["The far windows flicker"]))
+            self.assertNotIn("stars", x)
+            self.assertEqual([c["text"] for c in x["comments"]], ["The far windows flicker"])
             told = [(n["text"], n.get("quiet", False)) for n in board.notes(self.root)]
-            self.assertEqual(told, [('The person rated "The London street at night" in the showcase 2 of 5.', True),
-                                    ('The person rated "The London street at night" in the showcase 4 of 5.', True),
-                                    ('On "The London street at night" in the showcase: The far windows flicker', False)],
-                             "a rating reaches the agent quietly, a comment as a message; a bad rating is ignored")
+            self.assertEqual(told, [('On "The London street at night" in the showcase: The far windows flicker', False)],
+                             "a comment reaches the agent as a message; nothing else does")
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0&view=showcase").read().decode()
             self.assertIn("The far windows flicker", page)
+            for gone in ("/showcase/rate", "class='star", "★", "Rate or comment"):
+                self.assertNotIn(gone, page)
+            self.assertNotIn("rating", board.PROTOCOL, "the agent's instructions no longer mention one")
+            self.assertNotIn("rate", run("show", "A still", "--what", "a frame").stdout)
         finally:
             httpd.shutdown()
             httpd.server_close()
@@ -6195,6 +6367,8 @@ class DailyPageTest(HoursBase):
         with self.clock(14):                                           # Wednesday afternoon: on the page from 2 PM
             first = board.add_gate(self.root, "Which reminders first?", "R3", default="email first")
             plain = board.add_gate(self.root, "Keep the old export?", "R2")
+        with self.clock(15):
+            board.render(board.registry(), 0)                          # a look, so Friday's page has a "since"
         with self.clock(3, day=8):                                     # held to Thursday 7:30: a whole Thursday
             night = board.add_gate(self.root, "Rename the project?", default="keep plants")
         for h, m, d in ((7, 30, 8), (23, 59, 8), (7, 29, 9)):
@@ -6460,7 +6634,7 @@ class PhonePageTest(HoursBase):
             monitor.muted(True)
             with patch.object(monitor, "ensure"):
                 page = board.monitor_page(board.registry())
-        self.assertIn(">Muted</span>", page, "its state in a word beside its name")
+        self.assertIn("you decide · muted</span>", page, "its state in the menu's words beside its name")
         self.assertNotIn("<p class='muted'>Muted:", page, "not four lines on what that means")
         projects_, needs = page.split("<h2>Needs you</h2>")
         self.assertIn("<b>plants</b>", projects_, "every project at a glance, first")

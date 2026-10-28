@@ -5,21 +5,13 @@ the browser and on your phone. You see what each one is doing, what it's waiting
 far along its roadmap it is, and you steer them all from one board. A steward agent can hold the helm
 for you across them.
 
-And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects with one strong agent.
-
-### Leads and completed versions
-
-Each project has one agent responsible for its roadmap by default. If you add another agent to the same folder, choose **Add helper** or **Switch lead**. Shared agents read one canonical Vision and roadmap; the lead assigns individual items when work is split. The completing agent integrates and delivers its tested work, and Colony synchronizes helpers only when they are engaged. A project with one provider needs no coordination setup.
-
-During the Vision conversation, your agent proposes a few useful completed versions and where to pause for you. Codex continues with a bounded native goal; the board shows **Pause work**, the current version and its candidate when ready. Approving a version can stop there or explicitly release a planned next one. Clearing a review card leaves it unapproved. [Mechanics and commands](docs/project-lead-spec.md).
-
-
 ## Quick start
 
     git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start
 
-That's it. It installs colony, starts the board and prints where to open it: on this machine, from
-your phone on the same network, and in the Claude or ChatGPT app, where every project's session appears.
+That's it. It installs colony, starts the board and prints where to open it. The board answers this
+machine only; from your phone, use Tailscale (below, with HTTPS) or the Claude or ChatGPT app, where every
+project's session appears. `~/colony/start --lan` opens it to every device on your home network instead.
 The steward, an agent of its own, then walks you through setup. You need
 [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex), tmux and
 Python 3.10+.
@@ -41,13 +33,15 @@ join; its addresses mean nothing to anyone else. The board answers only your dev
 2. Then `sudo tailscale up --operator=$USER`, and open the login link it prints with the account you'll use on
    your phone.
 3. On your phone: install the Tailscale app, log in with the same account, and switch it on.
-4. Back here: `colony remote`. It prints the board's address, `http://<this machine>.<your network>.ts.net:8791/`
-   (or its `100.x.y.z` address).
+4. Back here: `colony remote`. It prints the board's address, `http://<this machine>.<your network>.ts.net:<port>/`
+   (or its `100.x.y.z` address), at the board's port: whichever `colony urls` prints.
 5. Open that address on your phone.
 
 Once it's on, the board refuses every device that isn't yours, the open home network included, so a guest on
 your wifi can't reach it: at home your phone reaches it through Tailscale as well. `colony remote --check` says
 where things stand; `colony remote --off` puts it back as it was.
+
+And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects with one strong agent.
 
 ## What you get
 
@@ -178,7 +172,7 @@ Accept or reject each point, with an optional comment; only accepting a change a
 the consultants' checking round. Choices and revisions stay in the decision's record.
 [How agents link consultant points to a gate](docs/consultation-gates.md).
 
-    colony board [--local]   start the board (open to your network by default; --local: this machine only)
+    colony board [--lan]     start the board (this machine only; --lan: every device on your home network too)
     colony restart           reload the board after a change; consoles and the steward keep running
     colony doctor            is everything up and wired? what to do if not
     colony urls              where the board answers
@@ -204,6 +198,12 @@ The first time Claude Code opens in a folder it asks whether you trust it: answe
 board (the choice shows as buttons) or the app. The state shown for each session (working, needs you,
 idle) is read off its screen, so a change in Claude Code's wording could mislabel it; the lines shown
 are always the real ones.
+
+### Leads and completed versions
+
+Each project has one agent responsible for its roadmap by default. If you add another agent to the same folder, choose **Add helper** or **Switch lead**. Shared agents read one canonical Vision and roadmap; the lead assigns individual items when work is split. The completing agent integrates and delivers its tested work, and Colony synchronizes helpers only when they are engaged. A project with one provider needs no coordination setup.
+
+During the Vision conversation, your agent proposes a few useful completed versions and where to pause for you. Codex continues with a bounded native goal; the board shows **Pause work**, the current version and its candidate when ready. Approving a version can stop there or explicitly release a planned next one. Clearing a review card leaves it unapproved. [Mechanics and commands](docs/project-lead-spec.md).
 
 ## The guide
 

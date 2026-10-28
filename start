@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
 # One command: install colony if needed, check what it needs, start the board and say where it is.
-#   ~/colony/start          the board on this machine
-#   ~/colony/start --lan    the board for every device on your home network
+#   ~/colony/start          the board on this machine only; from your phone, Tailscale (colony remote, with HTTPS)
+#                           or the Claude app
+#   ~/colony/start --lan    the board for every device on your home network too
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 command -v tmux >/dev/null || { echo "colony needs tmux: install it (e.g. sudo apt install tmux, brew install tmux)"; exit 1; }

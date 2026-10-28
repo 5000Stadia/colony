@@ -104,6 +104,20 @@ def _lan(a):
     return a.lan or (board.registry()["settings"]["lan"] and not a.local)
 
 
+# Who the board answers, said the same by colony urls and colony doctor (and the README and the start script): this
+# machine only unless asked, the person's phone through Tailscale or the Claude app. The person, Oct 28: "No: this
+# machine only; the phone through Tailscale or the Claude app".
+MACHINE_ONLY = ("this machine only; from your phone, Tailscale (colony remote, with HTTPS) or the Claude app; "
+                "colony board --lan opens it to your home network")
+
+
+def _reach(lan, private, port):
+    """Who the running board answers, in a line."""
+    if private:
+        return f"this machine and your own devices through Tailscale (http://{private}:{port}/), not the home network"
+    return "this machine and every device on your home network (--lan)" if lan else MACHINE_ONLY
+
+
 def _server_args(a):
     return ["--port", str(a.port)] + (["--lan"] if _lan(a) else ["--local"]) + (["--no-monitor"] if a.no_monitor else [])
 
@@ -201,7 +215,7 @@ def cmd_urls(a):
     if private:
         print("From your network:    refused while remote access is on: your devices reach it through Tailscale")
     elif not lan:
-        print("From your network:    off (colony settings lan on, then colony restart)")
+        print(f"From your network:    off: {MACHINE_ONLY}")
     if private:
         print(f"From anywhere:        http://{private}:{port}/   (your devices on Tailscale, and no one else)")
     else:
@@ -361,7 +375,9 @@ def cmd_doctor(a):
     args = json.loads(saved.read_text()) if saved.exists() else []
     port = args[args.index("--port") + 1] if "--port" in args else "8790"
     if _answers(port):
-        print(f"ok    board answers on port {port}")
+        print(f"ok    board answers on port {port}: "
+              + _reach("--lan" in args or (not args and board.registry()["settings"]["lan"]),
+                       board.registry()["settings"].get("tailscale"), port))
     else:
         problems.append(f"the board does not answer on port {port}: colony board, or colony restart"
                         + ("" if _free(int(port), False) else " (another program holds that port: colony stop, then colony board)"))
@@ -604,7 +620,7 @@ def cmd_pin(a):
 
 
 def cmd_show(a):
-    """Put a deliverable in the project's showcase for the person to see, rate and comment on, if they like."""
+    """Put a deliverable in the project's showcase for the person to see and comment on, if they like."""
     from . import board, showcase
     root = board.root_of()
     dead = _dead_link(a.link or "")
@@ -620,7 +636,7 @@ def cmd_show(a):
     except ValueError as err:
         print(f"colony: {err}", file=sys.stderr)
         return 2
-    print(f"shown {x['id']}: {x['title']} (the person may rate and comment; it arrives as a note)")
+    print(f"shown {x['id']}: {x['title']} (the person may comment; it arrives as a note)")
     return 0
 
 
@@ -1765,7 +1781,7 @@ def main(argv=None):
         p.add_argument(f"--{k}", help="for this project (default: the global setting)")
     p.set_defaults(fn=cmd_track)
     p = sub.add_parser("board"); p.add_argument("--port", type=int)
-    p.add_argument("--lan", action="store_true", help="also answer other machines on the network")
+    p.add_argument("--lan", action="store_true", help="also answer every device on your home network (the default is this machine only)")
     p.add_argument("--no-steward", "--no-monitor", dest="no_monitor", action="store_true", help="don't start the steward session and its watcher")
     p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
     p.add_argument("--local", action="store_true", help="answer only this machine, whatever the settings say")

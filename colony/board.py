@@ -120,7 +120,7 @@ steer all of them from one board, and the projects can write to each other.
 - The plan is `ROADMAP.md`: milestones `## M1 — name`, items `- [ ] R1 text`; `[~]` in progress, `[x]` done,
   `[?]` only for what the person asked to sign off, then `colony ready R4 "what's ready" --check "how to see it"`.
   A deliverable worth their seeing: `colony show "title" --what "what it is" --try "how to see it" --link URL-or-file
-  --item R4`; their rating or comment arrives as a note.
+  --item R4`; their comment arrives as a note.
   Work outside the milestone's purpose goes under `## Later`. Commit each finished piece.
   A milestone may name its kind after its title (`## M4 — Concepts · menu`): `menu` (options in any order), `lanes`
   (roads side by side; each item says `(lane: name)`), `findings` (questions answered by experiment), `sections` (the
@@ -235,12 +235,19 @@ def registry():
     old = reg.get("settings", {})
     if "usage_pause" in old:                           # its name before "safe pause"
         old.setdefault("safe_pause", old.pop("usage_pause"))
+    if path.exists() and "lan" not in old:
+        # a board from before a new one answered this machine only kept the default it had then, the home network,
+        # pinned once so nothing about how it is reached changes (every board saves its settings in full after this)
+        old["lan"] = True
+        raw = json.loads(path.read_text())
+        raw.setdefault("settings", {})["lan"] = True
+        save_registry(raw)
     reg["settings"] = dict(DEFAULT_SETTINGS, **old)
     return reg
 
 
 # The person's global options, with what each means; the board's Settings page and `colony settings` show them.
-DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": True, "messaging": True, "trust": True, "model": "", "effort": "",
+DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "monitor": True, "lan": False, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "all", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60,
@@ -258,7 +265,7 @@ SETTING_HELP = {
     "remote_by": "each program's default for new projects, as claude=on,codex=on (a project can turn its own off)",
     "safe_pause_session": "% of a 5-hour session window at which projects wind down until it resets; never later than safe_pause (off: as safe_pause)",
     "turbo_by": "turbo for each program, as claude=on,codex=on (on unless turned off): when its weekly use runs behind pace, its projects with queued work are turned up as each one ticks",
-    "lan": "the board answers other devices on your network, not only this machine",
+    "lan": "the board answers every device on your home network, not only this machine (off: your phone reaches it through Tailscale or the Claude app)",
     "messaging": "project agents can message each other (colony send, colony reply)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
@@ -1915,9 +1922,9 @@ def since(root, seen):
 
 def page_base(root, mark=True):
     """Where a project's page for the day starts what landed (and its Overview, what changed): the person's last look at
-    it on an earlier day (when, and the commit it stood at), or on a first look, the start of the day before. Each look
-    (at either page) is kept on this machine, with the board: the pages read the same all day, and turn over with the
-    person's day."""
+    it on an earlier day (when, and the commit it stood at), or on a first look, the start of the day before, marked
+    first: they were never here, so there is no "since you were last here" to tell. Each look (at either page) is kept
+    on this machine, with the board: the pages read the same all day, and turn over with the person's day."""
     path = home() / "today.json"
     with board_lock("today") if mark else nullcontext():
         try:
@@ -1929,7 +1936,8 @@ def page_base(root, mark=True):
         if rec.get("day") != board_time(day):
             before = hours.day_start(day - 1)
             rec = {"day": board_time(day), "from": rec.get("last") or {
-                "at": board_time(before), "head": git(root, "rev-list", "-1", f"--before=@{int(before)}", "HEAD").strip()}}
+                "at": board_time(before), "head": git(root, "rev-list", "-1", f"--before=@{int(before)}", "HEAD").strip(),
+                "first": True}}
         if mark:
             rec["last"] = {"at": now(), "head": git(root, "rev-parse", "HEAD").strip()}
             every[str(root)] = rec
@@ -1969,6 +1977,17 @@ def on_day(at):
     return time.strftime("%b %-d" if then.tm_year == today.tm_year else "%b %-d %Y", then)
 
 
+def local_day(at, clock=False):
+    """A board or git time as the person reads it, on this machine's clock: 2026-10-28 (with clock, 2026-10-28 16:00).
+    Cut from the stored text it was UTC, and an evening's question read as tomorrow's 23:00 beside Chat's 4:00 PM."""
+    from datetime import datetime
+    try:
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return str(at)[:16 if clock else 10].replace("T", " ")
+    return when.strftime("%Y-%m-%d %H:%M" if clock else "%Y-%m-%d")
+
+
 # ---------------------------------------------------------------- the page
 
 def e(text):
@@ -2000,14 +2019,18 @@ def note_box(pid, kind, ref, hint, back=None):
             f"<textarea name='text' placeholder='{e(hint)}'></textarea><button>Leave note</button></form>")
 
 
+def note_by(n):
+    """Who left a note, as a page names them (HTML): the person is "you", everyone else is named as themselves."""
+    return {'monitor': e(the_steward()) + ', for you',
+            'suggestion': 'research advice' if n.get('kind') == 'advice' else e(the_steward()) + ' suggests',
+            'observation': 'file change observed', 'colony': 'colony', 'page': 'a page you used'}.get(n.get('author'), 'you')
+
+
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        who = {'monitor': e(the_steward()) + ', for you',
-               'suggestion': 'research advice' if n.get('kind') == 'advice' else e(the_steward()) + ' suggests',
-               'observation': 'file change observed', 'colony': 'colony', 'page': 'a page you used'}.get(n.get('author'), 'you')
-        out += (f"<div class='note'><span class='who'>{who} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
-                + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
+        out += (f"<div class='note'><span class='who'>{note_by(n)} · {e(local_day(n['at']))}</span><div>{e(n['text'])}</div>"
+                + (f"<div class='reply'><span class='who'>agent · {e(local_day(n['addressed_at']))}</span>"
                    f"<div>{e(n['reply'])}</div></div>" if n["addressed_at"]
                    else f"<div class='who'>{e(status(n, road_items or {}))}</div>")
                 + "</div>")
@@ -2293,11 +2316,31 @@ def nav_order(plist):
 NEEDS_PAGE = -3          # the page of everything waiting on the person: no project's, nor the steward's
 
 
+def steward_status(state=None):
+    """The steward's state in one vocabulary wherever it shows (the menu, its page, the Helm tab): what it is doing
+    (working, idle, needs you, not running), then who decides: "you decide" with the helm off (muted too, if so), or
+    "steward decides" (by its name, once it has one) with the helm on. Before, at one moment its page said "Asleep",
+    the menu "idle · helm with you", and "helm with you" read as the helm being on. Returns (line, who decides, what
+    that means)."""
+    from . import monitor
+    if state is None:
+        state = monitor.snapshot()["state"]
+    if monitor.helm():
+        who, means = (f"{steward_name()} decides", f"{the_steward(start=True)} settles routine questions in every project "
+                      "included in its helm, within each one's direction; what is yours still comes to you.")
+    elif monitor.muted():
+        who, means = ("you decide · muted", "Every decision comes to you. Nothing wakes "
+                      f"{the_steward()} and it spends nothing; it answers only when you talk to it.")
+    else:
+        who, means = ("you decide", f"Every decision comes to you. Nothing wakes {the_steward()} but you and its "
+                      "scouting, and the board shows you what needs you.")
+    return f"{state if state != 'off' else 'not running'} · {who}", who, means
+
+
 def sidebar(reg, pid):
     from . import monitor
     plist = projects(reg)
     ms = monitor.snapshot()
-    helm = "at the helm" if monitor.helm() else "helm with you"
     side, total = [], 0
     for here, members in nav_groups(plist):
         chips, states, waits = [], [], 0
@@ -2333,7 +2376,7 @@ def sidebar(reg, pid):
     # the steward first: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>{e(steward_name())}</span>"
-                   f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>")
+                   f"<span class='sline'>{e(steward_status(ms['state'])[0])}</span></a>")
     from . import providers as pv, usage
     for k, prov in pv.PROVIDERS.items():
         ws = usage.read(k) if pv.usable(prov) else {}
@@ -3325,6 +3368,11 @@ PLAYER = """
   // a phone still drops the keyboard as the finger lifts, the box moves, and the tap lands where ↑ was: it sends on the
   // lift instead, as Chat's own box does (the person, 2026-10-28: "a singular tap retracts the keyboard and does not send")
   on(gc.querySelector('.gcsend'), 'touchend', (ev) => { ev.preventDefault(); gc.requestSubmit ? gc.requestSubmit() : gc.querySelector('.gcsend').click(); });
+  // at a desk, with a keyboard and a mouse, Enter sends and Shift+Enter starts a new line, as chat apps there do; a
+  // phone keeps Enter as a new line (its keyboard has no Shift+Enter), and words still being composed are left alone
+  const desk = window.matchMedia('(min-width: 701px) and (hover: hover) and (pointer: fine)');
+  on(gta, 'keydown', (ev) => { if (ev.key !== 'Enter' || ev.shiftKey || ev.altKey || ev.ctrlKey || ev.metaKey || ev.isComposing || !desk.matches) return;
+    ev.preventDefault(); gc.requestSubmit ? gc.requestSubmit() : gc.querySelector('.gcsend').click(); });
   on(gc, 'submit', async (ev) => { ev.preventDefault();
     const t = target(), text = gta.value.trim(), fs = [...gfile.files];
     if (!text && !fs.length) return;
@@ -4512,7 +4560,7 @@ def vision_box(root, pid):
     changes = [r for r in vision.history(root) if r['how'] != 'baseline']
     current = (prose(road['vision']) if road['vision'] else
                f"<p class='muted'>{e(road['goal']) or 'Shape the vision with your project agent.'}</p>")
-    rows = ''.join(f"<li><span class='who'>{e(r['at'])} · {e(r['how'])}</span>"
+    rows = ''.join(f"<li><span class='who'>{e(local_day(r['at'], clock=True))} · {e(r['how'])}</span>"
                    f"<div>{prose(r['text']) or '(vision cleared)'}</div>"
                    + (f"<p>{e(r['words'])}</p>" if r.get('words') else '')
                    + (f"<p class='muted'>Reading: {e(r['context'])}</p>" if r.get('context') else '') + '</li>' for r in reversed(changes))
@@ -4551,7 +4599,19 @@ def prose(text):
             out.append(f"<p>{_inline(' '.join(para))}</p>")
             para.clear()
         if items:
-            out.append("<ul>" + "".join(f"<li>{_inline(' '.join(i))}</li>" for i in items) + "</ul>")
+            # an item indented under another is a list within it, as deep as it goes (they read flat before)
+            html_, stack = [], []                   # stack: the indent of each list open, outermost first
+            for indent, *words in items:
+                while len(stack) > 1 and indent < stack[-1]:
+                    stack.pop()
+                    html_.append("</li></ul>")
+                if not stack or indent > stack[-1]:
+                    stack.append(indent)
+                    html_.append("<ul>")
+                else:
+                    html_.append("</li>")
+                html_.append(f"<li>{_inline(' '.join(words))}")
+            out.append("".join(html_) + "</li></ul>" * len(stack))
             items.clear()
         if rows:
             head = len(rows) > 1 and all(re.fullmatch(r":?-{3,}:?", c) for c in cells(rows[1]))
@@ -4587,7 +4647,7 @@ def prose(text):
         elif bullet:
             if para:
                 flush()
-            items.append([bullet.group(1)])
+            items.append([len(raw.expandtabs(4)) - len(raw.expandtabs(4).lstrip()), bullet.group(1)])
         elif items and raw[:1] in (" ", "\t"):
             items[-1].append(line)                       # a list item wrapped onto the next line
         else:
@@ -4758,14 +4818,22 @@ def render(reg, pid, view="overview", show_all=""):
         out.append(library_html(pid, root, show_all))
     elif view == "roadmap":                 # the plan and its record: the roadmap, notes, history, mail
         out.append(progress_panel(root, pid))       # a shared plan's versions, while one runs or waits to start
-        # the person's own notes the agent has not acted on yet, wherever they were left
+        # the person's own notes the agent has not acted on yet, wherever they were left; what colony, the steward or
+        # a page left for it follows, folded and named as theirs (colony's brief for a new project, in its command
+        # syntax, sat among "your notes" on a newcomer's first look)
         its_now = items(road)
-        mine = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
+        unread = [n for n in all_notes if not n["addressed_at"] and not (n["anchor"] or {}).get("gate")]
+        mine = [n for n in unread if n.get("author", "person") == "person"]
+        others = [n for n in unread if n.get("author", "person") != "person" and not n.get("quiet")]
+        row = lambda n, by="": (f"<div class='note'><span class='who'>{by}{e(where(n))} · {e(local_day(n['at']))}</span>"
+                                f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>")
         if mine:
             out.append(f"<h2>Your notes, not yet acted on ({len(mine)})</h2><div class='card'>"
-                       + "".join(f"<div class='note'><span class='who'>{e(where(n))} · {e(n['at'][:10])}</span>"
-                                 f"<div>{e(n['text'])}</div><div class='who'>{e(status(n, its_now))}</div></div>" for n in mine)
-                       + "</div>")
+                       + "".join(row(n) for n in mine) + "</div>")
+        if others:
+            out.append(f"<details class='card fold'><summary><h3>Left for the agent by others</h3>"
+                       f"<span class='muted'>{len(others)}</span></summary>"
+                       + "".join(row(n, f"{note_by(n)} · ") for n in others) + "</details>")
         out.append(measures_html(root))
         # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
         out.append("<h2 id='roadmap'>Roadmap</h2>")
@@ -4848,12 +4916,12 @@ def render(reg, pid, view="overview", show_all=""):
         for line in git(root, "log", "-n", str(RECORD_ALL if show_all == "history" else FOLD_SHOWN),
                         "--format=%h\x1f%aI\x1f%s").splitlines():
             h, t, subj = line.split("\x1f")
-            hist.append((stamp(t), f"<details class='item'><summary><code>{e(h)}</code> {e(t[:10])} {e(subj)}"
+            hist.append((stamp(t), f"<details class='item'><summary><code>{e(h)}</code> {e(local_day(t))} {e(subj)}"
                          + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
                          + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"/?p={pid}&view=roadmap") + "</details>"))
         out.append(record_fold(pid, "history", "History", hist, hist_n, show_all, rest="the rest are in its git log"))
         whole = [(n["at"], thread([n], items(road))) for n in all_notes if not n["anchor"]]
-        whole += [(m["at"], f"<div class='note'><span class='who'>you · {e(m['at'][:10])} · "
+        whole += [(m["at"], f"<div class='note'><span class='who'>you · {e(local_day(m['at']))} · "
                             f"{'into its console' if m['to'] == 'console' else 'to ' + e(m['to']) + ', written by its agent'}</span>"
                             f"<div>{e(m['text'])}</div></div>") for m in read(root, "messages.jsonl")]
         whole = [(at, h) for at, _, h in sorted(((at, i, h) for i, (at, h) in enumerate(whole)), reverse=True)]
@@ -4866,7 +4934,7 @@ def render(reg, pid, view="overview", show_all=""):
             state = ("answered" if m["answer"] else "waiting for an answer") if m["ask"] else ""
             if m["to"] == me and not m["delivered_at"]:
                 state = "reaches the agent on its next turn"
-            rows.append((m["at"], f"<div class='note'><span class='who'>{e(m['at'][:16].replace('T', ' '))} · {way}"
+            rows.append((m["at"], f"<div class='note'><span class='who'>{e(local_day(m['at'], clock=True))} · {way}"
                                   f"{' · ' + state if state else ''}</span><div>{e(m['text'])}</div></div>"))
         out.append(record_fold(pid, "mail", "Mail with other projects", rows, len(rows), show_all))
     else:                                 # what needs the person now, and what changed (its status leads the page)
@@ -5021,7 +5089,10 @@ def since_html(pid, root, base):
     """What changed since the person's last look on an earlier day (as the day's page counts it; no clearing needed):
     the newest few things, one line each with its date, and when there is more, how much in all, each count pointing
     to where it lives. Items moved, gates opened, the person's and the steward's notes answered, and the agent's pins
-    come first; commits fill what room is left. Nothing changed, no section."""
+    come first; commits fill what room is left. Nothing changed, or never here before, no section (a project made
+    minutes earlier read "Since you were last here · Oct 27" on its first day)."""
+    if base.get("first"):
+        return ""
     s = since(root, base)
     times = item_times(root) if s["moved"] else {}
     road = f"/?p={pid}&view=roadmap"
@@ -5121,7 +5192,7 @@ def library_html(pid, root, q=""):
             f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(x['id'])}' target='_blank' "
             f"rel='noopener'>{e(x['title'])}</a><form method='post' action='/pin/restore'>{hidden}<input type='hidden' name='id' "
             f"value='{e(x['id'])}'><button class='quiet'>Restore</button></form></div><div class='who'>"
-            f"archived {e(x['archived']['at'][:10])}{' by the agent' if x['archived'].get('by') == 'agent' else ''}"
+            f"archived {e(local_day(x['archived']['at']))}{' by the agent' if x['archived'].get('by') == 'agent' else ''}"
             + (f" · {e(x['archived']['why'])}" if x["archived"].get("why") else "") + "</div></div>" for x in gone) + "</details>")
     # adding a file from the project: found by a search, never listed by itself
     q = (q or "").strip().lower()
@@ -5186,7 +5257,7 @@ def measures_html(root):
             value = (f"<b>{measures.fmt(last['value'])}</b>{target}{' <span class=reached>✓ reached</span>' if reached else ''} "
                      f"<span class='spark'>{measures.spark(m['values'])}</span>"
                      + (" <span class='muted'>(method changed)</span>" if m["changed"] else ""))
-        when = (f" · {how} at {e(last['commit'][:7])}, {e(last['at'][:10])}" if last else "")
+        when = (f" · {how} at {e(last['commit'][:7])}, {e(local_day(last['at']))}" if last else "")
         why = f"<div class='muted small'>{e(last['reason'])}</div>" if last and last.get("reason") else ""
         rows.append(f"<div class='measure'><span class='mname'>{e(m['name'])}</span> {value}"
                     f"<div class='muted small' title='{e(m['what'])}'>{e(m['part'] if m['part'] not in (None, 'Vision', 'Measures') else 'the whole plan')}{when}</div>{why}</div>")
@@ -5372,7 +5443,7 @@ def render_item(reg, pid, iid):
         body.append("<h2>Consultations</h2>" + "".join(consultation(c) for c in cs))
     work = [l.split("\x1f") for l in git(root, "log", "--format=%h\x1f%aI\x1f%s", f"--grep={iid}\\b", "-E").splitlines() if l]
     body.append("<h2>Work done on it</h2><div class='card'>" + ("".join(
-        f"<div class='muted'><code>{e(h)}</code> {e(t_[:10])} {e(s)}</div>" for h, t_, s in work)
+        f"<div class='muted'><code>{e(h)}</code> {e(local_day(t_))} {e(s)}</div>" for h, t_, s in work)
         or "<p class='muted'>No commits mention it yet.</p>") + "</div>")
     ns = [n for n in notes(root) if (n["anchor"] or {}).get("item") == iid]
     body.append("<h2>Direction and notes</h2><div class='card'>" + thread(ns, its)
@@ -5541,7 +5612,7 @@ def consultation(c):
     checked = (f"<div class='pre'>Changes checked in this round: {e(c['checked']['words'])}</div>"
                if c.get("checked") else "")
     return (f"<div class='card'><b>Round {c['round']}: {e(c['question'])}</b> "
-            f"<span class='muted'>{e(c['at'][:10])} · ${c['cost']:.2f}{note}</span>"
+            f"<span class='muted'>{e(local_day(c['at']))} · ${c['cost']:.2f}{note}</span>"
             + "".join(answer(x) for x in c["answers"])
             + checked
             + (f"<div class='pre'>You accepted: {e(c['adopted'])}</div>" if c.get("adopted") else "")
@@ -5915,12 +5986,9 @@ def monitor_page(reg, view="overview"):
                f"<label class='stack'>What should {e(the_steward())} tell them for you?"
                f"<textarea name='text' placeholder='It relays it as yours, in full, and checks it landed'></textarea></label>"
                f"<button>Have {e(the_steward())} send it</button></form></div></details>") if targets else ""
-    # its state in a word beside its name; what that means is on the Helm tab (and under a pointer, in the word's title)
-    stance, means = (("At the helm", "It holds the helm of every project included in it, and settles routine questions "
-                      "within each one's direction.") if on else
-                     ("Muted", "Nothing wakes it and it spends nothing; it answers only when you talk to it.") if monitor.muted() else
-                     ("Asleep", "Nothing wakes it but you and its scouting, and the board shows you what needs you."))
-    head = (f"<header class='project'><div class='titlerow'><h1>{e(steward_name())}</h1><span class='badge stance' title='{e(means)}'>{stance}</span>"
+    # its state beside its name, in the menu's words; what that means is on the Helm tab (and under a pointer, in its title)
+    line, stance, means = steward_status()
+    head = (f"<header class='project'><div class='titlerow'><h1>{e(steward_name())}</h1><span class='badge stance' title='{e(means)}'>{e(line)}</span>"
             f"{message}<form method='post' action='/helm' class='helmform'>"
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form>"
@@ -5949,7 +6017,7 @@ def monitor_page(reg, view="overview"):
     if view == "helm":
         cards = [f"<div class='card'><div class='titlerow'><h3>Every project</h3>"
                  f"<a href='/steward?view=direction'>Standing direction →</a></div>"
-                 f"<p><b>{stance}.</b> {e(means)}</p>"
+                 f"<p><b>{e(stance[:1].upper() + stance[1:])}.</b> {e(means)}</p>"
                  f"<p class='muted'>What {e(the_steward())} settles, what always comes back to you, and how it steers, for all projects"
                  f"{' (your version)' if (home() / 'direction.md').exists() else ''}. Each project below adds its own, and "
                  f"whether it is included in {e(the_steward(possessive=True))} helm.</p></div>"]
@@ -5959,13 +6027,13 @@ def monitor_page(reg, view="overview"):
             pos, f, held = monitor.posture(p), focus(p), monitor.helm_for(p)
             opt = lambda v, label, cur: f"<option value='{v}'{' selected' if cur == v else ''}>{label}</option>"
             lines = "".join(f"<li><span class='kind'>{k}</span> {e(x)}</li>" for k in ("doing", "verify", "next") for x in f[k])
-            made = "".join(f"<div class='note'><span class='who'>{e(d['at'][:16].replace('T', ' '))}</span><div>{e(d['text'])}</div></div>"
+            made = "".join(f"<div class='note'><span class='who'>{e(local_day(d['at'], clock=True))}</span><div>{e(d['text'])}</div></div>"
                            for d in monitor.decisions(p, 8))
             cards.append(f"<div class='card helmcard'><div class='titlerow'><h3>{e(p.name)}</h3>"
-                         f"<span class='badge {'gate' if held else ''}'>{e(steward_name()) + ' holds the helm' if held else 'helm with you'}</span></div>"
+                         f"<span class='badge {'gate' if held else ''}'>{e(steward_name()) + ' decides' if held else 'you decide'}</span></div>"
                          f"<form class='options' method='post' action='/posture'><input type='hidden' name='p' value='{pid}'>"
                          f"<label><input type='checkbox' name='helm' value='on'{'' if pos['helm'] is False else ' checked'}> Include in {e(the_steward(possessive=True))} helm "
-                         f"<span class='muted'>({'held now' if held else 'the helm is with you' if not on else 'left out'})</span></label>"
+                         f"<span class='muted'>({'it decides here now' if held else 'the helm is off: you decide' if not on else 'left out: you decide here'})</span></label>"
                          f"<label class='stack'>Direction for {e(the_steward())}<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
                          f"<label><input type='checkbox' name='scouting' value='on'{' checked' if pos['scouting'] else ''}> Scout for it every "
                          f"<input name='scout' type='number' min='1' step='1' value='{pos['scout'] or 24}' class='hours'> hours "
@@ -5979,7 +6047,7 @@ def monitor_page(reg, view="overview"):
     # Every project at a glance first, one line each (what it is at, what waits on the person), then what waits on them,
     # project by project, then, folded, what the steward decided.
     made = monitor.decisions(None, 10)
-    recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(d['at'][:16].replace('T', ' '))}</span>"
+    recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(local_day(d['at'], clock=True))}</span>"
                      f"<div>{e(d['text'])}</div></div>" for d in made)
     last = monitor.said_last()
     said = (f"<a class='saidlast' href='/steward?view=console'><span class='who'>{e(the_steward(True))} said · {e(on_day(last['at']))}"
@@ -6026,11 +6094,11 @@ def status_card(pid, snap, work="", waiting=None):
 
 def showcase_html(pid, root):
     """What the project made that's worth seeing, newest first: what it is, how to see or try it, and the person's
-    rating and comments, none of them required. The rest folds into Earlier, the project's history of what it showed."""
+    comments, none required. The rest folds into Earlier, the project's history of what it showed."""
     rows = showcase.entries(root)
     if not rows:
         return ("<h2>Showcase</h2><p class='muted'>Nothing shown yet. When a deliverable reaches a stage where it should be "
-                "good, the agent puts it here: what it is and how to see it. Rate or comment if you like; nothing waits on you.</p>")
+                "good, the agent puts it here: what it is and how to see it. Comment if you like; nothing waits on you.</p>")
     back = f"/?p={pid}&view=showcase"
 
     def card(x):
@@ -6043,14 +6111,12 @@ def showcase_html(pid, root):
             image = not showcase.is_url(x) and showcase.mime(x).startswith("image/")
             link = (f"<a href='{href}'{new_tab}><img class='shot' src='{href}' alt='{e(x['title'])}'></a>" if image
                     else f"<a class='open' href='{href}'{new_tab}>Open {e(x['link'] if not showcase.is_url(x) else 'it')} →</a>")
-        stars = "".join(f"<button name='stars' value='{n}' class='star{' on' if (x['stars'] or 0) >= n else ''}' "
-                        f"title='{n} of 5'>★</button>" for n in range(1, 6))
-        said = "".join(f"<div class='note'><span class='who'>you · {e(c['at'][:10])}</span><div>{e(c['text'])}</div></div>"
+        said = "".join(f"<div class='note'><span class='who'>you · {e(local_day(c['at']))}</span><div>{e(c['text'])}</div></div>"
                        for c in x["comments"])
         return (f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b>"
-                f"<span class='who'>{e(x.get('item') or '')} {e(x['at'][:10])}</span></div>"
+                f"<span class='who'>{e(x.get('item') or '')} {e(local_day(x['at']))}</span></div>"
                 f"<div>{e(x['what'])}</div>" + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "")
-                + link + f"<form class='rate' method='post' action='/showcase/rate'>{hidden}{stars}</form>{said}"
+                + link + f"{said}"
                 f"<details><summary class='muted'>Comment</summary><form class='add' method='post' action='/showcase/comment'>"
                 f"{hidden}<textarea name='text' placeholder='What you think of it: it reaches the agent'></textarea>"
                 f"<button>Send</button></form></details></div>")
@@ -6062,7 +6128,7 @@ def showcase_html(pid, root):
 
 def nest_page(reg, name):
     """A nest's own page: the shared vision its projects build toward, its projects, and every member's links and
-    demos gathered in one place, each marked with the project it came from (open, rate and comment there)."""
+    demos gathered in one place, each marked with the project it came from (open and comment there)."""
     from . import nest
     plist = projects(reg)
     n = nest.nests().get(name)
@@ -6076,7 +6142,7 @@ def nest_page(reg, name):
            "with any member's agent; it records your words and every member hears it.</p>") + "</div>",
            *([f"<h2>Standards</h2><div class='card'>" + "".join(
                f"<div class='note'>“{e(r['words'])}”<span class='who'>{' · said in ' + e(r['from']) if r.get('from') else ''}"
-               f" · {e(r['at'][:10])}</span></div>" for r in n["standards"]) + "</div>"] if n.get("standards") else []),
+               f" · {e(local_day(r['at']))}</span></div>" for r in n["standards"]) + "</div>"] if n.get("standards") else []),
            "<h2>Projects</h2><div class='card plist'>"]
     for i, p in members:
         out.append(project_row(i, p, first_sentence_of(roadmap(p)["vision"] or roadmap(p)["goal"]) if p.exists() else ""))
@@ -6116,11 +6182,10 @@ def nest_page(reg, name):
     for i, p, x in demos:
         open_it = (f"<a class='open' href='/showcase/open?p={i}&id={e(x['id'])}' target='_blank' rel='noopener'>Open →</a>"
                    if x.get("link") else "")
-        stars = f" · {'★' * x['stars']}" if x.get("stars") else ""
         out.append(f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b><span class='who'>{e(p.name)} · "
-                   f"{e(x['at'][:10])}{stars}</span></div><div>{e(x['what'])}</div>"
+                   f"{e(local_day(x['at']))}</span></div><div>{e(x['what'])}</div>"
                    + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "") + open_it
-                   + f" <a class='muted' href='/?p={i}&view=showcase'>rate or comment in {e(p.name)}</a></div>")
+                   + f" <a class='muted' href='/?p={i}&view=showcase'>comment in {e(p.name)}</a></div>")
     if not demos:
         out.append("<p class='muted'>Nothing shown yet in these projects.</p>")
     return shell(reg, -2, "".join(out))
@@ -6447,7 +6512,7 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
                         f"<a class='go' href='/?p={pid}&view=console'>Open its console →</a>{foot}</div>")
         elif w["kind"] == "ask":
             a = w["ask"]
-            rows.append(f"<div class='need'>{who('asked in its console · ' + e(a['at'][:16].replace('T', ' ')))}"
+            rows.append(f"<div class='need'>{who('asked in its console · ' + said_at(a['at']))}"
                         f"{ask_html(a['text'])}{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
         else:                                         # items ready for the person's OK, with no question beside them
             rows.append(f"<div class='need'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}{foot}</div>")
@@ -6644,7 +6709,7 @@ def model_changes(pending_only=False):
         out.append(f"<details class='more'><summary>Recent choices ({min(len(state['history']), 30)})</summary>")
         for event in reversed(state['history'][-30:]):
             out.append('<ul>' + row(selection.role_label(event['role']), event['before'], event['after'], event['prices']) + '</ul>'
-                       + f"<p class='muted'>{e(event['reason'])} · {e(event['at'])}</p>")
+                       + f"<p class='muted'>{e(event['reason'])} · {e(local_day(event['at'], clock=True))}</p>")
             if selection.returnable(state, event):
                 out.append("<form method='post' action='/model-decision'><input type='hidden' name='action' value='rollback'>"
                            f"<input type='hidden' name='event' value='{e(event['id'])}'>"
@@ -7244,7 +7309,7 @@ def settings_page(reg):
     steps = "".join(f"<li>{e(t)}" + (f" <a href='{e(url)}' target='_blank' rel='noopener'>{e(url)}</a>" if url else "") + "</li>"
                     for t, url in bench.AA_STEPS)
     keybox = (f"<p>{'Connected' if st['connected'] else 'Not connected'}"
-              + (f"; data last fetched {e(st['at'][:16].replace('T', ' '))} UTC ({st.get('models', 0)} models)" if st.get("at") else "")
+              + (f"; data last fetched {e(local_day(st['at'], clock=True))} ({st.get('models', 0)} models)" if st.get("at") else "")
               + (f". <span class='muted'>{e(st['error'])}</span>" if st.get("error") else "") + "</p>"
               f"<ol class='steps'>{steps}</ol>"
               f"<form method='post' action='/aa-key' class='options'><label>API key <input type='password' name='key' "
@@ -8556,8 +8621,6 @@ class Handler(BaseHTTPRequestHandler):
                 pins.restore(root, pin["id"])
                 add_note(root, {"pin": pin["id"]}, f"The person brought {pins.describe(pin)} back into the Library.",
                          author='colony', quiet=True)
-        elif path == "/showcase/rate" and form.get("id") and form.get("stars", "").isdigit():
-            showcase.rate(root, form["id"], int(form["stars"]))
         elif path == "/showcase/comment" and text and form.get("id"):
             showcase.comment(root, form["id"], text)
         elif path == "/pin/comment" and text and form.get("id"):
@@ -8634,6 +8697,9 @@ CSS = """
 nav { width:220px; flex:none; border-right:1px solid var(--line); padding:16px 10px; background:var(--card) }
 /* where the menu is a column (a desktop, a phone turned sideways), the player and the message box keep to the page beside it */
 @media (min-width: 701px) { body .cplayer, body .gc { left:220px } }
+/* and it stays in place as the page scrolls, scrolling itself when it is the longer: in a long chat it went up with the
+   page and left an empty column */
+@media (min-width: 701px) { nav { position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto } }
 nav .pinjump { display:none }
 nav .proj { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; color:var(--ink); text-decoration:none }
 nav .proj.on { background:var(--sunk); font-weight:600 } main { flex:1; min-width:0; max-width:1240px; padding:8px 24px 60px }
@@ -9103,10 +9169,10 @@ details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8
 .status .waits { font-size:13px; margin-top:2px }
 .pinned { margin:10px 0 6px } .pinhead { display:flex; align-items:baseline; gap:12px } .pinhead h2 { margin:10px 0 6px }
 .show .showhead { display:flex; gap:8px; align-items:baseline } .show .showhead .who { margin-left:auto; white-space:nowrap }
+/* once the showcase's stars; the reading-speed controls (.voicesheet, .composerbar) are laid out with it too */
+.rate { display:flex; gap:2px; margin-top:6px }
 .show { min-width:0 } .show .showhead { flex-wrap:wrap } .show > div { overflow-wrap:anywhere }
 .show .try { margin-top:6px } .show .open { display:inline-block; max-width:100%; margin-top:6px; overflow-wrap:anywhere } .show .shot { display:block; max-width:100%; margin-top:8px; border-radius:6px }
-.rate { display:flex; gap:2px; margin-top:6px } .star { background:none; border:none; padding:2px 4px; font-size:20px; color:var(--line); cursor:pointer }
-.star.on { color:var(--accent) }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
 .pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
