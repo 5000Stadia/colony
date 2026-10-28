@@ -3151,7 +3151,8 @@ PLAYER = """
     // not sent: the words come back, still for that project
     gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = {key: t.key, name: t.name, chosen: true}; keepDraft(); grow(); placed();
     if (fs.length) { try { const dt = new DataTransfer(); fs.forEach((f) => dt.items.add(f)); gfile.files = dt.files; chosen(); } catch (e) {} }
-    gsaid.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console'
+    const left = r && r.status === 409 ? await r.text() : '';
+    gsaid.textContent = r && r.status === 409 ? 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console'
       : r && r.status === 503 ? (await r.text()).slice(0, 140) : 'Not sent: the board could not be reached';
   });
   grow();
@@ -3969,7 +3970,8 @@ CHAT = """
     if (fs.length) { try { const dt = new DataTransfer(); [...fs, ...file.files].forEach((x) => dt.items.add(x)); file.files = dt.files; } catch (e) {} }
     grow(); chosen(); busy();
     held.hidden = false;
-    held.textContent = r && r.status === 409 ? 'Not sent: something is half-typed in its console. Send or clear it there, then send this again.'
+    const left = r && r.status === 409 ? await r.text() : '';
+    held.textContent = r && r.status === 409 ? 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console. Send or clear it there, then send this again.'
       : r && r.status === 503 ? await r.text() : r ? 'Not sent: the board could not hand it over (' + r.status + ').' : 'Not sent: the board could not be reached.';
   });
   // Read aloud: the board's player, over every page, reads; this chat hands it the replies and shows where it is
@@ -7992,6 +7994,9 @@ class Handler(BaseHTTPRequestHandler):
                     append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text, "to": "console"})
                 if not sent and not console.live(src):        # not a draft in the way: its agent isn't there
                     return self._send(503, stopped(src).encode())
+            if not sent:                                  # what is in the way, so a leftover (a command left typed) shows
+                left = console.draft(monitor.name() if key == "steward" else console.session_name(src)) or ""
+                return self._send(409, short(" ".join(left.split()), 80).encode())
             self.send_response(204 if sent else 409)
             self.send_header("Content-Length", "0")
             self.end_headers()

@@ -1211,11 +1211,14 @@ class ChatTest(BoardBase):
             self.assertEqual(r.status, 204)
             pasted.assert_called_once_with("s", "Ship it")
         with patch.object(board.console, "ensure", return_value="s"), patch.object(board.console, "paste_into", return_value=False), \
-                patch.object(board.console, "live", return_value=True):
+                patch.object(board.console, "live", return_value=True), patch.object(board.console, "draft", return_value="/subagents"):
             with self.assertRaises(urllib.error.HTTPError) as held:
                 urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=x",
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
+            # colony-codex's probe left /subagents typed in its box and every message bounced: what is in the way shows
+            self.assertEqual(held.exception.read().decode(), "/subagents")
+            self.assertIn("'“' + left + '” is'", board.CHAT)
 
     def test_an_agent_that_dies_as_it_starts_says_why_and_a_message_to_it_says_so(self):
         # SnackStand: Claude Code read its own name as an option and left at once; the person saw only "the board
