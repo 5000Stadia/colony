@@ -56,7 +56,10 @@ where things stand; `colony remote --off` puts it back as it was.
   `tmux attach -t board-…` reaches the same session from a terminal.
 - **Chat**, beside each console (and the steward's): the conversation as the Claude app shows it, your messages
   in bubbles, the agent's replies in full, each run of work folded to a line ("Ran 6 commands, edited 2 files")
-  that opens to the steps, and a choice on its screen as buttons. What you send goes into its console. It reads
+  that opens to the steps (a background command shows once it finishes), and a choice on its screen as buttons. What you
+  send goes into its console; sent while it works, it shows faded as queued until the agent takes it up. Claude Code
+  holds it in its queue, with **Send now** and **Edit or reorder**. Codex takes it into the running turn, or, behind
+  a `!` shell command, as soon as that ends. It reads
   the session's own transcript, so it costs nothing, and the Console tab is a tap away. Under each reply, copy and
   play: play reads everything since your message aloud (Auto-speak reads each new reply as it arrives), at the
   speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
@@ -67,6 +70,7 @@ where things stand; `colony remote --off` puts it back as it was.
 - **Waiting on you:** decisions a project put to you (gates, each with tap answers, **Choose for me** where
   none is recommended, and **Choose for me, now and for questions like this**, which tells the agent where your line is), a question its agent says it is asking
   (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
+  **Needs you**, the glowing count first in the top bar beside the steward, opens onto all of it at once.
 - **Message**, at the top of every project: type or paste into its console as if you were there,
   or have its agent write to another project. Attach a file from your device or the project.
 - **The roadmap**, kept by the agent in `ROADMAP.md`, drawn as a journey: finished milestones as medals, each open
@@ -189,8 +193,9 @@ the consultants' checking round. Choices and revisions stay in the decision's re
 **Settings.** Each project can have its own model, effort, permissions and Remote Control; blank keeps
 the global choice. A new colony lets agents do anything in their own folders without asking ("allow
 everything"); Settings can make that ask, accept edits only, or plan only. The **provider** (the program that runs the agent) is Claude Code or Codex. Another joins
-by adding an entry to `colony/providers.py`; every place specific to one program is marked `PROVIDER:` in
-the code.
+as a class in `colony/providers.py` built on `Provider`, which names everything colony asks of a program, with a
+default where colony has one; `colony doctor` shows what each program supplies itself and what it lacks. Every place
+specific to one program is marked `PROVIDER:` in the code.
 
 **Where projects live.** Any folder can be a project. Folders you put in `~/colony/projects` join the
 board by themselves, new projects are created there, and Settings adds other folders that work the same way.
