@@ -14,50 +14,120 @@ KEEP = 30_000              # entries kept
 _seen, _lock = {}, threading.Lock()
 
 
-def _tail(path, limit=TAIL):
-    """The transcript's last entries, whole lines only. Read once, then only what was added since (a page asks every
-    few seconds); a transcript started again, or rewritten, is read afresh."""
+def _tail(path, keep, limit=TAIL):
+    """The transcript's last entries, whole lines only, each as `keep` leaves it (what its program's readers read of
+    it; None: not kept). Read once, then only what was added since (a page asks every few seconds); a transcript
+    started again, or rewritten, is read afresh. Kept for every project for as long as the board runs, so kept lean,
+    and read a line at a time: whole entries, 40 MB at a time, held over half a GB and took the board to 4 GB as every
+    console reloaded at once (2026-10-28)."""
     try:
         size = os.path.getsize(path)
     except OSError:
         return []
     with _lock:
-        c = _seen.get(str(path))
+        c, rest = _seen.get(str(path)), b""
         try:
             with open(path, "rb") as fh:
-                if c and size >= c["end"] and c["end"] >= len(c["mark"]):
+                if c and c["keep"] is keep and size >= c["end"] and c["end"] >= len(c["mark"]):
                     fh.seek(c["end"] - len(c["mark"]))
                     if fh.read(len(c["mark"])) != c["mark"]:
                         c = None                      # not the file it was: read it afresh
-                elif c:
+                else:
                     c = None
                 if not c:
-                    c = {"end": max(0, size - limit), "mark": b"", "entries": [], "cut": size > limit}
+                    c = {"end": max(0, size - limit), "mark": b"", "entries": [], "keep": keep}
+                    fh.seek(c["end"])
+                    if c["end"]:
+                        first = fh.readline()         # the first is cut mid-line
+                        c["end"] += len(first) if first.endswith(b"\n") else 0
                 fh.seek(c["end"])
-                chunk = fh.read(size - c["end"])
+                for line in fh:
+                    if not line.endswith(b"\n"):
+                        rest = line.strip()           # still being written: read, not kept, till its line ends
+                        break
+                    c["end"] += len(line)
+                    c["mark"] = line[-64:]
+                    if len(line) > BIG:
+                        continue
+                    try:
+                        e = keep(json.loads(line))
+                    except (ValueError, AttributeError, TypeError):
+                        continue
+                    if e is not None:
+                        c["entries"].append(e)
+                        if len(c["entries"]) > 2 * KEEP:
+                            del c["entries"][:-KEEP]
         except OSError:
             return []
-        last = chunk.rfind(b"\n")
-        if last >= 0:                                 # what is still being written waits for its line's end
-            lines = chunk[:last].split(b"\n")
-            if c.pop("cut", False):
-                lines = lines[1:]                     # the first is cut mid-line
-            for line in lines:
-                if len(line) > BIG:
-                    continue
-                try:
-                    c["entries"].append(json.loads(line))
-                except ValueError:
-                    pass
-            del c["entries"][:-KEEP]
-            c["end"] += last + 1
-            c["mark"] = chunk[max(0, last + 1 - 64):last + 1]
+        del c["entries"][:-KEEP]
         _seen[str(path)] = c
-        rest = chunk[last + 1:].strip()               # a whole last line with no line end yet: read, not kept
         try:
-            return list(c["entries"]) + ([json.loads(rest)] if rest and len(rest) <= BIG else [])
-        except ValueError:
-            return list(c["entries"])
+            e = keep(json.loads(rest)) if rest and len(rest) <= BIG else None
+        except (ValueError, AttributeError, TypeError):
+            e = None
+        return list(c["entries"]) + ([e] if e is not None else [])
+
+
+SHORT = 400                # a tool's argument, kept this long: a step's line, a task's name
+
+
+def _claude_keep(e):
+    """PROVIDER: what of a Claude Code transcript entry claude_events and background read: the person's and agent's
+    words, each tool's name, id and short arguments, the start of its result (a helper "Async agent launched"),
+    queued and attached messages, and the flags they check. Not its request records, file snapshots, pictures, tool
+    output or hidden thinking (only "updates" thinking is shown)."""
+    kind = e.get("type")
+    if kind not in ("user", "assistant", "queue-operation", "attachment") and not e.get("isCompactSummary"):
+        return None
+    out = {k: e[k] for k in ("type", "timestamp", "isMeta", "isSidechain", "isCompactSummary", "thinkingDisplay",
+                             "operation", "content") if k in e}
+    if kind == "attachment":
+        a = e.get("attachment") or {}
+        out["attachment"] = {k: a[k] for k in ("type", "prompt") if k in a}
+    content = (e.get("message") or {}).get("content")
+    if isinstance(content, list):
+        kept = []
+        for c in content:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("type")
+            if t == "text":
+                kept.append(c)
+            elif t == "thinking":
+                kept.append({"type": t, "thinking": c.get("thinking", "")} if e.get("thinkingDisplay") == "updates"
+                            else {"type": t})
+            elif t == "tool_use":
+                inp = c.get("input") if isinstance(c.get("input"), dict) else {}
+                kept.append({"type": t, "id": c.get("id"), "name": c.get("name"), "input": {
+                    k: v[:SHORT] if isinstance(v, str) else v for k, v in inp.items() if isinstance(v, (str, bool, int, float))}})
+            elif t == "tool_result":
+                said = c.get("content")
+                said = said if isinstance(said, str) else " ".join(x.get("text", "") for x in said or [] if isinstance(x, dict))
+                kept.append({"type": t, "tool_use_id": c.get("tool_use_id"), "content": said[:64]})
+        content = kept
+    if "message" in e:
+        out["message"] = {"content": content}
+    return out
+
+
+CODEX_READ = {"message", "custom_tool_call", "function_call", "custom_tool_call_output", "function_call_output",
+              "agent_message", "item_completed"}
+
+
+def _codex_keep(e):
+    """PROVIDER: what of a Codex rollout entry codex_events and codex_background read: a compaction, the messages,
+    tool calls and their results, helpers' reports and finished commands (without their output). Not its reasoning,
+    token counts or the rest."""
+    p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+    if e.get("type") == "compacted":
+        return {"type": "compacted", "timestamp": e.get("timestamp", "")}
+    if p.get("type") not in CODEX_READ:
+        return None
+    if p["type"] == "item_completed":
+        item = p.get("item") or {}
+        p = {"type": p["type"], "started_at_ms": p.get("started_at_ms"), "item": {
+            k: item[k] for k in ("type", "process_id", "duration", "command", "status", "exit_code") if k in item}}
+    return {"type": e.get("type"), "timestamp": e.get("timestamp", ""), "payload": p}
 
 
 # PROVIDER: Claude Code takes a long message typed into it as a paste, and keeps it wrapped in its transcript.
@@ -83,7 +153,7 @@ def _step(name, arg):
 def claude_events(path):
     """PROVIDER: Claude Code's transcript: the person's messages, the agent's prose, one step per tool it ran."""
     out, queued = [], []
-    for e in _tail(path):
+    for e in _tail(path, _claude_keep):
         if e.get("isMeta") or e.get("isSidechain"):
             continue
         at, content = e.get("timestamp", ""), (e.get("message") or {}).get("content")
@@ -140,7 +210,7 @@ NEEDS_YOU = re.compile(r"^\s*(?:\S*/)?colony\s+needs-you\s*$")
 def codex_events(path):
     """PROVIDER: a Codex rollout: the person's messages, the agent's prose, one step per tool call, its helpers' reports."""
     out = []
-    for e in _tail(path):
+    for e in _tail(path, _codex_keep):
         p = e.get("payload") if isinstance(e.get("payload"), dict) else {}
         at, kind = e.get("timestamp", ""), p.get("type")
         if e.get("type") == "compacted":
@@ -247,7 +317,7 @@ def background(path):
     first. state is running until its notice comes (completed, failed, killed). PROVIDER: Claude Code's transcript:
     a tool run with run_in_background, and the <task-notification> that names its tool-use-id when it stops."""
     started, notices = {}, {}
-    for e in _tail(path) if path and Path(path).exists() else []:
+    for e in _tail(path, _claude_keep) if path and Path(path).exists() else []:
         at = e.get("timestamp", "")
         content = (e.get("message") or {}).get("content")
         if e.get("type") in ("assistant", "user") and isinstance(content, list):
@@ -304,7 +374,7 @@ def codex_background(path):
                 if isinstance(x, dict) and ("chunk_id" in x or "wall_time_seconds" in x):
                     yield x
 
-    for e in _tail(path) if path and Path(path).exists() else []:
+    for e in _tail(path, _codex_keep) if path and Path(path).exists() else []:
         at, pl = e.get("timestamp", ""), e.get("payload") or {}
         kind = pl.get("type")
         if kind in ("custom_tool_call", "function_call"):

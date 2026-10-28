@@ -460,6 +460,23 @@ def stale(root, name=None, label=None):
     return None
 
 
+ROOM = 2 << 30              # bytes free before a console is reloaded: one reading back a long conversation takes GBs
+
+
+def room():
+    """Whether there is memory for a console to start: one resuming a long conversation reads it all back, and on a
+    machine already short the kernel kills what is largest (2026-10-28: the board, as ten consoles reloaded at once).
+    Linux's MemAvailable; elsewhere, yes."""
+    try:
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024 >= ROOM
+    except (OSError, ValueError, IndexError):
+        pass
+    return True
+
+
 def attached(name):
     """Whether anyone has the console open: the board's terminal or a terminal of the person's."""
     r = subprocess.run(["tmux", "display", "-p", "-t", name, "#{session_attached}"], capture_output=True, text=True)

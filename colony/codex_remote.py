@@ -427,6 +427,25 @@ def responsive(root, timeout=5):
         return False
 
 
+def let_go(keep):
+    """Stop each app host whose project is not in `keep` (resolved folders): one whose project moved to another
+    program or left the board, which nothing ends otherwise (2026-10-28: KidsRPG's ran on for 5 days). Only once it is
+    idle, so a turn the ChatGPT app is running finishes; one that answers nothing is stopped. The projects let go."""
+    from . import board
+    out = []
+    for home in sorted((board.home() / 'codex-remote').glob('*')):
+        project = read_json(home / 'colony-daemon.json').get('project')
+        if not project or not alive(home) or str(Path(project).resolve()) in keep:
+            continue
+        try:
+            gone = drain(home)
+        except (OSError, RPCError, ValueError):
+            gone = home_for(project) == home and stop_host(project)
+        if gone:
+            out.append(project)
+    return out
+
+
 def stop_host(root, timeout=15):
     """Stop the project's app host whatever it is doing (a frozen one answers nothing): TERM, then KILL. The pid
     is signalled only while its start time still matches the record. Whether it is gone."""

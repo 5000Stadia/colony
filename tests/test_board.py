@@ -4732,6 +4732,66 @@ class StayCurrentTest(BoardBase):
         finally:
             console.COMMAND = saved
 
+    def test_the_watcher_reloads_one_console_a_pass_and_only_with_memory_to_spare(self):
+        # 2026-10-28: a tier change reloaded ten consoles within a minute, each reading its whole conversation back,
+        # and the kernel killed the board for memory
+        from unittest.mock import patch
+        roots = [self.root, Path(self.tmp.name) / "second", Path(self.tmp.name) / "third"]
+        [r.mkdir(exist_ok=True) for r in roots]
+        names = {console.session_name(r): r for r in roots}
+        w, reloaded, free = monitor.Watcher(enabled=False), [], {"room": False}
+        with patch.object(board, "projects", return_value=roots), patch.object(monitor, "name", return_value="steward-seat"), \
+                patch.object(console, "running", side_effect=lambda n: n in names), \
+                patch.object(console, "switching", return_value=None), patch.object(console, "busy", return_value=None), \
+                patch.object(console, "stale", side_effect=lambda root, n=None, label=None:
+                             None if root in reloaded else "its settings or helper tiers changed"), \
+                patch.object(console, "snapshot", return_value={"state": "idle"}), \
+                patch.object(console, "drafting", return_value=False), patch.object(console, "attached", return_value=False), \
+                patch.object(console, "room", side_effect=lambda: free["room"]), \
+                patch.object(console, "reload", side_effect=lambda root, n=None, label=None: reloaded.append(root)):
+            def a_pass():
+                w.current_checked = 0
+                w.idle_since = {k: v - monitor.RELOAD_AFTER - 1 for k, v in w.idle_since.items()}
+                w.current()
+            a_pass(), a_pass()
+            self.assertEqual(reloaded, [], "memory short: they wait, idle and out of date")
+            free["room"] = True
+            a_pass()
+            self.assertEqual(len(reloaded), 1, "one a pass")
+            a_pass(), a_pass()
+            self.assertEqual(sorted(map(str, reloaded)), sorted(map(str, roots)), "the rest on later passes, each once")
+
+    def test_a_transcript_is_held_as_its_readers_read_it(self):
+        # the board holds every project's for as long as it runs: 520 MB in all, read whole; now what Chat and the task
+        # list read of each entry (2026-10-28)
+        from colony import chat
+        path = Path(self.tmp.name) / "held.jsonl"
+        big = "x" * 50_000
+        path.write_text("\n".join(json.dumps(e) for e in [
+            {"type": "api-request-blob", "timestamp": "t0", "body": big},
+            {"type": "assistant", "timestamp": "t1", "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": big}, {"type": "text", "text": "Done."},
+                {"type": "tool_use", "id": "u1", "name": "Write", "input": {"file_path": "a.py", "content": big, "todos": [1]}}]}},
+            {"type": "user", "timestamp": "t2", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "u1", "content": "Async agent launched " + big}]}},
+            {"type": "file-history-snapshot", "snapshot": big}]) + "\n")
+        held = chat._tail(path, chat._claude_keep)
+        self.assertEqual([e["type"] for e in held], ["assistant", "user"], "request records and snapshots: not held")
+        self.assertLess(len(json.dumps(held)), 2_000, "no tool output, file contents or hidden thinking")
+        use = held[0]["message"]["content"][2]
+        self.assertEqual((use["input"]["file_path"], len(use["input"]["content"])), ("a.py", chat.SHORT))
+        self.assertEqual(held[1]["message"]["content"][0]["content"], ("Async agent launched " + big)[:64])
+        self.assertEqual([s for k, s, _ in chat.claude_events(path)], ["Done.", "Write(a.py)"])
+
+    def test_memory_to_spare_is_read_from_the_kernel(self):
+        from unittest.mock import mock_open, patch
+        with patch("builtins.open", mock_open(read_data="MemTotal: 16000000 kB\nMemAvailable:  1500000 kB\n")):
+            self.assertFalse(console.room(), "1.5 GB free")
+        with patch("builtins.open", mock_open(read_data="MemTotal: 16000000 kB\nMemAvailable:  4000000 kB\n")):
+            self.assertTrue(console.room())
+        with patch("builtins.open", side_effect=OSError):
+            self.assertTrue(console.room(), "where it can't be told, a reload isn't held back")
+
     def test_the_watcher_reloads_only_an_idle_untouched_console_after_a_while(self):
         from unittest.mock import patch
         board.track(self.root)
@@ -4742,7 +4802,8 @@ class StayCurrentTest(BoardBase):
         with patch.object(console, "stale", lambda root, name=None, label=None: "Claude Code 1 → 2" if root == self.root else None), \
                 patch.object(console, "reload", lambda root, name=None, label=None: reloaded.append(root)), \
                 patch.object(console, "snapshot", lambda *a, **k: dict(state, lines=[])), \
-                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False):
+                patch.object(console, "drafting", lambda n: False), patch.object(console, "attached", lambda n: False), \
+                patch.object(console, "room", lambda: True):
             w.current_checked = 0
             w.current()
             self.assertEqual(reloaded, [], "idle only just now: wait")

@@ -129,7 +129,7 @@ class ProviderResumeTest(unittest.TestCase):
                 patch.object(console, 'snapshot', return_value={'state': 'idle'}), \
                 patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
                 patch.object(console, 'busy', side_effect=lambda *a: busy['why']), \
-                patch.object(console, 'reload') as reload:
+                patch.object(console, 'room', return_value=True), patch.object(console, 'reload') as reload:
             m.current()
             reload.assert_not_called()                  # idle on screen, but a background command still runs
             busy['why'] = None
@@ -149,7 +149,7 @@ class ProviderResumeTest(unittest.TestCase):
                 patch.object(console, 'snapshot', return_value={'state': 'idle'}), \
                 patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
                 patch.object(console, 'stale', return_value='Claude Code 1 → 2'), patch.object(console, 'busy', return_value=None), \
-                patch.object(console, 'reload') as reload:
+                patch.object(console, 'room', return_value=True), patch.object(console, 'reload') as reload:
             m.current_checked = 0
             m.current()
             reload.assert_not_called()

@@ -808,6 +808,7 @@ class StrongerModelsTest(TurboBase):
         self.patch(console, "snapshot", lambda root, lines=1, name=None: screen)
         self.patch(console, "drafting", lambda name: False)
         self.patch(console, "attached", lambda name: False)
+        self.patch(console, "room", lambda: True)
         w = monitor.Watcher()
 
         def minute(**after):

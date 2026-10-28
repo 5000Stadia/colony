@@ -861,11 +861,21 @@ class Watcher:
         running out of sight (a command or helper it left at work, a turn its program runs elsewhere). Time adds nothing
         to that. Every two minutes, with no tokens, a console whose program has been updated, or whose settings or helper
         tiers changed, is reloaded the same way into the same conversation, once it has also sat idle a few minutes:
-        no one is waiting on that, and a reload under someone reading it is a jolt. Nothing in the middle of work is touched."""
-        full = time.time() - self.current_checked >= 120 and board.registry()["settings"]["auto_update"]
-        if full:
+        no one is waiting on that, and a reload under someone reading it is a jolt. Nothing in the middle of work is touched.
+        One console a pass, and only with memory to spare: each reads its whole conversation back as it starts, and all
+        of them at once ran the machine out (2026-10-28). Each pass also lets go of what a program left running that
+        no project needs any more (Provider.let_go)."""
+        due = time.time() - self.current_checked >= 120
+        if due:
             self.current_checked = time.time()
+            for p in providers.PROVIDERS.values():
+                try:
+                    p.let_go()
+                except Exception:
+                    pass                        # tidying is extra: its trouble stops nothing else
+        full = due and board.registry()["settings"]["auto_update"]
         seats = [(p, console.session_name(p), None) for p in board.projects() if p.exists()] + [(home(), name(), "monitor")]
+        reloaded = False
         for root, nm, label in seats:
             if not console.running(nm):
                 self.idle_since.pop(nm, None)
@@ -881,9 +891,10 @@ class Watcher:
             if not switch and time.time() - first < RELOAD_AFTER:
                 continue
             why = f"switching from {switch[1]} to {switch[0]}" if switch else console.stale(root, nm, label)
-            if not why or console.busy(root, nm, label):
+            if not why or reloaded or not console.room() or console.busy(root, nm, label):
                 continue
             console.reload(root, nm, label)
+            reloaded = True
             self.idle_since.pop(nm, None)
             board.home().mkdir(parents=True, exist_ok=True)
             with (board.home() / "reloads.jsonl").open("a") as fh:

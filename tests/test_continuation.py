@@ -1092,6 +1092,39 @@ class FrozenTest(unittest.TestCase):
             self.assertEqual((stopped, len(self.restarted)), ([self.root], 2), 'the host and its turn are kept')
             self.assertIsNone(json.loads(recovery._frozen_path().read_text())[str(self.root)]['tell'], 'nothing to say')
 
+    def test_a_host_whose_project_left_codex_or_the_board_is_let_go_once_idle(self):
+        # 2026-10-28: KidsRPG moved to Claude Code and its host ran on for 5 days; storyroom's old Codex seat's for 4
+        kept, moved, frozen = self.root, Path(self.tmp.name) / 'moved', Path(self.tmp.name) / 'frozen'
+        for root in (kept, moved, frozen):
+            home = codex_remote.home_for(root)
+            home.mkdir(parents=True, exist_ok=True)
+            atomic_json(home / 'colony-daemon.json', dict(pid=1, start='1', project=str(root)))
+        drained, stopped, busy = [], [], {'moved': True}
+
+        def drain(home):
+            if home == codex_remote.home_for(frozen):
+                raise OSError('it answers nothing')
+            drained.append(home)
+            return not busy['moved']
+        with patch.object(codex_remote, 'alive', return_value=True), patch.object(codex_remote, 'drain', side_effect=drain), \
+                patch.object(codex_remote, 'stop_host', side_effect=lambda root: stopped.append(Path(root)) or True):
+            keep = {str(kept.resolve())}
+            self.assertEqual(codex_remote.let_go(keep), [str(frozen)], 'a turn the app runs goes on: the moved one waits')
+            self.assertEqual(stopped, [frozen], 'one that answers nothing is stopped')
+            busy['moved'] = False
+            self.assertEqual(sorted(codex_remote.let_go(keep)), sorted([str(moved), str(frozen)]))
+            self.assertNotIn(codex_remote.home_for(kept), drained, 'its project still runs on Codex: kept, console or not')
+
+    def test_codex_keeps_the_hosts_of_the_projects_on_it_and_the_stewards(self):
+        from colony import monitor
+        codex = providers.get('codex')
+        with patch.object(board, 'projects', return_value=[self.root, Path(self.tmp.name) / 'claude-one']), \
+                patch.object(providers, 'of', side_effect=lambda p: codex if p == self.root else providers.get('claude')), \
+                patch.object(monitor, 'provider', return_value=codex), \
+                patch.object(codex_remote, 'let_go', side_effect=lambda keep: sorted(keep)) as let_go:
+            self.assertEqual(codex.let_go(), sorted([str(self.root.resolve()), str(monitor.home().resolve())]))
+        self.assertEqual(providers.get('claude').let_go(), [], 'Claude Code leaves nothing running of its own')
+
     def test_stop_host_ends_a_host_that_answers_nothing(self):
         import subprocess, sys
         home = codex_remote.home_for(self.root)

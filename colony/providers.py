@@ -213,6 +213,11 @@ class Provider:
         """The commands its agent left running from the console in `pane` (lingering.py)."""
         return []
 
+    def let_go(self):
+        """Stop what it keeps running for a project that no longer runs on it (moved to another program, or off the
+        board), once that is at rest; the watcher asks every few minutes. The projects let go."""
+        return []
+
     def helpers(self, root):
         """Its helpers at work, [{name, what, stats}], for a program that doesn't list them on its screen (None:
         its screen says them)."""
@@ -1341,6 +1346,15 @@ class Codex(Provider):
         if re.search(r"^\s*› \d+\. ", screen, re.M) and not self.viewing(screen):
             return "needs you"
         return "idle"
+
+    def let_go(self):
+        """Its app hosts outlive their consoles by design (a restart reconnects to the turn), so one whose project no
+        longer runs on Codex, or left the board, is let go here."""
+        from . import board, codex_remote, monitor
+        keep = {str(Path(p).resolve()) for p in board.projects() if of(p) is self}
+        if monitor.provider() is self:
+            keep.add(str(Path(monitor.home()).resolve()))
+        return codex_remote.let_go(keep)
 
     def unfreeze(self, root):
         """Its app host runs the turn in a session of its own, which a console restart leaves running and reconnects
