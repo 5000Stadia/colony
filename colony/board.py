@@ -3825,10 +3825,14 @@ CHAT = """
       // only what changed is redrawn: a part already there stays as it is (a picture is not loaded again, so nothing
       // blinks or shifts), the rest comes in new
       const t = document.createElement('template'); t.innerHTML = last = html;
-      const have = new Map();
+      // what the page itself changes on a part (the one being read, opened or folded, placed where it floats) doesn't
+      // make it new: an open Needs you was swapped for a fresh one at each update, its place in it lost, a tap on it too
+      // (and every reply's ▷, marked as resting, with its row)
+      const have = new Map(), as = (h) => h.replace('class="say reading"', 'class="say"').replace(/ open=""/g, '')
+        .replace(/^(<details[^>]*?) style="[^"]*"/, '$1').replace(/ data-on="play"| data-p="false"/g, '');
       [...box.children].forEach((c) => { if (!c.classList.contains('mine')) {
-        const k = c.outerHTML.replace('class="say reading"', 'class="say"'); have.set(k, (have.get(k) || []).concat([c])); } });
-      box.replaceChildren(...[...t.content.children].map((n) => { const same = have.get(n.outerHTML); return same && same.length ? same.shift() : n; }));
+        const k = as(c.outerHTML); have.set(k, (have.get(k) || []).concat([c])); } });
+      box.replaceChildren(...[...t.content.children].map((n) => { const same = have.get(as(n.outerHTML)); return same && same.length ? same.shift() : n; }));
       keep(); if (window.colonyPlayer) window.colonyPlayer.placed();
       open.forEach((k) => { const d = box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = true; });
       shut.forEach((k) => { const d = k && box.querySelector(`details[data-k="${CSS.escape(k)}"]`); if (d) d.open = false; });

@@ -5688,6 +5688,11 @@ class PhonePageTest(HoursBase):
         self.assertIn("nd.contains(document.activeElement) && document.activeElement.matches('textarea, input')", board.PLAYER)
         self.assertLess(board.CSS.index("html.apart .chat details.needs"), board.CSS.index("html.answering .chat details.needs { display:block"))
         self.assertIn("on(document, 'focusin', soon)", board.PLAYER)
+        # what the page changes on a part (opened, placed, a ▷ marked resting) doesn't make the chat's update swap it:
+        # an open Needs you was replaced at each update, a tap on it lost (the person: "really finagling now")
+        self.assertIn('''.replace(/ open=""/g, '')''', board.CHAT)
+        self.assertIn('''.replace(/ data-on="play"| data-p="false"/g, '')''', board.CHAT)
+        self.assertIn("const same = have.get(as(n.outerHTML))", board.CHAT)
         # a bounce past the end parts the two by just the overshoot (the phone's log: 52px off, 52px past the end): the
         # tabs and what floats stay put (the person: "the bottom menu disappearing for a frame and the floating menus ...
         # adjusting to the bottom for that moment")
