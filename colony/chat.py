@@ -2,6 +2,7 @@
 transcript the session's hooks recorded, so it costs nothing and the console itself is untouched; what the person sends
 goes into the console as Message does."""
 import json
+import time
 import os
 import re
 import threading
@@ -280,41 +281,79 @@ def background(path):
 
 
 def codex_background(path):
-    """What a Codex agent left running, and how each ended, in background()'s form. PROVIDER: Codex's rollout, as
-    colony-codex captured it on 0.165: a code cell (custom_tool_call "exec") calls tools.exec_command, and its output
-    returns a session_id with no exit code while the command runs on; its end is the structured item_completed
-    CommandExecution whose process_id is that session id, with its exit code and duration. A direct exec_command
-    function call reads the same way. One never seen to end stays running (the board trims it by the footer's count)."""
-    calls, started, ended = {}, {}, {}
+    """What a Codex agent left running in the background, and how each ended, in background()'s form. PROVIDER: Codex's
+    rollout, as colony-codex captured it on 0.165. Its end is what counts: the structured item_completed
+    CommandExecution, with the command, its outcome and how long it ran, read whether or not its start was seen (a turn
+    interrupted before the cell printed anything). A start shows one still running: a tool result (from a code cell, a
+    later wait on that cell, or a direct exec_command call) giving a session id and no exit code, the session id being
+    the end's process_id. A command that ended without its start being seen is shown when it ran LONG or more: Codex
+    gives no sign of which of its commands were left to run, and one that long was work worth seeing."""
+    calls, cells, started, ended = {}, {}, {}, {}
+
+    def results(out):                                 # the tool results a call returned, never the commands' own output
+        blocks = [b.get("text", "") for b in out if isinstance(b, dict)] if isinstance(out, list) else [str(out or "")]
+        for b in blocks:
+            try:
+                r = json.loads(b)
+            except ValueError:
+                continue
+            for x in (r if isinstance(r, list) else [r]):
+                x = x.get("value", x) if isinstance(x, dict) and "status" in x and "value" in x else x   # Promise.allSettled
+                if isinstance(x, dict) and ("chunk_id" in x or "wall_time_seconds" in x):
+                    yield x
+
     for e in _tail(path) if path and Path(path).exists() else []:
         at, pl = e.get("timestamp", ""), e.get("payload") or {}
         kind = pl.get("type")
         if kind in ("custom_tool_call", "function_call"):
-            calls[pl.get("call_id")] = (at, pl.get("input") or pl.get("arguments") or "")
+            said = pl.get("input") or pl.get("arguments") or ""
+            if pl.get("name") == "exec_command":          # a direct call: its name says it, its arguments don't
+                said = "exec_command " + said
+            if pl.get("name") == "wait":                  # waiting on a cell that went on running: that cell's call
+                m = re.search(r'"cell_id"\s*:\s*"?(\w+)', said)
+                said, at = cells.get(m.group(1), (at, ""))[::-1] if m else (said, at)
+            calls[pl.get("call_id")] = (at, said)
         elif kind in ("custom_tool_call_output", "function_call_output") and pl.get("call_id") in calls:
             when, said = calls[pl["call_id"]]
-            if "exec_command" not in said:
-                continue                                    # a poll (write_stdin) or another tool: nothing started
             out = pl.get("output")
-            blocks = [b.get("text", "") for b in out if isinstance(b, dict)] if isinstance(out, list) else [str(out or "")]
-            for b in blocks:
+            m = re.match(r"Script running with cell ID (\w+)", out if isinstance(out, str) else
+                         next((b.get("text", "") for b in out or [] if isinstance(b, dict)), ""))
+            if m:
+                cells[m.group(1)] = (when, said)
+            # each command this call started, in order, against each session it returned that isn't one it polled
+            cmds = [] if "exec_command" not in said else re.findall(r'exec_command\s*\(\s*\{[^}]*?\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")', said) \
+                or re.findall(r'\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")', said)
+            polled = set(re.findall(r"write_stdin\s*\(\s*\{[^}]*?session_id\s*:\s*(\d+)", said))
+            fresh = [str(r["session_id"]) for r in results(out) if r.get("session_id") is not None and r.get("exit_code") is None
+                     and str(r["session_id"]) not in polled and str(r["session_id"]) not in started]
+            starts = said.count("exec_command")
+            for n, sid in enumerate(fresh[:starts]):
                 try:
-                    r = json.loads(b)
+                    what = json.loads(cmds[n]) if len(cmds) == starts else ""
                 except ValueError:
-                    continue
-                if isinstance(r, dict) and r.get("session_id") is not None and r.get("exit_code") is None:
-                    sid = str(r["session_id"])
-                    m = re.search(r'\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")', said)
-                    try:
-                        what = json.loads(m.group(1)) if m else ""
-                    except ValueError:
-                        what = ""
-                    started.setdefault(sid, {"id": "codex-" + sid, "kind": "Shell", "what": what.strip(), "at": when, "bg": True})
+                    what = ""
+                started[sid] = {"id": "codex-" + sid, "kind": "Shell", "what": what.strip(), "at": when, "bg": True}
         elif kind == "item_completed" and (pl.get("item") or {}).get("type") == "CommandExecution":
             item = pl["item"]
             sid = str(item.get("process_id") or "")
-            if sid in started and sid not in ended:
-                cmd = item.get("command") or []
-                ended[sid] = {"state": "completed" if item.get("status") == "completed" else "failed", "ended": at,
-                              "exit": item.get("exit_code"), "what": started[sid]["what"] or (cmd[-1] if cmd else "")}
-    return [dict(s, **ended.get(sid, {"state": "running", "ended": "", "exit": None})) for sid, s in started.items()]
+            took = (item.get("duration") or {}).get("secs", 0)
+            cmd = item.get("command") or []
+            began = pl.get("started_at_ms")
+            ended.setdefault(sid, {"state": "completed" if item.get("status") == "completed" else "failed", "ended": at,
+                                   "exit": item.get("exit_code"), "what": (cmd[-1] if cmd else "").strip(), "took": took,
+                                   "began": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(began / 1000)) if began else at})
+    out = []
+    for sid in dict.fromkeys([*started, *ended]):
+        s, n = started.get(sid), ended.get(sid)
+        if s is None and (n["took"] < LONG):
+            continue                                       # ended at once, its start unseen: not left running
+        row = dict(s or {"id": "codex-" + sid, "kind": "Shell", "what": "", "at": n["began"], "bg": True})
+        if n:
+            row.update(state=n["state"], ended=n["ended"], exit=n["exit"], what=n["what"] or row["what"])
+        else:
+            row.update(state="running", ended="", exit=None)
+        out.append(row)
+    return sorted(out, key=lambda r: r["at"])
+
+
+LONG = 30                     # seconds: a command that ran this long, its start unseen, is shown as one left running

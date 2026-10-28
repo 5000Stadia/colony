@@ -1640,24 +1640,58 @@ class CodexHelpersTest(BoardBase):
         cell = lambda t, cid, js: {"timestamp": t, "type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec",
                                                                                        "call_id": cid, "input": js}}
         back = lambda t, cid, *r: {"timestamp": t, "type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": cid,
-            "output": [{"type": "input_text", "text": "Script completed\nOutput:\n"}] + [{"type": "input_text", "text": json.dumps(x)} for x in r]}}
-        done = lambda t, sid, status, code: {"timestamp": t, "type": "event_msg", "payload": {"type": "item_completed", "item": {
-            "type": "CommandExecution", "process_id": str(sid), "status": status, "exit_code": code, "command": ["/bin/bash", "-lc", "x"]}}}
-        lines = [cell("T1", "c1", 'const r = await tools.exec_command({cmd:"python3 -m pytest -q \\"tests\\"",yield_time_ms:1000}); text(r);'),
-                 back("T2", "c1", {"session_id": 68567, "output": "start\n"}),
-                 cell("T3", "c2", 'text(await tools.write_stdin({session_id:68567,chars:""}));'),
-                 back("T4", "c2", {"session_id": 68567, "output": ""}),
-                 cell("T5", "c3", 'text(await tools.exec_command({cmd:"ls"}));'),
-                 back("T6", "c3", {"exit_code": 0, "output": "a\n"}),                    # done at once: not background
-                 cell("T7", "c4", 'const r = await tools.exec_command({cmd:"sleep 900",yield_time_ms:1000}); text(r);'),
-                 back("T8", "c4", {"session_id": 76533, "output": ""}),
-                 done("T9", 68567, "failed", 7)]
+            "output": [{"type": "input_text", "text": "Script completed\nOutput:\n"}] + [{"type": "input_text", "text": json.dumps(
+                [dict(chunk_id="c", **y) for y in x] if isinstance(x, list) else dict(chunk_id="c", **x))} for x in r]}}
+        done = lambda t, sid, status, code, cmd="", secs=1: {"timestamp": t, "type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "CommandExecution", "process_id": str(sid), "status": status, "exit_code": code, "command": ["/bin/bash", "-lc", cmd],
+            "duration": {"secs": secs, "nanos": 0}}}}
+        lines = [cell("T01", "c1", 'const r = await tools.exec_command({cmd:"python3 -m pytest -q \\"tests\\"",yield_time_ms:1000}); text(r);'),
+                 back("T02", "c1", {"session_id": 68567, "output": "start\n"}),
+                 cell("T03", "c2", 'text(await tools.write_stdin({session_id:68567,chars:""}));'),
+                 back("T04", "c2", {"session_id": 68567, "output": ""}),
+                 cell("T05", "c3", 'text(await tools.exec_command({cmd:"ls"}));'),
+                 back("T06", "c3", {"exit_code": 0, "output": "a\n"}),                    # done at once: not background
+                 cell("T07", "c4", 'const r = await tools.exec_command({cmd:"sleep 900",yield_time_ms:1000}); text(r);'),
+                 back("T08", "c4", {"session_id": 76533, "output": ""}),
+                 done("T09", 68567, "failed", 7, 'python3 -m pytest -q "tests"', 60),
+                 # a direct call, its name the only sign (colony-codex's review)
+                 {"timestamp": "T10", "type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "call_id": "d1",
+                                                                          "arguments": json.dumps({"cmd": "npm run dev", "yield_time_ms": 1000})}},
+                 {"timestamp": "T11", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "d1",
+                                                                          "output": json.dumps({"chunk_id": "c", "session_id": 4242, "output": ""})}}]
         path = Path(self.tmp.name) / "rollout.jsonl"
         path.write_text("".join(json.dumps(l) + "\n" for l in lines))
         got = providers.get("codex").background(str(path))
         self.assertEqual([(t["what"], t["state"], t["exit"], t["at"], t["ended"]) for t in got],
-                         [('python3 -m pytest -q "tests"', "failed", 7, "T1", "T9"), ("sleep 900", "running", None, "T7", "")])
+                         [('python3 -m pytest -q "tests"', "failed", 7, "T01", "T09"), ("sleep 900", "running", None, "T07", ""),
+                          ("npm run dev", "running", None, "T10", "")])
         self.assertEqual(chat.running(["· 1 background terminal running"]), "1 background terminal running")
+        # colony-codex's review, from fresh 0.165 runs and the shapes Codex's code cells allow
+        lines = [cell("U01", "w1", 'const r = await tools.exec_command({cmd:"make suite",yield_time_ms:30000}); text(JSON.stringify(r));'),
+                 {"timestamp": "U02", "type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "w1",
+                                                                         "output": "Script running with cell ID 1\nOutput:\n"}},
+                 {"timestamp": "U03", "type": "response_item", "payload": {"type": "function_call", "name": "wait", "call_id": "w2",
+                                                                         "arguments": json.dumps({"cell_id": "1"})}},
+                 back("U04", "w2", {"session_id": 58956, "output": "start\n"}),          # a wait on the cell gives its session
+                 done("U05", 93130, "completed", 0, "python3 long_run.py", 60),          # its start never printed: long, so shown
+                 done("U06", 555, "completed", 0, "ls", 0),                              # ended at once, start unseen: not shown
+                 done("U07", 777, "completed", 0, "npm test", 45),                       # ends before the cell's output says it began
+                 cell("U08", "a1", 'text(await Promise.all([tools.exec_command({cmd:"sleep 60"}), tools.exec_command({cmd:"sleep 90"})]));'),
+                 back("U09", "a1", [{"session_id": 101, "output": ""}, {"session_id": 102, "output": ""}]),
+                 cell("U10", "m1", 'text(await tools.exec_command({cmd:"echo released"})); text(await tools.write_stdin({session_id:999,chars:""}));'),
+                 back("U11", "m1", {"exit_code": 0, "output": "released\n"}, {"session_id": 999, "output": ""}),
+                 cell("U12", "n1", 'text(await tools.exec_command({cmd:"npm test",yield_time_ms:1000}));'),
+                 back("U13", "n1", {"session_id": 777, "output": ""}),
+                 cell("U14", "j1", 'text(await tools.exec_command({cmd:"cat data.json"}));'),
+                 {"timestamp": "U15", "type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "j1", "output": [
+                     {"type": "input_text", "text": json.dumps({"session_id": 31337})}]}}]   # a command's own JSON: no tool result
+        path.write_text("".join(json.dumps(l) + "\n" for l in lines))
+        got = providers.get("codex").background(str(path))
+        found = {t["what"]: (t["state"], t["exit"]) for t in got}
+        self.assertEqual(found, {"make suite": ("running", None), "python3 long_run.py": ("completed", 0), "npm test": ("completed", 0),
+                                 "sleep 60": ("running", None), "sleep 90": ("running", None)},
+                         "a wait's session, an end whose start was unseen, an end read first, each of several by its own name; "
+                         "no start for a poll, none for a quick end unseen, none from a command's own output")
 
 
     def test_codex_time_at_work_is_its_own_turns_lengths(self):
@@ -1669,25 +1703,36 @@ class CodexHelpersTest(BoardBase):
         ev = lambda t, kind, **kw: json.dumps({"timestamp": at(t), "type": "event_msg", "payload": dict(type=kind, **kw)}) + "\n"
         item = lambda t: json.dumps({"timestamp": at(t), "type": "response_item", "payload": {"type": "message"}}) + "\n"
         main = home / "main.jsonl"
-        main.write_text(ev(1000, "task_started") + ev(1006, "task_complete", duration_ms=6000)
-                        + ev(2000, "task_started") + ev(2003, "turn_aborted", started_at=2000, completed_at=2003, duration_ms=3664)
+        main.write_text(ev(1000, "task_started") + ev(1006, "task_complete", turn_id="t1", duration_ms=6000)
+                        + ev(2000, "task_started") + ev(2003, "turn_aborted", turn_id="t2", started_at=2000, completed_at=2003, duration_ms=3664)
                         + ev(9000, "task_started") + item(9030) + item(9060) + item(9060 + 2 * 3600))   # open: 60 s, then a day-long gap
         helper = home / "helper.jsonl"
         helper.write_text(ev(1000, "task_started") + ev(1500, "task_complete", duration_ms=500000))
         db = sqlite3.connect(home / "state_5.sqlite")
-        db.execute("CREATE TABLE threads (rollout_path TEXT, cwd TEXT, source TEXT)")
+        db.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT)")
         here = str(board.workdir(self.root).resolve())
-        db.executemany("INSERT INTO threads VALUES (?,?,?)", [
-            (str(main), here, '"cli"'),
-            (str(helper), here, json.dumps({"subagent": {"thread_spawn": {"parent_thread_id": "x"}}}, separators=(",", ":"))),
-            (str(helper), "/elsewhere", '"cli"')])
+        db.executemany("INSERT INTO threads VALUES (?,?,?,?)", [
+            ("m", str(main), here, '"cli"'),
+            ("h", str(helper), here, json.dumps({"subagent": {"thread_spawn": {"parent_thread_id": "x"}}}, separators=(",", ":"))),
+            ("o", str(helper), "/elsewhere", '"cli"')])
+        db.commit(); db.close()
+        # the same conversation moved to colony's own host: a copy of its history there, and its later work
+        host = board.home() / "codex-remote" / "h1"
+        host.mkdir(parents=True)
+        copy = host / "main.jsonl"
+        copy.write_text(ev(1000, "task_started") + ev(1006, "task_complete", turn_id="t1", duration_ms=6000)
+                        + ev(2000, "task_started") + ev(2003, "turn_aborted", turn_id="t2", started_at=2000, completed_at=2003, duration_ms=3664)
+                        + ev(3000, "task_started") + ev(3010, "task_complete", turn_id="t3", duration_ms=10000))
+        db = sqlite3.connect(host / "state_5.sqlite")
+        db.execute("CREATE TABLE threads (id TEXT, rollout_path TEXT, cwd TEXT, source TEXT)")
+        db.execute("INSERT INTO threads VALUES (?,?,?,?)", ("m", str(copy), here, '"cli"'))
         db.commit(); db.close()
         with patch.object(type(codex), "config_home", lambda self: home):
-            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 60, places=2,
-                                   msg="its turns as Codex timed them, an open one by its lines; not its helpers, nor elsewhere")
+            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 10 + 60, places=2,
+                                   msg="its turns as Codex timed them, each once, an open one by its lines; not its helpers, nor elsewhere")
             with main.open("a") as f:
-                f.write(ev(9000 + 2 * 3600 + 10, "task_complete", duration_ms=120000) + '{"timestamp":"half a li')
-            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 120, places=2, msg="read on as it grows")
+                f.write(ev(9000 + 2 * 3600 + 10, "task_complete", turn_id="t4", duration_ms=120000) + '{"timestamp":"half a li')
+            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 10 + 120, places=2, msg="read on as it grows")
 
 
     def test_each_program_is_named_by_its_own_app(self):

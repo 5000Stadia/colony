@@ -1320,30 +1320,34 @@ class Codex:
         """Time at work in this folder, all told, as Claude Code's: each turn's own length as Codex closes it (task_complete
         or turn_aborted, duration_ms), and a turn not closed by the time between its own lines, leaving out any gap over
         IDLE_GAP. Its conversations here, not its helpers' (theirs run inside its turns), from each thread store's
-        record of where each ran; rollouts only grow, so each is read on from where the last look stopped.
+        record of where each ran; each turn counted once by its own id, and each conversation's open turn once, since
+        a conversation moved to colony's own host keeps a copy of its history in both (colony-codex's review). Rollouts
+        only grow, so each is read on from where the last look stopped.
         PROVIDER: Codex's state_5.sqlite threads (cwd, source) and rollouts, in its own home and colony's hosts."""
         import sqlite3
         from . import board
         here = str(board.workdir(root).resolve())
-        total = 0.0
+        turns, open_ = {}, {}
         for home in [self.config_home(), *(board.home() / "codex-remote").glob("*")]:
             if not (home / "state_5.sqlite").exists():
                 continue
             try:
                 db = sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True, timeout=1)
                 try:
-                    rows = db.execute("SELECT rollout_path FROM threads WHERE cwd = ? AND source NOT LIKE '%\"thread_spawn\"%'",
+                    rows = db.execute("SELECT id, rollout_path FROM threads WHERE cwd = ? AND source NOT LIKE '%\"thread_spawn\"%'",
                                       (here,)).fetchall()
                 finally:
                     db.close()
             except sqlite3.Error:
                 continue
-            for (rollout,) in rows:
-                total += self._worked(rollout)
-        return total
+            for thread, rollout in rows:
+                ended, still = self._worked(rollout)
+                turns.update(ended)
+                open_[thread] = max(open_.get(thread, 0.0), still)
+        return sum(turns.values()) / 1000 + sum(open_.values())
 
     IDLE_GAP = ClaudeCode.IDLE_GAP
-    _worked_in = {}                               # rollout -> (bytes read, ms of turns ended, open turn's time, its latest)
+    _worked_in = {}                               # rollout -> (bytes read, {turn: ms} of turns ended, open turn's time, its latest)
 
     @classmethod
     def _worked(cls, rollout):
@@ -1351,10 +1355,10 @@ class Codex:
         try:
             size = os.path.getsize(rollout)
         except (OSError, TypeError):
-            return 0.0
-        at, ms, open_, last = cls._worked_in.get(rollout, (0, 0, 0.0, None))
+            return {}, 0.0
+        at, ms, open_, last = cls._worked_in.get(rollout, (0, {}, 0.0, None))
         if size < at:
-            at, ms, open_, last = 0, 0, 0.0, None                   # rewritten: read it afresh
+            at, ms, open_, last = 0, {}, 0.0, None                  # rewritten: read it afresh
         if size > at:
             with open(rollout, "rb") as fh:
                 fh.seek(at)
@@ -1368,7 +1372,8 @@ class Codex:
                             took = e.get("duration_ms")
                             if took is None and e.get("started_at") and e.get("completed_at"):
                                 took = (e["completed_at"] - e["started_at"]) * 1000
-                            ms, open_, last = ms + (took or 0), 0.0, None
+                            ms[e.get("turn_id") or f"{rollout}:{len(ms)}"] = took or 0
+                            open_, last = 0.0, None
                             continue
                     if b'"event_msg"' in line and b'"task_started"' in line:
                         open_, last = 0.0, _stamp(json.loads(line))
@@ -1383,7 +1388,7 @@ class Codex:
                     pass
             at += len(whole)
             cls._worked_in[rollout] = (at, ms, open_, last)
-        return ms / 1000 + open_
+        return ms, open_
 
     _turns = {}
 
