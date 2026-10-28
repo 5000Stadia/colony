@@ -824,14 +824,14 @@ def cmd_rule(a):
             print(f"{a.retire} retired.")
             return 0
         if a.text:
-            r = rules.add(root, a.text, a.words or "")
+            r = rules.add(root, a.text, a.words or "", why=a.why or "", context=a.context or "", given=a.given)
             print(f"Kept as {r['id']}: it comes back to you at every session start, after a compaction too.")
             return 0
     except (ValueError, KeyError) as err:
         print(err if isinstance(err, ValueError) else f"no rule {a.retire}", file=sys.stderr)
         return 2
     for r in rules.rules(root):
-        print(f"{r['id']}  {r['text']}  (their words: {r['words']})")
+        print(f"{r['id']}  {r['text']}  (their words: {r['words']})" + (f"  why: {r['why']}" if r.get("why") else ""))
     if not rules.rules(root):
         print("No standing rules here.")
     return 0
@@ -1764,6 +1764,9 @@ def main(argv=None):
     p = sub.add_parser("rule", help="the person's standing rules for this project: kept by colony, back at every session start")
     p.add_argument("text", nargs="?", help="the rule (with --retire: why it no longer holds)")
     p.add_argument("--words", help="the person's own words for it"); p.add_argument("--retire", metavar="ID")
+    p.add_argument("--why", help="what led to it: the moment or problem behind their words")
+    p.add_argument("--context", help="your reading of what it asks in practice")
+    p.add_argument("--given", help="the day they said it, where that was before now (YYYY-MM-DD)")
     p.set_defaults(fn=cmd_rule)
     p = sub.add_parser("lesson", help="lessons keyed to colony's actions: propose one from evidence, for the person to adopt")
     p.add_argument("--propose", nargs=2, metavar=("ACTION", "TEXT"), help="the action it rides on (gate, show, ready, connect, ...) and one sentence")

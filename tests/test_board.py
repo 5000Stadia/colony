@@ -6213,6 +6213,19 @@ class RulesTest(BoardBase):
         self.assertIn("Standing rules", board.rules_box(self.root, 0))
         rules.retire(self.root, r["id"], "lifted")
         self.assertEqual(rules.session_text(self.root), "")
+        # with their words, why and the agent's reading, handed back whole
+        r = rules.add(self.root, "Fix obvious bugs at once.", "If a problem is found, let's fix it.", why="offered a fix twice",
+                      context="fix, test, deploy, then tell them", given="2026-10-07")
+        said = rules.session_text(self.root)
+        for part in ('Their words: "If a problem is found, let\'s fix it." (2026-10-07).', "Why: offered a fix twice",
+                     "In practice: fix, test, deploy, then tell them", "--why"):
+            self.assertIn(part, said)
+        self.assertIn("why: offered a fix twice", board.rules_box(self.root, 0))
+        # every seat of a shared project holds the same rules: kept at its canonical home
+        seat = Path(self.tmp.name) / "seat"
+        seat.mkdir()
+        with patch("colony.lead.plan_root", return_value=self.root):
+            self.assertEqual([x["id"] for x in rules.rules(seat)], [r["id"]])
 
 
 class ReadyChecksTest(BoardBase):

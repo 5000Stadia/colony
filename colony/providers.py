@@ -1051,10 +1051,11 @@ class Codex:
         have = path.read_text() if path.exists() else ""
         block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY + self.GOAL
         memory = claude_memory(root)
-        if memory:                                  # the person's rules stay with the project when its program changes
-            block += (f"- The person's standing rules for this project, each with why, are kept in `{memory}` and the "
-                      "files it links (its Claude Code agent keeps them there): read it at the start of a session, "
-                      "follow them, and add a new one there in the same form.\n")
+        if memory:                                  # what its Claude Code agent learned stays with the project
+            block += (f"- What this project's Claude Code agent learned working here is in `{memory}` and the files it "
+                      "links: read it as background at the start of a session. The person's standing rules are not kept "
+                      "there but by colony, which hands them to you as each session starts; record a new one with "
+                      "`colony rule`.\n")
         marker = "## This project is part of a colony"
         if marker in have:
             start = have.index(marker)

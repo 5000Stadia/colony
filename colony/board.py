@@ -4263,7 +4263,8 @@ def rules_box(root, pid):
     found = rules.rules(root)
     if not found:
         return ""
-    items = "".join(f"<li>{e(r['text'])} <span class='muted'>(your words: {e(r['words'])})</span>"
+    items = "".join(f"<li>{e(r['text'])} <span class='muted'>(your words: {e(r['words'])})"
+                    f"{(' · why: ' + e(r['why'])) if r.get('why') else ''}</span>"
                     f"<form class='inline' method='post' action='/rule'><input type='hidden' name='p' value='{pid}'>"
                     f"<input type='hidden' name='id' value='{e(r['id'])}'><button class='quiet'>Retire</button></form></li>"
                     for r in found)

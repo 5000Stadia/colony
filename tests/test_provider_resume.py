@@ -189,12 +189,16 @@ class ProviderResumeTest(unittest.TestCase):
                 self.assertIn(part, note['text'])
             self.assertIsNone(console.catch_up(self.root), "once a switch, not at every restart")
 
-    def test_codex_reads_the_rules_claude_keeps_for_the_project(self):
+    def test_codex_reads_what_claude_learned_and_keeps_the_persons_rules_in_colony(self):
         index = Path(self.tmp.name) / 'MEMORY.md'
         index.write_text('- [Fix bugs](fix.md) — at once\n')
         with patch.object(providers, 'claude_memory', return_value=index):
             providers.get('codex').wire(self.root, board.protocol(self.root))
-        self.assertIn(f"standing rules for this project, each with why, are kept in `{index}`", (self.root / 'AGENTS.md').read_text())
+        told = (self.root / 'AGENTS.md').read_text()
+        self.assertIn(f"learned working here is in `{index}`", told)
+        # one source for the person's orders (colony-codex's audit): never added to Claude's memory from Codex
+        self.assertIn("standing rules are not kept there but by colony", told)
+        self.assertNotIn("add a new one there", told)
 
     def test_colonys_own_instructions_reach_both_programs(self):
         here = Path(__file__).resolve().parent.parent
