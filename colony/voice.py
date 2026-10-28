@@ -227,7 +227,12 @@ def speak(text, voice=None):
             got = _ask({"text": text, "voice": voice, "out": str(out)})
             if got.get("error"):
                 return None
-    old = list(cache.glob("*.wav")) + sorted(cache.glob("*.mp3"), key=lambda f: f.stat().st_mtime)[:-KEEP]
+    def made(f):                                         # another ask may have trimmed it a moment ago
+        try:
+            return f.stat().st_mtime
+        except OSError:
+            return 0
+    old = list(cache.glob("*.wav")) + sorted(cache.glob("*.mp3"), key=made)[:-KEEP]
     for f in old:
         f.unlink(missing_ok=True)
     return out if out.exists() else None

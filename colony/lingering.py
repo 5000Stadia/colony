@@ -3,13 +3,13 @@
 A command an agent put in the background, or a helper it started, can outlive its use: a waiter whose run ended
 elsewhere, a test server, a helper stuck on nothing. Age says nothing about it (Bookflow's suites run 4-6 hours, a
 builder helper 10), so colony watches what each does. A command is quiet while it and everything it started gain no
-CPU time and its output file does not grow; a helper is quiet while its own transcript is not written and no command
-of the project's is stirring. Once something has been quiet two hours and the agent has sat idle half an hour (with
+CPU time and write nothing (to its output file, a pipe, anywhere: the kernel counts each process's writes); a
+helper is quiet while its own transcript is not written and no command of the project's is stirring. Once something has been quiet two hours and the agent has sat idle half an hour (with
 nothing typed in its box and no one looking at it), colony types one line into its console naming what is quiet,
 so the agent stops what is done and leaves what is meant to stay. Each thing is named once, ever: that memory is the
 project's lingering.jsonl. Reading costs no tokens: /proc and file times, every five minutes.
 PROVIDER: each program's commands(pane) and helpers: Claude Code's shell snapshot, its rows under the box and their
-transcripts; Codex's app-server children and its thread store (quiet by CPU alone: its output is a pipe).
+transcripts; Codex's app-server children (on a pipe or a terminal of their own) and its thread store.
 """
 import os
 import re
@@ -56,12 +56,21 @@ def _cmdline(pid):
         return ""
 
 
+def _written(pid):
+    """Bytes a process has written so far, wherever to, from /proc: a pipe's progress shows without reading it."""
+    try:
+        return int(next(l for l in Path(f"/proc/{pid}/io").read_text().splitlines() if l.startswith("wchar:")).split()[1])
+    except (OSError, StopIteration, ValueError, IndexError):
+        return 0
+
+
 def _entry(pid, what):
     st = _stat(pid)
     if not st:
         return None
-    cpu = sum((_stat(p) or (0, 0))[1] for p in console._descendants(pid))
-    return {"pid": pid, "start": st[0], "cpu": cpu, "what": what, "out": _output(pid)}
+    family = console._descendants(pid)
+    cpu = sum((_stat(p) or (0, 0))[1] for p in family)
+    return {"pid": pid, "start": st[0], "cpu": cpu, "wrote": sum(_written(p) for p in family), "what": what, "out": _output(pid)}
 
 
 def commands(root, name):
@@ -86,15 +95,20 @@ def claude_commands(pane):
 
 def codex_commands(pane):
     """Codex's app-server runs each command as its own child, in a session of its own with nothing on its input;
-    its servers (MCP) it talks to through their input. Their output is a pipe the app-server reads: not looked at,
-    since reading it would take it, so a Codex command is quiet by its CPU alone."""
+    or on a terminal of its own (a command run with one); its servers (MCP) it talks to through their input. Their
+    output is a pipe the app-server reads: not read here, since that would take it, but the bytes written count."""
     out = []
+    try:
+        own_tty = os.readlink(f"/proc/{pane}/fd/0")
+    except OSError:
+        own_tty = None
     for server in (p for p in console._descendants(pane) if re.match(r"(\S*/)?codex app-server\b", _cmdline(p))):
         for pid in console._descendants(server)[1:]:
             try:
                 f = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
                 own, parent = int(f[3]) == pid, int(f[1]) == server       # its session's leader, the server's child
-                quiet_input = os.readlink(f"/proc/{pid}/fd/0") == "/dev/null"
+                given = os.readlink(f"/proc/{pid}/fd/0")
+                quiet_input = given == "/dev/null" or (given.startswith("/dev/pts/") and given != own_tty)
             except (OSError, ValueError, IndexError):
                 continue
             if own and parent and quiet_input:
@@ -116,8 +130,8 @@ def quiet(root, name, now, snap):
     found, stirring = [], False
     for c in commands(root, name):
         key = f"cmd:{c['pid']}:{c['start']}"
-        was, wrote = _seen.get((name, key)), _mtime(c["out"])
-        if not was or c["cpu"] - was["cpu"] >= STIR or wrote > was["wrote"]:
+        was, wrote = _seen.get((name, key)), (_mtime(c["out"]), c.get("wrote", 0))
+        if not was or c["cpu"] - was["cpu"] >= STIR or wrote != was["wrote"]:
             _seen[(name, key)] = was = {"cpu": c["cpu"], "wrote": wrote, "since": now}
             stirring = True
         was["cpu"] = c["cpu"]

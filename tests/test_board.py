@@ -1564,6 +1564,13 @@ class LingeringTest(BoardBase):
                 out.write_text("tick" * (k + 2)); os.utime(out, (t, t))
                 L.tick(now=t); t += L.EVERY
             self.assertFalse(any("serve.py" in x for x in typed))
+            # colony-codex's review: progress written to a pipe, barely any CPU, is work too (the kernel counts the bytes)
+            L._seen.clear(); L._idle.clear()
+            cmds = {"writer": {"pid": 14, "start": 8, "cpu": 0.05, "wrote": 220, "what": "python3 progress.py", "out": None}}
+            for k in range(30):
+                cmds["writer"]["wrote"] += 78
+                L.tick(now=t); t += L.EVERY
+            self.assertFalse(any("progress.py" in x for x in typed))
 
 
 class CodexHelpersTest(BoardBase):
@@ -1589,15 +1596,29 @@ class CodexHelpersTest(BoardBase):
             ("a", spawn(parent), now, "Rawls", "colony-rote", "/root/codex_ui_subject", rollout("a", "task_started")),
             ("b", spawn(parent), now, "Epicurus", "colony-routine", "/root/done_review", rollout("b", "task_started", "task_complete")),
             ("c", spawn("someone-else"), now, "Kant", "colony-rote", "/root/theirs", rollout("c", "task_started")),
-            ("d", spawn(parent), now - 9 * 86400, "Old", "colony-rote", "/root/old", rollout("d", "task_started"))])
+            ("d", spawn(parent), now - 9 * 86400, "Old", "colony-rote", "/root/old", rollout("d", "task_started")),
+            # colony-codex's review: a helper's own helper at work after the one between has finished
+            ("e", spawn("b"), now, "Sagan", "colony-rote", "/root/done_review/depth2_subject", rollout("e", "task_started")),
+            # and a busy helper whose tool output has pushed its turn's start more than a MiB back
+            ("f", spawn(parent), now, "Noether", "colony-routine", "/root/long_build", rollout("f", "task_started"))])
         db.commit(); db.close()
+        big = Path(day / "rollout-f.jsonl")
+        with big.open("a") as f:
+            f.write(json.dumps({"type": "response_item", "payload": {"type": "function_call_output", "output": "x" * 1_100_000}}) + "\n")
         codex._helping.clear()
         with patch.object(context, "session", return_value={"provider": "codex", "id": parent, "path": str(own)}):
             helping = codex.helpers(self.root, now=now + 600)
-        self.assertEqual([(h["name"], h["what"], h["stats"]) for h in helping], [("Rawls", "codex ui subject", "10m")],
-                         "its own, still in a turn: not one finished, another's, or one untouched for days")
+        self.assertEqual([(h["name"], h["what"], h["stats"]) for h in helping],
+                         [("Rawls", "codex ui subject", "10m"), ("Noether", "long build", "10m"), ("Sagan", "depth2 subject", "10m")],
+                         "its own and theirs, still in a turn: not one finished, another's, or one untouched for days")
+        # read as it grows: a turn ending, then a half-written line, change only what is added
+        with big.open("a") as f:
+            f.write(json.dumps({"type": "event_msg", "payload": {"type": "task_complete"}}) + "\n" + '{"type": "event_msg", "payl')
+        codex._helping.clear()
+        with patch.object(context, "session", return_value={"provider": "codex", "id": parent, "path": str(own)}):
+            self.assertEqual([h["name"] for h in codex.helpers(self.root, now=now + 600)], ["Rawls", "Sagan"])
         snap = {"state": "idle", "lines": ["› Ask Codex to do anything"], "activity": {"line": None, "agents": []}, "helpers": helping}
-        self.assertEqual(board.seen(snap)["behind"], "1 helper running")
+        self.assertEqual(board.seen(snap)["behind"], "3 helpers running")
         self.assertEqual(chat.running(["• Working (5m 27s • esc to interrupt) · 2 background terminals running · /ps to view"]),
                          "2 background terminals running")
 

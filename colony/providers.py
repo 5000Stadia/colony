@@ -77,6 +77,7 @@ The colony's own mechanisms (notes, gates, mail, the roadmap, the watcher) are p
 .board/, the `colony` command, and text typed into a tmux session. Keep new ones that way.
 """
 import json
+import os
 import re
 import sys
 import shlex
@@ -97,6 +98,32 @@ def _newest_first(path, most=1 << 22, block=1 << 16):
             yield from (line for line in reversed(lines) if line.strip())
         if pos == 0 and rest.strip():
             yield rest
+
+
+def _turn_marks(path, start, started):
+    """A Codex rollout read from `start` (a line cut there skipped) to its last whole line: (where that ends, when
+    its open turn started or None, whether any turn's start or end was read)."""
+    seen = False
+    with open(path, "rb") as f:
+        f.seek(max(0, start - 1))
+        if start and f.read(1) != b"\n":                # begun mid-line: from the next one
+            start += len(f.readline())
+        at = start
+        for line in f:
+            if not line.endswith(b"\n"):
+                break
+            at += len(line)
+            if b'"event_msg"' in line and (b'"task_started"' in line or b'"task_complete"' in line or b'"turn_aborted"' in line):
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                kind = (e.get("payload") or {}).get("type")
+                if kind == "task_started":
+                    started, seen = _stamp(e), True
+                elif kind in ("task_complete", "turn_aborted"):
+                    started, seen = None, True
+    return at, started, seen
 
 
 def _stamp(entry):
@@ -1223,8 +1250,9 @@ class Codex:
 
     def helpers(self, root, now=None):
         """Its helpers at work: Codex lists none under its box (its picker keeps finished ones too), so they come from
-        its thread store, each spawned with the session's id as its parent, and are at work while their own rollout's
-        last turn has started and not ended. [{name, what, stats, transcript}], kept ten seconds.
+        its thread store, each spawned with its parent's id, and are at work while their own rollout's last turn has
+        started and not ended. A helper's own helpers count too, though the one between has finished: the family is
+        followed down from the session. [{name, what, stats, transcript}], kept ten seconds.
         PROVIDER: Codex's state_5.sqlite threads (source subagent.thread_spawn) and rollouts."""
         import sqlite3
         import time
@@ -1241,13 +1269,23 @@ class Codex:
             if home and (home / "state_5.sqlite").exists():
                 db = sqlite3.connect(f"file:{home / 'state_5.sqlite'}?mode=ro", uri=True, timeout=1)
                 try:
-                    rows = db.execute("SELECT agent_nickname, agent_role, agent_path, rollout_path FROM threads "
-                                      "WHERE source LIKE ? AND updated_at > ?",
-                                      (f'%"parent_thread_id":"{s["id"]}"%', int(now) - 2 * 86400)).fetchall()
+                    rows = db.execute("SELECT id, source, updated_at, agent_nickname, agent_role, agent_path, rollout_path "
+                                      "FROM threads WHERE source LIKE '%\"thread_spawn\"%'").fetchall()
                 finally:
                     db.close()
-                for nick, role, agent, rollout in rows:
-                    started = self._turn_open(rollout)
+                children = {}
+                for row in rows:
+                    try:
+                        parent = json.loads(row[1])["subagent"]["thread_spawn"]["parent_thread_id"]
+                    except (ValueError, KeyError, TypeError):
+                        continue
+                    children.setdefault(parent, []).append(row)
+                family, at = [], [s["id"]]
+                while at:
+                    kin = [r for a in at for r in children.get(a, []) if r not in family]
+                    family, at = family + kin, [r[0] for r in kin]
+                for _, _, updated, nick, role, agent, rollout in family:
+                    started = (updated or 0) > now - 2 * 86400 and self._turn_open(rollout)
                     if started:
                         mins = int(max(0, now - started) // 60)
                         out.append({"name": nick or role or "helper", "what": (agent or "").rsplit("/", 1)[-1].replace("_", " "),
@@ -1257,22 +1295,26 @@ class Codex:
         self._helping[str(root)] = (now, out)
         return out
 
-    @staticmethod
-    def _turn_open(rollout):
-        """When a rollout's last turn started, while it has not ended (task_complete, turn_aborted); else None."""
+    _turns = {}
+
+    @classmethod
+    def _turn_open(cls, rollout):
+        """When a rollout's last turn started, while it has not ended (task_complete, turn_aborted); else None. Read as
+        it grows: its newest MiB first (all of it, only when that holds no turn's start or end: a helper's long tool
+        output can push its start back that far), then only what was added since."""
         try:
-            for line in _newest_first(rollout, most=1 << 20):
-                if b'"event_msg"' not in line:
-                    continue
-                e = json.loads(line)
-                kind = (e.get("payload") or {}).get("type")
-                if kind in ("task_complete", "turn_aborted"):
-                    return None
-                if kind == "task_started":
-                    return _stamp(e)
-        except (OSError, ValueError):
-            pass
-        return None
+            size = os.path.getsize(rollout)
+            at, started = cls._turns.get(rollout, (0, None))
+            if not at or at > size:
+                at, started, seen = _turn_marks(rollout, max(0, size - (1 << 20)), None)
+                if not seen and size > 1 << 20:
+                    at, started, seen = _turn_marks(rollout, 0, None)
+            elif at < size:
+                at, started, _ = _turn_marks(rollout, at, started)
+        except (OSError, TypeError):
+            return None
+        cls._turns[rollout] = (at, started)
+        return started
 
     # Its own views that the agent may open (the subagent picker, "← for agents") are drawn as a choice, but they are
     # no question for the person: one is open while its heading is on screen with no prompt to type at below it.
