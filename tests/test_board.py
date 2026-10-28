@@ -1324,6 +1324,37 @@ class ChatTest(BoardBase):
         self.assertEqual(turns[0]["text"], "Review R93")
         self.assertEqual(turns[0]["items"], [("step", "exec(git log -3)"), ("say", "Three findings.")])
 
+    def test_chat_holds_the_latest_turns_and_an_unchanged_feed_is_not_sent_again(self):
+        # a long day's forty turns, sent whole every few seconds, made a page the person's phone kept reloading
+        board.track(self.root)
+        path = Path(self.tmp.name) / "t.jsonl"
+        path.write_text("\n".join(json.dumps(l) for n in range(30) for l in (
+            {"type": "user", "message": {"content": f"question {n}"}, "timestamp": f"2026-10-19T10:{n:02d}:00Z"},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": f"answer {n}"}]}})))
+        from http.server import ThreadingHTTPServer
+        server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        base = f"http://127.0.0.1:{server.server_address[1]}/chat/feed?p=0"
+        with patch("colony.context.session", return_value={"provider": "claude", "id": "s", "path": str(path)}):
+            feed = board.chat_feed("0", self.root)
+            self.assertIn(">question 29<", feed)
+            self.assertIn(">question 10<", feed)
+            self.assertNotIn(">question 9<", feed, "the latest twenty")
+            self.assertIn("data-n='60'>Show earlier</button>", feed)
+            more = urllib.request.urlopen(base + "&n=60").read().decode()
+            self.assertIn(">question 0<", more, "earlier ones a tap away")
+            self.assertNotIn("Show earlier", more, "all of them shown")
+            first = urllib.request.urlopen(base)
+            tag = first.headers["ETag"]
+            self.assertTrue(tag)
+            with self.assertRaises(urllib.error.HTTPError) as same:
+                urllib.request.urlopen(urllib.request.Request(base, headers={"If-None-Match": tag}))
+            self.assertEqual(same.exception.code, 304, "unchanged: not sent again")
+            path.write_text(path.read_text() + "\n" + json.dumps(
+                {"type": "user", "message": {"content": "one more"}, "timestamp": "2026-10-19T11:00:00Z"}))
+            self.assertEqual(urllib.request.urlopen(urllib.request.Request(base, headers={"If-None-Match": tag})).status, 200)
+
     def test_the_chat_tab_shows_the_conversation_and_what_is_sent_goes_into_its_console(self):
         from colony import chat
         board.track(self.root)

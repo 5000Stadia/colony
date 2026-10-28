@@ -3234,7 +3234,8 @@ PLAYER = """
     tabs = document.querySelector('.tabs'), tr = tabs && tabs.getBoundingClientRect();
     fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'gc-' + when, top: Math.round(r.top),
       bottom: Math.round(r.bottom), h: Math.round(r.height), inner: innerHeight, vvh: v && Math.round(v.height), vvtop: v && Math.round(v.offsetTop),
-      tabs: tr && Math.round(tr.top), style: gc.style.cssText, path: location.pathname + location.search})})}).catch(() => {}); };
+      tabs: tr && Math.round(tr.top), style: gc.style.cssText, path: location.pathname + location.search,
+      nav: ((performance.getEntriesByType && performance.getEntriesByType('navigation')[0]) || {}).type || ''})})}).catch(() => {}); };
   on(gta, 'focus', () => { gcTyping = true; glist.hidden = true; document.body.classList.add('gctyping'); cancelAnimationFrame(ridef); ride();
     after(() => gmeasure('typing'), 1200); });
   on(gta, 'blur', () => { gcTyping = false; document.body.classList.remove('gctyping'); cancelAnimationFrame(ridef); placed(); });
@@ -3636,15 +3637,24 @@ _PARTS = {}                  # a project's latest parts, kept until its transcri
 REPLY = re.compile(r'\(Replying to: "(.*?)"\)\n')
 
 
-def chat_feed(key, root, shown=40):
+# Chat holds the latest turns, earlier ones a tap away: forty of a long day's, sent whole every few seconds, made a page
+# 119,000 pixels tall that the person's phone kept reloading (2026-10-28)
+SHOWN, MORE, MOST = 20, 40, 400
+
+
+def chat_feed(key, root, shown=SHOWN):
     """The conversation, as the app shows one: the person's messages, the agent's prose in full, each run of work
-    between folded to a line (Ran 6 commands), colony's own notices small; then what it is doing now."""
+    between folded to a line (Ran 6 commands), colony's own notices small; then what it is doing now. The latest
+    `shown` turns, with a button for earlier ones above them."""
     from . import chat, context, monitor
     s = context.session(root)
     turns = chat.turns(chat.events(s["provider"], s["path"])) if s else []
+    out = []
+    if len(turns) > shown:
+        out.append(f"<div class='earlier' data-k='earlier'><button type='button' class='quiet more' "
+                   f"data-n='{min(MOST, shown + MORE)}'>Show earlier</button></div>")
     turns = turns[-shown:]
     letters = mail_by_turn(root, turns)
-    out = []
     last_say = max((i for i, t in enumerate(turns) if any(kind == "say" for kind, _ in t["items"])), default=-1)
     for i, t in enumerate(turns):
         k = f"{e(t['at'])}"
@@ -3952,7 +3962,7 @@ CHAT = """
   file.addEventListener('change', chosen);
   // While a finger is on the page, or it still glides from a flick, nothing is redrawn or moved: a phone stops a
   // gliding page at any change. The next look catches up.
-  let moving = 0;
+  let moving = 0, shown = 0, tag = '';             // shown: the earlier turns asked for; tag: the feed as last fetched
   // caught on the way down: a scroll inside a part (the floating Needs you scrolls in itself) never reaches the window
   ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true, capture: true}));
   async function refresh() {
@@ -3961,7 +3971,10 @@ CHAT = """
     if ([...box.querySelectorAll('textarea')].some((t) => t.value.trim()) || box.contains(document.activeElement) &&
         document.activeElement.matches('textarea, select, input')) return;
     try {
-      const r = await fetch('/chat/feed?p=' + key, {cache: 'no-store'}); if (!r.ok) return;
+      const r = await fetch('/chat/feed?p=' + key + (shown ? '&n=' + shown : ''), {cache: 'no-store',
+        headers: tag ? {'If-None-Match': tag} : {}});
+      if (r.status === 304 || !r.ok) return;
+      tag = r.headers.get('ETag') || '';
       const html = await r.text(); if (html === last) return;
       // a part being read stays in view as replies land under it: the page keeps its place rather than following them
       const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick && !box.querySelector('.say.reading'), was = lastBottom();
@@ -4309,6 +4322,8 @@ CHAT = """
   document.addEventListener('click', (ev) => { if (!menu.hidden && !ev.target.closest('.automenu, button.auto')) menu.hidden = true; });
   window.addEventListener('scroll', () => { menu.hidden = true; }, {passive: true});
   box.addEventListener('click', async (ev) => {
+    const more = ev.target.closest('button.more');       // earlier turns, above where the reader is, who stays put
+    if (more) { shown = +more.dataset.n; tag = ''; moving = 0; more.textContent = 'Loading…'; refresh(); return; }
     if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
     const rp = ev.target.closest('button.reply');
     if (rp) { const s = box.querySelector(`.say[data-t="${CSS.escape(rp.dataset.t)}"]`); answering(s ? s.innerText : ''); ta.focus(); return; }
@@ -7596,10 +7611,23 @@ class Handler(BaseHTTPRequestHandler):
                 root = monitor.home() if key == "steward" else plist[int(key)]
             except (ValueError, IndexError):
                 return self._send(404, b"No such console")
-            body = chat_feed(key, root).encode()
+            try:
+                shown = min(MOST, max(SHOWN, int((q.get("n") or [SHOWN])[0])))
+            except ValueError:
+                shown = SHOWN
+            body = chat_feed(key, root, shown).encode()
+            # unchanged since the page last looked: said so in a line, so the phone neither fetches nor compares it again
+            tag = '"' + hashlib.sha1(body).hexdigest()[:16] + '"'
+            if self.headers.get("If-None-Match") == tag:
+                self.send_response(304)
+                self.send_header("ETag", tag)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
+            self.send_header("ETag", tag)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             return self.wfile.write(body)
@@ -8628,6 +8656,7 @@ details.item > summary .jd { vertical-align:middle; margin-right:4px } .ititle {
 blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--line); color:var(--muted) }
 .chat details.needs { border:1px solid var(--flag); border-radius:14px; background:var(--flag-bg); padding:8px 12px }
 .chat details.needs.blocking { border-width:2px }
+.chat .earlier { text-align:center; margin:4px 0 10px }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
 /* a chat's Needs you floats on the player (on the message box, where the player isn't shown), its own to that chat:
