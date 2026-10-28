@@ -636,9 +636,14 @@ class ArchiveAndListTest(BoardBase):
         (other / "ROADMAP.md").write_text(ROADMAP)
         board.track(other)
         nest.join(other, "holodeck")
+        kiln = Path(self.tmp.name) / "kiln"                # a nest of one shows its project alone: a second, for its chip
+        kiln.mkdir()
+        board.track(kiln)
+        nest.join(kiln, "holodeck")
         reg = board.registry()
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
         self.assertIn("class='proj nestset' href='/nest?n=holodeck'", board.sidebar(reg, mine), "the chip's way to its page")
+        nest.leave(kiln)
         page = board.nest_page(reg, "holodeck")
         self.assertIn("Add or take out projects", page)
         self.assertIn(f"<option value='{1 - mine}'>plants</option>", page, "a project outside it, to add")
@@ -704,6 +709,10 @@ class StewardPageTest(BoardBase):
         (other / "ROADMAP.md").write_text(ROADMAP)
         board.track(other)
         nest.join(other, "holodeck")
+        kiln = Path(self.tmp.name) / "kiln"                # a nest of one shows its project alone: a second, to fold
+        kiln.mkdir()
+        board.track(kiln)
+        nest.join(kiln, "holodeck")
         reg = board.registry()
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
         self.assertIn("data-fold='nav:holodeck' data-open='0'>", board.sidebar(reg, -1))

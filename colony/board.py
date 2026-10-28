@@ -2178,8 +2178,8 @@ def sidebar(reg, pid):
                          f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{e(p.name)}{badge}</span>"
                          f"<span class='sline' id='sline-{i}'>{e(snap.get('behind') or snap['state'] if snap['state'] != 'off' else '')}"
                          f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
-        if not here or here == PINNED:
-            side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here else chips
+        if not here or here == PINNED or len(members) == 1:     # a nest down to one live project: the project itself
+            side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here == PINNED else chips
             continue
         # a nest: one chip that opens to its projects (remembered on this device); open while one of them is shown
         state = next((s for s in ("needs you", "working", "idle") if s in states), "off")

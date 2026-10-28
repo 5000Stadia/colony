@@ -956,6 +956,21 @@ class ChatTest(BoardBase):
             w.stir()
         self.assertEqual(order(), ["kiln", "photonic", self.root.name, "glaze"], "kiln stirred last; the nest after it, whole")
 
+    def test_a_nest_down_to_one_live_project_shows_the_project_in_the_menu(self):
+        # Bookflow's nest held trial projects, since archived: opening the nest to reach its one project was a tap too many
+        from colony import nest
+        other = Path(self.tmp.name) / "kiln"
+        other.mkdir()
+        board.track(self.root)
+        board.track(other)
+        nest.join(self.root, "Pottery")
+        nest.join(other, "Pottery")
+        self.assertIn("nestchip", board.sidebar(board.registry(), -1), "two: the nest opens to them")
+        nest.leave(other)
+        side = board.sidebar(board.registry(), -1)
+        self.assertNotIn("nestchip", side, "one: no nest to open")
+        self.assertIn(f"{self.root.name}<span class='badge gate'", side, "the project itself, in the menu")
+
     def test_a_project_has_a_colour_of_its_own_chosen_where_its_settings_are(self):
         board.track(self.root)
         self.assertIn("name='color' value='' checked", board.project_settings_form(0, {}), "the board's green, unchosen")
