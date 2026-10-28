@@ -3283,6 +3283,8 @@ class ProjectSettingsTest(BoardBase):
                 data = urllib.parse.urlencode({"within": self.tmp.name, "name": name, "provider": provider, "model_pick": "claude-opus-5-5:medium" if provider == "claude" else "big-1:deep"}).encode()
                 urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/new", data=data))
             seeds, soil = Path(self.tmp.name) / "seeds", Path(self.tmp.name) / "soil"
+            settings = urllib.request.urlopen(f"http://127.0.0.1:{port}/settings").read().decode()
+            self.assertIn("Other CLI", settings, "Settings opens with it, its catalog and app left to colony's defaults")
             console.COMMAND = None                         # only to read the command each would start with
             self.assertIn("This project is part of a colony", (seeds / "CLAUDE.md").read_text())
             self.assertEqual(console.command("seeds", seeds), "claude --permission-mode bypassPermissions --remote-control seeds --model claude-opus-5-5 --effort medium")

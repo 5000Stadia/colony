@@ -146,6 +146,13 @@ class Provider:
         """Why its sandbox can't run here, in a line (None: it can, or it has none)."""
         return None
 
+    def catalog_freshness(self, now):
+        """How fresh its own model catalog is, for Settings, calling nothing: {"fields": [(name, value)], "warnings"}."""
+        return {"fields": [], "warnings": []}
+
+    app = None                         # the app its consoles are reached from besides the board (None: none)
+    reach = None                       # the setting that makes a console reachable there, as Settings names it
+
     # --- its console in tmux
     scrolled_marker = ""               # on screen while its view is scrolled up from the latest; the phone's ↓ follows it
     scrolls_in_tmux = False            # it draws inline and takes no mouse: its history is tmux's, a swipe scrolls that
@@ -315,6 +322,7 @@ class ClaudeCode(Provider):
     # Stop runs when a turn ends: `colony turn` records the turn if it asks the person something.
     # Shown on screen while its view is scrolled up from the latest; the console's ↓ follows it.
     scrolled_marker = "Jump to bottom"
+    app, reach = "the Claude app", "Remote Control"
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
              "Stop": "colony turn", "PreCompact": "colony context --hook before --console claude"}
 
@@ -791,6 +799,10 @@ class ClaudeCode(Provider):
         from . import chat
         return chat.background(path)
 
+    def catalog_freshness(self, now):
+        from . import catalog_freshness
+        return catalog_freshness.claude(self, now)
+
     def events(self, path):
         from . import chat
         return chat.claude_events(path)
@@ -1082,6 +1094,7 @@ class Codex(Provider):
     enter_after = 0.6       # typed text arriving at once reads to it as a paste, which swallows an Enter right after
     scrolled_marker = ""
     scrolls_in_tmux = True  # inline (--no-alt-screen), no mouse of its own: its scrollback is tmux's
+    app, reach = "ChatGPT", "Reach it from ChatGPT"
     legacy_hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
                     "Stop": "colony turn && printf '{}\\n'"}
     hooks = {"SessionStart": "colony notes --deliver --session --console codex",
@@ -1408,6 +1421,10 @@ class Codex(Provider):
     def background(self, path):
         from . import chat
         return chat.codex_background(path)
+
+    def catalog_freshness(self, now):
+        from . import catalog_freshness
+        return catalog_freshness.codex(self, now)
 
     def events(self, path):
         from . import chat

@@ -5452,13 +5452,13 @@ def project_settings_form(pid, own, action="/project-settings", root=None):
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
     g = registry()["settings"]
     remote = "on" if own.get("remote", g["remote_by"].get(own.get("provider") or g["provider"], g["remote"])) else "off"
+    prog = providers.get(own.get("provider") or g["provider"])
     names = {"ask": "ask each time", "edits": "accept edits", "all": "allow everything", "plan": "plan only"}
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
             f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
-            # PROVIDER: each program's own way in from its app: Claude Code's Remote Control, Codex's ChatGPT pairing
-            f"<label>{'Reach it from ChatGPT' if (own.get('provider') or g['provider']) == 'codex' else 'Remote Control'} "
-            f"{opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>"
+            # each program's own way in from its app (Provider.reach): Claude Code's Remote Control, Codex's ChatGPT pairing
+            + (f"<label>{e(prog.reach)} {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>" if prog.reach else "")
             + "<div class='swatches'><span>Colour</span>" + "".join(
                 f"<label title='{k}' style='--sw:{light};--swd:{dark}'><input type='radio' name='color' value='{'' if k == 'green' else k}'"
                 f"{' checked' if (own.get('color') or 'green') == k else ''}><span></span></label>" for k, (light, dark) in PALETTE.items())
@@ -6633,7 +6633,7 @@ def remote_line(root):
                     "<button>Connect to ChatGPT</button></form></p>")
         return "<p class='muted'>In ChatGPT: open its console to connect</p>"
     on = project_settings(root)[0].get('remote', True)
-    return f"<p class='muted'>Remote Control: {'on' if on else 'off'}</p>"
+    return f"<p class='muted'>{e(providers.of(root).reach)}: {'on' if on else 'off'}</p>" if providers.of(root).reach else ""
 
 
 def codex_pairing_options(reg):
@@ -6993,9 +6993,9 @@ def settings_page(reg):
           f"<span class='muted'>(folder trust, permission mode, Remote Control, hooks: so it runs as set up)</span></label>"
         + "".join(f"<label><input type='checkbox' name='remote_{k}' value='on'"
                   f"{' checked' if s['remote_by'].get(k, s['remote']) else ''}> "
-                  f"New {e(p.label)} projects are reachable from {'ChatGPT' if k == 'codex' else 'the Claude app'} "
+                  f"New {e(p.label)} projects are reachable from {e(p.app)} "
                   "<span class='muted'>(each project can turn it off)</span></label>"
-                  for k, p in pv.PROVIDERS.items() if pv.usable(p))
+                  for k, p in pv.PROVIDERS.items() if pv.usable(p) and p.app)
         + "".join(f"<label><input type='checkbox' name='turbo_{k}' value='on'"
                   f"{' checked' if s['turbo_by'].get(k, True) else ''}> Turbo for {e(p.label)} "
                   "<span class='muted'>(when its weekly use runs behind pace, its projects with queued work are "

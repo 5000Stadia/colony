@@ -25,46 +25,54 @@ def display_time(value):
 
 
 def info(provider, now=None):
-    import json
+    """How fresh a program's own model catalog is (Provider.catalog_freshness): {fields, warnings}."""
+    return provider.catalog_freshness(time.time() if now is None else now)
+
+
+def codex(provider, now):
+    """Codex's: the catalog snapshot it keeps, against its installed version."""
     import re
-    from pathlib import Path
-    from . import providers
-    now = time.time() if now is None else now
     fields, warnings = [], []
-    if providers.key(provider) == 'codex':
-        _, metadata = provider.catalog_snapshot()
-        if not metadata:
-            return dict(fields=[], warnings=['No readable model catalog yet'])
-        fields = [('Catalog client', metadata.get('client_version') or 'unknown'),
-                  ('Fetched', display_time(metadata.get('fetched_at'))),
-                  ('Identity', metadata.get('identity') or 'unknown')]
-        version = lambda value: tuple(map(int, re.findall(r'\d+', value or '')[:3]))
-        client, installed = version(metadata.get('client_version')), version(provider.version())
-        if client and installed and client < installed:
-            warnings.append('Catalog predates the installed Codex version')
-    else:
-        files = sorted((provider.config_home() / 'cache' / 'model-catalog').glob('*-cc.json'),
-                       key=lambda p: p.stat().st_mtime, reverse=True)
-        data = None
-        for path in files:
-            try:
-                candidate = json.loads(path.read_text())
-                if isinstance(candidate.get('catalog', {}).get('config', {}).get('models'), list):
-                    data = candidate
-                    break
-            except (OSError, ValueError, TypeError, AttributeError):
-                continue
-        if data is None:
-            return dict(fields=[], warnings=['No readable model catalog yet'])
-        fields = [('Fetched', display_time(data.get('fetchedAt'))), ('Stale after', display_time(data.get('staleAt')))]
-        stale, fetched = timestamp(data.get('staleAt')), timestamp(data.get('fetchedAt'))
-        if stale is not None and stale <= now:
-            warnings.append('Model catalog is past staleAt')
-        program = shutil.which(provider.program)
-        if program and fetched is not None:
-            try:
-                if fetched < Path(program).resolve().stat().st_mtime:
-                    warnings.append('Catalog predates the installed program update')
-            except OSError:
-                pass
+    _, metadata = provider.catalog_snapshot()
+    if not metadata:
+        return dict(fields=[], warnings=['No readable model catalog yet'])
+    fields = [('Catalog client', metadata.get('client_version') or 'unknown'),
+              ('Fetched', display_time(metadata.get('fetched_at'))),
+              ('Identity', metadata.get('identity') or 'unknown')]
+    version = lambda value: tuple(map(int, re.findall(r'\d+', value or '')[:3]))
+    client, installed = version(metadata.get('client_version')), version(provider.version())
+    if client and installed and client < installed:
+        warnings.append('Catalog predates the installed Codex version')
+    return dict(fields=fields, warnings=warnings)
+
+
+def claude(provider, now):
+    """Claude Code's: its cached catalog's own fetched and stale times, against its program's install."""
+    import json
+    from pathlib import Path
+    fields, warnings = [], []
+    files = sorted((provider.config_home() / 'cache' / 'model-catalog').glob('*-cc.json'),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    data = None
+    for path in files:
+        try:
+            candidate = json.loads(path.read_text())
+            if isinstance(candidate.get('catalog', {}).get('config', {}).get('models'), list):
+                data = candidate
+                break
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    if data is None:
+        return dict(fields=[], warnings=['No readable model catalog yet'])
+    fields = [('Fetched', display_time(data.get('fetchedAt'))), ('Stale after', display_time(data.get('staleAt')))]
+    stale, fetched = timestamp(data.get('staleAt')), timestamp(data.get('fetchedAt'))
+    if stale is not None and stale <= now:
+        warnings.append('Model catalog is past staleAt')
+    program = shutil.which(provider.program)
+    if program and fetched is not None:
+        try:
+            if fetched < Path(program).resolve().stat().st_mtime:
+                warnings.append('Catalog predates the installed program update')
+        except OSError:
+            pass
     return dict(fields=fields, warnings=warnings)
