@@ -1344,8 +1344,9 @@ class Codex:
                 ended, still = self._worked(rollout)
                 turns.update(ended)
                 open_.setdefault(thread, []).append(still)
-        # a conversation's open turn once: its newest, and none that another copy has seen close (colony-codex's review)
-        live = [max((o for o in opens if o[0] not in turns), key=lambda o: o[1], default=(None, 0, 0.0))[2] for opens in open_.values()]
+        # a conversation's open turn once: its newest (of two copies of it, the one read further), and none that another
+        # copy has seen close (colony-codex's review)
+        live = [max((o for o in opens if o[0] not in turns), key=lambda o: (o[1], o[2]), default=(None, 0, 0.0))[2] for opens in open_.values()]
         return sum(turns.values()) / 1000 + sum(live)
 
     IDLE_GAP = ClaudeCode.IDLE_GAP

@@ -1740,6 +1740,12 @@ class CodexHelpersTest(BoardBase):
                 f.write(ev(20000, "task_started", turn_id="t5") + ev(20050, "task_complete", turn_id="t5", duration_ms=50000))
             self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 10 + 120 + 50, places=2,
                                    msg="a turn closed in one copy is not also an open one in another (colony-codex's review)")
+            # both copies mid-turn on the same turn: counted once, as far as the copy read further shows it
+            with main.open("a") as f:
+                f.write(ev(30000, "task_started", turn_id="t6") + item(30005))
+            with copy.open("a") as f:
+                f.write(ev(30000, "task_started", turn_id="t6") + item(30015))
+            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 10 + 120 + 50 + 15, places=2)
 
 
     def test_each_program_is_named_by_its_own_app(self):
