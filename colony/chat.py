@@ -320,19 +320,30 @@ def codex_background(path):
                          next((b.get("text", "") for b in out or [] if isinstance(b, dict)), ""))
             if m:
                 cells[m.group(1)] = (when, said)
-            # each command this call started, in order, against each session it returned that isn't one it polled
-            cmds = [] if "exec_command" not in said else re.findall(r'exec_command\s*\(\s*\{[^}]*?\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")', said) \
-                or re.findall(r'\bcmd"?\s*:\s*("(?:[^"\\]|\\.)*")', said)
-            polled = set(re.findall(r"write_stdin\s*\(\s*\{[^}]*?session_id\s*:\s*(\d+)", said))
-            fresh = [str(r["session_id"]) for r in results(out) if r.get("session_id") is not None and r.get("exit_code") is None
-                     and str(r["session_id"]) not in polled and str(r["session_id"]) not in started]
-            starts = said.count("exec_command")
-            for n, sid in enumerate(fresh[:starts]):
+            # the tools it called, in order, against the results it returned, in order: a session from an exec_command
+            # is one it started, named by that call's own cmd; where the two don't pair up one for one, sessions it
+            # didn't poll are still started, unnamed (colony-codex's review: a guess would name one by another's command)
+            tools = ([("exec_command", said[len("exec_command "):])] if said.startswith("exec_command {") else
+                     re.findall(r"\b(exec_command|write_stdin)\s*\(\s*(\{[^}]*\})?", said))
+            res = [r for r in results(out)]
+            polled = set(re.findall(r"""write_stdin\s*\(\s*\{[^}]*?["']?session_id["']?\s*:\s*(\d+)""", said))
+            live = lambda r: r.get("session_id") is not None and r.get("exit_code") is None and str(r["session_id"]) not in started
+
+            def named(args):
+                m = re.search(r"""["']?\bcmd["']?\s*:\s*("(?:[^"\\]|\\.)*")""", args or "")
                 try:
-                    what = json.loads(cmds[n]) if len(cmds) == starts else ""
+                    return json.loads(m.group(1)).strip() if m else ""
                 except ValueError:
-                    what = ""
-                started[sid] = {"id": "codex-" + sid, "kind": "Shell", "what": what.strip(), "at": when, "bg": True}
+                    return ""
+            if tools and len(tools) == len(res):
+                pairs = [(named(a), r) for (t, a), r in zip(tools, res) if t == "exec_command" and live(r)]
+            else:
+                execs = [a for t, a in tools if t == "exec_command"]
+                fresh = [r for r in res if live(r) and str(r["session_id"]) not in polled][:len(execs)]
+                pairs = [(named(execs[0]) if len(execs) == len(fresh) == 1 else "", r) for r in fresh]
+            for what, r in pairs:
+                sid = str(r["session_id"])
+                started[sid] = {"id": "codex-" + sid, "kind": "Shell", "what": what, "at": when, "bg": True}
         elif kind == "item_completed" and (pl.get("item") or {}).get("type") == "CommandExecution":
             item = pl["item"]
             sid = str(item.get("process_id") or "")

@@ -1733,6 +1733,13 @@ class CodexHelpersTest(BoardBase):
             with main.open("a") as f:
                 f.write(ev(9000 + 2 * 3600 + 10, "task_complete", turn_id="t4", duration_ms=120000) + '{"timestamp":"half a li')
             self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 10 + 120, places=2, msg="read on as it grows")
+            # the old copy stopped mid-turn; the host's copy saw that turn close: counted once, as it closed
+            with main.open("a") as f:
+                f.write('ay"}\n' + ev(20000, "task_started", turn_id="t5") + item(20015) + item(20030))
+            with copy.open("a") as f:
+                f.write(ev(20000, "task_started", turn_id="t5") + ev(20050, "task_complete", turn_id="t5", duration_ms=50000))
+            self.assertAlmostEqual(codex.active_seconds(self.root), 6 + 3.664 + 10 + 120 + 50, places=2,
+                                   msg="a turn closed in one copy is not also an open one in another (colony-codex's review)")
 
 
     def test_each_program_is_named_by_its_own_app(self):

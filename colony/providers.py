@@ -1343,11 +1343,13 @@ class Codex:
             for thread, rollout in rows:
                 ended, still = self._worked(rollout)
                 turns.update(ended)
-                open_[thread] = max(open_.get(thread, 0.0), still)
-        return sum(turns.values()) / 1000 + sum(open_.values())
+                open_.setdefault(thread, []).append(still)
+        # a conversation's open turn once: its newest, and none that another copy has seen close (colony-codex's review)
+        live = [max((o for o in opens if o[0] not in turns), key=lambda o: o[1], default=(None, 0, 0.0))[2] for opens in open_.values()]
+        return sum(turns.values()) / 1000 + sum(live)
 
     IDLE_GAP = ClaudeCode.IDLE_GAP
-    _worked_in = {}                               # rollout -> (bytes read, {turn: ms} of turns ended, open turn's time, its latest)
+    _worked_in = {}       # rollout -> (bytes read, {turn: ms} of turns ended, open turn's time, its latest, (its id, its start))
 
     @classmethod
     def _worked(cls, rollout):
@@ -1355,10 +1357,10 @@ class Codex:
         try:
             size = os.path.getsize(rollout)
         except (OSError, TypeError):
-            return {}, 0.0
-        at, ms, open_, last = cls._worked_in.get(rollout, (0, {}, 0.0, None))
+            return {}, (None, 0, 0.0)
+        at, ms, open_, last, opened = cls._worked_in.get(rollout, (0, {}, 0.0, None, (None, 0)))
         if size < at:
-            at, ms, open_, last = 0, {}, 0.0, None                  # rewritten: read it afresh
+            at, ms, open_, last, opened = 0, {}, 0.0, None, (None, 0)   # rewritten: read it afresh
         if size > at:
             with open(rollout, "rb") as fh:
                 fh.seek(at)
@@ -1373,10 +1375,12 @@ class Codex:
                             if took is None and e.get("started_at") and e.get("completed_at"):
                                 took = (e["completed_at"] - e["started_at"]) * 1000
                             ms[e.get("turn_id") or f"{rollout}:{len(ms)}"] = took or 0
-                            open_, last = 0.0, None
+                            open_, last, opened = 0.0, None, (None, 0)
                             continue
                     if b'"event_msg"' in line and b'"task_started"' in line:
-                        open_, last = 0.0, _stamp(json.loads(line))
+                        e = json.loads(line)
+                        open_, last = 0.0, _stamp(e)
+                        opened = ((e.get("payload") or {}).get("turn_id"), last)
                         continue
                     if last is not None:                              # within a turn still open
                         found = re.match(rb'\{"timestamp":\s*"([^"]+)"', line)
@@ -1387,8 +1391,8 @@ class Codex:
                 except (ValueError, KeyError, TypeError):
                     pass
             at += len(whole)
-            cls._worked_in[rollout] = (at, ms, open_, last)
-        return ms, open_
+            cls._worked_in[rollout] = (at, ms, open_, last, opened)
+        return ms, (opened[0], opened[1], open_) if last is not None else (None, 0, 0.0)
 
     _turns = {}
 
