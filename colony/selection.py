@@ -461,7 +461,7 @@ def role_label(ident):
     family, role = ident.split(':', 1)
     role, _, project = role.partition('@')
     project_name = next((r.name for r in project_roots() if key(family, role, r) == ident), project)
-    label = {'main': 'main agents', 'monitor': 'steward'}.get(role, role)
+    label = {'main': 'main agents', 'monitor': board.steward_name()}.get(role, role)
     if role in bench.TIERS:
         label += ' helpers'
     return providers.get(family).label + ' · ' + label + (' · ' + project_name if project else '')
@@ -492,6 +492,6 @@ def affected(ident, before, after):
     if role in ('consultant', 'monitor'):
         pin = ((settings.get('consultants') or {}).get(family) if role == 'consultant' else
                settings.get('monitor_model') if family == settings['provider'] else None) or {}
-        out.append(dict(label=f'{family} {"steward" if role == "monitor" else role}', before=pair(pin) if pin.get('model') else before,
+        out.append(dict(label=f'{family} {board.steward_name() if role == "monitor" else role}', before=pair(pin) if pin.get('model') else before,
                         after=after, pinned=bool(pin.get('model'))))
     return out or [dict(label=role_label(ident), before=before, after=after, pinned=False)]

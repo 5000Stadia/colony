@@ -39,8 +39,12 @@ def resolve(name):
 
 
 def shown(name):
-    """A sender's name as people and agents read it: the steward's messages are stored as from "monitor"."""
-    return "steward" if name == "monitor" else name
+    """A sender's name as people and agents read it: the steward's messages are stored as from "monitor", and are
+    from the person's name for it, the role beside it, once it has one."""
+    if name != "monitor":
+        return name
+    named = board.steward_named()
+    return f"{named} (the person's steward)" if named else "steward"
 
 
 def sender():

@@ -3443,6 +3443,140 @@ class SettingsTest(BoardBase):
             httpd.server_close()
 
 
+class StewardNameTest(BoardBase):
+    """The person can name the steward ("rename the steward to something like Jarvis or whatever I want", Oct 28)."""
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        stand_in = {"state": "idle", "lines": [], "activity": {}}
+        for target, attr, value in ((console, "ensure", lambda root, name=None, label=None, settle=0: name),
+                                    (console, "snapshot", lambda root, lines=6, name=None: stand_in),
+                                    (monitor, "snapshot", lambda: stand_in)):
+            p = patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def pages(self):
+        reg = board.registry()
+        board.add_note(self.root, None, "Try a water log.", author="suggestion")
+        monitor.decided(self.root, "Approved the formatter's prompt.")
+        pages = {"overview": board.monitor_page(reg, "overview"), "helm": board.monitor_page(reg, "helm"),
+                 "chat": board.monitor_page(reg, "chat"), "thread": board.thread(board.notes(self.root)),
+                 "settings": board.settings_page(reg)}
+        return {k: html.unescape(v) for k, v in pages.items()}           # as the person reads them
+
+    def test_unnamed_the_steward_reads_as_it_always_did(self):
+        self.assertEqual((board.steward_named(), board.steward_name()), ("", "steward"))
+        p = self.pages()
+        self.assertIn("<h1>steward</h1>", p["overview"])
+        self.assertIn("id='dot-m'></span>steward</span>", p["overview"], "the nav")
+        self.assertIn("What the steward decided", p["overview"])
+        self.assertIn("Include in the steward's helm", p["helm"])
+        self.assertIn("placeholder='Message the steward'", p["chat"])
+        self.assertIn("data-name='steward'", p["chat"], "the player's own key for it")
+        self.assertIn("the steward suggests", p["thread"])
+        self.assertIn("<span class='sttl'>Steward</span>", p["settings"])
+        self.assertIn("name='steward_name' value=''", p["settings"])
+        self.assertIn("from the person's steward, acting for them", board.render_notes(
+            [{"id": "n1", "author": "monitor", "anchor": None, "text": "Go large."}], "Notes:"))
+        monitor.brief()
+        self.assertTrue(monitor.brief_path().read_text().startswith("# You are `steward · every project on this board"))
+        self.assertNotIn("named you", monitor.brief_path().read_text())
+        self.assertEqual(mail.shown("monitor"), "steward")
+        self.assertRegex(self.cli("settings").stdout, r"steward_name +steward +what you call the steward")
+
+    def test_a_name_shows_wherever_the_person_meets_the_steward(self):
+        board.set_setting("steward_name", "  Jarvis ")
+        self.assertEqual(board.registry()["settings"]["steward_name"], "Jarvis", "trimmed")
+        p = self.pages()
+        self.assertIn("<h1>Jarvis</h1>", p["overview"])
+        self.assertIn("id='dot-m'></span>Jarvis</span>", p["overview"], "the nav")
+        self.assertIn("What Jarvis decided", p["overview"])
+        self.assertIn("Have Jarvis send it", p["overview"])
+        self.assertIn("Include in Jarvis's helm", p["helm"])
+        self.assertIn("placeholder='Message Jarvis'", p["chat"])
+        self.assertIn("data-name='steward'", p["chat"], "the player still knows it by its key")
+        self.assertIn("Jarvis suggests", p["thread"], "Needs you and a project's notes")
+        self.assertIn("<span class='sttl'>Jarvis</span>", p["settings"])
+        self.assertIn("name='steward_name' value='Jarvis'", p["settings"])
+        self.assertIn("Run Jarvis with the board", p["settings"])
+        for name, page in p.items():                    # its script (the player's) is another helper's, and keeps its words
+            text = re.sub(r"(?s)<script.*?</script>|<!--.*?-->", "", page)
+            self.assertEqual(re.findall(r"(?i).{0,50}\bthe steward\b.{0,30}", text), [],
+                             f"no line the person reads on its {name} calls it the steward any more")
+        self.assertRegex(self.cli("settings").stdout, r"steward_name +Jarvis")
+        self.assertRegex(self.cli("settings").stdout, r"steward_model .*Jarvis's model")
+        board.set_setting("steward_name", "")
+        self.assertIn("<h1>steward</h1>", board.monitor_page(board.registry(), "overview"), "blank: the steward again")
+
+    def test_what_reaches_a_project_keeps_the_role_beside_the_name(self):
+        board.set_setting("steward_name", "Jarvis")
+        notes = board.render_notes([{"id": "n1", "author": "monitor", "anchor": None, "text": "Go large."},
+                                    {"id": "n2", "author": "suggestion", "anchor": None, "text": "A log.", "kind": "idea"},
+                                    {"id": "n3", "author": "suggestion", "anchor": None, "text": "A tool."}], "Notes:")
+        self.assertIn("(from Jarvis, the person's steward, acting for them;", notes)
+        self.assertIn("(Jarvis's own suggestion, as the person's steward, not an instruction", notes)
+        self.assertIn("(a suggestion from Jarvis, the person's steward, not an instruction", notes)
+        self.assertEqual(mail.shown("monitor"), "Jarvis (the person's steward)")
+        typed = []
+        with patch.object(console, "type_into", hearing(typed)):
+            from colony import cli
+            cli.main(["tell", "plants", "Keep to V1.5."])
+        self.assertEqual(typed, ["[colony] You have a note from Jarvis, the person's steward."])
+
+    def test_the_brief_says_its_name_and_a_change_tells_it_once(self):
+        monitor.brief()
+        before = len(monitor._rows())
+        board.set_setting("steward_name", "Jarvis")
+        text = monitor.brief_path().read_text()
+        self.assertTrue(text.startswith("# You are `Jarvis, the person's steward · every project on this board"))
+        self.assertIn("You are Jarvis: the person named you that, and calls you by it.", text)
+        told = monitor._rows()[before:]
+        self.assertEqual(len(told), 1, "told once")
+        self.assertIn("The person named you Jarvis", told[0]["text"])
+        board.set_setting("steward_name", "Jarvis")
+        self.assertEqual(len(monitor._rows()), before + 1, "the same name again tells it nothing")
+        board.set_setting("steward_name", "steward")
+        self.assertEqual(board.steward_named(), "", "its own word is the default")
+        self.assertIn("took back the name Jarvis", monitor._rows()[-1]["text"])
+        self.assertTrue(monitor.brief_path().read_text().startswith("# You are `steward · "))
+
+    def test_its_title_in_the_app_is_the_name(self):
+        saved, console.COMMAND = console.COMMAND, None
+        try:
+            self.assertIn("--remote-control monitor", console.command("monitor"), "unnamed, as it always was")
+            board.set_setting("steward_name", "Mr Jarvis")
+            self.assertIn("--remote-control 'Mr Jarvis'", console.command("monitor"))
+            self.assertIn("--remote-control plants", console.command("plants"), "a project's is its own")
+        finally:
+            console.COMMAND = saved
+
+    def test_a_name_that_cannot_be_shown_is_refused(self):
+        board.set_setting("steward_name", "Jarvis")
+        for bad in ("J" * 31, "<b>Jarvis</b>", "Jar`vis", "Jarvis\x07", "-Jarvis", "{who}"):
+            with self.assertRaises(ValueError, msg=bad):
+                board.set_setting("steward_name", bad)
+        self.assertEqual(board.steward_named(), "Jarvis", "a refused name changes nothing")
+        board.set_setting("steward_name", "O'Brien")
+        self.assertIn("<h1>O&#x27;Brien</h1>", board.monitor_page(board.registry(), "overview"), "escaped where drawn")
+        self.assertIn("name='steward_name' value='O&#x27;Brien'", board.settings_page(board.registry()))
+        refused = self.cli("settings", "steward_name", "<script>")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("letters, digits, spaces", refused.stderr, "it says what reads")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as no:
+                urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/options",
+                                                              data=urllib.parse.urlencode({"steward_name": "J" * 40, "effort": "low"}).encode()))
+            self.assertEqual(no.exception.code, 400)
+            self.assertEqual((board.steward_named(), board.registry()["settings"]["effort"]), ("O'Brien", ""),
+                             "nothing on the page is saved with a name that can't be shown")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
 class ProjectSettingsTest(BoardBase):
     def test_codex_suggestions_follow_catalog_without_changing_defaults(self):
         from unittest.mock import patch

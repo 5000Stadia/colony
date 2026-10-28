@@ -25,9 +25,9 @@ from . import board, console, hours, providers, supports
 def name():
     return board.scoped("board-monitor")
 
-ROLE = """# You are `steward · every project on this board · until the person ends you`
+ROLE = """# You are `{who} · every project on this board · until the person ends you`
 
-You act for the person across their projects. They reach you from the board (and from their agent program's
+{named}You act for the person across their projects. They reach you from the board (and from their agent program's
 own app, where it has one); each project also has its own session they can talk to directly.
 You were once called the monitor: older records, files and settings still say `monitor`, and mean you.
 
@@ -280,12 +280,30 @@ def rebrief():
               f"{path} afresh.")
 
 
+# The person's name for the steward (colony settings steward_name), in its header and opening; unnamed, neither.
+NAMED_WHO = "{name}, the person's steward"
+NAMED = "You are {name}: the person named you that, and calls you by it. "
+
+
+def renamed(before, after):
+    """The person named the steward (or took its name back): its brief says so, and it is told once."""
+    brief()
+    if after:
+        queue(f"The person named you {after}: from now on they call you {after}, and you answer to it. Your brief "
+              f"({brief_path()}) says so.")
+    else:
+        queue(f"The person took back the name {before}: you are the steward again, as your brief ({brief_path()}) says.")
+
+
 def brief():
     home().mkdir(parents=True, exist_ok=True)
     source = Path(__file__).resolve().parent.parent
     own = next((p for p in board.projects() if p.resolve() == source), None)
     upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
-    role = ROLE.replace("{source}", str(source)).replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
+    named = board.steward_named()
+    role = ROLE.replace("{who}", NAMED_WHO.format(name=named) if named else "steward")
+    role = role.replace("{named}", NAMED.format(name=named) if named else "").replace("{source}", str(source))
+    role = role.replace("{direction}", direction().strip()).replace("{upkeep}", upkeep)
     for f in {p.instructions for p in providers.PROVIDERS.values()}:     # whichever program runs it reads its own
         (home() / f).write_text(role)
 
@@ -675,8 +693,9 @@ class Watcher:
             elif state == "idle" or (urgent and state == "working"):
                 what = " and ".join(filter(None, [
                     "a note from the person on the board" if any(n.get('author') not in ('colony', 'observation', 'monitor', 'suggestion') for n in notes) else "",
-                    "a note from the person's steward" if any(n.get('author') == 'monitor' for n in notes) else "",
-                    "a suggestion from the steward" if any(n.get('author') == 'suggestion' for n in notes) else "",
+                    f"a note from {board.steward_role()}" if any(n.get('author') == 'monitor' for n in notes) else "",
+                    "a suggestion from " + (board.steward_role() if board.steward_named() else "the steward")
+                    if any(n.get('author') == 'suggestion' for n in notes) else "",
                     "an update from Colony" if any(n.get('author') == 'colony' for n in notes) else "",
                     "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
                     "mail from another project in the colony" if letters else ""]))

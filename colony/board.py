@@ -244,7 +244,7 @@ DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "mo
                     "permissions": "all", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60,
-                    "tailscale": "", "tailscale_lan_before": None}
+                    "tailscale": "", "tailscale_lan_before": None, "steward_name": ""}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -263,6 +263,7 @@ SETTING_HELP = {
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
     "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
     "monitor": "the steward session runs with the board",
+    "steward_name": "what you call the steward, as Jarvis (blank: steward); it answers to it, and the board shows it",
     "model": "main-agent model pin for this provider (blank: colony Auto)",
     "effort": "effort for a main-agent model pin (Auto chooses both model and effort)",
     "consult": "agents consult two fresh models, one from each family, at decisions costly to change (colony consult)",
@@ -282,6 +283,59 @@ SETTING_HELP = {
 # shown and typed under the new names.
 SETTING_ALIASES = {"steward": "monitor", "steward_model": "monitor_model"}
 SETTING_NAMES = {v: k for k, v in SETTING_ALIASES.items()}
+
+
+# The person can name the steward ("rename the steward to something like Jarvis or whatever I want", Oct 28): the
+# board and the steward's own brief then use their name, as they typed it, and what reaches a project keeps the
+# role beside it, so its agent knows who that is. Unnamed, every line reads as it always did.
+STEWARD_NAME_MAX = 30
+
+
+def steward_name_of(value):
+    """A name as the person typed it, trimmed; '' for none (or "steward" itself). One too long, or with what can't
+    be shown plainly everywhere it goes (a page, a console title, the steward's brief), is refused with ValueError."""
+    v = " ".join(str(value or "").split())
+    if v.lower() in ("", "steward", "the steward"):
+        return ""
+    if len(v) > STEWARD_NAME_MAX:
+        raise ValueError(f"the steward's name is at most {STEWARD_NAME_MAX} characters")
+    if not re.fullmatch(r"[^\W_][\w .'-]*", v):
+        raise ValueError("the steward's name takes letters, digits, spaces and . ' - only, starting with a letter or digit")
+    return v
+
+
+def steward_named():
+    """The name the person gave the steward, or '' while it has none."""
+    try:
+        return steward_name_of(registry()["settings"].get("steward_name"))
+    except ValueError:                                   # a hand-edited record: shown as the default, never raw
+        return ""
+
+
+def steward_name():
+    """What the board calls the steward: the person's name for it, else "steward"."""
+    return steward_named() or "steward"
+
+
+def the_steward(start=False, possessive=False):
+    """The steward in a sentence: "the steward" ("The steward" at its start, "the steward's"), or its name."""
+    n = steward_named()
+    return (n or ("The steward" if start else "the steward")) + ("'s" if possessive else "")
+
+
+def setting_help(key):
+    """A setting's line, the steward in it called by the person's name for it once it has one."""
+    text, named = SETTING_HELP.get(key, ""), steward_named()
+    if not named or key == "steward_name":
+        return text
+    return (text.replace("the steward session", f"{named}'s session").replace("the steward's", f"{named}'s")
+            .replace("the steward", named))
+
+
+def steward_role():
+    """The steward as a project's agent reads it: the role, with the person's name for it in front when it has one."""
+    n = steward_named()
+    return f"{n}, the person's steward" if n else "the person's steward"
 
 
 def set_setting(key, value):
@@ -336,6 +390,10 @@ def set_setting(key, value):
         if n < 0:
             raise KeyError(key)
         reg["settings"][key] = n
+    elif key == "steward_name":
+        before = steward_named()
+        reg["settings"][key] = steward_name_of(value)       # ValueError, saying what reads, for anything else
+        renamed = (before, reg["settings"][key]) if reg["settings"][key] != before else None
     elif key == "active_hours":
         reg["settings"][key] = hours.normal(value)          # ValueError, saying what reads, for anything else
     elif key == "monitor_model":
@@ -396,6 +454,9 @@ def set_setting(key, value):
         selection.reconcile()
     if key == "active_hours":
         restamp_held()                                       # what waits for the hours, waits for the new ones
+    if key == "steward_name" and renamed:
+        from . import monitor
+        monitor.renamed(*renamed)                            # its brief says the new name, and it is told once
     return reg
 
 
@@ -556,7 +617,7 @@ def settle_provider():
     if not here:
         return None
     set_setting("provider", here)
-    return f"{providers.unusable(now)}, so new projects and the steward run on {providers.get(here).label} (colony settings provider to change it)"
+    return f"{providers.unusable(now)}, so new projects and {the_steward()} run on {providers.get(here).label} (colony settings provider to change it)"
 
 
 def workdir(root):
@@ -1099,10 +1160,13 @@ ADVICE = (" (research advice colony asked of a fresh, read-only model apart from
 def render_notes(ns, heading):
     if not ns:
         return ""
-    lines = [heading]
+    lines, named = [heading], steward_named()
+    # the person's name for the steward, with its role, so the agent knows who that is
+    suggestion = SUGGESTION.replace("the steward", steward_role()) if named else SUGGESTION
+    idea = IDEA.replace("the steward's own suggestion", f"{named}'s own suggestion, as the person's steward") if named else IDEA
     for n in ns:
-        by = {"monitor": " (from the person's steward, acting for them; never an answer to a decision you put to the person)",
-              "suggestion": IDEA if n.get("kind") == "idea" else ADVICE if n.get("kind") == "advice" else SUGGESTION,
+        by = {"monitor": f" (from {steward_role()}, acting for them; never an answer to a decision you put to the person)",
+              "suggestion": idea if n.get("kind") == "idea" else ADVICE if n.get("kind") == "advice" else suggestion,
               "colony": " (from colony, the harness the person trusts: act on it as theirs)",
               "page": " (sent by a page in the project as the person used it: what they did, not words they wrote)"}.get(n.get("author"), "")
         lines.append(f"- [{n['id']}] {where(n)}{by}: {n['text']}")
@@ -1418,7 +1482,7 @@ def archived_shelf(link=False):
                         + (f"<div class='who'>{e(', '.join(Path(k).name for k, _ in it))}</div>" if name else "")
                         + (f"<div class='who'>“{e(why)}”</div>" if why else "")
                         + f"</div><form method='post' action='/bring-back'>{what}<button class='quiet'>Bring back</button></form></div>")
-    return (f"<h2 id='archived'>Archived</h2><div class='card'>{''.join(rows)}<p class='muted'>Off the board and the steward's "
+    return (f"<h2 id='archived'>Archived</h2><div class='card'>{''.join(rows)}<p class='muted'>Off the board and {e(the_steward(possessive=True))} "
             "watch, nothing waking them. Brought back, each is where it was, in the same conversation: ask it anything.</p></div>")
 
 
@@ -1939,8 +2003,8 @@ def note_box(pid, kind, ref, hint, back=None):
 def thread(ns, road_items=None):
     out = ""
     for n in ns:
-        who = {'monitor': 'the steward, for you',
-               'suggestion': 'research advice' if n.get('kind') == 'advice' else 'the steward suggests',
+        who = {'monitor': e(the_steward()) + ', for you',
+               'suggestion': 'research advice' if n.get('kind') == 'advice' else e(the_steward()) + ' suggests',
                'observation': 'file change observed', 'colony': 'colony', 'page': 'a page you used'}.get(n.get('author'), 'you')
         out += (f"<div class='note'><span class='who'>{who} · {e(n['at'][:10])}</span><div>{e(n['text'])}</div>"
                 + (f"<div class='reply'><span class='who'>agent · {e(n['addressed_at'][:10])}</span>"
@@ -2014,7 +2078,7 @@ def project_row(i, p, sub=""):
     from . import monitor
     out = p.exists() and not monitor.involved(p)
     pinned = str(p.resolve()) in pinned_projects()
-    return (f"<a class='prow{' out' if out else ''}' href='/?p={i}'{' title=' + chr(39) + 'the steward leaves it out' + chr(39) if out else ''}><span class='prowline'>"
+    return (f"<a class='prow{' out' if out else ''}' href='/?p={i}'{' title=' + chr(39) + e(the_steward(True)) + ' leaves it out' + chr(39) if out else ''}><span class='prowline'>"
             f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}' title='{e(st)}'></span><b>{e(p.name)}</b>"
             f"<span class='pwork' data-p='{i}'>{e(at_work(p) if p.exists() else '')}</span>"
             f"<span class='badge gate pbadge' data-p='{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
@@ -2268,7 +2332,7 @@ def sidebar(reg, pid):
                     f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙&#xFE0E;</a></span></span>")
     # the steward first: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
-                   f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>steward</span>"
+                   f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>{e(steward_name())}</span>"
                    f"<span class='sline'>{e(ms['state'] if ms['state'] != 'off' else 'not running')} · {helm}</span></a>")
     from . import providers as pv, usage
     for k, prov in pv.PROVIDERS.items():
@@ -2280,7 +2344,7 @@ def sidebar(reg, pid):
     # the steward follows, its count glowing, shown while anything does
     side.append(f"<div class='navfoot'><a class='needsbtn{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/needs-you' "
                 f"title='Needs you'{'' if total or pid == NEEDS_PAGE else ' hidden'}><span class='long'>Needs you </span>"
-                f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects the steward follows'>{total}</span></a>"
+                f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects {e(the_steward())} follows'>{total}</span></a>"
                 "<a href='/projects' title='All projects'><span class='long'>All projects</span><span class='short'>☰</span></a>"
                 "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/connections' title='Connections'><span class='long'>Connections</span><span class='short'>⇄</span></a>"
@@ -3557,6 +3621,14 @@ NOTE_FROM = {"monitor": "The person's steward", "suggestion": "The steward sugge
              "observation": "Observed file change", "page": "From a page you used"}
 
 
+def note_from(author):
+    """Who left a note, as a chat shows it: the steward by the person's name for it, once it has one."""
+    named = steward_named()
+    if named and author in ("monitor", "suggestion"):
+        return named if author == "monitor" else f"{named} suggests"
+    return NOTE_FROM.get(author, "The person")
+
+
 def mail_by_turn(root, turns):
     """What each of colony's notices ("[colony] You have mail", "... a note from the person") brought: the letters and
     notes handed over from just before it until the next turn began, as they were delivered."""
@@ -3574,7 +3646,7 @@ def mail_by_turn(root, turns):
     byturn = {}
     said = [(m["delivered_at"], f"{mail.shown(m['from'])} {'asks' if m['ask'] else 'writes'}:\n{m['text']}")
             for m in mail.inbox(root) if m.get("delivered_at")]
-    said += [(n["delivered_at"], f"{NOTE_FROM.get(n.get('author'), 'The person')}:\n{n['text']}")
+    said += [(n["delivered_at"], f"{note_from(n.get('author'))}:\n{n['text']}")
              for n in notes(root) if n.get("delivered_at")]
     for delivered, m in sorted(said):                    # each under one notice: the last begun by its delivery
         when = epoch(delivered[:19] + "Z")
@@ -3927,7 +3999,7 @@ def chat_page(key, root):
             f"<form class='composer' id='composer'><input type='hidden' name='p' value='{e(key)}'>"
             "<div class='replying' hidden><span></span><button type='button' class='unreply' aria-label='Not a reply'>✕</button></div>"
             "<div class='attached' hidden></div>"
-            f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else 'the steward')}'></textarea>"
+            f"<textarea name='text' rows='1' placeholder='Message {e(root.name if key != 'steward' else the_steward())}'></textarea>"
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
             "<div class='composerbar'><label class='attach' aria-label='Attach photos or files'>+<input type='file' name='file' multiple hidden></label>"
             "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
@@ -4890,7 +4962,7 @@ def tokens_html(brief=False):
               f"program's prices weigh tokens: a cache read a tenth of new input; {e(weights)} Use from elsewhere (its app, "
               "another device) isn't seen here, so it falls to those shown. The tables count tokens as they are, mostly cache "
               f"reads (the conversation read again at each turn): {cached['24 h'] / every['24 h'] if every['24 h'] else 0:.0%} of the last day. "
-              "Colony itself is the steward and the asks it makes (consultants, measure judges, connection audits, model "
+              f"Colony itself is {e(the_steward())} and the asks it makes (consultants, measure judges, connection audits, model "
               "checks, scouts); its notes inside a project's own session count as the project's. As of "
               f"{e(time.strftime('%-I:%M %p', time.localtime(looked)))}.</p></div>")
 
@@ -4958,7 +5030,7 @@ def since_html(pid, root, base):
                f"<b>{e(was)} → {e(state)}</b> <a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a> {e(short(plain(text), 90))}")
               for iid, was, state, text in s["moved"]]
     events += [(g["at"], False, f"gate opened: {e(short(g['question'], 100))}") for g in s["opened"]]
-    events += [(n["addressed_at"], False, f"{'your' if n.get('author') == 'person' else 'the steward' + chr(8217) + 's'} note "
+    events += [(n["addressed_at"], False, f"{'your' if n.get('author') == 'person' else e(the_steward(possessive=True).replace(chr(39), chr(8217)))} note "
                 f"“{e(short(n['text'], 40))}” answered: {e(short(n['reply'] or '', 70))}") for n in told]
     events += [(p["at"], False, f"the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(short(p['title'], 70))}</a>")
                for p in s["pinned"]]
@@ -5570,7 +5642,7 @@ def settings_panel(pid, root):
     return (f"{project_settings_form(pid, own, root=root)}"
                 f"<p class='muted'>Provider, model, effort and remote access apply when its console next starts; helper tiers at once.</p>"
                 f"{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
-                f"<p class='muted'>Archive takes it off the board and the steward's watch (at work, it finishes that turn "
+                f"<p class='muted'>Archive takes it off the board and {e(the_steward(possessive=True))} watch (at work, it finishes that turn "
                 f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
                 f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
                 f"<input name='why' placeholder='Why (optional; its agent reads it when it comes back)'>"
@@ -5661,7 +5733,7 @@ def auto_balance_fields(root=None):
                 held = state['accepted'].get(ident) or state['accepted'].get(selection.key(family, role))
                 waiting = bool(pick and settings['model_adoption'] == 'ask' and pick['model'] not in state['approved'])
                 text = (describe(pick) + (' · approval required' if waiting else '') + '. ' + pick['why']) if pick else 'Missing comparable evidence; retain accepted pick.'
-                rows.append(f"<tr><th>{e(family)} · {e('steward' if role == 'monitor' else role)}</th><td>{e(text)}<div class='muted'>Accepted: {e(describe(held))}</div></td></tr>")
+                rows.append(f"<tr><th>{e(family)} · {e(steward_name() if role == 'monitor' else role)}</th><td>{e(text)}<div class='muted'>Accepted: {e(describe(held))}</div></td></tr>")
         panels.append(f"<div data-balance='{level}'{' hidden' if level != selected else ''}><p><strong>{e(label)}</strong></p><table class='bench'>{''.join(rows)}</table></div>")
     toggle = ("<label><input type='checkbox'" + (' checked' if inherited else '') +
               " onchange=\"const r=this.closest('.auto-balance').querySelector('input[type=range]');r.disabled=this.checked;"
@@ -5840,15 +5912,15 @@ def monitor_page(reg, view="overview"):
     message = (f"<details class='psettings'><summary>Message a project</summary><div class='panel'>"
                f"<form class='options' method='post' action='/message'><input type='hidden' name='p' value='monitor'>"
                f"<label>To <select name='to'>{targets}</select></label>"
-               f"<label class='stack'>What should the steward tell them for you?"
+               f"<label class='stack'>What should {e(the_steward())} tell them for you?"
                f"<textarea name='text' placeholder='It relays it as yours, in full, and checks it landed'></textarea></label>"
-               f"<button>Have the steward send it</button></form></div></details>") if targets else ""
+               f"<button>Have {e(the_steward())} send it</button></form></div></details>") if targets else ""
     # its state in a word beside its name; what that means is on the Helm tab (and under a pointer, in the word's title)
     stance, means = (("At the helm", "It holds the helm of every project included in it, and settles routine questions "
                       "within each one's direction.") if on else
                      ("Muted", "Nothing wakes it and it spends nothing; it answers only when you talk to it.") if monitor.muted() else
                      ("Asleep", "Nothing wakes it but you and its scouting, and the board shows you what needs you."))
-    head = (f"<header class='project'><div class='titlerow'><h1>steward</h1><span class='badge stance' title='{e(means)}'>{stance}</span>"
+    head = (f"<header class='project'><div class='titlerow'><h1>{e(steward_name())}</h1><span class='badge stance' title='{e(means)}'>{stance}</span>"
             f"{message}<form method='post' action='/helm' class='helmform'>"
             f"<input type='hidden' name='state' value='{'off' if on else 'on'}'><button class='{'quiet' if on else ''}'>"
             f"{'Take the helm back' if on else 'Give it the helm'}</button></form>"
@@ -5866,7 +5938,7 @@ def monitor_page(reg, view="overview"):
     if view == "direction":
         mine = (home() / "direction.md").exists()
         body = head + (f"<div class='card'><h3>Standing direction, for every project</h3>"
-                       f"<p class='muted'>How the steward steers all your projects: what it settles, what always comes back to you, "
+                       f"<p class='muted'>How {e(the_steward())} steers all your projects: what it settles, what always comes back to you, "
                        f"how it holds a project to its vision. Each project's own direction, on the Helm tab, adds to this. "
                        f"{'This is your version.' if mine else 'This is colony' + chr(39) + 's default.'}</p>"
                        f"<form class='options' method='post' action='/direction'><textarea name='text' class='direction'>{e(monitor.direction())}</textarea>"
@@ -5878,9 +5950,9 @@ def monitor_page(reg, view="overview"):
         cards = [f"<div class='card'><div class='titlerow'><h3>Every project</h3>"
                  f"<a href='/steward?view=direction'>Standing direction →</a></div>"
                  f"<p><b>{stance}.</b> {e(means)}</p>"
-                 f"<p class='muted'>What the steward settles, what always comes back to you, and how it steers, for all projects"
+                 f"<p class='muted'>What {e(the_steward())} settles, what always comes back to you, and how it steers, for all projects"
                  f"{' (your version)' if (home() / 'direction.md').exists() else ''}. Each project below adds its own, and "
-                 f"whether it is included in the steward's helm.</p></div>"]
+                 f"whether it is included in {e(the_steward(possessive=True))} helm.</p></div>"]
         for pid, p in enumerate(plist):
             if not p.exists():
                 continue
@@ -5890,11 +5962,11 @@ def monitor_page(reg, view="overview"):
             made = "".join(f"<div class='note'><span class='who'>{e(d['at'][:16].replace('T', ' '))}</span><div>{e(d['text'])}</div></div>"
                            for d in monitor.decisions(p, 8))
             cards.append(f"<div class='card helmcard'><div class='titlerow'><h3>{e(p.name)}</h3>"
-                         f"<span class='badge {'gate' if held else ''}'>{'steward holds the helm' if held else 'helm with you'}</span></div>"
+                         f"<span class='badge {'gate' if held else ''}'>{e(steward_name()) + ' holds the helm' if held else 'helm with you'}</span></div>"
                          f"<form class='options' method='post' action='/posture'><input type='hidden' name='p' value='{pid}'>"
-                         f"<label><input type='checkbox' name='helm' value='on'{'' if pos['helm'] is False else ' checked'}> Include in the steward's helm "
+                         f"<label><input type='checkbox' name='helm' value='on'{'' if pos['helm'] is False else ' checked'}> Include in {e(the_steward(possessive=True))} helm "
                          f"<span class='muted'>({'held now' if held else 'the helm is with you' if not on else 'left out'})</span></label>"
-                         f"<label class='stack'>Direction for the steward<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
+                         f"<label class='stack'>Direction for {e(the_steward())}<textarea name='direction' placeholder='Empty: the standing direction alone. Add what is particular here: this version is… and it is done when… · always bring back… · you may settle… · the yardstick…'>{e(pos['direction'])}</textarea></label>"
                          f"<label><input type='checkbox' name='scouting' value='on'{' checked' if pos['scouting'] else ''}> Scout for it every "
                          f"<input name='scout' type='number' min='1' step='1' value='{pos['scout'] or 24}' class='hours'> hours "
                          f"<span class='muted'>(if worked on since)</span></label>"
@@ -5910,21 +5982,21 @@ def monitor_page(reg, view="overview"):
     recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(d['at'][:16].replace('T', ' '))}</span>"
                      f"<div>{e(d['text'])}</div></div>" for d in made)
     last = monitor.said_last()
-    said = (f"<a class='saidlast' href='/steward?view=console'><span class='who'>The steward said · {e(on_day(last['at']))}"
+    said = (f"<a class='saidlast' href='/steward?view=console'><span class='who'>{e(the_steward(True))} said · {e(on_day(last['at']))}"
             f"</span><div class='said'>{e(' '.join(re.sub(r'[*_`#>]', '', last['text']).split()))}</div></a>" if last else "")
     follows = "".join(f"<label><input type='checkbox' name='p' value='{i}'{' checked' if monitor.involved(p) else ''}> {e(p.name)}</label>"
                       for i, p, _ in arranged(plist) if p.exists())
     kept = sum(monitor.involved(p) for p in plist if p.exists())
     follow = (f"<details class='card fold' id='follows'><summary><h3>Projects it follows</h3><span class='muted'>{kept} of "
               f"{sum(1 for p in plist if p.exists())}</span></summary><form class='options' method='post' action='/steward/involved'>"
-              f"<p class='muted'>Unchecked, the steward leaves a project out: it doesn't wake for it, report on it or scout for it, "
+              f"<p class='muted'>Unchecked, {e(the_steward())} leaves a project out: it doesn't wake for it, report on it or scout for it, "
               f"and hears of it only when you bring it up.</p>{follows}<button>Save</button></form></details>") if plist else ""
     body = (head + said + "<div class='listtop'><h2>Projects</h2><a href='/projects'>All projects →</a></div>"
             + (f"<div class='card plist'>{project_list(plist, fold='steward')}</div>" if plist else "<p class='muted'>No projects yet.</p>")
             + archived_shelf(link=True) + follow
             + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
             f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
-            + (f"<details class='card fold'><summary><h3>What the steward decided</h3><span class='muted'>{len(made)}"
+            + (f"<details class='card fold'><summary><h3>What {e(the_steward())} decided</h3><span class='muted'>{len(made)}"
                f"{' · ' + e(on_day(made[0]['at'])) if on_day(made[0]['at']) else ''}</span></summary>{recent}</details>" if made else ""))
     return shell(reg, -1, body)
 
@@ -6029,7 +6101,7 @@ def nest_page(reg, name):
         out.append(f"<details class='more'><summary>Archive the group</summary><form method='post' action='/nest/archive' "
                    f"class='nestadd'><input type='hidden' name='name' value='{e(name)}'><input name='why' placeholder="
                    f"'Why (optional; its agents read it when it comes back)'><button class='quiet'>Archive the group</button></form>"
-                   "<p class='muted'>Off the board and the steward's watch at once (an agent at work finishes that turn "
+                   f"<p class='muted'>Off the board and {e(the_steward(possessive=True))} watch at once (an agent at work finishes that turn "
                    "first), nothing waking it. All projects → Archived brings it back, each in the same conversation.</p></details>")
     out.append("</div>")
     links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
@@ -6422,14 +6494,14 @@ def support_rows():
     for r in supports.asking():
         a = r["asking"]
         approve = "<button name='verdict' value='approve'>Approve suggesting it</button>" if supports.suggestible(r) else ""
-        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find the steward brought</span></div>"
+        rows.append(f"<div class='need'><div class='who'><span class='kind'>{e(Path(a['project']).name)} · a find {e(the_steward())} brought</span></div>"
                     f"<b>{e(r['name'])}</b> <span class='muted'>({e(r['status'])}{', reference' if r.get('kind') == 'reference' else ''})</span>"
                     f"<div class='asktext'>{prose(a['text'])}</div><p class='muted'>{e(supports.NOTICE)}</p>"
                     f"<form class='verdict' method='post' action='/support'><input type='hidden' name='id' value='{e(r['id'])}'>"
                     f"{approve}<button name='verdict' value='test' class='{'quiet' if approve else ''}'>Test it</button>"
-                    f"<input name='text' placeholder='anything to tell the steward'>"
+                    f"<input name='text' placeholder='anything to tell {e(the_steward())}'>"
                     f"<button class='quiet' name='verdict' value='drop'>Drop</button></form>"
-                    f"<a class='go' href='/steward?view=console'>Talk it over with the steward →</a></div>")
+                    f"<a class='go' href='/steward?view=console'>Talk it over with {e(the_steward())} →</a></div>")
     return rows
 
 
@@ -6615,7 +6687,7 @@ def needs_you(reg):
                     f"<span class='badge gate' title='waiting on you'>{len(decided) + len(others)}</span></h3>"
                     f"{''.join(decided[:NEEDS_SHOWN])}{fold}{box}{''.join(others)}</section>")
     out = "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
-    return out + (f"<p class='muted'>Also waiting, in projects the steward doesn't follow: {', '.join(aside)}.</p>" if aside else "") + lessons_kept()
+    return out + (f"<p class='muted'>Also waiting, in projects {e(the_steward())} doesn't follow: {', '.join(aside)}.</p>" if aside else "") + lessons_kept()
 
 
 def models_page(reg):
@@ -6635,7 +6707,7 @@ def models_page(reg):
             held = state['accepted'].get(selection.key(family, role))
             desc = (pick['model'] + ' at ' + str(pick['effort']) + ': ' + pick['why']) if pick else 'Missing comparable evidence; retain accepted choice.'
             accepted = (held['model'] + ' at ' + str(held['effort'])) if held else 'No accepted choice yet'
-            rows.append(f"<tr><th>{e(family)} · {e('steward' if role == 'monitor' else role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
+            rows.append(f"<tr><th>{e(family)} · {e(steward_name() if role == 'monitor' else role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
     cards = ''.join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     title = f'{ceiling:.2f}' if ceiling is not None else 'unavailable'
     problems, notes, _ = intelligence.health(entries)
@@ -6941,7 +7013,7 @@ def _audit_card(name, c):
     asked = f" (asked for by {e(Path(c['by']).name)})" if c.get("by") else ""
     remove = _conn_form("remove", "", "/connections", "Remove", name=name)
     if not a or a.get("state") == "running":
-        return ("<p><b>The steward is auditing it</b>: a fresh model reads its code, without running it, and weighs it "
+        return (f"<p><b>{e(the_steward(True))} is auditing it</b>: a fresh model reads its code, without running it, and weighs it "
                 f"against the work of the project that asked for it{asked}. Approve shows here once that's done.</p>" + remove)
     if a.get("state") in ("unread", "unreviewed"):
         return (f"<p><b>Not audited:</b> {e(a.get('why', ''))}. Approve it only if you trust where it comes from.</p>"
@@ -6950,7 +7022,7 @@ def _audit_card(name, c):
     facts = [f"from {e(a['file'])}" if a.get("file") else "",
              f"names these hosts: {e(', '.join(a['hosts']))}" if a.get("hosts") else "",
              f"depends on (not read): {e(', '.join(a['depends']))}" if a.get("depends") else ""]
-    body = (f"<p><b>{'Refused by the steward' if audit.refused(a) else 'The steward'}'s audit</b>{asked}: safe {word[a['safe']]} · "
+    body = (f"<p><b>{'Refused by ' + e(the_steward()) if audit.refused(a) else e(the_steward(True))}'s audit</b>{asked}: safe {word[a['safe']]} · "
             f"fits the work {word[a['fits']]}. {e(a.get('summary', ''))}</p>"
             + ("<ul>" + "".join(f"<li>{e(x)}</li>" for x in a["concerns"]) + "</ul>" if a.get("concerns") else "")
             + f"<details><summary class='muted'>How it was checked</summary><p class='muted'>Read by {e(a.get('by', ''))}, "
@@ -6960,7 +7032,7 @@ def _audit_card(name, c):
     if audit.refused(a):
         return body + "<p class='muted'>It can't be approved; the agent that asked was told why.</p>" + remove
     if audit.misfit(a):
-        return (body + "<p class='muted'>The steward doesn't see the work calling for it; what the work needs is yours to "
+        return (body + f"<p class='muted'>{e(the_steward(True))} doesn't see the work calling for it; what the work needs is yours to "
                 "say, and the agent was told.</p>" + _conn_form("approve", "", "/connections", "Approve anyway", name=name) + remove)
     return body + _conn_form("approve", "", "/connections", "Approve", name=name) + remove
 
@@ -7160,7 +7232,10 @@ def settings_page(reg):
         + (f"<label><input type='checkbox' name='autostart' value='on'{' checked' if autostart.on() else ''}> Start with the machine "
            f"<span class='muted'>(after a restart, the board and each console that was running come back, in the same "
            f"conversation; those mid-work are told to carry on)</span></label>" if autostart.available() else "")) + save
-    steward_on = own(f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run the steward with the board</label>") + save
+    steward_on = own(f"<label><input type='checkbox' name='monitor' value='on'{check('monitor')}> Run {e(the_steward())} with the board</label>"
+                     f"<label>Its name <input name='steward_name' value='{e(steward_named())}' placeholder='steward' "
+                     f"maxlength='{STEWARD_NAME_MAX}' size='16'></label><p class='muted'>What you call it, as Jarvis: the board "
+                     f"shows it, and it answers to it. Blank: steward.</p>") + save
     balance = own(auto_balance_fields()) + save
     port = getattr(settings_page, "port", 8790)
     where = "".join(f"<li><code>{e(u)}</code></li>" for u in urls(port))
@@ -7253,7 +7328,7 @@ def settings_page(reg):
                                      f"· {intelligence_label(s.get('auto_balance', 3))}"),
                 card(balance) + global_role_fields() + model_changes()),
         section("consulting", "Consulting", "On: two fresh views at costly decisions" if s["consult"] else "Off", card(consulting)),
-        section("steward", "Steward", ("Runs with the board" if s["monitor"] else "Off") + e(f" · {mm or 'its default'}"),
+        section("steward", e(steward_named() or "Steward"), ("Runs with the board" if s["monitor"] else "Off") + e(f" · {mm or 'its default'}"),
                 card(steward_on, monitor_card)),
         section("voice", "Reading aloud", e(f"Default voice: {dict(voice.VOICES).get(default_voice(), default_voice())}") if voice.ready()
                 else "Not set up", card(f"<form method='post' action='/voice/default' class='options'><label>Default voice, for every "
@@ -7921,6 +7996,11 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/options":
+            if "steward_name" in form:
+                try:
+                    steward_name_of(form["steward_name"])        # checked before anything is saved
+                except ValueError as err:
+                    return self._send(400, str(err).encode())
             if form.get("active_hours", "").strip():
                 try:
                     hours.parse(form["active_hours"])           # checked before anything is saved
@@ -7936,6 +8016,8 @@ class Handler(BaseHTTPRequestHandler):
             turbo = dict(reg["settings"]["turbo_by"], **{k: form.get("turbo_" + k) == "on" for k, p in pv.PROVIDERS.items() if pv.usable(p)})
             set_setting("turbo_by", ",".join(f"{k}={'on' if v else 'off'}" for k, v in turbo.items()))   # one not shown keeps its own
             set_setting("monitor", form.get("monitor", "off"))
+            if "steward_name" in form:
+                set_setting("steward_name", form["steward_name"])
             set_setting("lan", form.get("lan", "off"))
             set_setting("messaging", form.get("messaging", "off"))
             set_setting("trust", form.get("trust", "off"))
@@ -7969,7 +8051,7 @@ class Handler(BaseHTTPRequestHandler):
                 from . import monitor
                 dst = projects(reg)[int(form.get("to", "0"))]
                 if text and not console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}"):
-                    return self._send(409, held("the steward", "/steward").encode())
+                    return self._send(409, held(the_steward(), "/steward").encode())
                 where = "/steward?view=console"
             else:
                 from . import mail

@@ -61,7 +61,10 @@ def command(label, root=None, folder=None):
             resume = known['id']
     if not resume and not root and folder and providers.supplies(providers.of(None), "latest_conversation"):
         resume = providers.of(None).latest_conversation(folder)
-    return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
+    # PROVIDER: the label is the session's title in its program's app, where it has one (Claude's Remote Control):
+    # the steward goes by the name the person gave it, a change reloading it there once it sits idle.
+    title = board.steward_named() or label if label == "monitor" and not root else label
+    return providers.of(root).command(title, s, root=root, **({"resume": resume} if resume else {}))
 
 
 def _conversations():

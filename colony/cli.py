@@ -779,9 +779,9 @@ def cmd_models(a):
 
 def cmd_setup(a):
     """Ask the steward to walk the person through first-time setup again."""
-    from . import monitor
+    from . import board, monitor
     monitor.setup()
-    print("the steward will walk you through setup when it's next free (the board's steward page)")
+    print(f"{board.the_steward()} will walk you through setup when it's next free (the board's {board.steward_name()} page)")
     return 0
 
 
@@ -1027,8 +1027,9 @@ def cmd_notes(a):
             nest.session_text(root) if a.session and not own_monitor else '',
             engagement,
             board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
-            board.render_notes([n for n in fresh if n.get("author") == "monitor"], "The person's steward, acting for them, left notes for you:"),
-            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"], "Suggestions from the steward:"),
+            board.render_notes([n for n in fresh if n.get("author") == "monitor"], f"{board.steward_role()[0].upper()}{board.steward_role()[1:]}, acting for them, left notes for you:"),
+            board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"],
+                               "Suggestions from " + (board.steward_role() if board.steward_named() else "the steward") + ":"),
             board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") == "advice"], "Research advice colony asked for, apart from you:"),
             board.render_notes([n for n in fresh if n.get("author") == "colony"], "Colony, the harness the person set up and trusts, tells you (with their full approval):"),
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
@@ -1247,7 +1248,7 @@ def cmd_tell(a):
     try:
         name = console.ensure(root)
         if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
-            console.type_into(name, "[colony] You have a note from the person's steward.")
+            console.type_into(name, f"[colony] You have a note from {board.steward_role()}.")
     except (OSError, subprocess.CalledProcessError):
         # The note is kept either way: sending it again would deliver it twice.
         print(f"sent to {a.name}; its console isn't ready, so the note waits for its next turn")
@@ -1301,8 +1302,8 @@ def cmd_settings(a):
         shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
                  if k == "consultants" else ",".join(f"{f}={'on' if v.get(f, True) else 'off'}" for f in providers.PROVIDERS)
-                 if k == "turbo_by" else v or "(colony Auto)")
-        print(f"{board.SETTING_NAMES.get(k, k):14} {str(shown):28} {board.SETTING_HELP.get(k, '')}")
+                 if k == "turbo_by" else board.steward_name() if k == "steward_name" else v or "(colony Auto)")
+        print(f"{board.SETTING_NAMES.get(k, k):14} {str(shown):28} {board.setting_help(k)}")
     from . import autostart
     if autostart.available():                         # kept by systemd: shown as it holds there
         print(f"{'autostart':14} {'on' if autostart.on() else 'off':28} {board.SETTING_HELP['autostart']}")
@@ -1732,7 +1733,8 @@ def cmd_suggest(a):
     snap = console.snapshot(root, lines=4)
     now = turbo.ready(root, snap) and not turbo.held(root, snap)
     board.add_note(root, None, a.text, author="suggestion", quiet=True, kind="idea")
-    woken = now and console.type_into(console.session_name(root), "[colony] You have a suggestion from the steward.")
+    woken = now and console.type_into(console.session_name(root), "[colony] You have a suggestion from "
+                                       + (board.steward_role() if board.steward_named() else "the steward") + ".")
     print(f"suggested to {a.name}, as yours: " + ("its agent has it now" if woken else "its agent hears it on its next turn"))
     return 0
 
