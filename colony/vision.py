@@ -270,14 +270,14 @@ direction; consider their effect on the work at hand and act, discussing anythin
 
 def install(root):
     """Called at rollout and project discovery, once per logical project, without waking it."""
-    from . import board, providers
+    from . import board
     root = Path(root)
     observe(root)
     with locked(root):
         marker = root / '.board' / 'vision-installed'
         if marker.exists():
             return
-        providers.of(root).wire(board.workdir(root), board.protocol(root))
+        board.wire(root)
         from . import lead
         plan = lead.plan_path(root)
         text = section(plan.read_text())['text'] if plan.exists() else ''

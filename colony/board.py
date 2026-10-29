@@ -713,7 +713,65 @@ def sharing(path, name, chosen, role='helper'):
 def protocol(root):
     """The colony protocol as a project's agent reads it; for one sharing another project's folder, it says
     whose folder it is and where its own plan lives."""
-    return _protocol(root).replace("GUIDE_PATH", str(Path(__file__).resolve().parent.parent / "GUIDE.md"))
+    text = _protocol(root).replace("GUIDE_PATH", str(Path(__file__).resolve().parent.parent / "GUIDE.md"))
+    return text + PRIVATE if is_private(root) else text
+
+
+# A private project's agent is told why its plan and notes never show in git status, and not to force them in.
+PRIVATE = ("\nThis project is private: its repository is public or shared, so nothing of colony's enters its history. "
+           "Git here ignores colony's files (these instructions, colony's settings and helpers, `.board/`, and "
+           "`ROADMAP.md` unless the project already tracked it): never force-add or commit them, and keep the person's "
+           "words, notes and roadmap out of commit messages.\n")
+
+
+def is_private(root):
+    """Whether nothing of colony's may enter the project's git history (colony track --private): kept on its record,
+    so every later wiring honours it. A second agent in a private project's folder is private with it."""
+    def marked(r):
+        try:
+            return bool(json.loads((Path(r) / ".board" / "settings.json").read_text()).get("private"))
+        except (OSError, ValueError):
+            return False
+    return marked(root) or marked(workdir(root))
+
+
+def wire(root):
+    """The provider's wiring in the project's folder; private, in files its repository is told to ignore. Returns what
+    the person should know about it (a plan already tracked, no repository)."""
+    if not is_private(root):                         # as it always was: a program's wire() needn't know of privacy
+        providers_of(root).wire(workdir(root), protocol(root))
+        return []
+    providers_of(root).wire(workdir(root), protocol(root), private=True)
+    return exclude(root)
+
+
+def exclude(root):
+    """Colony's files in the repository's own exclude list (.git/info/exclude, which is local and never committed),
+    each line added only if missing; ROADMAP.md only while the project doesn't track it, since untracking a plan it
+    already keeps is the person's call. Removing the project leaves the lines: they are harmless."""
+    work = workdir(root)
+    found = subprocess.run(["git", "-C", str(work), "rev-parse", "--path-format=absolute", "--git-path", "info/exclude",
+                            "--show-prefix"], capture_output=True, text=True)
+    if found.returncode:
+        return [f"{work} is not in a git repository, so there is nothing to exclude colony's files from: they stay local."]
+    path, prefix = (found.stdout.splitlines() + ["", ""])[:2]
+    files = list(providers_of(root).private_files) + ([".board/"] if work == Path(root) else [])
+    said = []
+    if git(work, "ls-files", "--", "ROADMAP.md").strip():
+        said.append("ROADMAP.md is already tracked in this repository, so it stays in its history; whether to untrack "
+                    "it (git rm --cached ROADMAP.md) is yours.")
+    elif work == Path(root):                          # a second agent's plan lives in colony's home, not here
+        files.append("ROADMAP.md")
+    path = Path(path)
+    have = path.read_text() if path.exists() else ""
+    lines = set(have.splitlines())
+    missing = [f"/{prefix}{f}" for f in files if f"/{prefix}{f}" not in lines]
+    if missing:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(have + ("\n" if have and not have.endswith("\n") else "")
+                        + "# colony: this project is private, so its files stay out of git\n" * ("# colony:" not in have)
+                        + "".join(m + "\n" for m in missing))
+    return said
 
 
 def _protocol(root):
@@ -1243,9 +1301,10 @@ def render_notes(ns, heading):
     return "\n".join(lines)
 
 
-def track(path, register=True):
+def track(path, register=True, private=False):
     """Put a project on the board: its roadmap, its .board folder, and its provider's wiring (for Claude Code,
-    the colony protocol in CLAUDE.md and the delivery hooks) — added to whatever the project already has."""
+    the colony protocol in CLAUDE.md and the delivery hooks) — added to whatever the project already has. Private,
+    none of it enters the project's git history (wire()); a project once private stays so."""
     root = Path(path).expanduser().resolve()      # the folder chosen is the root, whatever repository holds it
     shared = workdir(root) != root                # a second project in another's folder: no repository of its own
     ours = {".git", ".board", ".claude", "CLAUDE.md", "ROADMAP.md"}
@@ -1254,6 +1313,14 @@ def track(path, register=True):
                               ((root / ".git").exists() and bool(git(root, "rev-parse", "--verify", "-q", "HEAD").strip())))
     if not shared and not (root / ".git").exists():
         subprocess.run(["git", "init", "-q", str(root)], check=True)
+    if private:
+        if providers_of(root).private_files is None:
+            raise ValueError(f"{providers_of(root).label} reads its instructions only from a file the project may "
+                             "track, so colony can't keep this project private on it")
+        settings = root / ".board" / "settings.json"
+        settings.parent.mkdir(exist_ok=True)
+        own = json.loads(settings.read_text()) if settings.exists() else {}
+        settings.write_text(json.dumps(dict(own, private=True), indent=2) + "\n")
     (root / ".board").mkdir(exist_ok=True)
     first_track = not any((root / '.board' / name).exists() for name in ('vision.jsonl', 'vision-installed'))
     from . import lead
@@ -1266,8 +1333,7 @@ def track(path, register=True):
     if first_track and not paired and not any(n.get('onboarding') == 'vision' for n in notes(root)):
         append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(4), at=now(),
                author='colony', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
-    from . import providers
-    providers.of(root).wire(workdir(root), protocol(root))
+    wire(root)
     from . import bench
     bench.write_helpers(root)                        # its helpers at the tiers, from the start
     reg = registry()
@@ -1293,8 +1359,8 @@ def deploy(root):
     """What colony installs in a project for its program (Provider.wire, write_helpers), brought up to date in place:
     its instructions and hooks, its commit stamp, its helpers at their tiers. A file already current is left as it is;
     a running console takes the rest up at its next idle reload, so no work is interrupted."""
-    from . import bench, lead, providers
-    providers.of(root).wire(workdir(root), protocol(root))
+    from . import bench, lead
+    wire(root)
     lead.install_stamp(root)
     bench.write_helpers(root)
 
@@ -6518,7 +6584,7 @@ def folder_browser(reg, current, purpose):
                    .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0])
         out.append(f"<form method='post' action='/add' class='options'><input type='hidden' name='path' value='{e(here)}'>"
                    f"<p class='muted'>This folder becomes the project's root. Its settings (blank: global):</p>{choices}"
-                   f"<button>Add this folder as a project</button></form><hr>"
+                   f"{PRIVATE_TICK}<button>Add this folder as a project</button></form><hr>"
                    f"<form method='post' action='/new' class='options'><input type='hidden' name='within' value='{e(here)}'>"
                    f"<label>New project named <input name='name' placeholder='a new, empty project in this folder'></label>{choices}"
                    f"<button>Create new project here</button></form>")
@@ -6535,6 +6601,11 @@ def duplicate_agent_page(reg, original, chosen):
                  "<p>Add this agent as a helper for assigned items, or switch the project lead to it. Both use the same Vision and roadmap.</p>"
                  f"<form method='post' action='/add'>{hidden}<button name='role' value='helper'>Add helper</button>"
                  "<button class='quiet' name='role' value='lead'>Switch lead</button></form>")
+
+
+# Where the board adds an existing folder: a public or shared repository keeps colony's files out of its history.
+PRIVATE_TICK = ("<label><input type='checkbox' name='private' value='on'> Private: keep colony's files (its instructions, "
+                "your notes and roadmap) out of this repository's git history, for one that is public or shared</label>")
 
 
 def add_project_page(reg, tab="new", error=""):
@@ -6555,7 +6626,7 @@ def add_project_page(reg, tab="new", error=""):
                        f"<div class='muted'>Created in:</div>{picker('within', where, where)}{choices}<button>Create project</button></form>"),
         "existing": ("Existing folder", f"<form method='post' action='/add' class='options'>"
                      f"<div class='muted'>The folder becomes the project's root. Existing plans stay intact while you and its agent shape the vision.</div>"
-                     f"{picker('path', '', 'No folder chosen')}{choices}<button>Add project</button></form>"),
+                     f"{picker('path', '', 'No folder chosen')}{choices}{PRIVATE_TICK}<button>Add project</button></form>"),
         "github": ("From GitHub", f"<form method='post' action='/clone' class='options'>"
                    f"<label>Repository <input name='url' placeholder='https://github.com/owner/repo'></label>"
                    f"<label>Folder name <input name='name' placeholder='the repository name'></label>"
@@ -9023,7 +9094,10 @@ class Handler(BaseHTTPRequestHandler):
                     connections.pick(folder, values.get("svc", []), values.get("svc_listed", []))
                     if form.get("voice"):
                         choose_voice("0", folder, form["voice"])
-                    track(folder)
+                    try:
+                        track(folder, private=form.get("private") == "on")
+                    except ValueError as err:
+                        return self._send(409, str(err).encode())
                     target = f"/?p={projects().index(folder)}"
             elif path == "/new" and folder_name(form.get("name", "")):
                 new = Path(form.get("within") or reg["new_root"]).expanduser() / folder_name(form["name"])

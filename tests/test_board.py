@@ -733,6 +733,122 @@ class BoardTest(BoardBase):
             httpd.server_close()
 
 
+class PrivateTest(BoardBase):
+    """colony track --private: a public or shared repository, where nothing of colony's may enter git's history."""
+    def setUp(self):
+        super().setUp()
+        self.repo = Path(self.tmp.name) / "public"
+        self.repo.mkdir()
+        self.in_repo("init", "-q", "-b", "main")
+        self.own = b"# Kernel\n\nThe project's own rules, without a final newline"
+        (self.repo / "CLAUDE.md").write_bytes(self.own)
+        (self.repo / "bot.py").write_text("print('hi')\n")
+        self.save("start")
+
+    def in_repo(self, *args):
+        return subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, text=True).stdout
+
+    def save(self, msg):
+        self.in_repo("add", "-A")
+        self.in_repo("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", msg)
+
+    def assert_nothing_for_git(self):
+        self.assertEqual(self.in_repo("status", "--porcelain", "--untracked-files=all"), "")
+        self.in_repo("add", "-A")
+        self.assertEqual(self.in_repo("diff", "--cached", "--name-only"), "", "git add -A stages nothing of colony's")
+        self.assertEqual((self.repo / "CLAUDE.md").read_bytes(), self.own)
+
+    def test_track_private_keeps_everything_out_of_git(self):
+        out = self.cli("track", str(self.repo), "--private")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("Private:", out.stdout)
+        self.assertTrue(board.is_private(self.repo))
+        local = (self.repo / "CLAUDE.local.md").read_text()
+        self.assertIn("## This project is part of a colony", local)
+        self.assertIn("This project is private", local)
+        self.assertFalse((self.repo / ".claude" / "settings.json").exists())
+        cfg = json.loads((self.repo / ".claude" / "settings.local.json").read_text())
+        self.assertIn("colony notes --deliver", json.dumps(cfg["hooks"]))
+        self.assertEqual(cfg["statusLine"]["command"], "colony statusline")
+        self.assertTrue((self.repo / ".board").is_dir())
+        (self.repo / "ROADMAP.md").write_text(ROADMAP)          # the plan its agent lays out with the person
+        # its helpers too, at whatever tiers the project has
+        providers.get("claude").write_helpers(self.repo, {"routine": {"model": "claude-sonnet-5", "effort": None}})
+        self.assertTrue((self.repo / ".claude" / "agents" / "colony-routine.md").exists())
+        self.assert_nothing_for_git()
+        self.assertTrue(providers.get("claude").wired(self.repo, private=True))
+        exclude = (self.repo / ".git" / "info" / "exclude").read_text()
+        board.track(self.repo, private=True)                    # again: no line added twice
+        self.assertEqual((self.repo / ".git" / "info" / "exclude").read_text(), exclude)
+        self.assertEqual(exclude.count("/CLAUDE.local.md\n"), 1)
+
+    def test_rewiring_at_board_start_keeps_it_private(self):
+        board.track(self.repo, private=True)
+        board.track(self.repo)                                  # tracked again without the flag: still private
+        (self.repo / "CLAUDE.local.md").unlink()
+        board.rewire_projects()                                 # what the board does as it starts, and daily
+        self.assertIn("## This project is part of a colony", (self.repo / "CLAUDE.local.md").read_text())
+        self.assertTrue(board.is_private(self.repo))
+        self.assert_nothing_for_git()
+
+    def test_an_earlier_public_wiring_moves_out_of_the_tracked_files(self):
+        own_settings = {"model": "x", "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo mine"}]}]}}
+        (self.repo / ".claude").mkdir()
+        (self.repo / ".claude" / "settings.json").write_text(json.dumps(own_settings))
+        self.own += b"\n"
+        (self.repo / "CLAUDE.md").write_bytes(self.own)
+        self.save("own settings")
+        board.track(self.repo)
+        self.assertIn("## This project is part of a colony", (self.repo / "CLAUDE.md").read_text())
+        board.track(self.repo, private=True)
+        self.assertEqual((self.repo / "CLAUDE.md").read_bytes(), self.own, "the person's own text, as it was")
+        self.assertEqual(json.loads((self.repo / ".claude" / "settings.json").read_text()), own_settings)
+        self.assertIn("## This project is part of a colony", (self.repo / "CLAUDE.local.md").read_text())
+
+    def test_a_tracked_roadmap_stays_and_is_named(self):
+        (self.repo / "ROADMAP.md").write_text(ROADMAP)
+        self.save("plan")
+        out = self.cli("track", str(self.repo), "--private")
+        self.assertIn("ROADMAP.md is already tracked", out.stdout)
+        self.assertNotIn("/ROADMAP.md", (self.repo / ".git" / "info" / "exclude").read_text())
+        self.assert_nothing_for_git()
+
+    def test_without_git_it_stays_local_and_says_so(self):
+        plain = Path(self.tmp.name) / "plain"
+        (plain / ".board").mkdir(parents=True)
+        (plain / ".board" / "settings.json").write_text(json.dumps({"private": True}))
+        said = board.wire(plain)
+        self.assertIn("not in a git repository", said[0])
+        self.assertTrue((plain / "CLAUDE.local.md").exists())
+        self.assertFalse((plain / "CLAUDE.md").exists())
+
+    def test_a_public_project_is_wired_as_before(self):
+        board.track(self.repo)
+        self.assertFalse((self.repo / "CLAUDE.local.md").exists())
+        self.assertFalse((self.repo / ".claude" / "settings.local.json").exists())
+        self.assertNotIn("colony", (self.repo / ".git" / "info" / "exclude").read_text())
+        self.assertNotIn("This project is private", (self.repo / "CLAUDE.md").read_text())
+        self.assertIn("CLAUDE.md", self.in_repo("status", "--porcelain"))
+
+    def test_codex_private_uses_its_override_file(self):
+        codex = providers.get("codex")
+        (self.repo / "AGENTS.md").write_text("# Our agents\n\nBe kind.\n")
+        self.save("agents")
+        settings = self.repo / ".board" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"provider": "codex", "private": True}))
+        board.wire(self.repo)
+        override = (self.repo / "AGENTS.override.md").read_text()
+        self.assertIn("Be kind.", override, "Codex reads only the override: the project's own AGENTS.md comes along")
+        self.assertIn("## This project is part of a colony", override)
+        self.assertEqual((self.repo / "AGENTS.md").read_text(), "# Our agents\n\nBe kind.\n")
+        self.assertTrue(codex.wired(self.repo, private=True))
+        self.assert_nothing_for_git()
+        (self.repo / "AGENTS.override.md").write_text("their own override\n")
+        with self.assertRaises(ValueError):
+            board.wire(self.repo)
+
+
 class ServingTest(BoardBase):
     """HTTPS through Tailscale Serve (R119): tailscale itself is a stand-in."""
     def setUp(self):
@@ -3414,6 +3530,14 @@ class FoldersTest(BoardBase):
             self.assertIn("bring the roadmap on board", board.notes(clones / "origin")[0]["text"], "a clone joins with its own work")
             self.post(port, "/add", path=str(self.root))
             self.assertIn(str(self.root), board.registry()["projects"])
+            self.assertFalse(board.is_private(self.root))
+            self.assertIn("name='private'", page, "an existing folder can be added private")
+            secret = Path(self.tmp.name) / "secret"
+            secret.mkdir()
+            (secret / "app.py").write_text("print(1)\n")
+            self.post(port, "/add", path=str(secret), private="on")
+            self.assertTrue(board.is_private(secret))
+            self.assertTrue((secret / "CLAUDE.local.md").exists() and not (secret / "CLAUDE.md").exists())
             self.post(port, "/new", within=str(shelf), name="fresh idea")
             self.assertTrue((shelf / "fresh idea" / "ROADMAP.md").exists())
             self.assertTrue(console.live(shelf / "fresh idea"))

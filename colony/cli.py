@@ -1,7 +1,8 @@
 """colony — one board for all of a person's long projects: each project's agent in its live console, what it
 waits on them for, its roadmap, and a steward that can act for them.
 
-    colony track [PATH]             put a project on the board (roadmap, notes, gates, delivery hooks)
+    colony track [PATH] [--private] put a project on the board (roadmap, notes, gates, delivery hooks); private,
+                                    nothing of colony's enters its git history
     colony board [--port 8790] [--lan]  one page for all tracked projects, with each project's live console
     colony gate "QUESTION" [--item R4] [--why ...] [--default ...]   put a decision in the person's hands
     colony notes [R4]               open notes from the person (the hooks deliver them by themselves)
@@ -83,8 +84,14 @@ def cmd_track(a):
             board.project_settings(Path(a.path).expanduser().resolve(), chosen)   # before wiring: the provider wires
         except KeyError as err:
             raise SystemExit(f"no such choice for {err}: colony settings shows the options")
-    root = board.track(a.path)
+    try:
+        root = board.track(a.path, private=a.private)
+    except ValueError as err:
+        raise SystemExit(f"colony: {err}")
     print(f"{root.name} is on the board. Open it with: colony board")
+    if board.is_private(root):
+        for line in ["Private: colony's files stay out of its git history (listed in the repository's own .git/info/exclude)."] + board.exclude(root):
+            print(line)
     return 0
 
 
@@ -404,7 +411,8 @@ def cmd_doctor(a):
         if not providers.installed(providers.of(p)):
             problems.append(f"{p.name}: {providers.missing(providers.of(p))}; install it, or choose another: "
                             f"colony settings --project {p.name} provider NAME")
-        elif not providers.of(p).wired(board.workdir(p)):
+        elif not (providers.of(p).wired(board.workdir(p), private=True) if board.is_private(p)
+                  else providers.of(p).wired(board.workdir(p))):
             problems.append(f"{p.name}: its board wiring is missing; colony track {p} restores it")
         else:
             print(f"ok    {p.name}: wired; console {console.snapshot(p, lines=1)['state']}")
@@ -1821,6 +1829,8 @@ def main(argv=None):
     p.add_argument('--role', choices=('lead', 'helper'), help='when adding another agent, switch lead or add a helper')
     for k in ("provider", "model", "effort", "permissions"):
         p.add_argument(f"--{k}", help="for this project (default: the global setting)")
+    p.add_argument("--private", action="store_true", help="keep everything of colony's out of the project's git "
+                   "history (for a public or shared repository); it stays private at every later wiring")
     p.set_defaults(fn=cmd_track)
     p = sub.add_parser("board"); p.add_argument("--port", type=int)
     p.add_argument("--lan", action="store_true", help="also answer every device on your home network (the default is this machine only)")

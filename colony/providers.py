@@ -102,6 +102,35 @@ def _keep(path, text):
     return [path]
 
 
+def _block(have, headings):
+    """Where colony's section sits in an instructions file: from its heading, or an old one, as a whole line ("## The
+    board is yours to keep healthy", the steward's own section, is not "## The board", and was cut out at every start
+    when it was taken for it), to the next section or the end. None when it isn't there."""
+    found = [re.search(rf"(?m)^{re.escape(m)}[ \t]*$", have) for m in headings]
+    marker = next((f for f in found if f), None)
+    if not marker:
+        return None
+    end = have.find("\n## ", marker.start() + 5)
+    return marker.start(), (end + 1 if end != -1 else len(have))
+
+
+def _place(path, block, headings):
+    """Colony's section in an instructions file: an older one brought up to date in place, else added at the end."""
+    have = path.read_text() if path.exists() else ""
+    span = _block(have, headings)
+    if span:
+        return _keep(path, have[:span[0]] + block + have[span[1]:])
+    return _keep(path, have + ("\n" if have and not have.endswith("\n") else "") + block)
+
+
+def _cut(path, headings):
+    """Colony's section taken out of an instructions file, the rest left as it was: for a private project, whose
+    tracked file must not carry it. A file that held nothing else goes."""
+    have = path.read_text() if path.exists() else ""
+    span = _block(have, headings)
+    return _keep(path, have[:span[0]] + have[span[1]:]) if span else []
+
+
 class Provider:
     """What colony asks of a program, each shape with what stands when the program doesn't supply it."""
     # --- what it is: shown in the forms and settings, and checked installed before it's offered (all required)
@@ -117,15 +146,21 @@ class Provider:
         the CLI's own flags; one it has no equivalent for is ignored. Required."""
         raise NotImplementedError
 
-    def wire(self, root, protocol):
+    def wire(self, root, protocol, private=False):
         """Put the colony protocol where the CLI reads project instructions, and arrange for `colony notes --deliver`
         output to reach the agent at session start (`--session`) and before each turn typed to it. Rewritten when it
-        differs, at tracking, at board start and daily (board.deploy). Required."""
+        differs, at tracking, at board start and daily (board.deploy). Private (colony track --private), all of it
+        goes in files of the CLI's that the project's history need never see, named in private_files. Required."""
         raise NotImplementedError
 
-    def wired(self, root):
+    def wired(self, root, private=False):
         """Whether wire() has been done (the doctor asks). Required."""
         raise NotImplementedError
+
+    # What wire(private=True) and write_helpers put in a project, as patterns for its repository's local exclude
+    # (relative to the project's folder); None where the program reads its instructions only from a file the project
+    # may track, so a private project can't run on it.
+    private_files = None
 
     def classify(self, screen):
         """"working" | "needs you" | "idle" from its terminal screen: the watcher and the steward's wake-ups depend
@@ -387,25 +422,18 @@ class ClaudeCode(Provider):
         parts += [shlex.quote(x) for x in connections.claude_args(root)]
         return " ".join(parts)
 
-    def wire(self, root, protocol):
+    def wire(self, root, protocol, private=False):
         """The colony protocol in CLAUDE.md (an older block brought up to date in place) and the delivery hooks
-        in .claude/settings.json, added to whatever the project already has."""
-        claude_md = root / "CLAUDE.md"
-        have = claude_md.read_text() if claude_md.exists() else ""
+        in .claude/settings.json, added to whatever the project already has. Private, they go in CLAUDE.local.md and
+        .claude/settings.local.json, which Claude Code reads beside the shared ones, and come out of the shared ones
+        if an earlier wiring put them there."""
         block = protocol.lstrip("\n")
-        # the block's heading, or its old one, as a whole line: "## The board is yours to keep healthy" (the steward's
-        # own section) is not "## The board", and was cut out at every start when it was taken for it
-        found = [re.search(rf"(?m)^{re.escape(m)}[ \t]*$", have) for m in ("## This project is part of a colony", "## The board")]
-        marker = next((f for f in found if f), None)
-        if not block:
-            pass                                   # nothing to deploy (the steward, whose brief is its own): left as it is
-        elif marker:
-            start = marker.start()
-            end = have.find("\n## ", start + 5)
-            _keep(claude_md, have[:start] + block + (have[end + 1:] if end != -1 else ""))
-        else:
-            _keep(claude_md, have + ("\n" if have and not have.endswith("\n") else "") + block)
-        settings = root / ".claude" / "settings.json"
+        if block:                                  # nothing to deploy (the steward, whose brief is its own): left as it is
+            if private:
+                _cut(root / "CLAUDE.md", self.HEADINGS)
+            _place(root / ("CLAUDE.local.md" if private else "CLAUDE.md"), block, self.HEADINGS)
+        shared = root / ".claude" / "settings.json"
+        settings = root / ".claude" / "settings.local.json" if private else shared
         settings.parent.mkdir(exist_ok=True)
         cfg = json.loads(settings.read_text()) if settings.exists() else {}
         for event, wanted in hook_entries(self).items():
@@ -416,8 +444,37 @@ class ClaudeCode(Provider):
                     entries.append(entry)
         # PROVIDER: Claude Code hands its usage limits only to its status line; colony's records them and shows
         # the person's own status line, if they set one. A project that set its own keeps it.
-        cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
+        own = json.loads(shared.read_text()).get("statusLine") if private and shared.exists() else None
+        if not own or own.get("command") == "colony statusline":
+            cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
         _keep(settings, json.dumps(cfg, indent=2) + "\n")
+        if private and shared.exists():
+            self._unhook(shared)
+
+    HEADINGS = ("## This project is part of a colony", "## The board")
+    private_files = ("CLAUDE.local.md", ".claude/settings.local.json", ".claude/agents/colony-*.md")
+
+    def _unhook(self, settings):
+        """Colony's hooks and status line taken out of a shared settings file, the rest left; rewritten only if
+        they were there."""
+        cfg = json.loads(settings.read_text())
+        ours = {e["hooks"][0]["command"] for entries in hook_entries(self).values() for e in entries}
+        hooks, found = cfg.get("hooks", {}), False
+        for event in list(hooks):
+            for entry in hooks[event]:
+                kept = [h for h in entry.get("hooks", []) if h.get("command") not in ours]
+                found |= len(kept) != len(entry.get("hooks", []))
+                entry["hooks"] = kept
+            hooks[event] = [e for e in hooks[event] if e.get("hooks")]
+            if not hooks[event]:
+                del hooks[event]
+        if "hooks" in cfg and not hooks:
+            del cfg["hooks"]
+        if (cfg.get("statusLine") or {}).get("command") == "colony statusline":
+            del cfg["statusLine"]
+            found = True
+        if found:
+            _keep(settings, json.dumps(cfg, indent=2) + "\n" if cfg else "")
 
     HELPER_CALL = "start one by its name (the Agent tool's subagent_type)"
 
@@ -795,9 +852,9 @@ class ClaudeCode(Provider):
             s = {}
         return {"model": s.get("model") or None, "effort": s.get("effortLevel") or None}
 
-    def wired(self, root):
-        claude_md = root / "CLAUDE.md"
-        settings = root / ".claude" / "settings.json"
+    def wired(self, root, private=False):
+        claude_md = root / ("CLAUDE.local.md" if private else "CLAUDE.md")
+        settings = root / ".claude" / ("settings.local.json" if private else "settings.json")
         hooks = json.dumps(json.loads(settings.read_text()).get("hooks", {})) if settings.exists() else ""
         return ("## This project is part of a colony" in (claude_md.read_text() if claude_md.exists() else "")
                 and all(h['command'] in hooks for entries in hook_entries(self).values() for e in entries for h in e['hooks']))
@@ -1274,17 +1331,22 @@ class Codex(Provider):
             parts += ["resume", shlex.quote(resume)]
         return " ".join(parts)
 
-    def wire(self, root, protocol):
-        """Install instructions and retire our old file hooks; launch flags now supply them in every checkout."""
+    # PROVIDER: Codex reads AGENTS.override.md in a folder instead of its AGENTS.md (at most one file per folder:
+    # learn.chatgpt.com/docs/agent-configuration/agents-md). A private project's instructions are that file: the
+    # project's own AGENTS.md, then colony's section, refreshed at each wiring, so an edit to AGENTS.md reaches its
+    # agent from the next one (board start, daily, colony track). The first line marks it as colony's.
+    OVERRIDE_MARK = ("<!-- written by colony for a private project: this folder's AGENTS.md, then colony's section; "
+                     "edit AGENTS.md, as this file is replaced -->\n")
+    private_files = ("AGENTS.override.md", ".codex/agents/colony-*.toml")
+
+    def wire(self, root, protocol, private=False):
+        """Install instructions and retire our old file hooks; launch flags now supply them in every checkout.
+        Private, the instructions go in AGENTS.override.md, and colony's section comes out of AGENTS.md."""
+        if private:
+            return self._wire_private(root, protocol)
         path = root / "AGENTS.md"
         have = path.read_text() if path.exists() else ""
-        block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY + self.GOAL
-        memory = claude_memory(root)
-        if memory:                                  # what its Claude Code agent learned stays with the project
-            block += (f"- What this project's Claude Code agent learned working here is in `{memory}` and the files it "
-                      "links: read it as background at the start of a session. The person's standing rules are not kept "
-                      "there but by colony, which hands them to you as each session starts; record a new one with "
-                      "`colony rule`.\n")
+        block = self._block(root, protocol)
         marker = "## This project is part of a colony"
         if marker in have:
             start = have.index(marker)
@@ -1292,6 +1354,30 @@ class Codex(Provider):
             _keep(path, have[:start] + block + (have[end + 1:] if end != -1 else ""))
         else:
             _keep(path, have + ("\n" if have and not have.endswith("\n") else "") + block)
+        self._retire_hooks(root)
+
+    def _wire_private(self, root, protocol):
+        override = root / "AGENTS.override.md"
+        if override.exists() and not override.read_text().startswith(self.OVERRIDE_MARK):
+            raise ValueError(f"{override} is the project's own, and Codex reads only one instructions file per folder: "
+                             "colony can't add its section privately here")
+        _cut(root / "AGENTS.md", ("## This project is part of a colony",))
+        own = (root / "AGENTS.md").read_text() if (root / "AGENTS.md").exists() else ""
+        _keep(override, self.OVERRIDE_MARK + own + ("\n" if own and not own.endswith("\n") else "")
+              + self._block(root, protocol))
+        self._retire_hooks(root)
+
+    def _block(self, root, protocol):
+        block = protocol.lstrip("\n").rstrip("\n") + self.DELIVERY + self.GOAL
+        memory = claude_memory(root)
+        if memory:                                  # what its Claude Code agent learned stays with the project
+            block += (f"- What this project's Claude Code agent learned working here is in `{memory}` and the files it "
+                      "links: read it as background at the start of a session. The person's standing rules are not kept "
+                      "there but by colony, which hands them to you as each session starts; record a new one with "
+                      "`colony rule`.\n")
+        return block
+
+    def _retire_hooks(self, root):
         settings = root / ".codex" / "hooks.json"
         if settings.exists():
             cfg = json.loads(settings.read_text())
@@ -1307,8 +1393,8 @@ class Codex(Provider):
         return (hook.get("type") == "command"
                 and hook.get("command") in (self.hooks.get(event), self.legacy_hooks.get(event)))
 
-    def wired(self, root):
-        path = root / "AGENTS.md"
+    def wired(self, root, private=False):
+        path = root / ("AGENTS.override.md" if private else "AGENTS.md")
         settings = root / ".codex" / "hooks.json"
         try:
             hooks = json.loads(settings.read_text()).get("hooks", {}) if settings.exists() else {}
