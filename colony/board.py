@@ -3743,8 +3743,8 @@ PLAYER = """
       if (was.S) S = {want: new Set(was.S.want), play: new Set(was.S.play), auto: new Map(was.S.auto), begun: new Set(was.S.begun)};
       // sounding a moment ago with Auto on (the page refreshed mid-reading): it goes on from the piece it was at, at the
       // first touch where a phone lets a page sound only after one
-      if (was.sounding && aloud() && Date.now() - was.saved < 90e3) { const restored = N;
-        whenAllowed(() => { if (N === restored && !playing) begin(N.j, N.piece); }); }
+      if (was.sounding && aloud() && Date.now() - was.saved < 90e3) { const restored = N, mine = opening;
+        whenAllowed(() => { if (mine === opening && N === restored && !playing && !paused && !why) begin(N.j, N.piece); }); }
     } else put('linenow', null); } catch (e) {}
   // Auto on as the page opens: armed again where this device was last able to play two hours ago or more, so a night's
   // replies wait for Play; its silence started where the phone lets it, and where it doesn't the pill says tap to resume

@@ -13,10 +13,14 @@ assert(playStart > end && clearStart > playStart, 'production queue Play handler
 const stepStart = source.indexOf('  const stepIn ='), stepEnd = source.indexOf('  // Auto: one switch,', stepStart);
 const readStart = source.indexOf('    read(v, secs) {'), readEnd = source.indexOf('    // a chat\'s seen:', readStart);
 assert(stepStart > end && stepEnd > stepStart && readStart > end && readEnd > readStart, 'production replay and direct-read handlers found');
+const allowStart = source.indexOf('  let allowing = null;'), allowEnd = source.indexOf('  const save =', allowStart);
+const restoreStart = source.indexOf('  // the reading last left on this device:'), restoreEnd = source.indexOf('  // Auto on as the page opens:', restoreStart);
+assert(allowStart > end && allowEnd > allowStart && restoreStart > end && restoreEnd > restoreStart, 'production saved-reading restoration found');
 const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = null;\n'
   + 'const shownLine = () => visible().filter(x => !clearOnly || clearOnly.includes(x.t));\n'
   + source.slice(playStart, clearEnd) + source.slice(stepStart, stepEnd)
-  + 'const direct = {' + source.slice(readStart, readEnd) + '};\n' + `
+  + 'const direct = {' + source.slice(readStart, readEnd) + '};\n'
+  + source.slice(allowStart, allowEnd) + source.slice(restoreStart, restoreEnd) + `
   window.testPlayer = {
     arrivals, start, begin, done, hold, skip, rest, clear: clearShown, play: playFrom,
     replay(x) { return again(x, L.projects[x.p] || {}); },
@@ -34,7 +38,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
 
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
-function browser(kokoro) {
+function browser(kokoro, restore = '') {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
   const timers = new Map(), sounds = [], resumed = [];
   class Events {
@@ -48,6 +52,15 @@ function browser(kokoro) {
   document.body = {classList: {contains: () => false}};
   document.querySelector = () => null;
   const storage = new Map([['aloud', '1'], ['automode', 'audio']]);
+  if (restore) {
+    document.activeElement = box;
+    storage.set('linenow', JSON.stringify({
+      N: {id: '0|' + restore, p: '0', t: restore, name: 'Plants', href: '/plants', kvoice: 'am_echo', kokoro,
+        blocks: [{k: restore, text: restore + ' reply. All done.'}], j: 0, piece: 0, seat: 'line'},
+      S: {want: ['0|' + restore], play: ['0|' + restore], auto: [], begun: ['0|' + restore]},
+      sounding: true, saved: time - 1000,
+    }));
+  }
   const setTimeout = (f, delay = 0) => { const id = ++serial; timers.set(id, {at: time + delay, f}); return id; };
   const clearTimeout = id => timers.delete(id);
   class Audio extends Events {
@@ -345,6 +358,24 @@ const cases = {
     let resumed = false;
     b.api.rest('the page opened', ok => { resumed = ok; }); await flush();
     assert.equal(b.api.state().letGo, 'paused'); assert.equal(resumed, false);
+  },
+  async 'restored sounding reading waits for focus and blur grace'(b) {
+    b = browser(b.kokoro, 'A'); assert.equal(b.api.state().t, 'A');
+    await b.focus(); assert.equal(b.sounds.length, 0); await b.blur();
+    await b.advance(2199); assert.equal(b.sounds.length, 0);
+    await b.advance(1); assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, true); assert(b.sounds.length > 0);
+  },
+  async 'a newer person pause holds the actual saved-reading restore'(b) {
+    b = browser(b.kokoro, 'A'); await b.focus(); b.api.hold(true);
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 0);
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, false); assert.equal(b.api.state().why, 'person');
+    b.api.hold(false); await flush(); assert.equal(b.api.state().playing, true); assert(b.sounds.length > 0);
+  },
+  async 'restoration cannot resume the same reply after another selection and Skip'(b) {
+    b = browser(b.kokoro, 'A'); await b.focus(); b.api.read('B'); b.api.skip();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, false);
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 0); assert.equal(b.api.state().playing, false);
+    b.api.hold(false); await flush(); assert.equal(b.api.state().playing, true); assert(b.sounds.length > 0);
   },
   async 'Skip invalidates pending sound before it resolves'(b) {
     const xs = await b.line(['A', 'B']), navigation = b.navigation();
