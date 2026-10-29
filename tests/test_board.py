@@ -10356,6 +10356,67 @@ class ProjectRenameTest(BoardBase):
         self.assertEqual(board.name_of(other), 'other')
         self.assertEqual(len(board.notes(self.root)), 1)
 
+    def test_an_agent_can_rename_itself_without_claiming_the_person_said_it(self):
+        address, session = mail.address(self.root), console.session_name(self.root)
+        result = self.cli('rename', '  Garden keeper  ', '--why', 'Matches the work')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(board.name_of(self.root), 'Garden keeper')
+        record = json.loads((self.root / '.board/name.json').read_text())
+        self.assertEqual(record['changed_by'], 'agent')
+        self.assertEqual(record['previous_name'], 'plants')
+        self.assertEqual(record['why'], 'Matches the work')
+        self.assertTrue(record['changed_at'])
+        self.assertEqual(board.notes(self.root), [])
+        self.assertIn('project folder', result.stdout)
+        self.assertIn('bookkeeping', result.stdout)
+        self.assertEqual(mail.address(self.root), address)
+        self.assertEqual(console.session_name(self.root), session)
+        before = (self.root / '.board/name.json').read_bytes()
+        result = self.cli('rename', 'Garden keeper')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / '.board/name.json').read_bytes(), before)
+        self.rename('Human name')
+        self.assertEqual(json.loads((self.root / '.board/name.json').read_text())['changed_by'], 'person')
+        self.assertEqual([n['author'] for n in board.notes(self.root)], ['person'])
+
+    def test_agent_rename_uses_its_logical_root_and_refuses_unknown_scopes(self):
+        other = Path(self.tmp.name) / 'other'
+        other.mkdir()
+        board.track(other)
+        prior_notes = board.notes(other)
+        invoke = lambda project, cwd=self.root, name='Agent name': subprocess.run(
+            [sys.executable, '-m', 'colony', 'rename', name], cwd=cwd, capture_output=True, text=True,
+            env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=project))
+        result = invoke(str(other))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(board.name_of(self.root), 'plants')
+        self.assertEqual(board.name_of(other), 'Agent name')
+        outside = Path(self.tmp.name) / 'outside'
+        outside.mkdir()
+        for scope in [str(outside), str(outside / 'missing'), 'other', '']:
+            with self.subTest(scope=scope):
+                self.assertNotEqual(invoke(scope).returncode, 0)
+        self.assertFalse((outside / '.board').exists())
+        (outside / '.board').mkdir()
+        self.assertNotEqual(invoke(str(outside)).returncode, 0, 'an unregistered .board is insufficient')
+        result = subprocess.run([sys.executable, '-m', 'colony', 'rename', 'Outside'], cwd=outside,
+                                capture_output=True, text=True,
+                                env={k: v for k, v in dict(os.environ, PYTHONPATH=str(ROOT)).items() if k != 'COLONY_PROJECT'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((outside / '.board/name.json').exists())
+        self.assertEqual(board.name_of(self.root), 'plants')
+        self.assertEqual(board.name_of(other), 'Agent name')
+        self.assertEqual(board.notes(other), prior_notes)
+
+    def test_agent_rename_validates_names_and_has_no_other_project_target(self):
+        for name in ['', '   ', 'x' * 121, 'line\nbreak']:
+            with self.subTest(name=name):
+                self.assertNotEqual(self.cli('rename', name).returncode, 0)
+        self.assertNotEqual(self.cli('rename', 'Name', '--project', 'plants').returncode, 0)
+        self.assertEqual(board.name_of(self.root), 'plants')
+        self.assertEqual(board.notes(self.root), [])
+        self.assertFalse((self.root / '.board/name.json').exists())
+
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires the isolated Chrome fixture')
     def test_phone_pencils_cancel_save_poll_and_escape(self):
         script = r'''

@@ -12,6 +12,7 @@ waits on them for, its roadmap, and a steward that can act for them.
     colony stop                     end the board, the steward and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
     colony projects                 every project on the board, its console state and latest line
+    colony rename "NAME" [--why W]  change this project's own name on the board
     colony send NAME "TEXT" [--ask] a message to another project's agent; --ask expects an answer
     colony reply ID "TEXT"          answer a message
     colony mail [--project NAME]    a project's mail, in and out
@@ -1180,6 +1181,32 @@ def cmd_notes(a):
     return 0
 
 
+def cmd_rename(a):
+    """An agent may name its own logical project, including one sharing another project's folder."""
+    from . import board, project_names
+    chosen = os.environ.get('COLONY_PROJECT')
+    if chosen is not None:
+        if not chosen or not Path(chosen).is_absolute():
+            print('colony rename: COLONY_PROJECT must name your registered project by its absolute path.', file=sys.stderr)
+            return 2
+        root = Path(chosen).resolve()
+    else:
+        root = board.root_of().resolve()
+    known = {p.resolve() for p in board.projects(adopt=False)}
+    if root not in known or not root.is_dir() or not (root / '.board').is_dir():
+        print('colony rename: run from your registered project or its board console.', file=sys.stderr)
+        return 2
+    try:
+        changed = project_names.rename(root, a.name, changed_by='agent', why=a.why)
+    except ValueError as err:
+        print(f'colony rename: {err}', file=sys.stderr)
+        return 2
+    print(f"{'Renamed to' if changed else 'Already named'} {project_names.name_of(root)}.")
+    if changed:
+        print(project_names.guidance(root))
+    return 0
+
+
 def cmd_whoami(a):
     """The board project this runs in, by name, for colony's commit stamp; nothing outside one."""
     from . import board
@@ -1936,6 +1963,8 @@ def main(argv=None):
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
     sub.add_parser("whoami").set_defaults(fn=cmd_whoami)
+    p = sub.add_parser('rename', help="change this project's own name on the board")
+    p.add_argument('name'); p.add_argument('--why', default=''); p.set_defaults(fn=cmd_rename)
     p = sub.add_parser("mute", help="mute the steward (on) so nothing wakes it, or wake it again (off)")
     p.add_argument("state", nargs="?", choices=("on", "off")); p.set_defaults(fn=cmd_mute)
     p = sub.add_parser("pair", help="a ChatGPT pairing code for a Codex project (--check CODE confirms it)")

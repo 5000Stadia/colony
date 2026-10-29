@@ -134,6 +134,8 @@ steer all of them from one board, and the projects can write to each other.
 - An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board
   edits reach you as before-and-after notes.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
+- To change your own project's name: `colony rename "New name"` (`--why "reason"` optional). Carry the name through
+  its identity and documentation, and its folder when practical, keeping Colony access, paths and old mail addresses working.
 - A standing order from the person (from now on, always, never) is kept by colony, not your memory: `colony rule
   "the rule" --words "their words"`. It comes back at every session start, after a compaction too; when they lift
   one, `colony rule --retire ID "why"`.

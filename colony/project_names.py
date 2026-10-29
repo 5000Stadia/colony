@@ -24,12 +24,31 @@ def name_of(root):
         return root.name
 
 
-def rename(root, value):
-    """Change the label and leave one direct instruction for this project's agent."""
+def guidance(root):
+    """The same practical follow-through for a person's rename or the agent's own."""
+    from . import lead
+    text = (
+        'Use the new name for the project from now on. Carry it through the project identity, '
+        'documentation and design where appropriate, and rename the project folder too when that is straightforward. '
+        'Work out any dependencies before a folder move; keep Colony registration, console access, paths, links and '
+        'history in working order, and keep the old mail address usable. Do not rewrite Git history. '
+        'If a folder move would be costly, disruptive or impractical, keep the working folder and explain briefly '
+        'what you kept and why. Aim for consistent naming and proper bookkeeping; routine updates need no further approval.'
+    )
+    if len(lead.info(root)['members']) > 1:
+        text += (' This name belongs to your logical project/agent. Coordinate shared-folder changes with the '
+                 'declared lead and the other agents; do not rename their projects or move shared work unilaterally.')
+    return text
+
+
+def rename(root, value, *, changed_by='person', why=''):
+    """Change the label; only a person's rename sends an instruction to the agent."""
     import fcntl
-    from . import board, lead
+    from . import board
     from .codex_transfer import atomic_json
     value = validate(value)
+    if changed_by not in ('person', 'agent'):
+        raise ValueError('A rename must be made by the person or the project agent.')
     root = Path(root)
     folder = root / '.board'
     folder.mkdir(exist_ok=True)
@@ -38,20 +57,16 @@ def rename(root, value):
         before = name_of(root)
         if before == value:
             return False
-        directive = (
-            f'The person renamed this project from {json.dumps(before, ensure_ascii=False)} '
-            f'to {json.dumps(value, ensure_ascii=False)} on the board.\n'
-            f'Their new name: {value}\n'
-            'What this means: use the new name for the project from now on. Carry it through the project identity, '
-            'documentation and design where appropriate, and rename the project folder too when that is straightforward. '
-            'Work out any dependencies before a folder move; keep Colony registration, console access, paths, links and '
-            'history in working order, and keep the old mail address usable. Do not rewrite Git history. '
-            'If a folder move would be costly, disruptive or impractical, keep the working folder and explain briefly '
-            'what you kept and why. Aim for consistent naming and proper bookkeeping; routine updates need no further approval.'
-        )
-        if len(lead.info(root)['members']) > 1:
-            directive += (' This name belongs to your logical project/agent. Coordinate shared-folder changes with the '
-                          'declared lead and the other agents; do not rename their projects or move shared work unilaterally.')
-        atomic_json(folder / 'name.json', {'name': value})
-        board.add_note(root, None, directive, author='person')
+        record = dict(name=value, previous_name=before, changed_by=changed_by, changed_at=board.now())
+        if why.strip():
+            record['why'] = why.strip()
+        atomic_json(folder / 'name.json', record)
+        if changed_by == 'person':
+            directive = (
+                f'The person renamed this project from {json.dumps(before, ensure_ascii=False)} '
+                f'to {json.dumps(value, ensure_ascii=False)} on the board.\n'
+                f'Their new name: {value}\n'
+                'What this means: ' + guidance(root)
+            )
+            board.add_note(root, None, directive, author='person')
         return True
