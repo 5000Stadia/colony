@@ -2926,7 +2926,7 @@ PLAYER = """
     if (!fresh.length) return;
     S = S || session();
     fresh.forEach((x) => { if (!S.want.has(id(x))) { S.want.add(id(x)); S.auto.set(id(x), Date.now()); } });
-    if (!N && !opened && able() && !writing()) { const x = nextUp(); if (x) start(x); }
+    if (!N && !opened && able()) { const x = nextUp(); if (x) start(x); }
   }
   // the reply to read next: the first in the line the session asked for (Play, a row, Auto as it landed), by its keys;
   // the one being read comes again only for parts that landed in it since it began
@@ -2934,16 +2934,23 @@ PLAYER = """
     return visible().find((x) => S.want.has(id(x)) && !(N && id(x) === N.id && x.b.every(([k]) => N.blocks.some((b) => b.k === k)))) || null; };
   const nextAfter = () => (S && visible().find((x) => S.want.has(id(x)) && !(N && id(x) === N.id))) || null;
   // a reply's words, fetched as it is about to be read (and the next one's, ahead)
-  const words = new Map();
+  const words = new Map(), wording = new Map();
   const fetched = (u, as) => fetch(u, {cache: 'no-store'}).then((r) => r.ok ? r[as]() : null).catch(() => null);
+  const wantedKeys = (x) => {
+    const fresh = S && S.auto.has(id(x)) && !S.play.has(id(x)) ? x.b.filter(([, at]) => Date.parse(at) >= armed) : [];
+    return (fresh.length ? fresh : x.b).map(([k]) => k); };
   async function texts(p, i, ks) {
     const have = words.get(i), find = (k) => have.find((b) => b.k === k);
     if (have && ks.every(find)) return ks.map(find);
-    const got = await fetched('/chat/text?p=' + encodeURIComponent(p) + '&k=' + encodeURIComponent(ks.join(',')), 'json');
-    const bs = (got && got.blocks) || [];
-    if (bs.length) { words.set(i, (have || []).filter((b) => !bs.some((c) => c.k === b.k)).concat(bs));
-      while (words.size > 8) words.delete(words.keys().next().value); }
-    return ks.map((k) => bs.find((b) => b.k === k)).filter(Boolean);
+    const key = JSON.stringify([i, ks]);
+    if (wording.has(key)) return wording.get(key);
+    const request = fetched('/chat/text?p=' + encodeURIComponent(p) + '&k=' + encodeURIComponent(ks.join(',')), 'json').then((got) => {
+      const bs = (got && got.blocks) || [];
+      if (bs.length) { words.set(i, (words.get(i) || []).filter((b) => !bs.some((c) => c.k === b.k)).concat(bs));
+        while (words.size > 8) words.delete(words.keys().next().value); }
+      return ks.map((k) => bs.find((b) => b.k === k)).filter(Boolean);
+    }).finally(() => { if (wording.get(key) === request) wording.delete(key); });
+    wording.set(key, request); return request;
   }
   // Each reply in its own project's voice, its project named first as the voice comes to it (from another project, or
   // after a quiet spell; not before a ▷), as a clip of its own in its own voice or one chosen for names
@@ -2977,25 +2984,43 @@ PLAYER = """
   // Ahead of what is heard, the next AHEAD clips are made, through this reply and into the next once its words are
   // here (the machine makes them back to back with no idle time), topped up as each clip starts. While the clip about to
   // be heard is still being made over the network it waits, so that one comes first. A clip that failed isn't asked
-  // for again (the phone's voice reads it).
+  // for again (the phone's voice reads it). A writing hold keeps this bounded preparation running in silence.
   const AHEAD = 5;
   let warming = false;
   const upcoming = () => {
-    const out = []; if (!N) return out;
+    const out = [];
+    // A box can hold the next reply before it becomes N. Prepare the same bounded horizon without starting it.
+    if (!N) { const x = nextUp(), info = x ? L.projects[x.p] || {} : {}, bs = x && words.get(id(x));
+      if (bs) { const ks = wantedKeys(x), r = {name: info.name, named: named(info.name, false), blocks: ks.map((k) => bs.find((b) => b.k === k)).filter(Boolean)};
+        r.blocks.forEach((b, j) => piecesOf(r, j).filter((p) => p.trim()).forEach((p) => { if (out.length < AHEAD) out.push([p, info.voice]); })); }
+      return out; }
+    if (N.silent) return out;
     let k = playing && now && now.s === N.blocks[N.j] ? now.at + 1 : N.piece;
     for (let j = N.j; j < N.blocks.length && out.length < AHEAD; j++, k = 0) {
       const ps = piecesOf(N, j).filter((p) => p.trim());
       for (; k < ps.length && out.length < AHEAD; k++) out.push([ps[k], N.kvoice]); }
     const x = !N.document && out.length < AHEAD && nextAfter(), info = x ? L.projects[x.p] || {} : {}, bs = x && words.get(id(x));
-    if (bs) { const r = {name: info.name, named: named(info.name, false), blocks: bs};
-      bs.forEach((b, j) => piecesOf(r, j).filter((p) => p.trim()).forEach((p) => { if (out.length < AHEAD) out.push([p, info.voice]); })); }
+    if (bs) { const r = {name: info.name, named: named(info.name, false), blocks: wantedKeys(x).map((k) => bs.find((b) => b.k === k)).filter(Boolean)};
+      r.blocks.forEach((b, j) => piecesOf(r, j).filter((p) => p.trim()).forEach((p) => { if (out.length < AHEAD) out.push([p, info.voice]); })); }
     return out; };
   function warm() {
-    if (warming || (playing && loading)) return;
-    const next = upcoming().find(([p, v]) => { const key = keyOf(abs(clip(p, v))); return !kept.has(key) && !failed.has(key); });
-    if (!next) return;
-    warming = true;
-    make(next[0], next[1]).then(() => { warming = false; warm(); });
+    if (warming || (playing && loading && !(paused && why === 'dictation'))) return;
+    if (!N && (!L.ready || !able() || mode() === 'text' || opened)) return;
+    if (N && (!N.kokoro || N.silent)) return;
+    const ahead = upcoming(), next = ahead.find(([p, v]) => { const key = keyOf(abs(clip(p, v))); return !kept.has(key) && !failed.has(key); });
+    if (next) {
+      warming = true;
+      make(next[0], next[1]).then(() => { warming = false; warm(); });
+      return;
+    }
+    const x = !N ? nextUp() : !N.document && ahead.length < AHEAD && nextAfter();
+    if (x) {
+      const ks = wantedKeys(x), bs = words.get(id(x));
+      if (!bs || !ks.every((k) => bs.some((b) => b.k === k))) {
+        warming = true;
+        texts(x.p, id(x), ks).then((got) => { warming = false; if (ks.every((k) => got.some((b) => b.k === k))) warm(); });
+      }
+    }
   }
   player.addEventListener('playing', () => { if (!player.loop) ready.add(keyOf(player.src)); if (loading && playing && !player.loop) { loading = false; changed(); } setState(); });
   // Locked, a phone runs a page only while it plays something, and lets it start a sound again only from one going: so
@@ -3124,12 +3149,11 @@ PLAYER = """
     if (aloud()) rest('between replies'); else hush();
   }
   async function start(x) {
-    if (writing()) { quietSoon(); return; }         // it stays in S until the box and its grace period let go
+    if (writing()) { warm(); quietSoon(); return; } // prepare it in S until the box and its grace period let go
     const mine = ++opening, i = id(x), info = L.projects[x.p] || {};
     opened = i; replaying = null;
     // what Auto took up as it landed is read from what landed; what Play or a row asked for, all of it that waits
-    const fresh = S && S.auto.has(i) && !S.play.has(i) ? x.b.filter(([, at]) => Date.parse(at) >= armed) : [];
-    const ks = (fresh.length ? fresh : x.b).map(([k]) => k);
+    const ks = wantedKeys(x);
     bridge(); loading = true; changed();
     const blocks = await texts(x.p, i, ks);
     if (mine !== opening) return;
@@ -3148,13 +3172,13 @@ PLAYER = """
   function begin(j, from = 0) {
     const s = N && N.blocks[j]; if (!s) return replyDone();
     startingSound = null;
-    if (writing()) {
-      N.j = j; N.piece = from; playing = false; paused = true; loading = false; why = 'dictation'; byVoice = true;
-      save(); changed(); quietSoon(); return;
-    }
-    // Text only holds for whatever Auto reads; a reply the person tapped ▷ on is read aloud
+    // Text only holds for whatever Auto reads; a reply the person tapped ▷ on is read aloud.
     N.silent = !N.tapped && aloud() && mode() === 'text';
     if (!from && !j && !N.resuming) N.named = !!N.say || named(N.name, N.tapped);
+    if (writing()) {
+      N.j = j; N.piece = from; playing = false; paused = true; loading = false; why = 'dictation'; byVoice = true;
+      save(); changed(); if (N.kokoro) warm(); quietSoon(); return;
+    }
     N.resuming = false;
     const parts = piecesOf(N, j).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
@@ -3174,7 +3198,8 @@ PLAYER = """
     }};
     const sound = () => { pending.ready = true; return pending.go(); };
     const titled = N.kokoro && parts[from] && parts[from].startsWith(NAME) && parts[from + 1];
-    const both = titled ? Promise.race([Promise.all([make(parts[from], N.kvoice), make(parts[from + 1], N.kvoice)]), new Promise((ok) => after(ok, 20000))]) : null;
+    const buffered = N.kokoro && parts[from] && making.get(keyOf(abs(clip(parts[from], N.kvoice))));
+    const both = titled || buffered ? Promise.race([titled ? Promise.all([make(parts[from], N.kvoice), make(parts[from + 1], N.kvoice)]) : buffered.promise, new Promise((ok) => after(ok, 20000))]) : null;
     const waits = [shown && Promise.race([shown, new Promise((ok) => after(ok, 3000))]), both].filter(Boolean);
     if (waits.length) { bridge(); return Promise.all(waits).then(sound); }
     return sound();
@@ -3255,6 +3280,7 @@ PLAYER = """
   const dictating = () => {
     if (N && playing && !paused) { hold(true, 'dictation'); byVoice = true; }
     if (!N && resting) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; changed(); }
+    if (N && N.kokoro) warm();
     quietSoon();
   };
   const writingChanged = (ev) => {

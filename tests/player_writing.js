@@ -29,6 +29,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
     voice(v) { N.kvoice = v; anew(true); },
     words(t, blocks) { words.set('0|' + t, blocks); },
     append(x) { L.line.push(x); words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))); },
+    update(x) { L.line = L.line.map(y => id(y) === id(x) ? x : y); },
     autoLine() { S.play.clear(); S.want.forEach(i => S.auto.set(i, Date.now())); },
     clearOnly(ts) { clearOnly = ts; },
     line(xs, kokoro, cache = true) {
@@ -45,7 +46,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
 function browser(kokoro, restore = '') {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
-  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [];
+  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [];
   class Events {
     constructor() { this.listeners = new Map(); }
     addEventListener(type, listener) { const xs = this.listeners.get(type) || []; xs.push(listener); this.listeners.set(type, xs); }
@@ -101,7 +102,7 @@ function browser(kokoro, restore = '') {
     Date: class extends Date {constructor(...args) {super(...(args.length ? args : [time]));} static now() {return time;}},
     localStorage: {getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k)},
     fetch: async (url, options = {}) => {
-      const u = new URL(url, 'http://board/');
+      const u = new URL(url, 'http://board/'); fetches.push(u);
       if (u.pathname === '/chat/text') {
         const turn = u.searchParams.get('t'), key = turn || u.searchParams.get('k');
         const request = turn ? 'turn:' + turn : key;
@@ -124,7 +125,7 @@ function browser(kokoro, restore = '') {
   vm.runInContext(program, context);
   const api = window.testPlayer;
   const row = t => ({p: '0', t, b: [[t, new Date(time).toISOString()]]});
-  return {api, kokoro, sounds, resumed, box, row, storage, marks,
+  return {api, kokoro, sounds, resumed, box, row, storage, marks, fetches,
     offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
     captureEnd() { return kokoro ? audios[0].onended : speech.last.onend; },
     voiceRequest(text) { const d = deferred(); requests.set('voice:' + text, d); return d; },
@@ -156,6 +157,134 @@ function browser(kokoro, restore = '') {
 }
 
 const cases = {
+  async 'writing continues pending buffer then resumes from cached audio'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']), navigation = b.navigation();
+    const clip = 'A reply. All done.', req = b.voiceRequest(clip);
+    await b.api.start(xs[0]); await b.focus(); b.api.warm(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    req.resolve({ok: true, blob: async () => new Blob(['cached audio'])}); await flush();
+    navigation.resolve(); await flush(); assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0);
+    await b.blur(); await b.advance(2200);
+    assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /^blob:/);
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+  },
+  async 'new Auto work buffers silently while writing without repeated fetches'(b) {
+    if (!b.kokoro) return;
+    await b.line([], false); await b.focus(); b.api.append(b.row('A')); b.api.autoLine();
+    const req = b.voiceRequest('A reply. All done.');
+    b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    await b.event('input'); b.api.arrivals(); await b.event('keydown'); b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    req.resolve({ok: true, blob: async () => new Blob(['cached arrival'])}); await flush();
+    assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0); assert.equal(b.api.state().t, null);
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /^blob:/);
+  },
+  async 'writing release reuses inflight buffer without playing early'(b) {
+    if (!b.kokoro) return;
+    await b.line(['A']); b.api.autoLine(); await b.focus();
+    const req = b.voiceRequest('A reply. All done.'); b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 0);
+    b.api.arrivals(); await flush(); assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    req.resolve({ok: true, blob: async () => new Blob(['inflight arrival'])}); await flush();
+    assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /^blob:/);
+  },
+  async 'buffered Auto respects manual pause after writing'(b) {
+    if (!b.kokoro) return;
+    await b.line(['A']); b.api.autoLine(); await b.focus();
+    const req = b.voiceRequest('A reply. All done.'); b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    b.api.hold(true); req.resolve({ok: true, blob: async () => new Blob(['held'])}); await flush();
+    await b.blur(); await b.advance(2200);
+    assert.equal(b.sounds.length, 0); assert.equal(b.api.state().letGo, 'paused'); assert.equal(b.marks.length, 0);
+  },
+  async 'buffered Auto respects Auto Off after writing'(b) {
+    if (!b.kokoro) return;
+    await b.line(['A']); b.api.autoLine(); await b.focus();
+    const req = b.voiceRequest('A reply. All done.'); b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    b.api.auto(false); req.resolve({ok: true, blob: async () => new Blob(['off'])}); await flush();
+    await b.blur(); await b.advance(2200); b.api.arrivals(); await flush();
+    assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0); assert.equal(b.api.state().t, null);
+  },
+  async 'writing buffer shares pending words when grace expires'(b) {
+    if (!b.kokoro) return;
+    await b.line(['A'], false); b.api.autoLine(); await b.focus();
+    const text = b.text('A');
+    b.api.arrivals(); await flush(); await b.event('input'); b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/chat/text').length, 1);
+    await b.blur(); await b.advance(2200);
+    assert.equal(b.fetches.filter(u => u.pathname === '/chat/text').length, 1);
+    text.resolve(); await flush();
+    assert.equal(b.sounds.length, 1);
+    assert.equal(b.fetches.filter(u => u.pathname === '/chat/text').length, 1);
+  },
+  async 'paused preparation continues through only its five clip horizon'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']), navigation = b.navigation();
+    const blocks = Array.from({length: 8}, (_, j) => ({k: 'part' + j, text: 'Part ' + j + ' begins. More words follow.'}));
+    xs[0].b = blocks.map(b => [b.k, xs[0].b[0][1]]); b.api.words('A', blocks);
+    const first = b.voiceRequest(blocks[0].text), second = b.voiceRequest(blocks[1].text);
+    await b.api.start(xs[0]); await b.focus();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    first.resolve({ok: true, blob: async () => new Blob(['one'])}); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 2);
+    second.resolve({ok: true, blob: async () => new Blob(['two'])}); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 5);
+    await b.event('input'); b.api.arrivals(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 5);
+    assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0);
+    navigation.resolve(); await flush(); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /^blob:/);
+  },
+  async 'manual pause holds an inflight buffer released by writing'(b) {
+    if (!b.kokoro) return;
+    await b.line(['A']); b.api.autoLine(); await b.focus();
+    const req = b.voiceRequest('A reply. All done.'); b.api.arrivals(); await flush();
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 0);
+    b.api.hold(true); req.resolve({ok: true, blob: async () => new Blob(['paused'])}); await flush();
+    assert.equal(b.sounds.length, 0); assert.equal(b.api.state().why, 'person'); assert.equal(b.marks.length, 0);
+    b.api.hold(false); await flush(); assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /^blob:/);
+  },
+  async 'superseded writing buffer cannot replace the latest queue row'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A', 'B']); b.api.autoLine(); await b.focus();
+    const old = b.voiceRequest('A reply. All done.'), latest = b.voiceRequest('B reply. All done.'), name = b.voiceRequest('Plants.');
+    b.api.arrivals(); await flush(); b.api.play(xs, 1); await flush();
+    assert.equal(old.signal.aborted, true);
+    old.resolve({ok: true, blob: async () => new Blob(['stale'])}); await flush();
+    name.resolve({ok: true, blob: async () => new Blob(['name'])});
+    latest.resolve({ok: true, blob: async () => new Blob(['latest'])}); await flush();
+    assert.equal(b.sounds.length, 0); await b.blur(); await b.advance(2200);
+    assert.equal(b.api.state().t, 'B'); assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /^blob:/);
+  },
+  async 'same Auto reply gains buffered parts while writing'(b) {
+    if (!b.kokoro) return;
+    await b.line(['A']); b.api.autoLine(); await b.focus();
+    const first = b.voiceRequest('A reply. All done.'), second = b.voiceRequest('A2 reply. All done.');
+    b.api.arrivals(); await flush(); const growing = b.row('A'); growing.b.push(['A2', growing.b[0][1]]);
+    b.api.update(growing); b.api.arrivals(); await flush();
+    first.resolve({ok: true, blob: async () => new Blob(['first'])}); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/chat/text').length, 1);
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 2);
+    second.resolve({ok: true, blob: async () => new Blob(['second'])}); await flush();
+    assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0);
+    await b.blur(); await b.advance(2200); assert.match(b.sounds[0], /^blob:/);
+    await b.end(); assert.equal(b.api.state().j, 1); assert.match(b.sounds[1], /^blob:/);
+    assert.equal(b.fetches.filter(u => u.pathname === '/chat/text').length, 1);
+  },
+  async 'incoming Auto buffers behind the reply held by writing'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']); b.api.autoLine(); await b.api.start(xs[0]); await b.focus();
+    const next = b.voiceRequest('B reply. All done.'); b.api.append(b.row('B')); b.api.arrivals(); b.api.warm(); await flush();
+    assert.equal(b.fetches.filter(u => u.pathname === '/voice').length, 1);
+    next.resolve({ok: true, blob: async () => new Blob(['next'])}); await flush();
+    assert.equal(b.sounds.length, 1); assert.equal(b.marks.length, 0);
+    await b.blur(); await b.advance(2200); await b.end();
+    assert.equal(b.api.state().t, 'B'); assert.match(b.sounds[b.sounds.length - 1], /^blob:/);
+  },
   async 'idle arrival waits for focus and blur grace'(b) {
     await b.line(['A']); await b.focus(); b.api.arrivals(); await flush();
     await b.advance(5000); assert.equal(b.sounds.length, 0);
