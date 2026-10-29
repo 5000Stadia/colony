@@ -3461,7 +3461,7 @@ PLAYER = """
   // let the sound go. A tap opens the line. Reading, a bar: whose reply and where in the line, its first words, ❚❚ and ⏭.
   const PICON = @ICONS@;
   const HEAD = "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' aria-hidden='true'>"
-    + "<path d='M4 14v-2a8 8 0 0 1 16 0v2'/><rect x='3' y='14' width='5' height='6' rx='2'/><rect x='16' y='14' width='5' height='6' rx='2'/></svg>";
+    + "<path d='M4 14v-2a8 8 0 0 1 16 0v2'/><rect x='3' y='14' width='5' height='6' rx='2'/><rect x='16' y='14' width='5' height='6' rx='2'/><path class='cpaudiooff' d='m3 3 18 18'/></svg>";
   const SCREEN = "<span class='cptextstatus held' role='img'><svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.6' aria-hidden='true'>"
     + "<rect x='4' y='5' width='16' height='11' rx='1.5'/><path d='M12 16v4m-4 0h8'/><g class='cptextoff'><circle cx='12' cy='12' r='10'/><path d='m5 5 14 14'/></g></svg></span>";
   const RETURN = "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='m8 4-5 5 5 5M3 9h10a7 7 0 0 1 0 14'/></svg>";
@@ -3561,10 +3561,12 @@ PLAYER = """
     document.documentElement.classList.toggle('cpgo', !!N && playing && !paused);      // sounding now
     bar.classList.toggle('cpidle', !N); document.body.classList.toggle('cpon', !!N);
     pill.classList.toggle('on', live); pill.classList.toggle('held', held2); pill.classList.toggle('none', !aloud() && !n);
+    pill.classList.toggle('textonly', mode() === 'text');
     const say = aloud() ? (held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);
     if ($('.cpsay').textContent !== say) $('.cpsay').textContent = say;
-    pill.setAttribute('aria-label', held2 ? 'Auto is on, but the phone let the sound go: tap to resume'
-      : n + (n === 1 ? ' reply' : ' replies') + ' waiting' + (live ? ', Auto on' : '') + ': open the line');
+    pill.setAttribute('aria-label', (held2 ? 'Auto is on, but the phone let the sound go: tap to resume'
+      : n + (n === 1 ? ' reply' : ' replies') + ' waiting' + (live ? ', Auto on' : '') + ': open the line')
+      + (mode() === 'text' ? ', Text only: no sound' : ''));
     if (N) {
       const s = N.blocks[N.j] || N.blocks[0] || {text: ''};
       $('.cpname').textContent = (N.name || '') + place() + (!playing || paused ? (letGo ? ' · tap to resume' : ' · paused') : '');
@@ -3833,7 +3835,7 @@ PLAYER = """
     attach(v) { view = v; changed();
       const s = N && N.blocks[N.j];                     // arrived at the chat being read: there, at once
       if (s && playing && following() && !N.document && String(N.p) === String(v.key)) showHere(); },
-    setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); heed(); },
+    setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} draw(); if (view) view.mark(); heed(); },
     leave() { follow(null); view = null; },
     // where a chat's project is being read: the reply and part, playing or held
     of(name, key) { if (!N || N.document || (key === undefined ? N.name !== name : String(N.p) !== String(key))) return null; const s = N.blocks[N.j] || {};
@@ -10408,6 +10410,7 @@ main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--
   border:1px solid var(--line); background:var(--card); color:var(--ink); font-size:14px; font-weight:600; white-space:nowrap;
   box-shadow:0 3px 12px rgba(0,0,0,.16); cursor:pointer } .cppill svg { flex:none; color:var(--accent) }
 .cppill.none, .cppill.none svg { color:var(--muted) }
+.cppill:not(.textonly) .cpaudiooff { display:none }
 .cppill.on { border-color:var(--accent); color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent), 0 3px 12px rgba(0,0,0,.16) }
 .cppill.held, .cppill.held svg { color:var(--flag) } .cppill.held { border-color:var(--flag); background:var(--flag-bg) }
 body.typing .cplayer { top:calc(var(--kbtop, 100vh) - var(--boxh, 0px) - var(--cph, 56px) - 8px); bottom:auto !important }
