@@ -231,6 +231,9 @@ def cmd_urls(a):
     elif not lan:
         print(f"From your network:    off: {MACHINE_ONLY}")
     if private:
+        for url in board.urls(port, lan=False):
+            if url.startswith("https://"):
+                print(f"From anywhere:        {url}   (your devices on Tailscale, and no one else)")
         print(f"From anywhere:        http://{private}:{port}/   (your devices on Tailscale, and no one else)")
     else:
         print("From anywhere:        off (colony remote sets it up through Tailscale: your devices only)")

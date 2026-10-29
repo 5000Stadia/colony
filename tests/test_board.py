@@ -4130,6 +4130,25 @@ class ReachTest(BoardBase):
         self.assertIn("refused while remote access is on", said)
         self.assertIn("through Tailscale (http://box.tail0000.ts.net:8791/)", cli._reach(True, "box.tail0000.ts.net", "8791"))
 
+    def test_urls_prefers_live_board_https_then_keeps_the_plain_http_address(self):
+        from colony import tailscale
+        board.set_setting("tailscale", "box.tail0000.ts.net")
+        # A recorded HTTPS port alone is not evidence that Serve still points to this board.
+        reg = board.registry()
+        reg["settings"]["https_board"] = 8791
+        board.save_registry(reg)
+        (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--lan"]))
+        secure, plain = "https://box.tail0000.ts.net/", "http://box.tail0000.ts.net:8791/"
+        for served, expected in (({443: 8791}, [secure, plain]), ({443: 8123}, [plain]), ({}, [plain])):
+            with self.subTest(served=served), \
+                    patch.object(tailscale, "served", return_value=served), \
+                    patch.object(tailscale, "status", return_value={"name": "box.tail0000.ts.net"}), \
+                    patch.object(board.shutil, "which", return_value="/usr/bin/tailscale"), \
+                    patch.dict(board._HTTPS, {"at": 0.0, "on": False}, clear=True):
+                said = self.urls()
+                self.assertEqual(re.findall(r"From anywhere:\s+(https?://\S+)", said), expected)
+                self.assertIn("http://127.0.0.1:8791/", said)
+
 
 class ProjectSettingsTest(BoardBase):
     def test_codex_suggestions_follow_catalog_without_changing_defaults(self):
