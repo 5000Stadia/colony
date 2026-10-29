@@ -243,6 +243,13 @@ def _report(root, originals, status, reason, code, *, notify):
 
 def repair(root):
     """Finish pending sender feedback, even for handed FYI or answered asks, without delivering mail again."""
+    # An idle watcher must not create bookkeeping before a project's first message. Once a log has work,
+    # _repair reads it under the lock; a message arriving after this look waits for the next tick.
+    try:
+        if not (Path(root) / '.board' / FILE).stat().st_size:
+            return
+    except FileNotFoundError:
+        return
     with _lock(root):
         _repair(root)
 

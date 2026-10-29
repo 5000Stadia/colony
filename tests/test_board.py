@@ -9980,6 +9980,24 @@ class MailDeliveryStatusTest(BoardBase):
     def send(self, **kwargs):
         return mail.send('shop', 'Which columns?', **kwargs)
 
+    def test_idle_watcher_with_no_mail_leaves_project_files_untouched(self):
+        def files():
+            return {str(path): (path.stat().st_mtime_ns, path.read_bytes())
+                    for root in (self.root, self.shop) for path in root.rglob('*')
+                    if path.is_file() and '.git' not in path.parts}
+
+        for empty_log in (False, True):
+            with self.subTest(empty_log=empty_log):
+                if empty_log:
+                    for root in (self.root, self.shop):
+                        (root / '.board' / mail.FILE).write_text('')
+                before = files()
+                with patch.object(board, 'open_notes', return_value=[]), patch.object(console, 'snapshot') as snapshot:
+                    monitor.Watcher().mail()
+                    monitor.Watcher().mail()
+                snapshot.assert_not_called()
+                self.assertEqual(files(), before)
+
     def test_handoff_is_mirrored_without_waking_healthy_sender(self):
         m = self.send(ask=True)
         self.assertEqual(m['delivery']['status'], 'queued')
