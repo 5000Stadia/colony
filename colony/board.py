@@ -2813,6 +2813,8 @@ PLAYER = """
   // words and how far it got; S: the session it is in, what Play or a row asked for and what Auto took up as it landed;
   // back: the line's reading a ▷ under a reply stepped in front of, taken up again after it.
   let N = null, S = null, back = null, playing = false, paused = false, loading = false, via = '', view = null, now = null;
+  let startingSound = null;                      // a prepared part, including one whose page or voice is still loading
+  let resumeAfterWriting = null;                 // an explicit Play while the box still holds the voice
   let why = null, stopAt = 0, letGo = null, unlocked = false, said = null, saidAt = 0, sent = -1, hidAt = 0;
   const rate = () => { let r = 1; try { r = +localStorage.getItem('pace') || 1; } catch (e) {} return [1, 1.25, 1.5, 1.75].includes(r) ? r : 1; };
   const pace = () => rate() + 0.25;               // the voices read slowly: each speed plays a quarter faster than it says
@@ -2830,7 +2832,7 @@ PLAYER = """
   const arm = () => { armed = clock(); put('armed', armed); };
   // able: Auto on and the phone letting this page play (a sound played since it opened, and none refused or let go)
   const able = () => aloud() && unlocked && !letGo;
-  const listening = () => able() && !paused;
+  const listening = () => able() && !paused && !writing();
   // The pauses and takings-up, each with its cause and how it went, and each let-go with how long the page had been
   // hidden, for the player-state report: the live trial says from the phone's own record what still cuts it off
   const story = [];
@@ -2890,7 +2892,7 @@ PLAYER = """
     if (!fresh.length) return;
     S = S || session();
     fresh.forEach((x) => { if (!S.want.has(id(x))) { S.want.add(id(x)); S.auto.set(id(x), Date.now()); } });
-    if (!N && !opened && able()) { const x = nextUp(); if (x) start(x); }
+    if (!N && !opened && able() && !writing()) { const x = nextUp(); if (x) start(x); }
   }
   // the reply to read next: the first in the line the session asked for (Play, a row, Auto as it landed), by its keys;
   // the one being read comes again only for parts that landed in it since it began
@@ -2964,7 +2966,7 @@ PLAYER = """
     player.onended = player.onerror = null; paused = false; loading = false; };
   const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
   const silent = () => player.loop && player.src === SILENT;
-  const bridge = () => { if (!unlocked || (silent() && !player.paused)) return;
+  const bridge = () => { if (writing() || !unlocked || (silent() && !player.paused)) return;
     player.onended = player.onerror = null; player.loop = true; player.src = SILENT; player.play().catch(() => {}); };
   // the lock screen and Android's notification as a song is: what is being read, with pause and skip; between replies
   // "Waiting for replies"; and playing, held or nothing, as the pill says
@@ -2976,7 +2978,7 @@ PLAYER = """
   const restStop = (why) => { lastStop = {why, at: new Date().toISOString().slice(11, 19), hidden: hidden()}; log('let go', why);
     if (stops++ < 4) measure({when: 'rest-stop', why, hidden: hidden(), aloud: aloud(), path: location.pathname + location.search}); };
   const rest = (cause, then) => {
-    if (!aloud() || N || !L.ready) { if (then) then(false); return; }
+    if (writing() || !aloud() || N || !L.ready) { if (then) then(false); return; }
     player.onended = player.onerror = null; player.loop = true;
     if (player.src !== SILENT) player.src = SILENT;
     resting = resting || Date.now(); tell(); setState();
@@ -2989,11 +2991,12 @@ PLAYER = """
   O.si.call(window, () => { if (resting && Date.now() - resting > LONG) { ours = Date.now(); player.pause(); player.loop = false; resting = 0;
     letGo = {why: 'two quiet hours', at: Date.now()}; stopAt = Date.now(); restStop('two quiet hours'); changed(); } }, 30e3);
   // a tap lets the phone play: a moment of silence, played within it, and from then on this page may sound by itself
-  const prime = () => { if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
+  const prime = () => { if (writing()) return;
+    if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
     if ((N && playing) || resting) return;
     player.loop = false; player.src = SILENT;
     player.play().then(() => { unlocked = true; if (letGo && letGo.why !== 'paused') letGo = null; changed(); }).catch(() => {}); };
-  const reading = (s) => playing && N && N.blocks[N.j] === s;
+  const reading = (s) => playing && !paused && N && N.blocks[N.j] === s;
   // a play() the phone refused: held where it is, the pill or the bar saying tap to resume, never a silent pause
   const refused = (what, cause) => { if (!N) return; paused = true; why = 'phone'; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
     unlocked = false; log(what, cause, false); save(); changed(); };
@@ -3058,6 +3061,7 @@ PLAYER = """
   // a reply done (heard, skipped, cleared): back to the line's reading a ▷ stepped in front of, or on to the next the
   // session asked for; none, and the bar folds back into the pill, Auto waiting in silence for the next to land
   function replyDone() {
+    opening += 1; opened = ''; startingSound = null; resumeAfterWriting = null; byVoice = false;   // no pending work belongs to what ended
     follow(null); bridge(); playing = false; paused = false; why = null; now = null; N = null;
     if (back) { const b = back; back = null; N = b.N; if (b.sounding) return begin(N.j, N.piece); hush(); save(); return changed(); }
     const x = nextUp();
@@ -3066,6 +3070,7 @@ PLAYER = """
     if (aloud()) rest('between replies'); else hush();
   }
   async function start(x) {
+    if (writing()) { quietSoon(); return; }         // it stays in S until the box and its grace period let go
     const mine = ++opening, i = id(x), info = L.projects[x.p] || {};
     opened = i;
     // what Auto took up as it landed is read from what landed; what Play or a row asked for, all of it that waits
@@ -3079,6 +3084,7 @@ PLAYER = """
     N = {id: i, p: x.p, t: x.t, name: info.name || '', href: info.href || '', kvoice: info.voice || 'am_echo', kokoro: !!L.ready,
       blocks, j: 0, piece: 0, seat: S && S.auto.has(i) && !S.play.has(i) ? 'auto' : 'line'};
     if (S) S.begun.add(i);
+    if (letGo && letGo.why === 'paused') { playing = false; paused = true; why = 'person'; save(); return changed(); }
     begin(0, 0);
   }
   // A part begins: shown in its chat as it is heard (Audio + text: the page goes there, 3 s at most to wait, and the
@@ -3087,6 +3093,11 @@ PLAYER = """
   // person: "a delay before first message ... no audio name reading start until message 1 is ready"); 20 s at most
   function begin(j, from = 0) {
     const s = N && N.blocks[j]; if (!s) return replyDone();
+    startingSound = null;
+    if (writing()) {
+      N.j = j; N.piece = from; playing = false; paused = true; loading = false; why = 'dictation'; byVoice = true;
+      save(); changed(); quietSoon(); return;
+    }
     // Text only holds for whatever Auto reads; a reply the person tapped ▷ on is read aloud
     N.silent = !N.tapped && aloud() && mode() === 'text';
     if (!from && !j) N.named = !!N.say || named(N.name, N.tapped);
@@ -3100,7 +3111,13 @@ PLAYER = """
       texts(x.p, id(x), x.b.map(([k]) => k)); }
     if (N.silent) { hush(); return changed(); }
     tell(parts[from].replace(NAME, ''));
-    const sound = () => { if (reading(s)) return N.kokoro ? sayK(j, parts, from) : sayPhone(j, parts, from); };
+    const pending = startingSound = {reply: N, ready: false, go: () => {
+      if (startingSound !== pending || !reading(s)) return;
+      if (writing()) { dictating(); return; }
+      startingSound = null;
+      return N.kokoro ? sayK(j, parts, from) : sayPhone(j, parts, from);
+    }};
+    const sound = () => { pending.ready = true; return pending.go(); };
     const titled = N.kokoro && parts[from] && parts[from].startsWith(NAME) && parts[from + 1];
     const both = titled ? Promise.race([Promise.all([make(parts[from], N.kvoice), make(parts[from + 1], N.kvoice)]), new Promise((ok) => after(ok, 20000))]) : null;
     const waits = [shown && Promise.race([shown, new Promise((ok) => after(ok, 3000))]), both].filter(Boolean);
@@ -3109,17 +3126,22 @@ PLAYER = """
   }
   // ❚❚ holds the reading where it is, ▶ takes it up from there; held in the silence between replies, Auto lets go at once
   function hold(want, cause = 'person') {
+    if (want && cause !== 'dictation') resumeAfterWriting = null;
+    if (!want && writing()) { resumeAfterWriting = {reply: N, cause}; quietSoon(); return; }
     if (!N) {
       if (!want) return resume(cause);
       if (aloud()) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; letGo = {why: 'paused', at: Date.now()}; stopAt = Date.now(); log('pause', cause); }
       return changed(); }
-    if (!playing) { if (!want) { takeUp(); prime(); begin(N.j, N.piece); } return; }
-    if (want) { if (paused) return; paused = true; why = cause; stopAt = Date.now(); follow(null); log('pause', cause); save();
+    if (!playing) { if (!want) { byVoice = false; takeUp(); prime(); begin(N.j, N.piece); }
+      else if (cause !== 'dictation') { why = cause; byVoice = false; save(); changed(); } return; }
+    if (want) { if (paused) { if (cause !== 'dictation') { why = cause; byVoice = false; save(); changed(); } return; }
+      paused = true; why = cause; stopAt = Date.now(); follow(null); log('pause', cause); save();
       if (!N.silent) { if (N.kokoro && !(talk && talk.speaking)) { ours = Date.now(); player.pause(); } else if (talk) talk.pause(); }
       return changed(); }
     if (!paused) return;
     takeUp(); paused = false; why = null; byVoice = false; sent = -1; save();
     if (N.silent) return changed();
+    if (startingSound && startingSound.reply === N) { if (startingSound.ready) startingSound.go(); return changed(); }
     if (N.kokoro && !(talk && talk.speaking)) player.play().then(() => { unlocked = true; log('resume', cause, true); changed(); })
       .catch((err) => { if (!err || err.name !== 'AbortError') refused('resume', cause); });
     else if (talk && talk.paused) talk.resume(); else begin(N.j, N.piece);
@@ -3135,13 +3157,15 @@ PLAYER = """
     }
     stopAt = 0; letGo = null;
   }
-  function resume(cause) { takeUp();
+  function resume(cause) {
+    if (writing()) { resumeAfterWriting = {reply: N, cause}; quietSoon(); return; }
+    takeUp();
     if (aloud() && L.ready) rest(cause, (ok) => { log('resume', cause, ok); if (ok) look(); }); else prime();
     changed(); }
   // ⏭: on to the next reply, the rest of this one counted skipped (the same move in the bar and on the lock screen)
   function skip() { if (!N) return; markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped'); log('skip', N.name); replyDone(); }
   // The phone stopped the sound itself. While a box has the keyboard, dictation took it (iOS gives the sound to the
-  // microphone): the dictation hold, taken up when the words stop coming or on Send. Otherwise a call, the lock screen,
+  // microphone): the dictation hold, taken up after the box lets go. Otherwise a call, the lock screen,
   // another app's audio: held, and taken up again on coming back to the page where the phone lets it.
   player.addEventListener('pause', () => {
     if (Date.now() - ours < 600 || player.ended) return;
@@ -3152,25 +3176,38 @@ PLAYER = """
     if (boxed()) { why = 'dictation'; byVoice = true; quietSoon(); log('pause', 'the phone, a box being written in'); }
     else { why = 'phone'; letGo = {why: 'phone', at: Date.now()}; log('pause', 'the phone'); }
     save(); changed(); });
-  // Dictating into a box (the chat's own, or the one over every page): the voice would be heard by the phone too, so the
-  // reading holds as soon as dictated words arrive (underlined words, or a run of them with no key pressed), and goes on
-  // once they have stopped coming for a couple of seconds, or on Send, within Send's own tap so the phone lets it play
-  // (the person, 2026-10-28: "when I interrupt it, maybe when I'm sending a message ... it goes to pause but then it
-  // doesn't automatically resume sometimes")
-  let keyed = 0, byVoice = false, quiet = 0;
-  const grown = new WeakMap();
+  // Writing is a hold even with no reply playing yet. Focus covers an iOS microphone waiting for words; composition
+  // and every input cover short updates without key events. Only after all of them end, plus 2.2 seconds, may a new
+  // part or reply begin. Send's capture handler runs before the form clears and blurs, so it cannot release this hold.
+  let byVoice = false, quiet = 0, writingUntil = 0;
+  const composing = new Set();
   const isBox = (t) => !!(t && t.matches && t.matches('textarea, input[type=text], input:not([type])'));
   const boxed = () => isBox(document.activeElement);
-  const goOn = (cause) => { O.ct.call(window, quiet); if (!byVoice) return; byVoice = false; if (N && playing && paused && why === 'dictation') hold(false, cause); };
-  const quietSoon = () => { O.ct.call(window, quiet); quiet = after(() => goOn('the words stopped'), 2200); };
-  const dictating = () => { if (N && playing && !paused) { hold(true, 'dictation'); byVoice = true; } if (byVoice) quietSoon(); };
-  on(document, 'keydown', () => { keyed = Date.now(); }, true);
-  on(document, 'focusin', (ev) => { if (isBox(ev.target)) grown.set(ev.target, ev.target.value.length); }, true);
-  on(document, 'compositionstart', (ev) => { if (isBox(ev.target)) dictating(); }, true);
-  on(document, 'compositionupdate', (ev) => { if (byVoice && isBox(ev.target)) dictating(); }, true);
-  on(document, 'input', (ev) => { const t = ev.target; if (!isBox(t)) return; const grew = t.value.length - (grown.get(t) || 0); grown.set(t, t.value.length);
-    if (ev.inputType !== 'insertFromPaste' && (grew > 12 || byVoice && grew > 0) && Date.now() - keyed > 400) dictating(); }, true);
-  on(document, 'submit', () => { if (byVoice || why === 'dictation') { byVoice = true; goOn('Send'); } }, true);
+  const writing = () => boxed() || composing.size > 0 || Date.now() < writingUntil;
+  const goOn = (cause) => {
+    O.ct.call(window, quiet);
+    if (writing()) return quietSoon();
+    const resume = resumeAfterWriting; resumeAfterWriting = null;
+    if (resume && resume.reply === N) return hold(false, resume.cause);
+    if (byVoice) { byVoice = false; if (N && paused && why === 'dictation') hold(false, cause); }
+    if (!N && !opened && S && (able() || S.play.size) && !(letGo && letGo.why === 'paused')) {
+      const x = nextUp(); if (x) start(x);
+    }
+  };
+  const quietSoon = () => { O.ct.call(window, quiet); quiet = after(() => goOn('the box let go'), Math.max(1, writingUntil - Date.now(), 2200)); };
+  const dictating = () => {
+    if (N && playing && !paused) { hold(true, 'dictation'); byVoice = true; }
+    if (!N && resting) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; changed(); }
+    quietSoon();
+  };
+  const writingChanged = (ev) => {
+    if (!isBox(ev.target)) return;
+    if (ev.type === 'compositionstart' || ev.type === 'compositionupdate' || ev.isComposing) composing.add(ev.target);
+    if (ev.type === 'compositionend' || ev.type === 'focusout') composing.delete(ev.target);
+    writingUntil = Date.now() + 2200; dictating();
+  };
+  ['focusin', 'focusout', 'keydown', 'beforeinput', 'input', 'compositionstart', 'compositionupdate', 'compositionend']
+    .forEach((t) => on(document, t, writingChanged, true));
   // A reading shown as playing whose sound has stood still for a few seconds (stopped by the phone, a clip that ended
   // without saying so) is set going again, on to the next clip where this one ended; each time goes to the board's log
   // with what the phone said, so the cause is read from the phone's own numbers.
@@ -3200,6 +3237,7 @@ PLAYER = """
   // A phone plays a page's audio only after a tap on it: a tap anywhere (Send included) plays a moment of silence, and
   // from then on new replies may be read by themselves; where Auto was let go, it is the tap that resumes
   on(document, 'pointerdown', (ev) => { if (!aloud() || (ev.target.closest && ev.target.closest('#cplayer'))) return;
+    if (writing()) return;                        // a Send tap belongs to the box, never a request to resume
     if (letGo && !isBox(ev.target)) { if (!N) return resume('a tap'); if (playing && paused && why !== 'person') return hold(false, 'a tap'); }
     prime(); }, true);
   if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => hold(false, 'lock screen')], ['nexttrack', () => skip()],
@@ -3227,7 +3265,7 @@ PLAYER = """
     if (!playing || !now || !N || now.s !== N.blocks[N.j]) return;
     if (N.kokoro && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
     const {parts, at} = now;
-    if (paused) { hush(); playing = false; N.piece = at; save(); changed(); return; }   // ▶ takes it up there, in the new voice
+    if (paused) { const reason = why; hush(); playing = false; paused = true; why = reason; N.piece = at; save(); changed(); return; }   // ▶ takes it up there, in the new voice
     hush(true); playing = true; changed();
     if (N.kokoro) sayK(N.j, parts, at); else sayPhone(N.j, parts, at);
   };
@@ -3241,7 +3279,7 @@ PLAYER = """
   const sample = new Audio();
   const SAMPLE = @SAMPLE@;                        // colony/voice.py's: each voice's is made ahead and kept
   function preview(v, label) {
-    if (!v) return;
+    if (!v || writing()) return;
     if (playing && !paused) hold(true, 'a voice tried');
     if (resting) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; }
     sample.src = '/voice?v=' + encodeURIComponent(v) + '&t=' + encodeURIComponent((label || '') + '. ' + SAMPLE);
@@ -3371,7 +3409,7 @@ PLAYER = """
     const byP = {}, all = [];
     xs.forEach((x) => { const ks = x.b.map(([k]) => k); (byP[x.p] = byP[x.p] || []).push(...ks); ks.forEach((k) => { all.push(mk(x.p, k)); marked.add(mk(x.p, k)); });
       legacy((L.projects[x.p] || {}).name, ks, x.b.map(([, at]) => at)); });
-    if (N && xs.some((x) => id(x) === N.id)) replyDone(); else changed();
+    if (xs.some((x) => (N && id(x) === N.id) || id(x) === opened)) replyDone(); else changed();
     const got = await send('cleared', byP, 'line');
     if (got && got.clear) put('lineundo', {clear: got.clear, n: xs.length, keys: all, at: Date.now()});
     else all.forEach((k) => marked.delete(k));                 // not taken: back in the line
@@ -3392,7 +3430,8 @@ PLAYER = """
     if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'Nothing heard yet.'; list.append(li); }
   }
   // a ▷ under a reply, or one played again, steps in front of the line's reading, which goes on after it
-  const stepIn = () => { if (N && !N.tapped) back = {N, sounding: playing && !paused}; follow(null);
+  const stepIn = () => { opening += 1; opened = ''; startingSound = null; resumeAfterWriting = null;
+    if (N && !N.tapped) back = {N, sounding: playing && !paused}; follow(null);
     if (N) { hush(true); playing = false; paused = false; } };
   async function again(x, info) {
     shutSheet(); prime();
@@ -3536,7 +3575,8 @@ PLAYER = """
   // coming back with Auto on: what came since is read at once where the browser lets a page speak by itself; a phone
   // lets it only after a tap, so there it starts with the first touch anywhere on the page
   let allowing = null;
-  const whenAllowed = (go) => { if (unlocked || playing) return go();
+  const whenAllowed = (go) => { if (writing()) { after(() => whenAllowed(go), 2200); return; }
+    if (unlocked || playing) return go();
     // one moment of silence asks for them all: two asking at once would each cut the other's sound short
     if (!allowing) allowing = new Promise((ok) => { player.src = SILENT;
       player.play().then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
@@ -3690,7 +3730,8 @@ PLAYER = """
       if (was.S) S = {want: new Set(was.S.want), play: new Set(was.S.play), auto: new Map(was.S.auto), begun: new Set(was.S.begun)};
       // sounding a moment ago with Auto on (the page refreshed mid-reading): it goes on from the piece it was at, at the
       // first touch where a phone lets a page sound only after one
-      if (was.sounding && aloud() && Date.now() - was.saved < 90e3) whenAllowed(() => { if (N && !playing) begin(N.j, N.piece); });
+      if (was.sounding && aloud() && Date.now() - was.saved < 90e3) { const restored = N;
+        whenAllowed(() => { if (N === restored && !playing) begin(N.j, N.piece); }); }
     } else put('linenow', null); } catch (e) {}
   // Auto on as the page opens: armed again where this device was last able to play two hours ago or more, so a night's
   // replies wait for Play; its silence started where the phone lets it, and where it doesn't the pill says tap to resume

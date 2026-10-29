@@ -1367,8 +1367,8 @@ class ChatTest(BoardBase):
         with self.assertRaises(ValueError):
             board.add_gate(self.root, "Which pot?", options=["clay"], recommended="glass")
         self.assertIn("form[action=\"/answer\"]", board.CHAT, "answered from the chat, the page staying where it is")
-        self.assertIn("on(document, 'compositionstart', (ev) => { if (isBox(ev.target)) dictating(); }, true);", board.PLAYER,
-                      "dictating into a box (the chat's, or the one over every page) holds the reading")
+        self.assertIn("'compositionstart', 'compositionupdate', 'compositionend'", board.PLAYER,
+                      "composition in any message box is tracked until it ends")
         self.assertIn("if (document.hidden) away()", board.CHAT, "leaving the page, the box lets go of the keyboard")
 
     def test_the_project_at_work_leads_the_lists_the_steward_muted_or_not(self):
@@ -7961,6 +7961,17 @@ class StewardBriefTest(BoardBase):
             self.assertIn("The board is yours to keep healthy", monitor.brief_path().read_text())
 
 
+class PlayerWritingTest(unittest.TestCase):
+    def test_writing_holds_production_player_starts_and_asynchronous_continuations(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is needed to execute the browser player regression")
+        result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
+                                input=board.player_js(), text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("PASS "), 40, result.stdout)
+
+
 class LineTest(BoardBase):
     """R123, the unheard line: one record on the board of what each project's agent said and what of it was heard,
     which every device and view reads (the person: "if the user hears or reads something in all, it should be
@@ -8429,10 +8440,10 @@ class LineTest(BoardBase):
         # ▷ on the reply being read: ❚❚ holds it, ▷ goes on where it stopped (Continue is gone); another reply starts
         self.assertIn("if (s && s.t === t) return P.hold(s.playing && !s.paused);", chat)
         self.assertIn("return P.read(view, np ? [{t, k: t, at: '', text: np.dataset.say}] : turn(t)); }", chat)
-        self.assertIn("if (!playing) { if (!want) { takeUp(); prime(); begin(N.j, N.piece); } return; }", js)
-        # the phone's pause while a box has the keyboard is the dictation hold; Send takes it up within its own tap
+        self.assertIn("if (!playing) { if (!want) { byVoice = false; takeUp(); prime(); begin(N.j, N.piece); }", js)
+        # the phone's pause while a box has the keyboard is the dictation hold; Send waits for blur and its grace
         self.assertIn("if (boxed()) { why = 'dictation'; byVoice = true; quietSoon();", js)
-        self.assertIn("on(document, 'submit', () => { if (byVoice || why === 'dictation') { byVoice = true; goOn('Send'); } }, true);", js)
+        self.assertNotIn("goOn('Send')", js)
         # a refused play() says tap to resume, never a silent pause; and the resume window is two hours
         self.assertIn("const refused = (what, cause) => { if (!N) return; paused = true; why = 'phone'; letGo = {why: 'refused'", js)
         self.assertIn("const LONG = 2 * 3600e3;", js)
