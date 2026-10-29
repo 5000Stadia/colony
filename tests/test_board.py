@@ -4533,7 +4533,7 @@ class MailWakeTest(BoardBase):
         self.assertEqual(self.typed, [])
         [copy] = mail.messages(source)
         self.assertEqual(copy["delivery"]["status"], "delayed")
-        self.assertIn("usage limit", copy["delivery"]["reason"])
+        self.assertIn("configured 5-hour safe-pause window", copy["delivery"]["reason"])
         receipts = [n for n in board.notes(source) if n.get("kind") == "mail-delivery"]
         self.assertEqual(len(receipts), 1)
         self.assertFalse(mail.inbox(self.root)[0]["delivered_at"])

@@ -671,9 +671,7 @@ class Watcher:
             if not p.exists():
                 continue
             try:
-                repair = getattr(mail, "repair", None)
-                if repair:
-                    repair(p)
+                mail.repair(p)
                 woke_starting = self._mail_project(p, closing.get(str(p)), woke_starting)
             except Exception as err:
                 # One broken console or inbox must not hold every other project's mail. Exception text can
