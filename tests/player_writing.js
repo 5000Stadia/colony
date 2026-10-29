@@ -19,12 +19,17 @@ assert(allowStart > end && allowEnd > allowStart && restoreStart > end && restor
 const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = null;\n'
   + 'const shownLine = () => visible().filter(x => !clearOnly || clearOnly.includes(x.t));\n'
   + source.slice(playStart, clearEnd) + source.slice(stepStart, stepEnd)
+  + source.slice(stepEnd, source.indexOf('  // sits above what is fixed', stepEnd))
   + 'const direct = {' + source.slice(readStart, readEnd) + '};\n'
   + source.slice(allowStart, allowEnd) + source.slice(restoreStart, restoreEnd) + `
   window.testPlayer = {
-    arrivals, start, begin, done, hold, skip, rest, clear: clearShown, play: playFrom,
+    arrivals, start, begin, done, hold, skip, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
     replay(x) { return again(x, L.projects[x.p] || {}); },
     read(t) { direct.read({key: '0', name: 'Plants', href: '/plants', kokoro: L.ready}, [{t, k: t, text: t + ' reply. All done.'}]); },
+    voice(v) { N.kvoice = v; anew(true); },
+    words(t, blocks) { words.set('0|' + t, blocks); },
+    append(x) { L.line.push(x); words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))); },
+    autoLine() { S.play.clear(); S.want.forEach(i => S.auto.set(i, Date.now())); },
     clearOnly(ts) { clearOnly = ts; },
     line(xs, kokoro, cache = true) {
       L = {line: xs, projects: {'0': {name: 'Plants', href: '/plants', voice: 'am_echo'}}, ready: kokoro, total: xs.length};
@@ -32,7 +37,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
       S = session(); xs.forEach(x => { S.want.add(id(x)); S.play.add(id(x)); });
       if (cache) xs.forEach(x => words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))));
     },
-    state: () => ({t: N && N.t, j: N && N.j, playing, paused, why, opened, letGo: letGo && letGo.why}),
+    state: () => ({document: N && N.document, pending: N && N.pending, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, letGo: letGo && letGo.why}),
   };
 })();`;
 
@@ -40,7 +45,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
 function browser(kokoro, restore = '') {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
-  const timers = new Map(), sounds = [], resumed = [];
+  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [];
   class Events {
     constructor() { this.listeners = new Map(); }
     addEventListener(type, listener) { const xs = this.listeners.get(type) || []; xs.push(listener); this.listeners.set(type, xs); }
@@ -64,7 +69,9 @@ function browser(kokoro, restore = '') {
   const setTimeout = (f, delay = 0) => { const id = ++serial; timers.set(id, {at: time + delay, f}); return id; };
   const clearTimeout = id => timers.delete(id);
   class Audio extends Events {
-    constructor() { super(); this.src = ''; this.paused = true; this.ended = false; this.loop = false; }
+    get src() { return this._src; }
+    set src(value) { this._src = value; this.currentTime = 0; }
+    constructor() { super(); audios.push(this); this.src = ''; this.paused = true; this.ended = false; this.loop = false; }
     play() {
       this.paused = false;
       if (this.src && !this.src.startsWith('data:')) sounds.push(this.src);
@@ -76,7 +83,7 @@ function browser(kokoro, restore = '') {
   const speech = new Events();
   Object.assign(speech, {
     getVoices: () => [], speaking: false, paused: false,
-    speak(u) { if (u.text) sounds.push(u.text); this.speaking = true; if (u.onstart) u.onstart(); },
+    speak(u) { this.last = u; if (u.text) sounds.push(u.text); this.speaking = true; if (u.onstart) u.onstart(); },
     pause() { this.paused = true; }, resume() { this.paused = false; resumed.push('speech'); },
     cancel() { this.paused = this.speaking = false; },
   });
@@ -90,10 +97,10 @@ function browser(kokoro, restore = '') {
   window.colonyNav = nav;
   const context = vm.createContext({window, document, colonyNav: nav, Audio,
     SpeechSynthesisUtterance: class {constructor(text) {this.text = text;}},
-    navigator: {}, location: {href: 'http://board/', pathname: '/', search: ''}, URL, URLSearchParams,
+    navigator: {}, AbortController, location: {href: 'http://board/', pathname: '/', search: ''}, URL, URLSearchParams,
     Date: class extends Date {constructor(...args) {super(...(args.length ? args : [time]));} static now() {return time;}},
     localStorage: {getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k)},
-    fetch: async url => {
+    fetch: async (url, options = {}) => {
       const u = new URL(url, 'http://board/');
       if (u.pathname === '/chat/text') {
         const turn = u.searchParams.get('t'), key = turn || u.searchParams.get('k');
@@ -101,15 +108,33 @@ function browser(kokoro, restore = '') {
         if (requests.has(request)) return requests.get(request).promise;
         return response(key.split(',').map(k => ({k, text: k + ' reply. All done.'})));
       }
-      if (u.pathname === '/chat/heard') return {ok: true, json: async () => ({clear: 'clear1'})};
+      if (u.pathname === '/voice') {
+        const req = requests.get('voice:' + u.searchParams.get('t'));
+        if (req) { req.signal = options.signal; return req.promise; }
+      }
+      if (u.pathname === '/open') {
+        const request = requests.get('document:' + u.searchParams.get('f'));
+        return request ? request.promise : {ok: false};
+      }
+      if (u.pathname === '/chat/heard') { marks.push(options.body); return {ok: true, json: async () => ({clear: 'clear1'})}; }
       return {ok: false, json: async () => ({}), headers: {get: () => null}};
     },
-    changed() {}, save() {}, report() {}, shutSheet() {}, clearTimeout, setTimeout,
+    changed() {}, save() {}, look() {}, report() {}, shutSheet() {}, clearTimeout, setTimeout,
   });
   vm.runInContext(program, context);
   const api = window.testPlayer;
   const row = t => ({p: '0', t, b: [[t, new Date(time).toISOString()]]});
-  return {api, kokoro, sounds, resumed, box, row, storage,
+  return {api, kokoro, sounds, resumed, box, row, storage, marks,
+    offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
+    captureEnd() { return kokoro ? audios[0].onended : speech.last.onend; },
+    voiceRequest(text) { const d = deferred(); requests.set('voice:' + text, d); return d; },
+    async end() { const a = audios[0]; if (kokoro) { const end = a.onended; if (end) end(); } else if (speech.last && speech.last.onend) speech.last.onend(); await flush(); },
+    document(name = 'book.md', parts = ['First chapter. A story.', 'Second chapter. The end.']) {
+      const d = deferred(); requests.set('document:' + name, d);
+      return {play: () => api.document('/open?p=0&f=' + name + '&audio=1'),
+        resolve(data) { d.resolve({ok: true, json: async () => data || ({title: name, project: 'Plants', voice: 'am_echo', kokoro,
+          blocks: parts.map((text, i) => ({k: 'document-' + i, text})), sections: parts.map((_, i) => ({title: 'Chapter ' + (i + 1), start: i, end: i + 1}))})}); }};
+    },
     async line(ts, cache = true) { const xs = ts.map(row); api.line(xs, kokoro, cache); await flush(); return xs; },
     async focus() { document.activeElement = box; document.emit('focusin', {target: box}); await flush(); },
     async blur() { document.activeElement = null; document.emit('focusout', {target: box}); await flush(); },
@@ -389,6 +414,124 @@ const cases = {
     assert.equal(b.sounds.length, 0); await b.focus(); await b.blur(); await b.advance(2200);
     assert.equal(b.sounds.length, 0); b.api.hold(false); await flush(); assert.equal(b.sounds.length, 1);
   },
+  async 'document suspends Auto immediately while ingestion is pending'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]);
+    const doc = b.document(), pending = doc.play(); await flush();
+    assert.equal(b.api.state().document, true); assert.equal(b.api.state().back, 'A');
+    assert.equal(b.sounds.length, 1); b.api.arrivals(); await flush(); assert.equal(b.sounds.length, 1);
+    doc.resolve(); await pending; assert.equal(b.sounds.length, 2);
+  },
+  async 'section jump and completion restore interrupted Auto then queued reply'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    b.api.section(1); await flush(); assert.equal(b.api.state().section, 1);
+    await b.end(); assert.equal(b.api.state().t, 'A');
+    assert.equal(b.marks.length, 0, 'document sections never mark replies heard');
+    await b.end(); assert.equal(b.api.state().t, 'B'); assert.equal(b.marks.length, 1);
+  },
+  async 'document plays all chunks before restoring Auto'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    await b.end(); assert.equal(b.api.state().section, 1); assert.equal(b.api.state().document, true);
+    await b.end(); assert.equal(b.api.state().t, 'A');
+  },
+  async 'next section skips document rather than unheard replies'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    b.api.skip(); await flush(); assert.equal(b.api.state().section, 1); assert.equal(b.marks.length, 0);
+    b.api.skip(); await flush(); assert.equal(b.api.state().t, 'A'); assert.equal(b.marks.length, 0);
+  },
+  async 'document ingestion waits while focused and through blur grace'(b) {
+    await b.line([]); const doc = b.document(), p = doc.play(); await b.focus(); doc.resolve(); await p;
+    assert.equal(b.sounds.length, 0); await b.blur(); await b.advance(2199); assert.equal(b.sounds.length, 0);
+    await b.advance(1); assert.equal(b.sounds.length, 1);
+  },
+  async 'document section jump remains held through composition'(b) {
+    await b.line([]); const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    await b.event('compositionstart'); b.api.section(1); await flush(); await b.advance(4000);
+    assert.equal(b.sounds.length, 1); await b.event('compositionend'); await b.advance(2200);
+    assert.equal(b.sounds.length, 2); assert.equal(b.api.state().section, 1);
+  },
+  async 'manual pause during ingestion survives delivery and blur'(b) {
+    await b.line([]); const doc = b.document(), p = doc.play(); b.api.hold(true); doc.resolve(); await p;
+    await b.focus(); await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 0);
+    b.api.hold(false); await flush(); assert.equal(b.sounds.length, 1);
+  },
+  async 'Auto Off during document leaves interrupted Auto held'(b) {
+    const xs = await b.line(['A', 'B']); b.api.autoLine(); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p; b.api.auto(false);
+    b.api.section(1); await b.end(); assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, false);
+    const n = b.sounds.length; b.api.arrivals(); await flush(); assert.equal(b.sounds.length, n);
+  },
+  async 'paused document finish keeps underlying reply held'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    b.api.section(1); b.api.hold(true); b.api.skip(); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, false);
+  },
+  async 'superseded ingestion cannot replace newer document'(b) {
+    await b.line([]); const old = b.document('old.md'), next = b.document('next.md');
+    const p = old.play(), q = next.play(); old.resolve(); next.resolve(); await Promise.all([p, q]);
+    assert.equal(b.sounds.length, 1); assert.match(b.sounds[0], /First/);
+    assert.equal(b.api.state().document, true);
+  },
+  async 'queue Play cancels pending document ingestion'(b) {
+    const xs = await b.line(['A']); const doc = b.document(), p = doc.play();
+    b.api.play(xs, 0); doc.resolve(); await p; await flush();
+    assert.equal(b.api.state().t, 'A'); assert(b.sounds.every(x => !x.includes('First')));
+  },
+  async 'empty document restores previous reply without marking it heard'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve({blocks: [], sections: []}); assert.equal(await p, false);
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.marks.length, 0);
+  },
+  async 'document does not navigate to Auto chat in text-following mode'(b) {
+    await b.line([]); const nav = b.navigation(), doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    assert.equal(b.sounds.length, 1); nav.resolve();
+  },
+  async 'document content only comes from same-origin opener'(b) {
+    await b.line([]); assert.equal(await b.api.document('https://other.invalid/open?audio=1'), false);
+    assert.equal(await b.api.document('/chat/text?audio=1'), false); assert.equal(b.api.state().document, null);
+  },
+
+  async 'document restores exact interrupted clip position'(b) {
+    const xs = await b.line(['A']); b.api.words('A', [{k: 'A', text: 'First sentence. Second sentence. Third sentence.'}]);
+    await b.api.start(xs[0]); if (b.kokoro) await b.end(); assert.equal(b.api.state().piece, 1); if (b.kokoro) b.offset(12.5);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p; b.api.section(1); await b.end();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().piece, 1);
+    assert(b.sounds[b.sounds.length - 1].includes('Third')); if (b.kokoro) assert.equal(b.offset(), 12.5);
+  },
+  async 'old voice completion cannot advance a restarted document section'(b) {
+    await b.line([]); const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    const end = b.captureEnd(); b.api.voice('bm_fable'); await flush();
+    const n = b.sounds.length; end(); await flush();
+    assert.equal(b.api.state().section, 0); assert.equal(b.sounds.length, n);
+  },
+  async 'old section completion cannot advance a replay of the same section'(b) {
+    await b.line([]); const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    const end = b.captureEnd(); b.api.section(0); await flush();
+    const n = b.sounds.length; end(); await flush(); assert.equal(b.api.state().section, 0); assert.equal(b.sounds.length, n);
+  },
+  async 'new Auto arrival waits for document completion then plays'(b) {
+    await b.line([]); const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    b.api.append(b.row('New')); b.api.arrivals(); await flush(); assert.equal(b.sounds.length, 1);
+    b.api.section(1); await b.end(); assert.equal(b.api.state().t, 'New');
+  },
+  async 'previously paused reply remains held after document completion'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); b.api.hold(true);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p; b.api.section(1); await b.end();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, false); assert.equal(b.api.state().paused, true);
+  },
+  async 'superseded document prefetch is aborted and stale result ignored'(b) {
+    if (!b.kokoro) return;
+    await b.line([]); const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    const request = b.voiceRequest('Second chapter. The end.'); b.api.warm(); await flush();
+    assert(request.signal); assert.equal(request.signal.aborted, false);
+    b.api.voice('bm_fable'); assert.equal(request.signal.aborted, true);
+    request.resolve({ok: true, blob: async () => new Blob(['old voice'])}); await flush();
+    assert.equal(b.api.state().section, 0);
+  },
+
 };
 (async () => {
   let failures = 0;

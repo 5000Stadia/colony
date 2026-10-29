@@ -8227,7 +8227,77 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 86, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 126, result.stdout)
+
+
+class DocumentAudioTest(BoardBase):
+    serve = ReaderTest.serve
+    fetch = ReaderTest.fetch
+
+    def test_full_large_markdown_ingestion_is_bounded_and_independent_of_preview(self):
+        from colony import document_audio, opener
+        board.track(self.root)
+        text = '# A long chapter\n\n' + ('A novel needs every word. ' * 16000) + '\n\n## Last chapter\n\nThe very last sentence.'
+        self.assertGreater(len(text), opener.LONG)
+        (self.root / 'novel.md').write_text(text)
+        self.serve()
+        status, _, page = self.fetch('/open?p=0&f=novel.md')
+        self.assertEqual(status, 200)
+        self.assertIn('Play document', page)
+        self.assertNotIn('The very last sentence.', page)
+        status, headers, body = self.fetch('/open?p=0&f=novel.md&audio=1')
+        self.assertEqual(status, 200)
+        self.assertIn('application/json', headers['Content-Type'])
+        got = json.loads(body)
+        spoken = ' '.join(b['text'] for b in got['blocks'])
+        self.assertEqual(spoken.count('A novel needs every word.'), 16000)
+        self.assertTrue(spoken.endswith('The very last sentence.'))
+        self.assertGreater(len(got['sections']), 50)
+        self.assertEqual(got['sections'][-1]['title'], 'Last chapter')
+        self.assertTrue(all(0 < len(b['text']) <= document_audio.CLIP for b in got['blocks']))
+        self.assertEqual([j for sec in got['sections'] for j in range(sec['start'], sec['end'])], list(range(len(got['blocks']))))
+
+    def test_heading_sections_ignore_code_and_keep_link_words(self):
+        from colony import document_audio
+        got = document_audio.ingest('Preface.\n\n# One\nRead [the paper](https://example.invalid).\n```python\n# Not a chapter\nsecret()\n```\nTwo\n---\nThe end.', 'Book')
+        self.assertEqual([s['title'] for s in got['sections']], ['Book', 'One', 'Two'])
+        text = ' '.join(b['text'] for b in got['blocks'])
+        self.assertIn('Read the paper.', text)
+        self.assertNotIn('secret', text)
+        self.assertNotIn('https:', text)
+        giant = 'x' * 30000
+        plain = document_audio.ingest(giant, 'Plain', False)
+        self.assertEqual(''.join(b['text'] for b in plain['blocks']), giant)
+        self.assertTrue(all(len(b['text']) <= document_audio.CLIP for b in plain['blocks']))
+
+    def test_audio_route_keeps_opener_project_and_steward_boundaries(self):
+        board.track(self.root)
+        (self.root / 'notes.txt').write_text('All the plain words.')
+        (self.root / 'raw.png').write_bytes(b'\x89PNG')
+        outside = Path(self.tmp.name) / 'outside.txt'
+        outside.write_text('private outside')
+        (self.root / 'escape.txt').symlink_to(outside)
+        monitor.home().mkdir(parents=True, exist_ok=True)
+        (monitor.home() / 'steward.md').write_text('# Steward\nIts own document.')
+        self.serve()
+        self.assertEqual(json.loads(self.fetch('/open?p=0&f=notes.txt&audio=1')[2])['blocks'][0]['text'], 'All the plain words.')
+        self.assertEqual(self.fetch('/open?p=0&f=../outside.txt&audio=1')[0], 404)
+        self.assertEqual(self.fetch('/open?p=0&f=escape.txt&audio=1')[0], 404)
+        self.assertEqual(self.fetch('/open?p=0&f=raw.png&audio=1')[0], 400)
+        self.assertEqual(self.fetch('/open?p=0&f=.&audio=1')[0], 400)
+        self.assertEqual(self.fetch('/open?p=99&f=notes.txt&audio=1')[0], 404)
+        self.assertEqual(self.fetch('/open?p=0&u=http://example.invalid/&audio=1')[0], 400)
+        self.assertIn('Its own document.', self.fetch('/open?p=steward&f=steward.md&audio=1')[2])
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_phone_reader_document_player_and_section_selection(self):
+        board.track(self.root)
+        (self.root / 'listening.md').write_text('# Opening\nA first sentence. One more sentence.\n\n## Closing\nA final sentence. The end.')
+        self.serve()
+        result = subprocess.run(['node', str(ROOT / 'tests/document_audio_browser.js'), self.base], text=True,
+                                capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS phone document player and sections', result.stdout)
 
 
 class LineTest(BoardBase):

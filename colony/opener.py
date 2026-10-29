@@ -231,6 +231,18 @@ def changed(path):
 # The reading page's own: its ‹ goes back in the browser's history when the person came from a board page, so the
 # page they left is where they left it; and a comment is sent in place, so going back never passes the page again.
 READER = """
+(() => {
+  const controls = document.querySelector('.readaudio');
+  if (!controls) return;
+  const play = controls.querySelector('.readplay'), status = controls.querySelector('.readaudiostatus');
+  play.addEventListener('click', async () => {
+    if (!window.colonyPlayer) return;
+    status.textContent = 'Loading document…'; play.disabled = true;
+    const ok = await colonyPlayer.document(controls.dataset.url);
+    if (!controls.isConnected) return;
+    play.disabled = false; status.textContent = ok ? 'Sections are in the player below.' : 'Could not read this document. Try again.';
+  });
+})();
 function readBack(a, steps) {
   if (steps && history.length > 1) { history.back(); return false; }
   if (history.length === 1) window.close();
@@ -315,9 +327,11 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     # Edit stays with pinned text files: one reached here unpinned is read-only, so a phone writes no other file
     editable = pin and how in ("doc", "text") and not cut and pins.is_text(pin)
     edit = f"<a class='readedit' href='/pin/edit?p={e(key)}&id={e(pin['id'])}'>Edit</a>" if editable else ""
+    audio = (f"<div class='readaudio' data-url='{e(ref(key, rel) + '&audio=1')}'><button type='button' class='readplay'>Play document</button>"
+             "<span class='readaudiostatus' role='status'></span></div>") if how in ('doc', 'text') else ""
     out = (f"<div class='readtop'><a class='back' href='{e(back)}' onclick='return readBack(this, {int(by_history)})'>‹ {e(label)}</a></div>"
            f"<p class='who readabout'>{' · '.join(about)}</p>"
-           f"<article class='reader{' plain' if how == 'text' else ''}'>{body}</article>"
+           f"{audio}<article class='reader{' plain' if how == 'text' else ''}'>{body}</article>"
            + (f"<p class='sent'>Sent: it reaches {e(to)} as a message.</p>" if sent else "")
            + f"<div class='readfoot'>{comment}{edit}</div><script>{READER}</script>")
     return board.shell(reg, -1 if steward else int(key), out)

@@ -2874,6 +2874,7 @@ PLAYER = """
     const top = ats.filter(Boolean).sort().pop(); if (top && top > (get('heardto:' + name) || '')) put('heardto:' + name, top); };
   // parts of a reply heard or skipped: only those still in the line, so a reply heard before plays again writing nothing
   function markParts(x, ks, how) {
+    if (x.document) return;
     const waiting = new Map(); L.line.forEach((y) => { if (y.p === String(x.p)) y.b.forEach(([k, at]) => waiting.set(k, at)); });
     const mine = ks.filter((k) => waiting.has(k) && !marked.has(mk(x.p, k)));
     if (!mine.length) return;
@@ -2896,7 +2897,7 @@ PLAYER = """
       const listed = new Set(); L.line.forEach((x) => x.b.forEach(([k]) => listed.add(mk(x.p, k))));
       [...marked].forEach((k) => { if (!listed.has(k)) marked.delete(k); });
       if (able()) put('alive', Date.now());
-      if (N && !N.tapped && !playing && !N.blocks.slice(N.j).some((b) => listed.has(mk(N.p, b.k)))) { N = null; save(); }   // heard elsewhere meanwhile
+      if (N && !N.document && !N.tapped && !playing && !N.blocks.slice(N.j).some((b) => listed.has(mk(N.p, b.k)))) { N = null; save(); }   // heard elsewhere meanwhile
       arrivals(); changed();
     } finally { looking = false; schedule(); if (more) { more = false; look(); } }
   }
@@ -2906,7 +2907,8 @@ PLAYER = """
   // What lands while Auto is on joins the session, read after what is being read (the backlog waits for Play); held by a
   // pause or a let-go, it waits there quietly until the tap that resumes
   const session = () => ({want: new Set(), play: new Set(), auto: new Map(), begun: new Set()});
-  let opening = 0, opened = '', replaying = null;
+  let opening = 0, opened = '', replaying = null, documentRequest = null;
+  const cancelDocument = () => { if (documentRequest) documentRequest.abort(); documentRequest = null; };
   function arrivals() {
     if (!aloud() || !armed) return;
     const fresh = visible().filter((x) => x.b.some(([, at]) => Date.parse(at) >= armed));
@@ -2947,12 +2949,20 @@ PLAYER = """
   // it again over the network otherwise), so going on to it needs nothing from the network: no wait between clips.
   const kept = new Map(), failed = new Set();      // the clip's address -> the page's own copy; those not made
   const keyOf = (u) => u.replace('&auto=1', '');  // a clip is the same clip, read by itself or on a tap
+  const making = new Map();
+  const cancelClips = () => { making.forEach((x) => x.controller && x.controller.abort()); making.clear(); };
   const make = (p, v) => { const u = abs(clip(p, v)), key = keyOf(u);
     if (kept.has(key)) return Promise.resolve();
-    return fetch(u).then((r) => r.ok ? r.blob() : null).then((b) => { if (!b) { failed.add(key); return; }
+    if (making.has(key)) return making.get(key).promise;
+    const request = {controller: typeof AbortController === 'undefined' ? null : new AbortController()};
+    request.promise = fetch(u, request.controller ? {signal: request.controller.signal} : {}).then((r) => r.ok ? r.blob() : null).then((b) => {
+      if (request.controller && request.controller.signal.aborted) return;
+      if (!b) { failed.add(key); return; }
       kept.set(key, URL.createObjectURL(b)); ready.add(key);
-      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); } })
-      .catch(() => { failed.add(key); }); };
+      if (kept.size > 24) { const [old, o] = kept.entries().next().value; URL.revokeObjectURL(o); kept.delete(old); }
+    }).catch((err) => { if (!err || err.name !== 'AbortError') failed.add(key); })
+      .finally(() => { if (making.get(key) === request) making.delete(key); });
+    making.set(key, request); return request.promise; };
   // Ahead of what is heard, the next AHEAD clips are made, through this reply and into the next once its words are
   // here (the machine makes them back to back with no idle time), topped up as each clip starts. While the clip about to
   // be heard is still being made over the network it waits, so that one comes first. A clip that failed isn't asked
@@ -2965,7 +2975,7 @@ PLAYER = """
     for (let j = N.j; j < N.blocks.length && out.length < AHEAD; j++, k = 0) {
       const ps = piecesOf(N, j).filter((p) => p.trim());
       for (; k < ps.length && out.length < AHEAD; k++) out.push([ps[k], N.kvoice]); }
-    const x = out.length < AHEAD && nextAfter(), info = x ? L.projects[x.p] || {} : {}, bs = x && words.get(id(x));
+    const x = !N.document && out.length < AHEAD && nextAfter(), info = x ? L.projects[x.p] || {} : {}, bs = x && words.get(id(x));
     if (bs) { const r = {name: info.name, named: named(info.name, false), blocks: bs};
       bs.forEach((b, j) => piecesOf(r, j).filter((p) => p.trim()).forEach((p) => { if (out.length < AHEAD) out.push([p, info.voice]); })); }
     return out; };
@@ -2982,8 +2992,8 @@ PLAYER = """
   // reply's words fetched, its name made, its chat opened) is bridged with silence; between replies Auto plays silence,
   // as a music app goes on to the next song, so the next reply is heard as it lands (the person, 2026-10-28: "when I
   // lock my phone, the audio keeps playing which is great ... anything you can do to support that kind of usage")
-  let ours = 0, resting = 0;
-  const hush = (keep) => { if (talk) talk.cancel(); if (!keep) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; }
+  let ours = 0, resting = 0, soundGeneration = 0;
+  const hush = (keep) => { soundGeneration += 1; if (talk) talk.cancel(); if (!keep) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; }
     player.onended = player.onerror = null; paused = false; loading = false; };
   const SILENT = 'data:audio/wav;base64,UklGRqQMAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YYAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
   const silent = () => player.loop && player.src === SILENT;
@@ -3025,13 +3035,14 @@ PLAYER = """
     unlocked = false; log(what, cause, false); save(); changed(); };
   const sayK = (j, parts, from) => {
     let n = from;
-    const s = N.blocks[j], mine = () => reading(s);
+    const s = N.blocks[j], generation = soundGeneration, mine = () => generation === soundGeneration && reading(s);
     const next = () => {
       if (!mine()) return;
       if (n >= parts.length) return done(N.j);
       now = {s, parts, at: n}; N.piece = n; sent = -1; save(); changed();
       const u = abs(clip(parts[n], N.kvoice));
       player.loop = false; player.src = kept.get(keyOf(u)) || u; player.playbackRate = pace(); player.defaultPlaybackRate = pace();
+      if (N.resumeTime) { try { player.currentTime = N.resumeTime; } catch (e) {} delete N.resumeTime; }
       n += 1;
       // refused for want of a tap on this page: held there, tap to resume; cut short by a pause, a skip or the next clip
       // is no refusal, and nothing is read again; a clip that failed is read by the phone's own voice
@@ -3050,7 +3061,7 @@ PLAYER = """
     playing = true; changed();
     // a phone that won't speak before a tap on the page says nothing and starts nothing: tap to resume
     let began = false;
-    const s = N.blocks[j], mine = () => reading(s);
+    const s = N.blocks[j], generation = soundGeneration, mine = () => generation === soundGeneration && reading(s);
     after(() => { if (mine() && !began && !talk.speaking) { talk.cancel(); refused('speak', "the phone's voice"); } }, 2500);
     parts.slice(from).forEach((p, n) => { const x = from + n, u = new SpeechSynthesisUtterance(p.replace(NAME, '').trim()); if (voice) u.voice = voice; u.rate = pace();
       u.onstart = () => { began = true; if (!mine()) return; now = {s, parts, at: x}; N.piece = x; save(); loading = false; changed();
@@ -3084,13 +3095,18 @@ PLAYER = """
   // a reply done (heard, skipped, cleared): back to the line's reading a ▷ stepped in front of, or on to the next the
   // session asked for; none, and the bar folds back into the pill, Auto waiting in silence for the next to land
   function replyDone(finished = false) {
+    const wasDocument = N && N.document, heldDocument = wasDocument && ((paused && why !== 'dictation') || letGo);
+    if (wasDocument) { cancelDocument(); cancelClips(); }
     // Finishing the old reply is not a new choice: a replay whose words are loading still comes next. Skip and Clear cancel it.
     const waiting = finished && replaying && replaying.opening === opening;
     if (!waiting) { opening += 1; opened = ''; replaying = null; }
     startingSound = null; resumeAfterWriting = null; byVoice = false;
     follow(null); bridge(); playing = false; paused = false; why = null; now = null; N = null;
     if (waiting) { save(); return changed(); }
-    if (back) { const b = back; back = null; N = b.N; if (b.sounding) return begin(N.j, N.piece); hush(); save(); return changed(); }
+    if (back) { const b = back; back = null; N = b.N; via = b.via || '';
+      if (b.sounding && !heldDocument && (!b.auto || aloud())) { N.resuming = true; N.resumeTime = b.offset || 0; return begin(N.j, N.piece); }
+      hush(); paused = true; why = b.why || 'person'; save(); return changed(); }
+    if (wasDocument && (heldDocument || !aloud())) { hush(); save(); return changed(); }
     const x = nextUp();
     if (x) return start(x);
     S = null; save(); changed();
@@ -3127,13 +3143,14 @@ PLAYER = """
     }
     // Text only holds for whatever Auto reads; a reply the person tapped ▷ on is read aloud
     N.silent = !N.tapped && aloud() && mode() === 'text';
-    if (!from && !j) N.named = !!N.say || named(N.name, N.tapped);
+    if (!from && !j && !N.resuming) N.named = !!N.say || named(N.name, N.tapped);
+    N.resuming = false;
     const parts = piecesOf(N, j).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
     hush(true); N.j = j; N.piece = from; playing = true; paused = false; why = null; now = null; sent = -1; said = N.name; saidAt = Date.now();
     loading = !N.silent && !(N.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from], N.kvoice))))); save(); changed();
     if (!parts.length) return done(j);
-    const shown = showHere(), x = j + 1 >= N.blocks.length && nextAfter();
+    const shown = showHere(), x = !N.document && j + 1 >= N.blocks.length && nextAfter();
     if (x) { const h = (L.projects[x.p] || {}).href; if (h && following() && x.p !== N.p) colonyNav.prefetch(h);
       texts(x.p, id(x), x.b.map(([k]) => k)); }
     if (N.silent) { hush(); return changed(); }
@@ -3153,6 +3170,7 @@ PLAYER = """
   }
   // ❚❚ holds the reading where it is, ▶ takes it up from there; held in the silence between replies, Auto lets go at once
   function hold(want, cause = 'person') {
+    if (N && N.document && N.pending) { paused = want; why = want ? cause : null; return changed(); }
     if (replaying && replaying.opening === opening && cause !== 'dictation') replaying.pause = want ? cause : null;
     if (want && cause !== 'dictation') resumeAfterWriting = null;
     if (!want && writing()) { resumeAfterWriting = {reply: N, cause}; quietSoon(); return; }
@@ -3191,7 +3209,7 @@ PLAYER = """
     if (aloud() && L.ready) rest(cause, (ok) => { log('resume', cause, ok); if (ok) look(); }); else prime();
     changed(); }
   // ⏭: on to the next reply, the rest of this one counted skipped (the same move in the bar and on the lock screen)
-  function skip() { if (!N) return; markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped'); log('skip', N.name); replyDone(); }
+  function skip() { if (!N) return; if (N.document) { const sec = N.sections.find((x) => x.start > N.j); return sec ? documentSection(sec.start) : replyDone(); } markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped'); log('skip', N.name); replyDone(); }
   // The phone stopped the sound itself. While a box has the keyboard, dictation took it (iOS gives the sound to the
   // microphone): the dictation hold, taken up after the box lets go. Otherwise a call, the lock screen,
   // another app's audio: held, and taken up again on coming back to the page where the phone lets it.
@@ -3278,7 +3296,7 @@ PLAYER = """
   const later = (s, wait) => { clearTimeout(looking2);
     looking2 = setTimeout(() => { if (reading(s)) showHere(); }, wait); };
   function showHere() {
-    if (!N || !following()) return null;
+    if (!N || N.document || !following()) return null;
     const s = N.blocks[N.j]; if (!s) return null;
     if (view && view.name === N.name) { view.focus(s.k, true); return null; }
     // never away from something being written: a box with words in it, or one being typed in, keeps the page
@@ -3290,6 +3308,7 @@ PLAYER = """
   }
   // A new voice or speed takes effect at once: Kokoro's speed on the clip playing; otherwise from the piece being heard.
   const anew = (voiceChanged) => {
+    if (voiceChanged) cancelClips();
     if (!playing || !now || !N || now.s !== N.blocks[N.j]) return;
     if (N.kokoro && !voiceChanged) { player.playbackRate = pace(); player.defaultPlaybackRate = pace(); return; }
     const {parts, at} = now;
@@ -3326,6 +3345,7 @@ PLAYER = """
     + "<div class='cpbar'><button type='button' class='cpwhat' aria-label='The line'><b class='cpname'></b><span class='cpprev'></span></button>"
     + "<button type='button' class='cphold'></button><button type='button' class='cpnext' aria-label='Skip to the next reply'>" + PICON.skip + "</button></div>"
     + "<div class='cpshade' hidden></div><div class='cpsheet' role='dialog' aria-label='The unheard line' hidden><button type='button' class='cpgrab' aria-label='Close'></button>"
+    + "<div class='cpdocument' hidden><b class='cpdoctitle'></b><p class='cpdocstatus' role='status'></p><ol class='cprows cpdocrows'></ol><button type='button' class='cpdocstop'>Finish document</button></div>"
     + "<div class='cpmain'><div class='cpchips'></div><ol class='cprows'></ol><p class='cpempty' hidden></p>"
     + "<div class='cpacts'><button type='button' class='cpplay'></button><button type='button' class='cpclear'>Clear</button></div>"
     + "<div class='cpundo' hidden><span></span><button type='button' class='cpundobtn'>Undo</button></div>"
@@ -3361,6 +3381,22 @@ PLAYER = """
   let drawnSheet = '';
   function drawSheet() {
     if (sheet.hidden) return;
+    const doc = N && N.document;
+    $('.cpdocument').hidden = !doc;
+    if (doc) {
+      $('.cpdoctitle').textContent = N.name;
+      $('.cpdocstatus').textContent = N.pending ? 'Loading document…' : 'Choose a section to listen from there.';
+      const key = N.id + ':' + N.j + ':' + N.blocks.length;
+      if ($('.cpdocrows').dataset.drawn !== key) {
+        $('.cpdocrows').dataset.drawn = key;
+        $('.cpdocrows').replaceChildren(...N.sections.map((sec, i) => {
+          const li = document.createElement('li'), b = document.createElement('button'); b.type = 'button';
+          b.textContent = (i + 1) + '. ' + sec.title; b.dataset.start = sec.start;
+          if (N.j >= sec.start && N.j < sec.end) { li.className = 'now'; b.setAttribute('aria-current', 'true'); }
+          li.append(b); return li;
+        }));
+      }
+    }
     const xs = visible(), p = chipOf(xs), shown = p ? xs.filter((x) => x.p === p) : xs, counts = {};
     xs.forEach((x) => { counts[x.p] = (counts[x.p] || 0) + 1; });
     const key = [p, N && N.id, xs.map((x) => id(x) + ':' + x.b.length).join(','), L.since].join('|');
@@ -3396,7 +3432,9 @@ PLAYER = """
       const s = N.blocks[N.j] || N.blocks[0] || {text: ''};
       $('.cpname').textContent = (N.name || '') + place() + (!playing || paused ? (letGo ? ' · tap to resume' : ' · paused') : '');
       bar.classList.toggle('cppaused', !playing || paused); bar.classList.toggle('cpheld', !!letGo);
-      $('.cpprev').textContent = first(s.text, 12);
+      const section = N.document && N.sections.find((x) => N.j >= x.start && N.j < x.end);
+      $('.cpprev').textContent = N.document ? (N.pending ? 'Loading document…' : section ? section.title : '') : first(s.text, 12);
+      $('.cpnext').setAttribute('aria-label', N.document ? 'Next section' : 'Skip to the next reply');
       const st = playing && !paused ? (loading ? 'load' : 'pause') : 'play';
       const hb = $('.cphold'); if (hb.dataset.on !== st) { hb.dataset.on = st; hb.innerHTML = PICON[st]; hb.setAttribute('aria-label', st === 'play' ? 'Play' : 'Pause'); }
     }
@@ -3410,6 +3448,8 @@ PLAYER = """
   on(document, 'keydown', (ev) => { if (ev.key === 'Escape' && !sheet.hidden) shutSheet(); });
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpnext'), 'click', skip);
+  on($('.cpdocrows'), 'click', (ev) => { const b = ev.target.closest('button[data-start]'); if (b) documentSection(+b.dataset.start); });
+  on($('.cpdocstop'), 'click', () => { if (N && N.document) replyDone(); });
   on($('.cpchips'), 'click', (ev) => { const b = ev.target.closest('button'); if (!b) return;
     chipName = b.dataset.p ? (L.projects[b.dataset.p] || {}).name || '' : ''; put('linechip', chipName || null); drawnSheet = ''; draw(); });
   on(rows, 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return;
@@ -3426,6 +3466,7 @@ PLAYER = """
   // Play: the line as the chips show it, from its first reply or the row tapped, and on down it
   function playFrom(xs, i) {
     if (!xs[i]) return;
+    cancelDocument(); cancelClips();
     opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null; byVoice = false;
     S = session(); xs.slice(i).forEach((x) => { S.want.add(id(x)); S.play.add(id(x)); });
     back = null; said = null; shutSheet();
@@ -3459,8 +3500,8 @@ PLAYER = """
     if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'No replies in history yet.'; list.append(li); }
   }
   // a ▷ under a reply, or one played again, steps in front of the line's reading, which goes on after it
-  const stepIn = () => { opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null;
-    if (N && !N.tapped) back = {N, sounding: playing && !paused}; follow(null);
+  const stepIn = (document = false) => { cancelDocument(); cancelClips(); opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null;
+    if (N && !N.document && (!N.tapped || document)) back = {N, sounding: playing && !paused, via, why, auto: N.seat === 'auto', offset: N.kokoro && now && now.s === N.blocks[N.j] ? player.currentTime : 0}; follow(null);
     if (N) { hush(true); playing = false; paused = false; } };
   async function again(x, info) {
     shutSheet(); takeUp(); prime();
@@ -3475,6 +3516,28 @@ PLAYER = """
     via = '';
     if (pending.pause) { playing = false; paused = true; why = pending.pause; save(); return changed(); }
     begin(0, 0);
+  }
+  async function readDocument(url) {
+    const u = new URL(url, location.href);
+    if (u.origin !== new URL(location.href).origin || u.pathname !== '/open' || u.searchParams.get('audio') !== '1') return false;
+    prime(); stepIn(true); hush(true); bridge();
+    const mine = opening, controller = new AbortController(); documentRequest = controller;
+    N = {id: 'document:' + mine, p: u.searchParams.get('p'), name: 'Document', document: true, pending: true,
+      tapped: true, sections: [], blocks: [], j: 0, piece: 0};
+    playing = true; paused = false; why = null; loading = true; now = null; via = ''; changed();
+    let got = null;
+    try { const r = await fetch(u.href, {cache: 'no-store', signal: controller.signal}); if (r.ok) got = await r.json(); } catch (e) {}
+    if (mine !== opening || controller.signal.aborted || !N || !N.document) return false;
+    documentRequest = null;
+    if (!got || !got.blocks || !got.blocks.length) { replyDone(); return false; }
+    N.name = got.title; N.projectName = (L.projects[N.p] || {}).name || (listed().find((x) => x.key === N.p) || {}).name || got.project; N.kvoice = got.voice; N.kokoro = got.kokoro;
+    N.blocks = got.blocks; N.sections = got.sections; N.pending = false; loading = false;
+    if (paused) { playing = false; save(); changed(); return true; }
+    begin(0, 0); return true;
+  }
+  function documentSection(start) {
+    if (!N || !N.document || N.pending || !N.sections.some((s) => s.start === start)) return;
+    cancelClips(); hush(!writing()); playing = false; takeUp(); begin(start, 0);
   }
   // Auto: one switch, every project's; on, what lands from now is read as it lands, and the phone is kept able to
   function setAloud(yes) { try { localStorage.setItem('aloud', yes ? '1' : '0'); } catch (e) {}
@@ -3569,6 +3632,7 @@ PLAYER = """
   const here = () => location.pathname === '/steward' ? 'steward' : location.pathname === '/' ? new URLSearchParams(location.search).get('p') : null;
   const voiced = () => { const mine = here(), p = listed().find((x) => x.key === mine);
     if (p) return {key: p.key, name: p.name};
+    if (N && N.document) return {key: N.p, name: N.projectName || 'Document'};
     return N && L.projects[N.p] ? {key: N.p, name: N.name} : {key: 'default', name: 'Every project (default)'}; };
   let whom = null, asking = 0;                     // the project whose voice the settings show, while they are open
   const whose = () => whom || voiced();
@@ -3615,13 +3679,15 @@ PLAYER = """
     if (!allowing) allowing = new Promise((ok) => { player.src = SILENT;
       player.play().then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
     allowing.then(() => { allowing = null; go(); }); };
-  const save = () => { put('linenow', N ? {N, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
-    sounding: playing && !paused, saved: Date.now()} : null); };
+  const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: current, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
+    sounding: N && N.document ? !!(back && back.sounding) : playing && !paused, saved: Date.now()} : null); };
   const P = window.colonyPlayer = {
+    document: readDocument, documentSection,
     busy: () => !!N || resting > 0, placed, rate, following, mode, auto: aloud, unlock: prime, poke, hold, skip, preview,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} anew(false); },
     setVoice(name, v) { Object.values(L.projects).forEach((x) => { if (x.name === name) x.voice = v; });
-      if (N && N.name === name && N.kvoice !== v) { N.kvoice = v; save(); anew(true); } },
+      if (back && back.N.name === name) back.N.kvoice = v;
+      if (N && (N.projectName || N.name) === name && N.kvoice !== v) { N.kvoice = v; save(); anew(true); } },
     attach(v) { view = v; changed();
       const s = N && N.blocks[N.j];                     // arrived at the chat being read: there, at once
       if (s && playing && following() && N.name === v.name) v.focus(s.k, true); },
@@ -3654,6 +3720,7 @@ PLAYER = """
       changed(); },
     // what the player holds, for a look from outside (the board's own checks)
     state: () => ({reading: N && {id: N.id, j: N.j, piece: N.piece, k: (N.blocks[N.j] || {}).k}, playing, paused, why, letGo: letGo && letGo.why,
+      document: N && N.document ? {title: N.name, sections: N.sections, pending: N.pending} : null,
       able: able(), resting: !!resting, sent, clip: now && now.parts[now.at], waiting: visible().length, story: story.slice()}),
   };
   document.body.appendChild(bar);
@@ -3683,6 +3750,7 @@ PLAYER = """
   const keepDraft = () => { try { sessionStorage.setItem('gc', JSON.stringify({to: anchor, text: gta.value})); } catch (e) {} };
   const onPage = () => { const k = here(); return listed().find((x) => x.key === k) || null; };
   const target = () => { if (anchor) return anchor; const p = onPage(); if (p) return p;
+    if (N && N.document) return {key: N.p, name: N.projectName || 'Document'};
     return N && L.projects[N.p] ? {key: N.p, name: N.name} : null; };
   function gcDraw() {
     const show = aloud() && mode() !== 'audio';
@@ -8691,6 +8759,8 @@ class Handler(BaseHTTPRequestHandler):
         it. A path outside its folder, or one not there, is not found."""
         from . import monitor, opener
         one = lambda k: (q.get(k) or [""])[0]
+        if one("u") and one("audio"):
+            return self._send(400, b"a local readable document is needed")
         if one("u"):                                   # an address on this machine, as the device asking reaches it
             return (self._redirect(opener.reach(one("u"), self.headers.get("Host", ""))) if re.match(r"https?://", one("u"), re.I)
                     else self._send(404, b"not an address"))
@@ -8699,6 +8769,21 @@ class Handler(BaseHTTPRequestHandler):
         path = pins.inside(root, one("f")) if root else None
         if not path or not path.exists():
             return self._send(404, b"the file is gone")
+        if one("audio"):
+            if opener.kind(path) not in ("doc", "text"):
+                return self._send(400, b"a readable document is needed")
+            from . import document_audio
+            from . import voice
+            data = document_audio.ingest(path.read_text(errors="replace"), path.name, opener.kind(path) == "doc")
+            data.update(project=Path(root).name, voice=voice_of(key, root)[0], kokoro=voice.ready())
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            return self.wfile.write(body)
         if opener.kind(path) == "raw":
             return self._file(key, root, path, download=one('download') == '1')
         return self._send(200, opener.page(reg, key, root, path, pin_id=one("pin"), entry_id=one("s"), whole=bool(one("whole")),
@@ -10452,8 +10537,10 @@ details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8
 .pintitle .pt { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere }
 .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .pintitle.gone { color:var(--muted); font-weight:400 }
 .pin > a.pintitle { display:block }
+.readaudio{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0}.readaudio button{padding:9px 14px}.readaudiostatus{font-size:13px;color:var(--muted)}
+.cpdocument{padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:14px}.cpdocrows{max-height:42vh;overflow:auto}.cpdocrows button{border:0;background:transparent;color:inherit;text-align:left;width:100%;padding:8px}.cpdocrows .now{background:var(--sunk)}.cpdocstatus{font-size:13px}
 /* the reading page (opener.py): the document at a readable width, light and dark, its actions at its foot */
-.readtop, .readabout, .reader, .readfoot, .sent { max-width:42em; margin-left:auto; margin-right:auto }
+.readtop, .readabout, .reader, .readfoot, .readaudio, .sent { max-width:42em; margin-left:auto; margin-right:auto }
 .readtop .back { display:inline-block; padding:8px 0; font-size:15px; text-decoration:none } .readabout { margin-top:0; margin-bottom:12px }
 .reader { font-size:16.5px; line-height:1.6; overflow-wrap:anywhere }
 .reader h1, .reader h2, .reader h3, .reader h4, .reader h5, .reader h6 { color:var(--ink); text-transform:none; letter-spacing:0; line-height:1.3 }
