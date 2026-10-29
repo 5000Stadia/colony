@@ -60,13 +60,39 @@ class ContextTest(unittest.TestCase):
         self.assertEqual(snap['tokens'], 123)
         self.assertEqual(context.transcript(self.s)['exchanges'], snap['exchanges'])
 
-    def test_large_exchange_and_unfinished_exchange_postpone(self):
-        self.message('user', 'x' * 6000); self.message('assistant', 'done')
-        with self.assertRaisesRegex(ValueError, 'not truncated'):
-            context.tail(context.transcript(self.s))
+    def test_unfinished_exchange_postpones_and_a_large_one_keeps_its_start_and_end(self):
+        self.message('user', 'START of the request. ' + 'x' * 6000); self.message('assistant', 'y' * 3000 + ' Done, at the end.')
+        recent = context.tail(context.transcript(self.s))
+        self.assertEqual([m['role'] for m in recent], ['user', 'trimmed', 'assistant'])
+        self.assertTrue(recent[0]['text'].startswith('START of the request. '))
+        self.assertTrue(recent[2]['text'].endswith(' Done, at the end.'))
+        self.assertIn('[colony trimmed this exchange', recent[1]['text'])
+        self.assertEqual(recent[1]['left'], 9040 - len(recent[0]['text']) - len(recent[2]['text']), 'what it says it left out')
+        self.assertLessEqual(sum(len(m['text'].encode()) + 64 for m in recent), context.TAIL_BUDGET)
         self.message('user', 'pending')
         with self.assertRaisesRegex(ValueError, 'not completed'):
             context.tail(context.transcript(self.s))
+
+    def test_trimming_keeps_whole_messages_where_they_fit_and_never_splits_a_character(self):
+        exchange = [dict(role='user', text='Fix the export, then tell me.'),
+                    *[dict(role='assistant', text=f'Step {n}: ' + 'Ωé😀' * 60) for n in range(20)],
+                    dict(role='assistant', text='Fixed and pushed; nothing else changed.')]
+        recent = context.tail(dict(exchanges=[exchange]), source='/x/rollout.jsonl')
+        self.assertEqual(recent[0], exchange[0], 'the request, whole')
+        self.assertEqual(recent[-1], exchange[-1], 'the latest reply, whole')
+        mark = next(m for m in recent if m['role'] == 'trimmed')
+        self.assertIn('the whole exchange is in /x/rollout.jsonl', mark['text'])
+        kept = [m for m in recent if m['role'] != 'trimmed']
+        for m in kept:
+            self.assertTrue(any(m['text'] in e['text'] for e in exchange), 'every kept piece is verbatim')
+        self.assertEqual(mark['left'], sum(len(e['text'].encode()) for e in exchange) - sum(len(m['text'].encode()) for m in kept))
+        self.assertLessEqual(sum(len(m['text'].encode()) + 64 for m in recent), context.TAIL_BUDGET)
+        one = [dict(role='user', text='Begin here. ' + 'Ω' * 20_000 + ' The question at the end?'), dict(role='assistant', text='Yes.')]
+        recent = context.tail(dict(exchanges=[one]))
+        self.assertEqual([m['role'] for m in recent], ['user', 'trimmed', 'user', 'assistant'], 'one long message: its start and its end')
+        self.assertTrue(recent[0]['text'].startswith('Begin here. ') and recent[2]['text'].endswith('The question at the end?'))
+        context.log(self.root, dict(tail=recent), 'restored')
+        self.assertEqual(board.read(self.root, 'context-history.jsonl')[-1]['exchanges'], 1, 'still one exchange')
 
     def test_usage_is_current_and_no_window_never_guesses(self):
         self.message('user', 'hello'); self.message('assistant', 'done'); self.usage(10)
@@ -271,4 +297,97 @@ class ContextTest(unittest.TestCase):
         atomic_json(context.file(self.root, 'context-session.json'), dict(self.s, id='new-session'))
         with patch.object(context, 'safe', return_value=True):
             context.tick(self.root)
-        self.assertEqual(set(context.read(context.file(self.root))), {'last'})
+        st = context.read(context.file(self.root))
+        self.assertEqual(set(st), {'last', 'session', 'carries'})
+        self.assertEqual(st['carries'], {'exact-id': dict(text='old intent', at='yesterday')}, 'the old conversation keeps its own')
+        self.assertEqual(board.read(self.root, 'context-history.jsonl')[-1]['status'], 'new conversation')
+
+    def test_a_long_last_exchange_is_restored_trimmed_within_the_hook_limit_and_the_refresh_goes_ahead(self):
+        self.message('user', 'Keep the colour periwinkle. ' + 'Ω😀 and more. ' * 900)
+        self.message('assistant', 'Starting. ' + 'step done; ' * 700 + 'All finished: the invoice is already sent.')
+        self.usage()                                   # 125,000 of a 200,000 window: over the threshold
+        carry = 'Ω' * (context.CARRY_BUDGET // 2)      # the largest carry-over it takes
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+            self.assertIn('Context carry-over', typed.call_args.args[1], 'not deferred: the carry-over is asked for')
+            job = context.read(context.file(self.root))['job']
+            self.assertTrue(context.carry_reply(self.root, 'codex', dict(self.payload, hook_event_name='Stop',
+                            last_assistant_message=f'<colony-carry id="{job["id"]}">{carry}</colony-carry>')))
+            context.tick(self.root)
+            self.assertEqual(typed.call_args.args[1], '/compact')
+        context.before_compact(self.root, 'codex', self.payload)
+        self.event('compacted', dict(message='A native summary.'))
+        prompt = dict(self.payload, hook_event_name='UserPromptSubmit')
+        text = context.on_prompt(self.root, 'codex', prompt)
+        self.assertIn('Keep the colour periwinkle.', text, 'its start')
+        self.assertIn('All finished: the invoice is already sent.', text, 'its end')
+        self.assertIn('[colony trimmed this exchange to fit the restoration budget', text)
+        self.assertIn(carry, text)
+        self.assertLessEqual(len(text.encode()), context.OUTPUT_BUDGET)
+        self.assertLess(len(text), 10_000, "within Claude Code's hook output limit")
+        context.delivered(self.root, prompt)
+        self.message('developer', text)
+        context.on_prompt(self.root, 'codex', prompt)
+        rows = board.read(self.root, 'context-history.jsonl')
+        self.assertEqual([r['status'] for r in rows], ['restored'], 'nothing deferred on the way')
+        self.assertEqual((rows[0]['trigger'], rows[0]['carry_bytes'], rows[0]['exchanges']), ('scheduled', len(carry.encode()), 1))
+        self.assertGreater(rows[0]['trimmed'], 0)
+        self.assertIn('restored trimmed', rows[0]['reason'])
+
+    def test_a_conversation_left_and_taken_up_again_restores_its_own_carry_over_and_the_history_says_why(self):
+        """Colony's console went to Codex and back on 22-23 October: the switch cleared the refresh state, the Claude
+        conversation's carry-over with it, and the 12 native compactions after it restored none, with no reason logged."""
+        self.message('user', 'Keep blue.'); self.message('assistant', 'Kept.')
+        self.state('requested')
+        self.assertTrue(context.carry_reply(self.root, 'codex', dict(self.payload, hook_event_name='Stop',
+                        last_assistant_message='<colony-carry id="1234567890abcdef">Already sent the invoice.</colony-carry>')))
+        other = self.root / 'other.jsonl'
+        other.write_text(''.join(json.dumps(dict(type='response_item', payload=p)) + '\n' for p in (
+            dict(type='message', role='user', content=[dict(type='input_text', text='Hello again.')]),)))
+        mine, theirs = self.payload, dict(self.payload, session_id='other-id', transcript_path=str(other))
+        def compact(payload, path):
+            """A native compaction in that conversation, and what it restores."""
+            context.before_compact(self.root, 'codex', payload)
+            with path.open('a') as f:
+                f.write(json.dumps(dict(type='compacted', payload=dict(message='summary'))) + '\n')
+            prompt = dict(payload, hook_event_name='UserPromptSubmit')
+            text = context.on_prompt(self.root, 'codex', prompt)
+            context.delivered(self.root, prompt)
+            with path.open('a') as f:
+                f.write(json.dumps(dict(type='response_item', payload=dict(type='message', role='developer',
+                        content=[dict(type='input_text', text=text)]))) + '\n')
+            context.on_prompt(self.root, 'codex', prompt)
+            return text
+        for payload in (theirs, mine):                 # away to another conversation, and back
+            self.assertTrue(context.register(self.root, 'codex', dict(payload, hook_event_name='SessionStart')))
+            with patch.object(context, 'safe', return_value=False):
+                context.tick(self.root)
+            restored = compact(payload, other if payload is theirs else self.path)
+            if payload is theirs:
+                self.assertIn('(none)', restored, 'a new conversation inherits nothing')
+        self.assertIn('Already sent the invoice.', restored, 'its own carry-over, back with it')
+        rows = board.read(self.root, 'context-history.jsonl')
+        self.assertEqual([r['status'] for r in rows], ['new conversation', 'restored', 'new conversation', 'restored'])
+        self.assertEqual((rows[1]['trigger'], rows[1]['carry_bytes']), ('native', 0))
+        self.assertIn('no carry-over is recorded in this conversation yet', rows[1]['reason'])
+        self.assertEqual((rows[3]['trigger'], rows[3]['reason']), ('native', ''))
+        self.assertTrue(rows[3]['carry_at'] and rows[3]['carry_bytes'])
+
+    def test_a_carry_over_recorded_before_they_were_kept_apart_stays_with_its_conversation(self):
+        st = self.state('restored')
+        st['carry'] = dict(text='Older single carry-over.', at='earlier')
+        atomic_json(context.file(self.root), st)
+        self.message('user', 'blue'); self.message('assistant', 'yes')
+        context.before_compact(self.root, 'codex', self.payload)
+        st = context.read(context.file(self.root))
+        self.assertEqual((st['job']['carry'], st['job']['written']), ('Older single carry-over.', 'earlier'))
+        self.assertEqual(st['carries'], {'exact-id': dict(text='Older single carry-over.', at='earlier')})
+        self.assertNotIn('carry', st)
+
+    def test_a_carry_over_too_large_is_deferred_in_the_history_with_its_size(self):
+        self.state('requested')
+        payload = dict(self.payload, hook_event_name='Stop',
+                       last_assistant_message='<colony-carry id="1234567890abcdef">' + 'x' * 3001 + '</colony-carry>')
+        self.assertTrue(context.carry_reply(self.root, 'codex', payload))
+        row = board.read(self.root, 'context-history.jsonl')[-1]
+        self.assertEqual((row['status'], row['reason']), ('deferred', 'Carry-over was empty or too large (3,001 bytes).'))

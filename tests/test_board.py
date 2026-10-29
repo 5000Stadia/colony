@@ -4706,6 +4706,49 @@ class SelfHostTest(BoardBase):
         self.assertIn(f"Colony's source is itself a project on this board, `{ROOT.name}`", brief)
         self.assertIn(f"colony tell {ROOT.name}", brief)
 
+    def test_a_project_inside_colonys_folder_skips_colonys_own_instructions_and_keeps_its_settings(self):
+        """Claude Code loads the CLAUDE.md of every folder above a project: one in colony's projects/ skips colony's
+        own, named by where colony's source is; one outside, and colony itself, keep theirs."""
+        source = Path(self.tmp.name) / "colony-source"
+        inside = source / "projects" / "garden"
+        (inside / ".claude").mkdir(parents=True)
+        (inside / ".claude" / "settings.json").write_text(json.dumps({"model": "x", "claudeMdExcludes": ["**/vendor/CLAUDE.md"]}))
+        claude, own = providers.get("claude"), str(source / "CLAUDE.md")
+        settings = lambda folder: json.loads((folder / ".claude" / "settings.json").read_text())
+        with patch.object(providers, "SOURCE", source):
+            board.track(inside)
+            board.track(self.root)                                   # outside it
+            claude.wire(source, board.PROTOCOL)                      # colony itself
+            claude.wire(inside, board.PROTOCOL)                      # again: nothing twice
+        cfg = settings(inside)
+        self.assertEqual(cfg["claudeMdExcludes"], ["**/vendor/CLAUDE.md", own], "the project's own exclusions kept")
+        self.assertEqual(cfg["model"], "x")
+        self.assertIn("colony notes --deliver", json.dumps(cfg["hooks"]))
+        self.assertNotIn("claudeMdExcludes", settings(self.root))
+        self.assertNotIn("claudeMdExcludes", settings(source))
+        elsewhere = Path(self.tmp.name) / "moved" / "colony"        # colony's source at another path: it follows
+        with patch.object(providers, "SOURCE", elsewhere):
+            (elsewhere / "projects" / "garden").mkdir(parents=True)
+            claude.wire(elsewhere / "projects" / "garden", "")
+            self.assertEqual(settings(elsewhere / "projects" / "garden")["claudeMdExcludes"], [str(elsewhere / "CLAUDE.md")])
+        with patch.object(providers, "SOURCE", source):              # a project moved out of colony's folder
+            (self.root / ".claude" / "settings.json").write_text(json.dumps(dict(settings(self.root), claudeMdExcludes=[own])))
+            claude.wire(self.root, board.PROTOCOL)
+        self.assertNotIn("claudeMdExcludes", settings(self.root))
+
+    def test_the_projects_already_inside_take_the_exclusion_at_the_next_rewire_without_a_restart(self):
+        source = Path(self.tmp.name) / "colony-source"
+        inside = source / "projects" / "garden"
+        inside.mkdir(parents=True)
+        path = inside / ".claude" / "settings.json"
+        with patch.object(providers, "SOURCE", source):
+            board.track(inside)
+            path.write_text(json.dumps({k: v for k, v in json.loads(path.read_text()).items() if k != "claudeMdExcludes"}))
+            with patch.object(console, "reload") as reload:
+                board.rewire_projects()                              # what the board's start and its daily upkeep run
+                reload.assert_not_called()
+        self.assertEqual(json.loads(path.read_text())["claudeMdExcludes"], [str(source / "CLAUDE.md")])
+
 
 class PinTest(BoardBase):
     def test_text_is_served_as_utf8_so_a_phone_reads_its_dashes(self):

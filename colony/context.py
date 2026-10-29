@@ -211,7 +211,7 @@ def retained(carry, summary):
     return bool(words) and words in ' '.join((summary or '').split())
 
 
-def tail(snapshot, budget=TAIL_BUDGET, skip_pending=False):
+def tail(snapshot, budget=TAIL_BUDGET, skip_pending=False, source="the conversation's transcript"):
     chosen, size = [], 0
     for exchange in reversed(snapshot['exchanges']):
         if not any(m['role'] == 'assistant' for m in exchange):
@@ -221,11 +221,46 @@ def tail(snapshot, budget=TAIL_BUDGET, skip_pending=False):
         cost = sum(len(m['text'].encode()) + 64 for m in exchange)
         if size + cost > budget:
             if not chosen:
-                raise ValueError('The latest whole exchange exceeds the restoration budget; it was not truncated.')
+                chosen = [trim(exchange, budget, source)]   # alone over the budget: shortened, never a reason to wait
             break
         chosen.insert(0, exchange)
         size += cost
     return [m for exchange in chosen for m in exchange]
+
+
+def _cut(text, size, end=False):
+    """At most `size` UTF-8 bytes of the text, from its start or its end, never splitting a character."""
+    data = text.encode()
+    if size >= len(data):
+        return text
+    return (data[len(data) - size:] if end else data[:size]).decode(errors='ignore') if size > 0 else ''
+
+
+def trim(exchange, budget, source):
+    """The newest exchange when it alone is over the budget: its start (the request first) in up to half, its end
+    (the latest reply) in the rest, and a plain mark where its middle is left out, counted like any message."""
+    sizes = [len(m['text'].encode()) for m in exchange]
+    note = lambda left: (f'[colony trimmed this exchange to fit the restoration budget: {left:,} bytes of its middle are '
+                         f'left out here; the whole exchange is in {source}.]')
+    room = budget - 64 - len(note(sum(sizes)).encode())     # the mark's own allowance, at its longest
+    if room // 2 <= 64:
+        raise ValueError('The latest whole exchange exceeds the restoration budget, too small even to trim.')
+    start, spare, i = [], room // 2, 0
+    while sizes[i] + 64 <= spare:                            # never all of it: then it would not be over the budget
+        start.append(exchange[i])
+        spare -= sizes[i] + 64
+        i += 1
+    if spare > 64:
+        start.append(dict(exchange[i], text=_cut(exchange[i]['text'], spare - 64)))
+    end, spare, j = [], room - sum(len(m['text'].encode()) + 64 for m in start), len(exchange)
+    while j > i + 1 and sizes[j - 1] + 64 <= spare:
+        end.insert(0, exchange[j - 1])
+        spare -= sizes[j - 1] + 64
+        j -= 1
+    if spare > 64:                                           # the one that does not fit whole keeps its end
+        end.insert(0, dict(exchange[j - 1], text=_cut(exchange[j - 1]['text'], spare - 64, end=True)))
+    left = sum(sizes) - sum(len(m['text'].encode()) for m in start + end)
+    return start + [dict(role='trimmed', text=note(left), left=left)] + end
 
 
 def usage(root, payload):
@@ -252,10 +287,22 @@ def occupancy(root, s, snapshot):
     return snapshot['tokens'], window
 
 
-def log(root, job, status, reason='', after=None):
+def log(root, job, status, reason='', after=None, **more):
+    kept = job.get('tail', [])
+    # a request trimmed at both ends is two pieces, either side of the mark: one exchange
+    exchanges = sum(m['role'] == 'user' and not (n and kept[n - 1]['role'] == 'trimmed') for n, m in enumerate(kept))
     board.append(root, 'context-history.jsonl', dict(at=board.now(), id=job.get('id'), session=job.get('session'),
-                 status=status, reason=reason, before=job.get('before'), exchanges=len([m for m in job.get('tail', []) if m['role'] == 'user']),
-                 carry_bytes=len(job.get('carry', '').encode()), after=after))
+                 status=status, reason=reason, before=job.get('before'), exchanges=exchanges,
+                 carry_bytes=len(job.get('carry', '').encode()), after=after, **more))
+
+
+def carries(st):
+    """Each conversation's last carry-over, by its id: one taken up again after another program's finds its own,
+    and a new one starts with none."""
+    kept = dict(st.get('carries') or {})
+    if st.get('carry') and (st.get('job') or {}).get('session'):
+        kept.setdefault(st['job']['session'], st['carry'])   # recorded before they were kept apart: its job's
+    return kept
 
 
 def carry_reply(root, key, payload):
@@ -274,11 +321,14 @@ def carry_reply(root, key, payload):
             return False
         carry = match[1].strip()
         if not carry or len(carry.encode()) > CARRY_BUDGET:
-            job.update(phase='deferred', reason='Carry-over was empty or too large.')
+            job.update(phase='deferred', reason=f'Carry-over was empty or too large ({len(carry.encode()):,} bytes).')
             st['retry_after'] = time.time() + COOLDOWN
+            log(root, job, 'deferred', job['reason'])
         else:
             job.update(phase='ready', carry=carry, written=board.now())
-            st['carry'] = dict(text=carry, at=job['written'])
+            kept = {sid: c for sid, c in carries(st).items() if sid != job['session']}
+            st['carries'] = dict(list(kept.items())[-3:] + [(job['session'], dict(text=carry, at=job['written']))])
+            st.pop('carry', None)
             file(root, 'context-carried.md').write_text(carry + '\n')
         atomic_json(file(root), st)
     return True
@@ -293,10 +343,13 @@ def before_compact(root, key, payload):
         st = read(file(root))
         job = st.get('job') or {}
         if job.get('session') != s['id'] or job.get('phase') not in ('ready', 'compacting', 'unknown', 'prepared'):
-            job = dict(id=secrets.token_hex(8), session=s['id'], carry=(st.get('carry') or {}).get('text', ''),
-                       written=(st.get('carry') or {}).get('at'), automatic=True)
+            st['carries'] = carries(st)                      # this conversation's own, before its job is replaced
+            st.pop('carry', None)
+            own = st['carries'].get(s['id']) or {}
+            job = dict(id=secrets.token_hex(8), session=s['id'], carry=own.get('text', ''), written=own.get('at'),
+                       automatic=True)
         try:
-            recent = tail(snap, skip_pending=job.get('automatic', False))
+            recent = tail(snap, skip_pending=job.get('automatic', False), source=s['path'])
         except ValueError as err:
             # Never interrupt a native emergency compaction. Keep the source recoverable.
             recent = []
@@ -315,19 +368,30 @@ def historical(root, job, *, omit_carry=False):
             + ('The native summary already retains this carry-over (in its summary, or the messages it kept word for word); '
                'its text is not repeated here.\n\n' if omit_carry else
                f"Carry-over recorded {job.get('written') or 'before this refresh'}:\n{job.get('carry') or '(none)'}\n\n"))
-    text += '\n\n'.join(m['role'] + ' (verbatim historical text):\n' + m['text'] for m in job.get('tail', []))
+    text += '\n\n'.join(m['text'] if m['role'] == 'trimmed' else m['role'] + ' (verbatim historical text):\n' + m['text']
+                        for m in job.get('tail', []))
     if job.get('tail_deferred'):
         text += '\n\nThe complete recent exchange is retained in ' + job['source'] + '; ' + job['tail_deferred']
     return text
 
 
 def restored(root, st):
-    st['job']['phase'] = 'restored'
+    job = st['job']
+    job['phase'] = 'restored'
     st['last'] = time.time()
     snap = transcript(session(root))
-    st['await_usage'] = max(snap['compact'], st['job'].get('boundary', 0))
+    st['await_usage'] = max(snap['compact'], job.get('boundary', 0))
     st['retry_after'] = time.time() + COOLDOWN
-    log(root, st['job'], 'restored', st['job'].get('tail_deferred', ''))
+    # Why it holds what it holds, so a restoration without a carry-over or exchanges can be explained later.
+    trimmed, why = sum(m.get('left', 0) for m in job.get('tail', [])), []
+    if not job.get('carry'):
+        why.append('Native compaction, and no carry-over is recorded in this conversation yet.')
+    if job.get('tail_deferred'):
+        why.append(job['tail_deferred'])
+    if trimmed:
+        why.append(f'The newest exchange was restored trimmed: {trimmed:,} bytes of its middle left out.')
+    log(root, job, 'restored', ' '.join(why), trigger='native' if job.get('automatic') else 'scheduled',
+        carry_at=job.get('written'), trimmed=trimmed)
     atomic_json(file(root), st)
 
 
@@ -405,9 +469,14 @@ def tick(root):
     with locked(root):
         st = read(file(root)) or dict(last=now)
         job = st.get('job') or {}
-        if job and job.get('session') != s['id']:
-            st = dict(last=now)  # A deliberately new conversation has its own cursor and transient state.
-            job = {}
+        was = st.get('session') or job.get('session')
+        if was and was != s['id']:
+            # A deliberately new conversation, or another program's, has its own cursor and transient state. Each
+            # keeps its own carry-over, so one taken up again (a program switch and back) restores it as before.
+            log(root, dict(session=s['id']), 'new conversation', f'The console moved here from conversation {was}; '
+                'its refresh state starts afresh, and each conversation keeps its own carry-over.')
+            st, job = dict(last=now, carries=carries(st)), {}
+        st['session'] = s['id']
         phase = job.get('phase')
         if phase == 'emitted' and job['id'] in snap['markers']:
             restored(root, st)
@@ -447,7 +516,7 @@ def tick(root):
         if job.get('id') != ident or job.get('phase') not in ('due', 'ready'):
             return
         try:
-            recent = tail(snap, min(TAIL_BUDGET, int((window or 200_000) * .08)))
+            recent = tail(snap, min(TAIL_BUDGET, int((window or 200_000) * .08)), source=s['path'])
         except ValueError as err:
             job.update(phase='deferred', reason=str(err))
             st['retry_after'] = now + COOLDOWN

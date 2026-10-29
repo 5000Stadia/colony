@@ -17,6 +17,8 @@ import sys
 import shlex
 from pathlib import Path
 
+SOURCE = Path(__file__).resolve().parent.parent     # colony's own source folder, wherever it is now
+
 
 def _newest_first(path, most=1 << 22, block=1 << 16):
     """A file's lines from its end backwards, at most `most` bytes back: a look back that stops early reads little
@@ -447,6 +449,17 @@ class ClaudeCode(Provider):
         own = json.loads(shared.read_text()).get("statusLine") if private and shared.exists() else None
         if not own or own.get("command") == "colony statusline":
             cfg.setdefault("statusLine", {"type": "command", "command": "colony statusline"})
+        # PROVIDER: Claude Code also loads the CLAUDE.md of every folder above the project, so one inside colony's
+        # source folder (projects/, where new ones go) would read colony's own development rules and the protocol a
+        # second time on every request. Its settings skip that one file, at colony's path now; colony keeps its own.
+        colony_md, excluded = str(SOURCE / "CLAUDE.md"), cfg.get("claudeMdExcludes") or []
+        inside = SOURCE in Path(root).resolve().parents
+        if inside and colony_md not in excluded:
+            cfg["claudeMdExcludes"] = excluded + [colony_md]
+        elif not inside and colony_md in excluded:             # moved out of colony's folder, or colony itself
+            cfg["claudeMdExcludes"] = [p for p in excluded if p != colony_md]
+            if not cfg["claudeMdExcludes"]:
+                del cfg["claudeMdExcludes"]
         _keep(settings, json.dumps(cfg, indent=2) + "\n")
         if private and shared.exists():
             self._unhook(shared)
