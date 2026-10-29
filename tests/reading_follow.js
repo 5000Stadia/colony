@@ -4,8 +4,10 @@ const start = source.indexOf('  const readingFollow = window.colonyReadingFollow
 assert(start > 0 && end > start);
 let time = 10000;
 let chatting = true;
+const timers = new Map(), storage = new Map(); let nextTimer = 0;
+const localStorage = {getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k,v) => storage.set(k,String(v))};
 const listeners = new Map(), window = {}, document = {getElementById: () => chatting ? {} : null};
-vm.runInNewContext(source.slice(start, end), {window, document, O: {add: {call(_window, type, listener) { listeners.set(type, listener); }}}, Date: {now: () => time}});
+vm.runInNewContext(source.slice(start, end), {window, document, localStorage, O: {st: {call(_window, fn, ms) {const id=++nextTimer; timers.set(id,{fn,at:time+ms}); return id;}}, ct: {call(_window,id) {timers.delete(id);}}, add: {call(_window, type, listener) { listeners.set(type, listener); }}}, Date: {now: () => time}});
 const follow = window.colonyReadingFollow;
 const emit = (type, extra = {}) => listeners.get(type)({type, isTrusted: true, ...extra});
 assert(follow.canFollow()); assert(follow.inChat()); chatting = false; assert(!follow.inChat()); chatting = true;
@@ -20,4 +22,12 @@ emit('pointermove', {buttons: 0, pointerType: 'mouse'}); assert(follow.canFollow
 emit('touchmove'); assert(!follow.canFollow());
 time += 5001; emit('click', {isTrusted: false}); assert(follow.canFollow(), 'programmatic clicks do not claim the page');
 emit('click'); assert(!follow.canFollow(), 'trusted activation claims the page');
+let updates = 0; follow.subscribe(() => updates++);
+assert.equal(follow.grace(), 5); follow.setGrace(20); assert.equal(storage.get('followGrace'), '20');
+emit('wheel'); time += 10000; assert.equal(follow.remaining(), 10000); assert.equal(timers.size, 1);
+const before = updates; emit('wheel'); emit('wheel'); assert.equal(updates, before, 'repeated gestures do not repaint status');
+time += 20000; [...timers.values()][0].fn(); assert(follow.canFollow()); assert.equal(updates, before + 1, 'one expiry updates status');
+follow.setGrace(999); assert.equal(follow.grace(), 5, 'invalid durations reset to default');
+follow.setGrace(''); assert.equal(follow.grace(),5);
+follow.setGrace(0); emit('pointerdown'); assert(follow.canFollow());
 console.log('PASS production reading-follow clock');

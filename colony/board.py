@@ -2684,23 +2684,35 @@ PLAYER = """
   // A person's gestures own the page for five seconds. Scroll events alone include scrollTo/scrollBy, so only
   // an active gesture or its continuing inertia extends this clock. The state survives page replacement.
   const readingFollow = window.colonyReadingFollow = (() => {
-    const GRACE = 5000;
-    let last = -Infinity, intentUntil = 0, programUntil = 0, version = 0;
-    const remaining = () => Math.max(0, GRACE - (Date.now() - last));
+    const choices = [0, 2, 5, 10, 20, 30, 60];
+    const valid = (n) => (typeof n === 'number' || typeof n === 'string' && n.trim() !== '') && choices.includes(Number(n)) ? Number(n) : 5;
+    const stored = () => { try { const n = localStorage.getItem('followGrace'); return n === null ? 5 : valid(n); } catch (e) { return 5; } };
+    let seconds = stored(), last = -Infinity, intentUntil = 0, programUntil = 0, version = 0, expiry = 0, published = false;
+    const listeners = new Set();
+    const remaining = () => Math.max(0, seconds * 1000 - (Date.now() - last));
+    const notify = (force = false) => {
+      O.ct.call(window, expiry); const left = remaining(), held = left > 0;
+      if (left) expiry = O.st.call(window, () => notify(), left);
+      if (force || held !== published) { published = held; listeners.forEach((fn) => fn()); }
+    };
     const gesture = (ev) => {
       if (!ev.isTrusted || (ev.type === 'pointermove' && !ev.buttons && ev.pointerType !== 'touch')) return;
       if (Date.now() < programUntil && window.scrollTo) window.scrollTo({left: window.scrollX, top: window.scrollY, behavior: 'instant'});
       last = Date.now(); version += 1; programUntil = 0;
       const scrolling = /^(wheel|touch|pointer)/.test(ev.type) || (ev.type === 'keydown' && /^(Arrow|Page|Home|End| )/.test(ev.key));
       if (scrolling) intentUntil = Date.now() + 800;
+      notify();
     };
     ['pointerdown', 'pointerup', 'pointermove', 'touchstart', 'touchmove', 'touchend', 'wheel', 'keydown', 'input', 'click']
       .forEach((type) => O.add.call(window, type, gesture, {capture: true, passive: true}));
     O.add.call(window, 'scroll', () => {
       if (Date.now() < programUntil || Date.now() >= intentUntil) return;
-      last = Date.now(); version += 1; intentUntil = last + 250;
+      last = Date.now(); version += 1; intentUntil = last + 250; notify();
     }, {capture: true, passive: true});
-    return {canFollow: () => remaining() === 0, remaining, version: () => version, inChat: () => !!(document.getElementById('chat') && document.getElementById('composer')),
+    O.add.call(window, 'storage', (ev) => { if (ev.key === 'followGrace') { seconds = stored(); notify(true); } });
+    return {grace: () => seconds, setGrace(n) { seconds = valid(n); try { localStorage.setItem('followGrace', String(seconds)); } catch (e) {} notify(true); },
+      subscribe(fn) { listeners.add(fn); fn(); return () => listeners.delete(fn); },
+      canFollow: () => remaining() === 0, remaining, version: () => version, inChat: () => !!(document.getElementById('chat') && document.getElementById('composer')),
       programmatic(fn) { programUntil = Date.now() + 1000; intentUntil = 0; return fn(); }};
   })();
   const fresh = () => ({ls: [], is: new Set(), ts: new Set()});
@@ -2764,6 +2776,7 @@ PLAYER = """
     const kept = ['cplayer', 'gc'].map((x) => document.getElementById(x)).filter(Boolean);    // the player, the message box
     document.body.replaceChildren(...[...doc.body.childNodes].map((n) => document.adoptNode(n)));
     kept.forEach((x) => document.body.appendChild(x));
+    window.dispatchEvent(new Event('colony-view'));
     window.colonyFrom = from;
     readingFollow.programmatic(() => scrollTo(0, how.y || 0));
     // External dependencies load in document order before the page's inline code (Console needs xterm and fit).
@@ -2804,7 +2817,7 @@ PLAYER = """
     if (method === 'GET') { action.search = new URLSearchParams(d).toString(); go(action.href); }
     else go(action.href, {method, body: multi ? d : new URLSearchParams(d)});
   });
-  window.colonyNav = {keep: O, prefetch, go: (u, how = {}) => document.documentElement.classList.contains('media-open') || (how.automatic && (!readingFollow.inChat() || !readingFollow.canFollow())) ? Promise.resolve() : busy() || how.automatic ? go(new URL(u, location.href).href, how) : (location.href = u),
+  window.colonyNav = {keep: O, prefetch, go: (u, how = {}) => document.documentElement.classList.contains('media-open') || (how.automatic && (!readingFollow.inChat() || !readingFollow.canFollow())) ? Promise.resolve() : busy() || how.automatic || how.readingChoice !== undefined ? go(new URL(u, location.href).href, how) : (location.href = u),
     replace: (u) => document.documentElement.classList.contains('media-open') ? Promise.resolve() : busy() ? go(new URL(u, location.href).href, {replace: true}) : location.replace(u),
     reload: () => document.documentElement.classList.contains('media-open') ? Promise.resolve() : busy() ? go(location.href, {replace: true}) : location.reload()};
 })();
@@ -3209,7 +3222,7 @@ PLAYER = """
     N.resuming = false;
     const parts = piecesOf(N, j).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
-    hush(true); N.j = j; N.piece = from; playing = true; paused = false; why = null; now = null; sent = -1; said = N.name; saidAt = Date.now();
+    hush(true); N.j = j; N.piece = from; rememberTextTarget(); playing = true; paused = false; why = null; now = null; sent = -1; said = N.name; saidAt = Date.now();
     loading = !N.silent && !(N.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from], N.kvoice))))); save(); changed();
     if (!parts.length) return done(j);
     const shown = showHere(), x = !N.document && j + 1 >= N.blocks.length && nextAfter();
@@ -3352,6 +3365,29 @@ PLAYER = """
     prime(); }, true);
   if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => hold(false, 'lock screen')], ['nexttrack', () => skip()],
     ['stop', () => hold(true, 'lock screen')], ['previoustrack', null]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
+  const validTextTarget = (target) => {
+    if (!target || typeof target.href !== 'string' || typeof target.k !== 'string' || typeof target.name !== 'string' || typeof target.p !== 'string') return null;
+    try { if (new URL(target.href, location.href).origin !== new URL(location.href).origin) return null; } catch (e) { return null; }
+    return target;
+  };
+  let lastTextTarget = validTextTarget(get('textreturn'));
+  function rememberTextTarget() {
+    if (!N || N.document || !N.href || !N.blocks[N.j]) return;
+    const target = validTextTarget({href: N.href, name: N.name || '', p: String(N.p), k: N.blocks[N.j].k});
+    if (target && (!lastTextTarget || ['href', 'name', 'p', 'k'].some((k) => target[k] !== lastTextTarget[k]))) {
+      lastTextTarget = target; put('textreturn', target);
+    }
+  }
+  const textTarget = () => { rememberTextTarget(); return lastTextTarget; };
+  async function returnToReading() {
+    const target = textTarget(); if (!target) return false;
+    const choice = readingFollow.version();
+    await colonyNav.go(target.href, {readingChoice: choice});
+    if (choice !== readingFollow.version()) return false;
+    const current = textTarget(), focus = current && current.href === target.href ? current : target;
+    if (view && String(view.key) === String(focus.p)) view.focus(focus.k, true, true);
+    return true;
+  }
   // Audio + text follows the voice once the person's five-second hold has expired. A selected Play may
   // show its target immediately; continuing parts and sentence turns use the shared interaction clock.
   let looking2 = 0;
@@ -3364,7 +3400,7 @@ PLAYER = """
     const s = N.blocks[N.j]; if (!s) return null;
     if (!canFollow()) { later(s, readingFollow.remaining()); return null; }
     const explicit = explicitFollow();
-    if (view && view.name === N.name) { view.focus(s.k, true, explicit); N.explicitFollow = false; return null; }
+    if (view && String(view.key) === String(N.p)) { view.focus(s.k, true, explicit); N.explicitFollow = false; return null; }
     const box = document.body.classList.contains('gcon') ? null : document.querySelector('#composer textarea'), at = document.activeElement;
     if (!N.href || document.body.classList.contains('typing') || (box && box.value.trim()) || (at && at.matches && at.matches('input, textarea, select')))
       return null;
@@ -3409,10 +3445,13 @@ PLAYER = """
   const PICON = @ICONS@;
   const HEAD = "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' aria-hidden='true'>"
     + "<path d='M4 14v-2a8 8 0 0 1 16 0v2'/><rect x='3' y='14' width='5' height='6' rx='2'/><rect x='16' y='14' width='5' height='6' rx='2'/></svg>";
+  const SCREEN = "<span class='cptextstatus held' role='img'><svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.6' aria-hidden='true'>"
+    + "<rect x='4' y='5' width='16' height='11' rx='1.5'/><path d='M12 16v4m-4 0h8'/><g class='cptextoff'><circle cx='12' cy='12' r='10'/><path d='m5 5 14 14'/></g></svg></span>";
+  const RETURN = "<svg viewBox='0 0 24 24' width='18' height='18' fill='none' stroke='currentColor' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='m8 4-5 5 5 5M3 9h10a7 7 0 0 1 0 14'/></svg>";
   const bar = document.createElement('div'); bar.id = 'cplayer'; bar.className = 'cplayer cpidle'; bar.hidden = true;
-  bar.innerHTML = "<div class='cpminirow'><button type='button' class='cppill' aria-haspopup='dialog'>" + HEAD + "<span class='cpsay'></span></button></div>"
-    + "<div class='cpbar'><button type='button' class='cpwhat' aria-label='The line'><b class='cpname'></b><span class='cpprev'></span></button>"
-    + "<button type='button' class='cphold'></button><button type='button' class='cpnext' aria-label='Skip to the next reply'>" + PICON.skip + "</button></div>"
+  bar.innerHTML = "<div class='cptransport'><button type='button' class='cpreturn' aria-label='Return to reading' hidden>" + RETURN + "</button><div class='cpcontrols'><div class='cpminirow'><button type='button' class='cppill' aria-haspopup='dialog'>" + HEAD + SCREEN + "<span class='cpsay'></span></button></div>"
+    + "<div class='cpbar'>" + SCREEN + "<button type='button' class='cpwhat' aria-label='The line'><b class='cpname'></b><span class='cpprev'></span></button>"
+    + "<button type='button' class='cphold'></button><button type='button' class='cpnext' aria-label='Skip to the next reply'>" + PICON.skip + "</button></div></div></div>"
     + "<div class='cpshade' hidden></div><div class='cpsheet' role='dialog' aria-label='The unheard line' hidden><button type='button' class='cpgrab' aria-label='Close'></button>"
     + "<div class='cpdocument' hidden><b class='cpdoctitle'></b><p class='cpdocstatus' role='status'></p><ol class='cprows cpdocrows'></ol><button type='button' class='cpdocstop'>Finish document</button></div>"
     + "<div class='cpmain'><div class='cpchips'></div><ol class='cprows'></ol><p class='cpempty' hidden></p>"
@@ -3425,14 +3464,15 @@ PLAYER = """
     + "<div class='cpset' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>Reads as</div>"
     + "<div class='cpseg'><button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
     + "<button type='button' data-m='text'>Text only</button></div><p class='cpmodesay'></p>"
+    + "<label class='cpline'>Resume text after <select class='cpgrace'>" + [0, 2, 5, 10, 20, 30, 60].map((n) => "<option value='" + n + "'>" + n + " seconds</option>").join('') + "</select></label><p class='cpgracesay'>After you touch or scroll in Chat. Other pages stay where you leave them.</p>"
     + "<label class='cpline'>Speed <select class='cprate'>" + [1, 1.25, 1.5, 1.75].map((r) => "<option value='" + r + "'>" + r + "×</option>").join('') + "</select></label>"
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div>"
     + "<div class='cpheard' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>History</div><p>Recent replies played, read or skipped.</p><ol class='cprows cpheardrows'></ol></div></div>";
   const $ = (s) => bar.querySelector(s), pill = $('.cppill'), sheet = $('.cpsheet'), shade = $('.cpshade'), rows = $('.cpmain .cprows');
-  const MODESAY = {both: "Read aloud, and the page goes with it, into each project's chat", audio: 'Read aloud; the page stays where you are',
-    text: 'No sound: each reply shown in its chat, and ⏭ goes on'};
+  const MODESAY = {both: "Read aloud; while you are in Chat, follow the reply after your interaction pause", audio: 'Read aloud; the page stays where you are',
+    text: 'No sound; while you are in Chat, follow each reply, and ⏭ goes on'};
   const first = (t, n) => { const w = String(t || '').replace(/\\s+/g, ' ').trim().split(' '); return w.slice(0, n).join(' ') + (w.length > n ? '…' : ''); };
   const when = (at) => { const d = new Date(at); if (isNaN(d)) return '';
     const clock = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
@@ -3486,6 +3526,17 @@ PLAYER = """
   const place = () => { if (!S || !N || N.tapped || !S.begun.has(N.id)) return '';
     const left = visible().filter((x) => S.want.has(id(x)) && !S.begun.has(id(x))).length;
     return ' · ' + S.begun.size + ' of ' + (S.begun.size + left); };
+  function drawTextFollow() {
+    const inChat = readingFollow.inChat(), target = textTarget();
+    const message = !aloud() ? 'Auto text follow is off' : !following() ? 'Audio only: text follow is off'
+      : !inChat ? 'Text follow waits while you browse outside Chat' : N && N.document ? 'Document playback: Chat text follow is off'
+      : writing() ? 'Text follow waits while you write' : !readingFollow.canFollow() ? 'Text follow waits after your interaction'
+      : 'Auto text follow is ready';
+    const enabled = aloud() && following() && inChat && !(N && N.document) && !writing() && readingFollow.canFollow();
+    bar.querySelectorAll('.cptextstatus').forEach((el) => { el.classList.toggle('held', !enabled); el.setAttribute('aria-label', message); el.title = message; });
+    const button = $('.cpreturn'); button.hidden = inChat || !target; button.disabled = !target;
+    button.title = button.getAttribute('aria-label') || 'Return to reading';
+  }
   const draw = () => {
     bar.hidden = false;
     const n = visible().length, live = aloud() && able(), held2 = aloud() && !able();
@@ -3517,6 +3568,8 @@ PLAYER = """
   on(document, 'keydown', (ev) => { if (ev.key === 'Escape' && !sheet.hidden) shutSheet(); });
   on($('.cphold'), 'click', () => hold(playing ? !paused : false));
   on($('.cpnext'), 'click', skip);
+  on($('.cpreturn'), 'click', () => returnToReading());
+  on($('.cpgrace'), 'change', () => readingFollow.setGrace($('.cpgrace').value));
   on($('.cpdocrows'), 'click', (ev) => { const b = ev.target.closest('button[data-start]'); if (b) documentSection(+b.dataset.start); });
   on($('.cpdocstop'), 'click', () => { if (N && N.document) replyDone(); });
   on($('.cpchips'), 'click', (ev) => { const b = ev.target.closest('button'); if (!b) return;
@@ -3629,7 +3682,7 @@ PLAYER = """
   const fieldUnder = (el) => { const r = el.getBoundingClientRect(); if (!r.width || !r.height) return false;
     return [...document.querySelectorAll(FIELD)].some((f) => { if (bar.contains(f) || f.closest('#gc')) return false;
       const q = f.getBoundingClientRect(); return q.width && q.height && q.left < r.right && q.right > r.left && q.top < r.bottom && q.bottom > r.top; }); };
-  const placed = () => { gcDraw();
+  const placed = () => { gcDraw(); drawTextFollow();
     const v = window.visualViewport, foot = v ? v.offsetTop + v.height : innerHeight;
     // a bounce past the end or the top parts the two by just the overshoot: as the page is, still (it dropped what floats)
     const over = Math.max(0, scrollY + innerHeight - document.body.scrollHeight) + Math.min(0, scrollY);
@@ -3707,7 +3760,7 @@ PLAYER = """
   let whom = null, asking = 0;                     // the project whose voice the settings show, while they are open
   const whose = () => whom || voiced();
   async function sets(fresh = true) {
-    $('.cprate').value = String(rate());
+    $('.cprate').value = String(rate()); $('.cpgrace').value = String(readingFollow.grace());
     bar.querySelectorAll('.cpseg button').forEach((b) => b.classList.toggle('on', b.dataset.m === mode()));
     $('.cpmodesay').textContent = MODESAY[mode()] || '';
     if (!fresh) return;
@@ -3752,7 +3805,7 @@ PLAYER = """
   const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: {...current, explicitFollow: false}, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
     sounding: N && N.document ? !!(back && back.sounding) : playing && !paused, saved: Date.now()} : null); };
   const P = window.colonyPlayer = {
-    document: readDocument, documentSection, canFollow,
+    document: readDocument, documentSection, canFollow, returnToReading,
     busy: () => !!N || resting > 0, placed, rate, following, mode, auto: aloud, unlock: prime, poke, hold, skip, preview,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} anew(false); },
     setVoice(name, v) { Object.values(L.projects).forEach((x) => { if (x.name === name) x.voice = v; });
@@ -3760,11 +3813,11 @@ PLAYER = """
       if (N && (N.projectName || N.name) === name && N.kvoice !== v) { N.kvoice = v; save(); anew(true); } },
     attach(v) { view = v; changed();
       const s = N && N.blocks[N.j];                     // arrived at the chat being read: there, at once
-      if (s && playing && following() && N.name === v.name) showHere(); },
+      if (s && playing && following() && !N.document && String(N.p) === String(v.key)) showHere(); },
     setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} placed(); if (view) view.mark(); heed(); },
     leave() { follow(null); view = null; },
     // where a chat's project is being read: the reply and part, playing or held
-    of(name) { if (!N || N.name !== name) return null; const s = N.blocks[N.j] || {};
+    of(name, key) { if (!N || N.document || (key === undefined ? N.name !== name : String(N.p) !== String(key))) return null; const s = N.blocks[N.j] || {};
       return {active: true, playing, paused, loading, t: N.t, k: s.k}; },
     now: () => ({playing, paused}),
     // ▷ under a reply in Chat: that reply alone, from the page's own words (the person: "sometimes the last message is
@@ -3794,6 +3847,8 @@ PLAYER = """
       able: able(), resting: !!resting, sent, clip: now && now.parts[now.at], waiting: visible().length, story: story.slice()}),
   };
   document.body.appendChild(bar);
+  on(window, 'colony-view', drawTextFollow);
+  readingFollow.subscribe(() => { drawTextFollow(); if (readingFollow.inChat() && readingFollow.canFollow() && N && playing && !paused && following()) showHere(); });
   // The message box over every page while Auto reads with text (Audio + text, Text only; R112): a line on it names
   // the project it sends to. Empty, it follows the project on screen (on a page of none, the one being read); with
   // words in it, it keeps the project they were begun for until sent, the page changing under it as the voice moves
@@ -5308,7 +5363,7 @@ CHAT = """
   // ▷ under each reply: a spinner while its voice is being made, ❚❚ while it is heard (a tap holds it), ▷ while it is
   // held (a tap goes on from where it stopped); no ■, and the bar has the rest
   const mark = () => { if (!box.isConnected) return;
-    const s = P.of(view.name), on = s && s.playing ? s.t : null;
+    const s = P.of(view.name, view.key), on = s && s.playing ? s.t : null;
     box.querySelectorAll('button.listen, button.needplay').forEach((b) => {
       const st = b.dataset.t !== on || s.paused ? 'play' : s.loading ? 'load' : 'pause';
       if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } });
@@ -5320,7 +5375,7 @@ CHAT = """
   const scrollReading = (fn) => readingFollow ? readingFollow.programmatic(fn) : fn();
   let refocus = 0;
   const focus = (k, go, explicit = false) => { if (!box.isConnected) return;
-    const follow = P.following();
+    const follow = explicit || P.following();
     clearTimeout(refocus);
     box.querySelectorAll('.say.reading').forEach((x) => { if (!follow || x.dataset.k !== k) x.classList.remove('reading'); });
     const el = follow && k && box.querySelector(`.say[data-k="${CSS.escape(k)}"]`); if (!el) return;
@@ -5524,7 +5579,7 @@ CHAT = """
     // goes on from where it stopped (with Continue gone, never from its start); on any other, that one starts
     const np = ev.target.closest('button.needplay');
     const l = np || ev.target.closest('button.listen');
-    if (l) { if (np) ev.preventDefault(); const s = P.of(view.name), t = l.dataset.t;
+    if (l) { if (np) ev.preventDefault(); const s = P.of(view.name, view.key), t = l.dataset.t;
       if (s && s.t === t) return P.hold(s.playing && !s.paused);
       return P.read(view, np ? [{t, k: t, at: '', text: np.dataset.say}] : turn(t)); }
     const b = ev.target.closest('button[data-option]'); if (!b) return;
@@ -10322,6 +10377,9 @@ body.gctyping .gc::after { content:''; position:absolute; left:0; right:0; top:1
    are placed: a status line or Send now is never left under them */
 body .chat { padding-bottom:calc(12px + var(--room, 0px)) }
 main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--room, 0px) + 8px) }
+.cptransport { display:flex; align-items:center; gap:6px }.cpcontrols { flex:1; min-width:0 }.cplayer.cpidle .cptransport { justify-content:flex-end }.cplayer.cpidle .cpcontrols { flex:0 1 auto }
+.cplayer .cpreturn { flex:none; width:44px; height:44px; min-height:44px; padding:0; display:inline-flex; align-items:center; justify-content:center; border-radius:50%; border:1px solid var(--line); background:var(--card); color:var(--accent); box-shadow:0 3px 12px rgba(0,0,0,.16) }
+.cplayer .cpreturn[hidden] { display:none }.cptextstatus { display:inline-flex; flex:none; width:18px; height:18px; color:var(--accent) }.cptextstatus svg { color:inherit }.cptextstatus.held { color:var(--muted) }.cptextstatus:not(.held) .cptextoff { display:none }.cpbar > .cptextstatus { margin:0 3px }.cpgracesay { font-size:13px; color:var(--muted) }
 /* At rest, the pill (R123): headphones and how many replies wait; Auto on and able to play, a ring and "Auto · 5"; Auto
    on but the sound let go, "Auto · tap to resume" in the colour of what waits on the person */
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cppill { pointer-events:auto } .cplayer.cpidle .cpminirow { display:flex }

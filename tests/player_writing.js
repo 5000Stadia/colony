@@ -16,13 +16,17 @@ assert(stepStart > end && stepEnd > stepStart && readStart > end && readEnd > re
 const allowStart = source.indexOf('  let allowing = null;'), allowEnd = source.indexOf('  const save =', allowStart);
 const restoreStart = source.indexOf('  // the reading last left on this device:'), restoreEnd = source.indexOf('  // Auto on as the page opens:', restoreStart);
 assert(allowStart > end && allowEnd > allowStart && restoreStart > end && restoreEnd > restoreStart, 'production saved-reading restoration found');
+const ofStart = source.indexOf('    of(name, key) {'), ofEnd = source.indexOf('    now:', ofStart);
+assert(ofStart > 0 && ofEnd > ofStart);
 const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = null;\n'
   + 'const shownLine = () => visible().filter(x => !clearOnly || clearOnly.includes(x.t));\n'
   + source.slice(playStart, clearEnd) + source.slice(stepStart, stepEnd)
   + source.slice(stepEnd, source.indexOf('  // sits above what is fixed', stepEnd))
+  + 'const observer = {' + source.slice(ofStart, ofEnd) + '};\n'
   + 'const direct = {' + source.slice(readStart, readEnd) + '};\n'
   + source.slice(allowStart, allowEnd) + source.slice(restoreStart, restoreEnd) + `
   window.testPlayer = {
+    returning: returnToReading, target: textTarget, showHere, view(v) {view=v;}, of(key, name) {return observer.of(name,key);},
     arrivals, start, begin, done, hold, skip, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
     replay(x) { return again(x, L.projects[x.p] || {}); },
     read(t) { direct.read({key: '0', name: 'Plants', href: '/plants', kokoro: L.ready}, [{t, k: t, text: t + ' reply. All done.'}]); },
@@ -46,7 +50,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
 function browser(kokoro, restore = '') {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
-  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [];
+  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [], navigations = []; let gestureVersion = 0;
   class Events {
     constructor() { this.listeners = new Map(); }
     addEventListener(type, listener) { const xs = this.listeners.get(type) || []; xs.push(listener); this.listeners.set(type, xs); }
@@ -94,8 +98,9 @@ function browser(kokoro, restore = '') {
   const response = blocks => ({ok: true, json: async () => ({blocks}), headers: {get: () => null}});
   Object.assign(window, {speechSynthesis: speech, setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {}});
   const nav = {keep: {add: Events.prototype.addEventListener, st: setTimeout, ct: clearTimeout, si: () => 0},
-    go: () => navigation && navigation.promise, prefetch() {}};
+    go: (url, how) => {navigations.push({url, how}); return navigation && navigation.promise;}, prefetch() {}};
   window.colonyNav = nav;
+  window.colonyReadingFollow = {canFollow: () => true, inChat: () => true, remaining: () => 0, version: () => gestureVersion};
   const context = vm.createContext({window, document, colonyNav: nav, Audio,
     SpeechSynthesisUtterance: class {constructor(text) {this.text = text;}},
     navigator: {}, AbortController, location: {href: 'http://board/', pathname: '/', search: ''}, URL, URLSearchParams,
@@ -125,7 +130,7 @@ function browser(kokoro, restore = '') {
   vm.runInContext(program, context);
   const api = window.testPlayer;
   const row = t => ({p: '0', t, b: [[t, new Date(time).toISOString()]]});
-  return {api, kokoro, sounds, resumed, box, row, storage, marks, fetches,
+  return {api, kokoro, sounds, resumed, box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
     offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
     captureEnd() { return kokoro ? audios[0].onended : speech.last.onend; },
     voiceRequest(text) { const d = deferred(); requests.set('voice:' + text, d); return d; },
@@ -672,6 +677,47 @@ const cases = {
     const doc = b.document(), p = doc.play(); doc.resolve(); await p;
     b.api.clearOnly(['A']); await b.api.clear(); assert.equal(b.api.state().document, true);
     b.api.section(1); await b.end(); assert.equal(b.api.state().t, 'B');
+  },
+
+  async 'Return navigates without changing audio state or mode'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]);
+    const before = b.api.state(), sound = b.sounds.length, marks = b.marks.length, focused = [];
+    b.api.view({key: '0', name: 'Renamed label', focus: (...args) => focused.push(args)});
+    assert.equal(await b.api.returning(), true);
+    assert.equal(b.storage.get('automode'), 'audio'); assert.equal(b.sounds.length, sound); assert.equal(b.marks.length, marks);
+    assert.deepEqual(b.api.state(), before); assert.equal(focused[0][0], 'A'); assert.equal(focused[0][2], true);
+  },
+  async 'Return target survives final reply completion'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); await b.end();
+    assert.equal(b.api.state().t, null); const sound = b.sounds.length, marks = b.marks.length;
+    assert.equal(b.api.target().k, 'A'); await b.api.returning();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, sound); assert.equal(b.marks.length, marks);
+  },
+  async 'document playback keeps the previous Chat return target'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    const before = b.api.state(), sound = b.sounds.length;
+    assert.equal(b.api.target().k, 'A'); await b.api.returning();
+    assert.deepEqual(b.api.state(), before); assert.equal(b.sounds.length, sound); assert.equal(b.navigations.at(-1).url, '/plants');
+  },
+  async 'new interaction revokes a pending Return focus'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); const pending = b.navigation();
+    const focus = []; b.api.view({key: '0', name: 'Plants', focus: (...args) => focus.push(args)});
+    const jump = b.api.returning(); b.gesture(); pending.resolve(); assert.equal(await jump, false); assert.equal(focus.length, 0);
+  },
+  async 'reading identity uses project keys despite duplicate and renamed labels'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); b.storage.set('automode', 'both'); const focus = [];
+    b.api.view({key: '1', name: 'Plants', focus: (...args) => focus.push(args)}); await b.api.showHere();
+    assert.equal(focus.length, 0); assert.equal(b.api.of('1', 'Plants'), null);
+    b.api.view({key: '0', name: 'New name', focus: (...args) => focus.push(args)}); await b.api.showHere();
+    assert.equal(focus[0][0], 'A'); assert(b.api.of('0', 'New name'));
+  },
+
+  async 'Return keeps its last target while the next reply words load'(b) {
+    const xs = await b.line(['A', 'B'], false), next = b.text('B'); await b.api.start(xs[0]); await b.end();
+    assert.equal(b.api.state().t, null); assert.equal(b.api.target().k, 'A'); const sound = b.sounds.length;
+    await b.api.returning(); assert.equal(b.sounds.length, sound); assert.equal(b.api.target().k, 'A');
+    next.resolve(); await flush(); assert.equal(b.api.state().t, 'B'); assert.equal(b.api.target().k, 'B');
   },
 
 };

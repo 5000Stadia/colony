@@ -8230,7 +8230,7 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 152, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 164, result.stdout)
 
 
 class DocumentAudioTest(BoardBase):
@@ -10843,8 +10843,7 @@ class ReadingFollowTest(BoardBase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS production reading-follow clock', result.stdout)
 
-    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
-    def test_phone_auto_navigation_and_chat_follow_wait_five_seconds_after_interaction(self):
+    def serve_reading(self):
         board.track(self.root)
         feed = ("<div class='msg'><section class='say' data-k='part1' data-t='A'><p>First part. Another sentence.</p></section>"
                 "<div style='height:1600px'></div><section class='say' data-k='part2' data-t='A'><p>Second part. More sentences.</p></section>"
@@ -10852,13 +10851,19 @@ class ReadingFollowTest(BoardBase):
                 "<div style='height:1600px'></div><p>Last sentence.</p></section></div>")
         with patch.object(board, 'chat_feed', return_value=feed), patch('colony.voice.ready', return_value=False):
             chat = board.chat_page('0', self.root)
+        other = Path(self.tmp.name) / 'other-chat'; other.mkdir(); board.track(other)
+        with patch.object(board, 'chat_feed', return_value=feed), patch('colony.voice.ready', return_value=False), patch.object(board, 'name_of', return_value='plants'):
+            other_chat = board.chat_page('1', other)
+        with patch.object(board, 'chat_feed', return_value=feed), patch('colony.voice.ready', return_value=False), patch.object(board, 'name_of', return_value='Renamed plants'):
+            renamed_chat = board.chat_page('0', self.root)
+        (self.root / 'listening.md').write_text('# Opening\nDocument first sentence. Another sentence.\n\n## Closing\nDocument last sentence. The end.')
         link = "<a id='fixture-manual' href='/fixture/reading-manual' style='position:fixed;right:12px;top:100px;z-index:99'>Manual page</a>"
-        chosen = ("<button type='button' onclick='colonyPlayer.read({key:0,name:\"plants\",href:\"/fixture/reading-chat\",kokoro:false},"
-                  "[{t:\"E\",k:\"explicit\",text:\"Opening sentence. Last sentence.\"}])'>Play chosen reply</button>")
         pages = {
             '/fixture/reading-source': "<h1>Source Chat</h1><div id='chat'><p style='height:2500px'>Keep my reading place.</p></div><form id='composer'><textarea></textarea></form>",
             '/fixture/reading-chat': link + chat,
-            '/fixture/reading-manual': '<h1>Manual page</h1>' + chosen,
+            '/fixture/reading-other': link + other_chat,
+            '/fixture/reading-renamed': link + renamed_chat,
+            '/fixture/reading-manual': '<h1>Manual page</h1>',
             '/fixture/reading-external': "<h1>Dependency Chat</h1><div id='chat'></div><form id='composer'><textarea></textarea></form><script src='/fixture/reading-dependency.js'></script><script>window.fixtureActivated=(window.fixtureActivated||0)+1;</script>",
         }
         reg = board.registry()
@@ -10872,7 +10877,20 @@ class ReadingFollowTest(BoardBase):
         server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
-        result = subprocess.run(['node', str(ROOT / 'tests/reading_follow_browser.js'), f'http://127.0.0.1:{server.server_address[1]}'],
+        return f'http://127.0.0.1:{server.server_address[1]}'
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
+    def test_phone_auto_navigation_and_chat_follow_wait_five_seconds_after_interaction(self):
+        base = self.serve_reading()
+        result = subprocess.run(['node', str(ROOT / 'tests/reading_follow_browser.js'), base],
                                 text=True, capture_output=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS five-second Auto reading grace', result.stdout)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
+    def test_phone_text_follow_setting_status_and_return_keep_audio_state(self):
+        base = self.serve_reading()
+        result = subprocess.run(['node', str(ROOT / 'tests/reading_controls_browser.js'), base], text=True,
+                                capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS text-follow settings, status and persistent Return', result.stdout)
