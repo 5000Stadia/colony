@@ -1029,6 +1029,181 @@ class ConsoleTest(BoardBase):
             s.close()
 
 
+class TranscriptReadersTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    @contextmanager
+    def streaming_only(self, path):
+        """Reject whole-file reads without needing a real project's enormous transcript."""
+        builtin_open, path_open = open, Path.open
+        reads = []
+
+        class Stream:
+            def __init__(self, fh):
+                self.fh = fh
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.fh.close()
+
+            def __getattr__(self, name):
+                return getattr(self.fh, name)
+
+            def read(self, size=-1):
+                if not 0 <= size <= 300_001:
+                    raise AssertionError("transcripts must be read in bounded pieces")
+                return self.fh.read(size)
+
+            def readline(self, size=-1):
+                if not 0 <= size <= 300_001:
+                    raise AssertionError("even a single transcript row must be read in bounded pieces")
+                line = self.fh.readline(size)
+                if line:
+                    reads.append(len(line))
+                return line
+
+            def readlines(self, *args):
+                raise AssertionError("transcript rows must not be collected all at once")
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                raise AssertionError("iteration can allocate an unbounded transcript row")
+
+        def wrap(fh, name):
+            return Stream(fh) if isinstance(name, (str, Path)) and Path(name) == path else fh
+
+        with patch("builtins.open", side_effect=lambda name, *a, **kw: wrap(builtin_open(name, *a, **kw), name)), \
+                patch.object(Path, "open", lambda name, *a, **kw: wrap(path_open(name, *a, **kw), name)):
+            yield reads
+
+    def test_claude_last_turn_streams_history_and_keeps_its_prose_and_identity(self):
+        path = self.root / "claude.jsonl"
+        row = lambda **e: json.dumps(e) + "\n"
+        text = lambda s: {"type": "text", "text": s}
+        with path.open("w") as fh:
+            fh.write(row(type="user", message={"content": "Old request"}))
+            fh.write(row(type="assistant", uuid="old", message={"content": [text("Old answer")]}))
+            # Tool output can dominate a transcript; keep it on disk and generate one modest row at a time.
+            for _ in range(128):
+                fh.write(row(type="user", message={"content": [{"type": "tool_result", "content": "x" * 16384}]}))
+            fh.write(row(type="user", message={"content": [text("New request")]}))
+            fh.write(row(type="assistant", uuid="first", message={"content": [text("First"), text("part")]}))
+            fh.write('{"type":"user","message":{"content":[{"type":"tool_result","content":"')
+            for _ in range(32):
+                fh.write("x" * 16384)
+            fh.write('"}]}}\n')
+            fh.write(row(type="user", message={"content": [{"type": "tool_result", "content": "done"}]}))
+            fh.write(row(type="assistant", uuid="tool", message={"content": [{"type": "tool_use"}]}))
+            # A complete JSON object without a newline was also visible to the original turn reader.
+            fh.write(row(type="assistant", uuid="last", message={"content": [text("Final café")]}).rstrip("\n"))
+        with self.streaming_only(path) as reads:
+            self.assertEqual(providers.ClaudeCode._turn(path), ("last", ["First\npart", "Final café"]))
+        self.assertGreater(len(reads), 128)
+        with path.open("a") as fh:
+            fh.write('\n{"type":"assistant","message":')
+        with self.streaming_only(path):
+            self.assertEqual(providers.ClaudeCode._turn(path), ("last", ["First\npart", "Final café"]))
+
+    def test_claude_work_time_streams_and_retries_only_the_unfinished_row(self):
+        home = self.root / "claudehome"
+        folder = home / "projects" / re.sub(r"[^A-Za-z0-9-]", "-", str(self.root.resolve()))
+        folder.mkdir(parents=True)
+        path = folder / "session.jsonl"
+        row = lambda kind, stamp: json.dumps({"type": kind, "timestamp": stamp, "message": {"content": "café"}}) + "\n"
+        start = row("user", "2026-10-29T10:00:00Z")
+        later = row("assistant", "2026-10-29T10:00:20Z")
+        ended = json.dumps({"type": "system", "subtype": "turn_duration", "durationMs": 35000})
+        path.write_text(start + later + "bad JSON\n" + ended)
+        claude = providers.get("claude")
+        with patch.object(type(claude), "config_home", return_value=home), \
+                patch.object(type(claude), "_turns", {}), patch.object(board, "workdir", return_value=self.root):
+            complete = len((start + later + "bad JSON\n").encode())
+            with self.streaming_only(path):
+                self.assertEqual(claude.active_seconds(self.root), 20)
+                self.assertEqual(claude._turns[path][0], complete)
+            with path.open("a") as fh:
+                fh.write("\n")
+            with self.streaming_only(path) as reads:
+                self.assertEqual(claude.active_seconds(self.root), 35)
+                self.assertEqual(reads, [len(ended.encode()) + 1])
+                self.assertEqual(claude.active_seconds(self.root), 35)
+                self.assertEqual(len(reads), 1, "an unchanged transcript is not read again")
+            path.write_text(start)
+            with self.streaming_only(path):
+                self.assertEqual(claude.active_seconds(self.root), 0, "a truncated transcript starts afresh")
+                self.assertEqual(claude._turns[path][0], len(start.encode()))
+            with path.open("a") as fh:
+                fh.write('{"type":"user","message":{"content":[{"type":"tool_result","content":"')
+                for _ in range(32):
+                    fh.write("x" * 16384)
+            with self.streaming_only(path) as reads:
+                self.assertEqual(claude.active_seconds(self.root), 0)
+                self.assertEqual(claude._turns[path][0], len(start.encode()), "an oversized unfinished row also waits")
+                self.assertGreater(len(reads), 1, "oversized rows are drained in bounded pieces")
+            with path.open("a") as fh:
+                # Claude's own timestamp is last; a tool result can also contain an earlier nested timestamp.
+                fh.write('","timestamp":"2026-10-29T09:00:00Z"}]},"timestamp": "2026-10-29T10:00:10Z"}\n')
+            with self.streaming_only(path):
+                self.assertEqual(claude.active_seconds(self.root), 10, "an oversized final row still advances open work")
+                self.assertEqual(claude._turns[path][0], path.stat().st_size)
+            with path.open("a") as fh:
+                fh.write(later)
+            with self.streaming_only(path):
+                self.assertEqual(claude.active_seconds(self.root), 20)
+                self.assertEqual(claude._turns[path][0], path.stat().st_size)
+
+    def test_codex_work_time_streams_and_preserves_open_turn_and_completed_ids(self):
+        path = self.root / "codex.jsonl"
+        stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+        event = lambda t, kind, **kw: json.dumps({"timestamp": stamp(t), "type": "event_msg", "payload": dict(type=kind, **kw)}) + "\n"
+        item = lambda t: json.dumps({"timestamp": stamp(t), "type": "response_item", "payload": {"text": "café"}}) + "\n"
+        prefix = (event(1000, "task_started", turn_id="done") + event(1010, "task_complete", turn_id="done", duration_ms=10000)
+                  + event(2000, "task_started", turn_id="open") + item(2020) + "bad JSON\n")
+        end = event(2030, "turn_aborted", turn_id="open", started_at=2000, completed_at=2030)
+        path.write_text(prefix + end.rstrip("\n"))
+        codex = providers.get("codex")
+        with patch.object(type(codex), "_worked_in", {}):
+            with self.streaming_only(path):
+                self.assertEqual(codex._worked(str(path)), ({"done": 10000}, ("open", 2000, 20)))
+                self.assertEqual(codex._worked_in[str(path)][0], len(prefix.encode()))
+            with path.open("a") as fh:
+                fh.write("\n")
+            with self.streaming_only(path) as reads:
+                self.assertEqual(codex._worked(str(path)), ({"done": 10000, "open": 30000}, (None, 0, 0)))
+                self.assertEqual(reads, [len(end.encode())])
+                self.assertEqual(codex._worked(str(path)), ({"done": 10000, "open": 30000}, (None, 0, 0)))
+                self.assertEqual(len(reads), 1, "an unchanged rollout is not read again")
+            path.write_text(event(3000, "task_started", turn_id="new") + item(3015))
+            with self.streaming_only(path):
+                self.assertEqual(codex._worked(str(path)), ({}, ("new", 3000, 15)), "truncation drops old turn identities")
+            complete = path.stat().st_size
+            with path.open("a") as fh:
+                fh.write('{"timestamp": "' + stamp(3018) + '","type":"response_item","payload":{"type":"function_call_output","output":"')
+                for _ in range(32):
+                    fh.write("x" * 16384)
+            with self.streaming_only(path) as reads:
+                self.assertEqual(codex._worked(str(path)), ({}, ("new", 3000, 15)))
+                self.assertEqual(codex._worked_in[str(path)][0], complete, "an oversized unfinished row also waits")
+                self.assertGreater(len(reads), 1)
+            with path.open("a") as fh:
+                fh.write('"}}\n')
+            with self.streaming_only(path):
+                self.assertEqual(codex._worked(str(path)), ({}, ("new", 3000, 18)), "an oversized final row still advances open work")
+                self.assertEqual(codex._worked_in[str(path)][0], path.stat().st_size)
+            with path.open("a") as fh:
+                fh.write(item(3020))
+            with self.streaming_only(path):
+                self.assertEqual(codex._worked(str(path)), ({}, ("new", 3000, 20)))
+                self.assertEqual(codex._worked_in[str(path)][0], path.stat().st_size)
+
+
 class ChatTest(BoardBase):
     def test_a_claude_transcript_reads_as_turns_with_its_work_folded_between_its_prose(self):
         from colony import chat

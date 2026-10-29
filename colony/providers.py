@@ -17,6 +17,8 @@ import sys
 import shlex
 from pathlib import Path
 
+from .jsonl import read_line
+
 SOURCE = Path(__file__).resolve().parent.parent     # colony's own source folder, wherever it is now
 
 
@@ -719,21 +721,29 @@ class ClaudeCode(Provider):
         if not path or not Path(path).exists():
             return None, []
         prose, key = [], None
-        for line in Path(path).read_text().splitlines():
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            m = e.get("message") or {}
-            content = m.get("content")
-            if e.get("type") == "user" and (isinstance(content, str) or any(
-                    isinstance(c, dict) and c.get("type") == "text" for c in content or [])):
-                prose, key = [], None                          # the person spoke: a new turn starts
-            elif e.get("type") == "assistant" and isinstance(content, list):
-                text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text").strip()
-                if text:
-                    prose.append(text)
-                    key = e.get("uuid") or key
+        with open(path, "rb") as fh:
+            while True:
+                line, complete = read_line(fh)
+                if line == b"":
+                    break
+                if line is None:                              # an oversized tool result: keep scanning
+                    if not complete:
+                        break
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                m = e.get("message") or {}
+                content = m.get("content")
+                if e.get("type") == "user" and (isinstance(content, str) or any(
+                        isinstance(c, dict) and c.get("type") == "text" for c in content or [])):
+                    prose, key = [], None                          # the person spoke: a new turn starts
+                elif e.get("type") == "assistant" and isinstance(content, list):
+                    text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text").strip()
+                    if text:
+                        prose.append(text)
+                        key = e.get("uuid") or key
         return key, prose
 
     def active_seconds(self, root):
@@ -755,21 +765,24 @@ class ClaudeCode(Provider):
             if size > at:
                 with f.open("rb") as fh:
                     fh.seek(at)
-                    chunk = fh.read()
-                whole = chunk[:chunk.rfind(b"\n") + 1]               # a line still being written waits
-                for line in whole.splitlines():
-                    try:
-                        if b'"turn_duration"' in line:
-                            ms, open_, last = ms + json.loads(line).get("durationMs", 0), 0.0, None
-                        elif re.search(rb'"type":\s*"(user|assistant)"', line):
-                            found = re.findall(rb'"timestamp":"([^"]+)"', line)   # the line's own is its last
-                            t = stamp({"timestamp": found[-1].decode()} if found else json.loads(line))
-                            if last is not None and 0 < t - last <= self.IDLE_GAP:
-                                open_ += t - last
-                            last = t if last is None else max(last, t)
-                    except (ValueError, KeyError):
-                        pass
-                at += len(whole)
+                    while True:
+                        line, complete = read_line(fh, edges=512)
+                        if not complete:                         # a line still being written waits
+                            break
+                        at = fh.tell()
+                        if line is None:
+                            continue
+                        try:
+                            if b'"turn_duration"' in line:
+                                ms, open_, last = ms + json.loads(line).get("durationMs", 0), 0.0, None
+                            elif re.search(rb'"type":\s*"(user|assistant)"', line):
+                                found = re.findall(rb'"timestamp":\s*"([^"]+)"', line)   # the line's own is its last
+                                t = stamp({"timestamp": found[-1].decode()} if found else json.loads(line))
+                                if last is not None and 0 < t - last <= self.IDLE_GAP:
+                                    open_ += t - last
+                                last = t if last is None else max(last, t)
+                        except (ValueError, KeyError):
+                            pass
                 self._turns[f] = (at, ms, open_, last)
             total += ms / 1000 + open_
         return total
@@ -1718,33 +1731,36 @@ class Codex(Provider):
         if size > at:
             with open(rollout, "rb") as fh:
                 fh.seek(at)
-                chunk = fh.read()
-            whole = chunk[:chunk.rfind(b"\n") + 1]                   # a line still being written waits
-            for line in whole.splitlines():
-                try:
-                    if b'"event_msg"' in line and (b'"task_complete"' in line or b'"turn_aborted"' in line):
-                        e = (json.loads(line).get("payload") or {})
-                        if e.get("type") in ("task_complete", "turn_aborted"):
-                            took = e.get("duration_ms")
-                            if took is None and e.get("started_at") and e.get("completed_at"):
-                                took = (e["completed_at"] - e["started_at"]) * 1000
-                            ms[e.get("turn_id") or f"{rollout}:{len(ms)}"] = took or 0
-                            open_, last, opened = 0.0, None, (None, 0)
-                            continue
-                    if b'"event_msg"' in line and b'"task_started"' in line:
-                        e = json.loads(line)
-                        open_, last = 0.0, _stamp(e)
-                        opened = ((e.get("payload") or {}).get("turn_id"), last)
+                while True:
+                    line, complete = read_line(fh, edges=512)
+                    if not complete:                             # a line still being written waits
+                        break
+                    at = fh.tell()
+                    if line is None:
                         continue
-                    if last is not None:                              # within a turn still open
-                        found = re.match(rb'\{"timestamp":\s*"([^"]+)"', line)
-                        t = _stamp({"timestamp": found[1].decode()}) if found else 0
-                        if t and 0 < t - last <= cls.IDLE_GAP:
-                            open_ += t - last
-                        last = max(last, t) if t else last
-                except (ValueError, KeyError, TypeError):
-                    pass
-            at += len(whole)
+                    try:
+                        if b'"event_msg"' in line and (b'"task_complete"' in line or b'"turn_aborted"' in line):
+                            e = (json.loads(line).get("payload") or {})
+                            if e.get("type") in ("task_complete", "turn_aborted"):
+                                took = e.get("duration_ms")
+                                if took is None and e.get("started_at") and e.get("completed_at"):
+                                    took = (e["completed_at"] - e["started_at"]) * 1000
+                                ms[e.get("turn_id") or f"{rollout}:{len(ms)}"] = took or 0
+                                open_, last, opened = 0.0, None, (None, 0)
+                                continue
+                        if b'"event_msg"' in line and b'"task_started"' in line:
+                            e = json.loads(line)
+                            open_, last = 0.0, _stamp(e)
+                            opened = ((e.get("payload") or {}).get("turn_id"), last)
+                            continue
+                        if last is not None:                              # within a turn still open
+                            found = re.match(rb'\{"timestamp":\s*"([^"]+)"', line)
+                            t = _stamp({"timestamp": found[1].decode()}) if found else 0
+                            if t and 0 < t - last <= cls.IDLE_GAP:
+                                open_ += t - last
+                            last = max(last, t) if t else last
+                    except (ValueError, KeyError, TypeError):
+                        pass
             cls._worked_in[rollout] = (at, ms, open_, last, opened)
         return ms, (opened[0], opened[1], open_) if last is not None else (None, 0, 0.0)
 
