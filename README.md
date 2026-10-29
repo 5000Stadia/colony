@@ -73,9 +73,14 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
   nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
   without it, the phone's own voice reads.
-- **Pictures, PDFs and tables in Chat:** a corner button opens a fullscreen viewer that stays open through
+- **Pictures, PDFs and tables in Chat and document readers:** a corner button opens a fullscreen viewer that stays open through
   phone rotation. Start fitted to the width, zoom to 1.5×, 2×, 2.5× or 3×, and scroll within the viewer.
-  Pictures and PDFs have Download; closing returns to the same place in Chat.
+  Pictures and PDFs have Download; closing returns to the same reading position. Files opened from Showcase
+  and Library use these controls too. Reader tables scroll within their own area, and Back and Project links
+  keep the reader with the project it came from.
+- **Auto follows your place:** text follows playback only while Chat is open, with five seconds to browse
+  after a touch or scroll. Audio may continue elsewhere without bringing you back to Chat. Selecting a
+  History item returns to that entry when text is enabled; audio-only playback leaves the view alone.
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
   the project and handle folder names and references where practical, keeping access and history working.
   Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
