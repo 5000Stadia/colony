@@ -3780,7 +3780,7 @@ class ReachTest(BoardBase):
 
     def test_a_board_with_remote_access_binds_and_answers_as_it_did(self):
         reg = board.registry()
-        reg["settings"].update(lan=True, tailscale="colony.taildd35a8.ts.net", tailscale_lan_before=True)
+        reg["settings"].update(lan=True, tailscale="box.tail0000.ts.net", tailscale_lan_before=True)
         board.save_registry(reg)
         (board.home() / "server.json").write_text(json.dumps(["--port", "8791", "--lan"]))
         from colony import cli
@@ -3789,9 +3789,9 @@ class ReachTest(BoardBase):
         self.assertEqual(cli._server_args(argparse.Namespace(port=8791, lan=False, local=False, no_monitor=False)),
                          ["--port", "8791", "--lan"], "and restarts the same way")
         said = self.urls()
-        self.assertIn("http://colony.taildd35a8.ts.net:8791/", said)
+        self.assertIn("http://box.tail0000.ts.net:8791/", said)
         self.assertIn("refused while remote access is on", said)
-        self.assertIn("through Tailscale (http://colony.taildd35a8.ts.net:8791/)", cli._reach(True, "colony.taildd35a8.ts.net", "8791"))
+        self.assertIn("through Tailscale (http://box.tail0000.ts.net:8791/)", cli._reach(True, "box.tail0000.ts.net", "8791"))
 
 
 class ProjectSettingsTest(BoardBase):
