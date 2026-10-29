@@ -88,8 +88,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
   the project and handle folder names and references where practical, keeping access and history working.
   Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
-- **Document audio:** readable text and Markdown files have Play document, with a section queue, section
-  jumps and replay. Large documents are read in small chunks. Auto waits during document playback and
+- **Document audio:** readable text and Markdown files have Play document at the top, beside Edit for pinned
+  text. Playback uses that project's assigned voice, with a section queue, section jumps and replay.
+  Large documents are read in small chunks. Auto waits during document playback and
   resumes afterward, respecting pause and Auto Off. Document playback uses the current page session;
   the interrupted Chat reply remains saved. The player's **History** shows recent replies played, read or skipped.
 - **The front page:** every project, those waiting on you first, each with its line (working, idle, what it's on),

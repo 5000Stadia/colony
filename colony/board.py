@@ -3786,8 +3786,8 @@ PLAYER = """
     const r = await fetch('/chat/voice', {method: 'POST', body: new URLSearchParams(Object.assign({p: key}, body))}).catch(() => null);
     if (!r || !r.ok) return;
     const got = await r.json();
-    $('.cpkvoice').dataset.voice = got.voice; P.setVoice(name, got.voice);
-    document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, voice: got.voice, own: got.own, colony: key === 'default'}})); };
+    $('.cpkvoice').dataset.voice = got.voice; P.setVoice(name, got.voice, key);
+    document.dispatchEvent(new CustomEvent('colony-voice', {detail: {name, key, voice: got.voice, own: got.own, colony: key === 'default'}})); };
   const label = (sel) => (sel.selectedOptions[0] || {}).textContent || '';
   on($('.cpkvoice'), 'change', () => { const v = $('.cpkvoice').value;       // Default: the colony's voice, said as such
     preview(v || $('.cpkvoice').dataset.voice, label($('.cpkvoice'))); keepVoice({voice: v}); });
@@ -3808,9 +3808,11 @@ PLAYER = """
     document: readDocument, documentSection, canFollow, returnToReading,
     busy: () => !!N || resting > 0, placed, rate, following, mode, auto: aloud, unlock: prime, poke, hold, skip, preview,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} anew(false); },
-    setVoice(name, v) { Object.values(L.projects).forEach((x) => { if (x.name === name) x.voice = v; });
-      if (back && back.N.name === name) back.N.kvoice = v;
-      if (N && (N.projectName || N.name) === name && N.kvoice !== v) { N.kvoice = v; save(); anew(true); } },
+    setVoice(name, v, key) {
+      const belongs = (r) => key === undefined ? (r.projectName || r.name) === name : String(r.p) === String(key);
+      Object.entries(L.projects).forEach(([p, x]) => { if (key === undefined ? x.name === name : String(p) === String(key)) x.voice = v; });
+      if (back && belongs(back.N)) back.N.kvoice = v;
+      if (N && belongs(N) && N.kvoice !== v) { N.kvoice = v; save(); anew(true); } },
     attach(v) { view = v; changed();
       const s = N && N.blocks[N.j];                     // arrived at the chat being read: there, at once
       if (s && playing && following() && !N.document && String(N.p) === String(v.key)) showHere(); },
@@ -5463,10 +5465,10 @@ CHAT = """
     if (!r || !r.ok) return;
     const got = await r.json(), changed = got.voice !== kvoice;
     kvoice = got.voice; picker.value = got.own ? got.voice : '';
-    if (changed) P.setVoice(view.name, kvoice);
+    if (changed) P.setVoice(view.name, kvoice, view.key);
   };
   document.addEventListener('colony-voice', (ev) => { const d = ev.detail; if (!picker) return;
-    if (d.name === view.name) { kvoice = d.voice; picker.value = d.own ? d.voice : ''; }
+    if (d.key === undefined ? d.name === view.name : String(d.key) === String(view.key)) { kvoice = d.voice; picker.value = d.own ? d.voice : ''; }
     else if (d.colony && !picker.value) kvoice = d.voice; });         // the colony's changed, and this one follows it
   if (picker) picker.addEventListener('change', () => { P.preview(picker.value || picker.dataset.voice, (picker.selectedOptions[0] || {}).textContent);
     keepVoice({voice: picker.value}); });
@@ -10677,9 +10679,9 @@ details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8
 .pintitle .pt { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere }
 .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .pintitle.gone { color:var(--muted); font-weight:400 }
 .pin > a.pintitle { display:block }
-.readaudio{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0}.readaudio button{padding:9px 14px}.readaudiostatus{font-size:13px;color:var(--muted)}
+.readaudio{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:16px 0}.readaudio button,.readaudio .readedit{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:11px 18px;line-height:1.25}.readaudiostatus{flex-basis:100%;font-size:13px;color:var(--muted)}.readaudiostatus:empty{display:none}
 .cpdocument{padding:12px 0;border-bottom:1px solid var(--line);margin-bottom:14px}.cpdocrows{max-height:42vh;overflow:auto}.cpdocrows button{border:0;background:transparent;color:inherit;text-align:left;width:100%;padding:8px}.cpdocrows .now{background:var(--sunk)}.cpdocstatus{font-size:13px}
-/* the reading page (opener.py): the document at a readable width, light and dark, its actions at its foot */
+/* the reading page (opener.py): document actions lead the text; comments and return links follow it */
 .readtop, .readabout, .reader, .readfoot, .readaudio, .sent { max-width:42em; margin-left:auto; margin-right:auto }
 .readtop .back { display:inline-block; padding:8px 0; font-size:15px; text-decoration:none } .readabout { margin-top:0; margin-bottom:12px }
 .reader { font-size:16.5px; line-height:1.6; overflow-wrap:anywhere }
@@ -10692,7 +10694,8 @@ details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8
 .reader code { background:var(--sunk); padding:1px 4px; border-radius:4px } .reader pre code { background:none; padding:0 }
 .reader pre.plain { white-space:pre-wrap; overflow-wrap:anywhere; background:transparent; padding:0; font-size:13.5px; line-height:1.5 }
 .reader hr { border:0; border-top:1px solid var(--line); margin:22px 0 } .reader .cut { margin-top:18px; color:var(--muted) }
-.readfoot { display:flex; gap:10px; align-items:flex-start; margin-top:20px; padding-top:12px; border-top:1px solid var(--line) }
+.readfoot { display:flex; flex-direction:column; gap:12px; align-items:stretch; margin-top:20px; padding-top:12px; border-top:1px solid var(--line) }
+.readfoot > .readnav { margin:0 }
 .readcomment { flex:1; min-width:0 } .readcomment > summary { display:inline-block; list-style:none; cursor:pointer }
 .readcomment > summary::-webkit-details-marker { display:none }
 .readcomment > summary, a.readedit { padding:11px 18px; border:1px solid var(--line); border-radius:10px; background:var(--card); text-decoration:none }

@@ -8230,12 +8230,31 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 164, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 168, result.stdout)
 
 
 class DocumentAudioTest(BoardBase):
     serve = ReaderTest.serve
     fetch = ReaderTest.fetch
+
+    def test_document_audio_uses_its_own_projects_assigned_voice(self):
+        board.track(self.root)
+        other = Path(self.tmp.name) / 'seeds'; other.mkdir()
+        board.track(other)
+        for root in (self.root, other):
+            (root / 'guide.md').write_text('# Project guide\nRead in this project\'s own voice.')
+        board.default_voice('am_echo')
+        board.choose_voice('0', self.root, 'af_heart')
+        board.choose_voice('1', other, 'bm_fable')
+        self.serve()
+        with patch('colony.voice.ready', return_value=True):
+            for key, expected in (('0', 'af_heart'), ('1', 'bm_fable')):
+                status, _, body = self.fetch(f'/open?p={key}&f=guide.md&audio=1')
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)['voice'], expected)
+            board.choose_voice('1', other, '')
+            self.assertEqual(json.loads(self.fetch('/open?p=1&f=guide.md&audio=1')[2])['voice'], 'am_echo')
+            self.assertEqual(json.loads(self.fetch('/open?p=0&f=guide.md&audio=1')[2])['voice'], 'af_heart')
 
     def test_full_large_markdown_ingestion_is_bounded_and_independent_of_preview(self):
         from colony import document_audio, opener
@@ -9959,6 +9978,7 @@ class ReaderMediaTest(BoardBase):
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
     def test_phone_showcase_reader_media_and_inline_table_scroll(self):
         self.another_project()
+        pins.add(self.root, 'docs/inventory.md', 'Inventory guide')
         result = subprocess.run(['node', str(ROOT / 'tests/reader_media.js'), self.serve(), self.entry['id'], self.picture_entry['id'], self.pdf_entry['id']],
                                 capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

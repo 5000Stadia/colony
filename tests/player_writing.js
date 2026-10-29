@@ -12,6 +12,8 @@ const playStart = source.indexOf('  function playFrom(');
 assert(playStart > end && clearStart > playStart, 'production queue Play handler found');
 const stepStart = source.indexOf('  const stepIn ='), stepEnd = source.indexOf('  // Auto: one switch,', stepStart);
 const readStart = source.indexOf('    read(v, secs) {'), readEnd = source.indexOf('    // a chat\'s seen:', readStart);
+const voiceStart = source.indexOf('    setVoice('), voiceEnd = source.indexOf('    attach(', voiceStart);
+assert(voiceStart > end && voiceEnd > voiceStart, 'production project voice update found');
 assert(stepStart > end && stepEnd > stepStart && readStart > end && readEnd > readStart, 'production replay and direct-read handlers found');
 const allowStart = source.indexOf('  let allowing = null;'), allowEnd = source.indexOf('  const save =', allowStart);
 const restoreStart = source.indexOf('  // the reading last left on this device:'), restoreEnd = source.indexOf('  // Auto on as the page opens:', restoreStart);
@@ -24,6 +26,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
   + source.slice(stepEnd, source.indexOf('  // sits above what is fixed', stepEnd))
   + 'const observer = {' + source.slice(ofStart, ofEnd) + '};\n'
   + 'const direct = {' + source.slice(readStart, readEnd) + '};\n'
+  + 'const voicing = {' + source.slice(voiceStart, voiceEnd) + '};\n'
   + source.slice(allowStart, allowEnd) + source.slice(restoreStart, restoreEnd) + `
   window.testPlayer = {
     returning: returnToReading, target: textTarget, showHere, view(v) {view=v;}, of(key, name) {return observer.of(name,key);},
@@ -31,6 +34,8 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
     replay(x) { return again(x, L.projects[x.p] || {}); },
     read(t) { direct.read({key: '0', name: 'Plants', href: '/plants', kokoro: L.ready}, [{t, k: t, text: t + ' reply. All done.'}]); },
     voice(v) { N.kvoice = v; anew(true); },
+    assignedVoice(name, v, key) { voicing.setVoice(name, v, key); },
+    project(p, info) { L.projects[p] = info; },
     words(t, blocks) { words.set('0|' + t, blocks); },
     append(x) { L.line.push(x); words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))); },
     update(x) { L.line = L.line.map(y => id(y) === id(x) ? x : y); },
@@ -42,7 +47,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
       S = session(); xs.forEach(x => { S.want.add(id(x)); S.play.add(id(x)); });
       if (cache) xs.forEach(x => words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))));
     },
-    state: () => ({document: N && N.document, pending: N && N.pending, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, letGo: letGo && letGo.why}),
+    state: () => ({document: N && N.document, pending: N && N.pending, voice: N && N.kvoice, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, letGo: letGo && letGo.why}),
   };
 })();`;
 
@@ -634,6 +639,36 @@ const cases = {
     const doc = b.document(), p = doc.play(); doc.resolve(); await p; b.api.section(1); await b.end();
     assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().piece, 1);
     assert(b.sounds[b.sounds.length - 1].includes('Third')); if (b.kokoro) assert.equal(b.offset(), 12.5);
+  },
+  async 'document uses its owner voice and restores the interrupted project voice'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); b.api.voice('bm_fable'); await flush();
+    b.api.project('1', {name: 'Seeds', voice: 'am_echo', href: '/?p=1&view=chat'});
+    const doc = b.document('other-project.md');
+    const reading = b.api.document('/open?p=1&f=other-project.md&audio=1');
+    doc.resolve({title: 'Other project guide', project: 'Seeds', voice: 'af_heart', kokoro: b.kokoro,
+      blocks: [{k: 'document-0', text: 'Opening section.'}, {k: 'document-1', text: 'Closing section.'}],
+      sections: [{title: 'Opening', start: 0, end: 1}, {title: 'Closing', start: 1, end: 2}]});
+    await reading; assert.equal(b.api.state().voice, 'af_heart');
+    if (b.kokoro) assert.equal(new URL(b.sounds.at(-1), 'http://board/').searchParams.get('v'), 'af_heart');
+    b.api.section(1); await b.end();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().voice, 'bm_fable');
+    if (b.kokoro) assert.equal(new URL(b.sounds.at(-1), 'http://board/').searchParams.get('v'), 'bm_fable');
+  },
+  async 'project voice updates stay scoped through document playback and renamed labels'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]);
+    b.api.project('1', {name: 'Plants', voice: 'af_heart', href: '/?p=1&view=chat'});
+    const doc = b.document('same-label.md');
+    const reading = b.api.document('/open?p=1&f=same-label.md&audio=1');
+    doc.resolve({title: 'Other guide', project: 'Plants', voice: 'af_heart', kokoro: b.kokoro,
+      blocks: [{k: 'document-0', text: 'Opening.'}, {k: 'document-1', text: 'Closing.'}],
+      sections: [{title: 'Opening', start: 0, end: 1}, {title: 'Closing', start: 1, end: 2}]});
+    await reading;
+    b.api.assignedVoice('Plants', 'bm_fable', '0'); await flush();
+    assert.equal(b.api.state().voice, 'af_heart', 'another same-label project cannot change this document voice');
+    b.api.assignedVoice('New label', 'am_echo', '1'); await flush();
+    assert.equal(b.api.state().voice, 'am_echo', 'project identity survives a display-name change');
+    b.api.section(1); await b.end();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().voice, 'bm_fable');
   },
   async 'old voice completion cannot advance a restarted document section'(b) {
     await b.line([]); const doc = b.document(), p = doc.play(); doc.resolve(); await p;

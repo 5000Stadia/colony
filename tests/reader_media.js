@@ -11,6 +11,20 @@ const [base, documentId, imageId, pdfId] = process.argv.slice(2), artifacts = pr
     await page.locator(`#s-${documentId} a.open`).click();
     await page.waitForSelector('.reader [data-media=table]');
     assert(await page.locator('.readplay').isVisible(), 'document audio remains available');
+    const play = await page.locator('.readplay').boundingBox(), edit = await page.locator('.readedit').boundingBox(), article = await page.locator('.reader').boundingBox();
+    assert(edit.y < article.y && play.y < article.y, 'Edit and Play lead the document');
+    assert(Math.abs(edit.y - play.y) <= 2, 'Edit and Play share the same action row');
+    assert(play.x + play.width <= edit.x, 'document actions do not overlap');
+    assert(play.height >= 44 && edit.height >= 44, 'document actions have touch-sized targets');
+    if (artifacts) { fs.mkdirSync(artifacts, {recursive: true}); await page.screenshot({path: `${artifacts}/reader-actions-390.png`}); }
+    await page.locator('.readfoot').scrollIntoViewIfNeeded();
+    const comment = await page.locator('.readcomment > summary').boundingBox(), exits = await page.locator('.readfoot .readnav').boundingBox();
+    assert(comment.y + comment.height <= exits.y, 'footer navigation stays below Comment');
+    await page.locator('.readcomment > summary').click();
+    await page.locator('.readcomment textarea').fill('A sample comment draft.');
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'expanded comment fits the phone');
+    if (artifacts) await page.screenshot({path: `${artifacts}/reader-footer-390.png`});
+    await page.locator('.readcomment > summary').click();
     assert.equal(await page.locator('.reader .media-expand').count(), 4);
     assert.equal(await page.locator('.reader h1').getAttribute('id'), 'sample-inventory');
     assert.equal(await page.locator('.reader h2').getAttribute('id'), 'finish');

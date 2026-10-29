@@ -292,8 +292,8 @@ def folder_html(key, root, path):
 
 def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="", sent=False, viewer=False, host=''):
     """A document, text file, folder or explicit media viewer: a way back to where the person
-    was, what it is, the thing itself (a long file's first part, with the rest a tap away), and at its foot Comment,
-    and Edit for a pinned text file. A cut-off preview is never editable."""
+    was, what it is, the thing itself (a long file's first part, with the rest a tap away), Play and Edit at the top,
+    and Comment at its foot. Edit is for pinned text files; a cut-off preview is never editable."""
     base = Path(root).resolve()
     rel = str(path.relative_to(base))
     steward = key == "steward"
@@ -338,8 +338,8 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     # Edit stays with pinned text files: one reached here unpinned is read-only, so a phone writes no other file
     editable = pin and how in ("doc", "text") and not cut and pins.is_text(pin)
     edit = f"<a class='readedit' href='/pin/edit?p={e(key)}&id={e(pin['id'])}'>Edit</a>" if editable else ""
-    audio = (f"<div class='readaudio' data-url='{e(ref(key, rel) + '&audio=1')}'><button type='button' class='readplay'>Play document</button>"
-             "<span class='readaudiostatus' role='status'></span></div>") if how in ('doc', 'text') else ""
+    audio = (f"<div class='readaudio' role='group' aria-label='Document actions' data-url='{e(ref(key, rel) + '&audio=1')}'><button type='button' class='readplay'>Play document</button>"
+             f"{edit}<span class='readaudiostatus' role='status'></span></div>") if how in ('doc', 'text') else ""
     project = '/steward?view=chat' if steward else return_ref(root)
     exits = (f"<a class='back' href='{e(back)}'>‹ Back to {e(label)}</a>"
              f"<a class='readproject' href='{e(project)}'>Project: {e(board.steward_name() if steward else board.name_of(root))}</a>")
@@ -347,7 +347,7 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
            f"<p class='who readabout'>{' · '.join(about)}</p>"
            f"{audio}<article class='reader{' plain' if how == 'text' else ''}'>{body}</article>"
            + (f"<p class='sent'>Sent: it reaches {e(to)} as a message.</p>" if sent else "")
-           + f"<div class='readfoot'>{comment}{edit}<div class='readnav' role='navigation' aria-label='Document navigation'>{exits}</div></div><script>{READER}</script>")
+           + f"<div class='readfoot'>{comment}<div class='readnav' role='navigation' aria-label='Document navigation'>{exits}</div></div><script>{READER}</script>")
     return board.shell(reg, -1 if steward else int(key), out)
 
 
