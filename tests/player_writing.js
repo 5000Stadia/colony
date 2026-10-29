@@ -8,15 +8,18 @@ assert(start >= 0 && end > start, 'production player closure found');
 const clearStart = source.indexOf('  async function clearShown()');
 const clearEnd = source.indexOf('  // Heard:', clearStart);
 assert(clearStart > end && clearEnd > clearStart, 'production Clear handler found');
-const stepStart = source.indexOf('  const stepIn ='), stepEnd = source.indexOf('  async function again(', stepStart);
+const playStart = source.indexOf('  function playFrom(');
+assert(playStart > end && clearStart > playStart, 'production queue Play handler found');
+const stepStart = source.indexOf('  const stepIn ='), stepEnd = source.indexOf('  // Auto: one switch,', stepStart);
 const readStart = source.indexOf('    read(v, secs) {'), readEnd = source.indexOf('    // a chat\'s seen:', readStart);
-assert(stepStart > end && stepEnd > stepStart && readStart > end && readEnd > readStart, 'production direct-read handlers found');
+assert(stepStart > end && stepEnd > stepStart && readStart > end && readEnd > readStart, 'production replay and direct-read handlers found');
 const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = null;\n'
   + 'const shownLine = () => visible().filter(x => !clearOnly || clearOnly.includes(x.t));\n'
-  + source.slice(clearStart, clearEnd) + source.slice(stepStart, stepEnd)
+  + source.slice(playStart, clearEnd) + source.slice(stepStart, stepEnd)
   + 'const direct = {' + source.slice(readStart, readEnd) + '};\n' + `
   window.testPlayer = {
-    arrivals, start, begin, done, hold, skip, clear: clearShown,
+    arrivals, start, begin, done, hold, skip, rest, clear: clearShown, play: playFrom,
+    replay(x) { return again(x, L.projects[x.p] || {}); },
     read(t) { direct.read({key: '0', name: 'Plants', href: '/plants', kokoro: L.ready}, [{t, k: t, text: t + ' reply. All done.'}]); },
     clearOnly(ts) { clearOnly = ts; },
     line(xs, kokoro, cache = true) {
@@ -80,14 +83,15 @@ function browser(kokoro) {
     fetch: async url => {
       const u = new URL(url, 'http://board/');
       if (u.pathname === '/chat/text') {
-        const key = u.searchParams.get('k');
-        if (requests.has(key)) return requests.get(key).promise;
+        const turn = u.searchParams.get('t'), key = turn || u.searchParams.get('k');
+        const request = turn ? 'turn:' + turn : key;
+        if (requests.has(request)) return requests.get(request).promise;
         return response(key.split(',').map(k => ({k, text: k + ' reply. All done.'})));
       }
       if (u.pathname === '/chat/heard') return {ok: true, json: async () => ({clear: 'clear1'})};
       return {ok: false, json: async () => ({}), headers: {get: () => null}};
     },
-    changed() {}, save() {}, report() {}, clearTimeout, setTimeout,
+    changed() {}, save() {}, report() {}, shutSheet() {}, clearTimeout, setTimeout,
   });
   vm.runInContext(program, context);
   const api = window.testPlayer;
@@ -107,6 +111,8 @@ function browser(kokoro) {
       time = to; await flush();
     },
     text(key) { const d = deferred(); requests.set(key, d); return {resolve: () => d.resolve(response([{k: key, text: key + ' reply. All done.'}]))}; },
+    replayText(t) { const d = deferred(); requests.set('turn:' + t, d);
+      return {resolve: (blocks = [{k: t, text: t + ' reply. All done.'}]) => d.resolve(response(blocks))}; },
     navigation() { storage.set('automode', 'both'); navigation = deferred(); return navigation; },
   };
 }
@@ -214,6 +220,131 @@ const cases = {
     const starting = b.api.start(xs[0]); await b.focus(); b.api.read('B'); pending.resolve(); await starting; await flush();
     assert.equal(b.sounds.length, 0); await b.blur(); await b.advance(2200);
     assert.equal(b.api.state().t, 'B'); assert.equal(b.sounds.length, 1);
+  },
+  async 'queue row replaces pending text while writing'(b) {
+    const xs = await b.line(['A', 'B'], false), pending = b.text('A');
+    const starting = b.api.start(xs[0]); await b.focus(); b.api.play(xs, 1);
+    pending.resolve(); await starting; await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.api.state().opened, ''); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > 0);
+  },
+  async 'filtered queue Play replaces pending text with Auto off'(b) {
+    const xs = await b.line(['A', 'B'], false), pending = b.text('A'); b.storage.set('aloud', '0');
+    const starting = b.api.start(xs[0]); await b.focus(); b.api.play([xs[1]], 0);
+    pending.resolve(); await starting; await flush(); assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > 0);
+  },
+  async 'queue Play invalidates pending sound while writing'(b) {
+    const xs = await b.line(['A', 'B']), navigation = b.navigation();
+    await b.api.start(xs[0]); await b.focus(); b.api.play(xs, 1); navigation.resolve(); await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > 0);
+  },
+  async 'replay text arriving during writing waits through grace'(b) {
+    await b.line([]); const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    await b.focus(); pending.resolve(); await replaying; await flush(); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2199); assert.equal(b.sounds.length, 0);
+    await b.advance(1); assert.equal(b.api.state().t, 'A'); assert(b.sounds.length > 0);
+  },
+  async 'pending replay cannot replace a newer queue selection'(b) {
+    const xs = await b.line(['B']), pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    b.api.play(xs, 0); await flush(); assert.equal(b.api.state().t, 'B'); const sounds = b.sounds.length;
+    pending.resolve(); await replaying; await flush(); assert.equal(b.api.state().t, 'B'); assert.equal(b.sounds.length, sounds);
+  },
+  async 'pending replay cannot replace queue Play held by writing'(b) {
+    const xs = await b.line(['B']), pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    await b.focus(); b.api.play(xs, 0); pending.resolve(); await replaying; await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > 0);
+  },
+  async 'pending replay cannot replace a newer direct Play'(b) {
+    await b.line([]); const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    await b.focus(); b.api.read('B'); pending.resolve(); await replaying; await flush();
+    assert.equal(b.api.state().t, 'B'); assert.equal(b.sounds.length, 0);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert.equal(b.sounds.length, 1);
+  },
+  async 'latest replay wins when text responses arrive out of order'(b) {
+    await b.line([]); const old = b.replayText('A'), latest = b.replayText('B');
+    const first = b.api.replay(b.row('A')), second = b.api.replay(b.row('B'));
+    latest.resolve(); await second; await flush(); assert.equal(b.api.state().t, 'B'); const sounds = b.sounds.length;
+    old.resolve(); await first; await flush(); assert.equal(b.api.state().t, 'B'); assert.equal(b.sounds.length, sounds);
+  },
+  async 'Clear invalidates a pending replay of the current reply'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]); const sounds = b.sounds.length;
+    const pending = b.replayText('A'), replaying = b.api.replay(xs[0]);
+    await b.focus(); b.api.clearOnly(['A']); await b.api.clear(); pending.resolve(); await replaying; await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, sounds);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > sounds);
+  },
+  async 'Skip invalidates a pending replay of the current reply'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]); const sounds = b.sounds.length;
+    const pending = b.replayText('A'), replaying = b.api.replay(xs[0]);
+    await b.focus(); b.api.skip(); pending.resolve(); await replaying; await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, sounds);
+    await b.blur(); await b.advance(2200); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > sounds);
+  },
+  async 'an arrival waits behind a pending replay selection'(b) {
+    await b.line(['B']); const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    b.api.arrivals(); await flush(); assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0);
+    pending.resolve(); await replaying; await flush(); assert.equal(b.api.state().t, 'A'); assert(b.sounds.length > 0);
+  },
+  async 'an empty replay releases its pending selection'(b) {
+    await b.line(['B']); const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    pending.resolve([]); await replaying; await flush(); assert.equal(b.api.state().opened, '');
+    b.api.arrivals(); await flush(); assert.equal(b.api.state().t, 'B'); assert(b.sounds.length > 0);
+  },
+  async 'a person pause while replay text loads survives writing release'(b) {
+    await b.line([]); const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    b.api.hold(true); await b.focus(); pending.resolve(); await replaying; await flush();
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, 0);
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().paused, true); assert.equal(b.api.state().why, 'person');
+    b.api.hold(false); await flush(); assert(b.sounds.length > 0);
+  },
+  async 'a pause of the active reply also holds its pending replay'(b) {
+    const xs = await b.line(['B']); await b.api.start(xs[0]); const sounds = b.sounds.length;
+    const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    b.api.hold(true); await b.focus(); pending.resolve(); await replaying; await flush();
+    await b.blur(); await b.advance(2200); assert.equal(b.sounds.length, sounds);
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().paused, true); assert.equal(b.api.state().why, 'person');
+    b.api.hold(false); await flush(); assert(b.sounds.length > sounds);
+  },
+  async 'explicit replay resumes an earlier person pause'(b) {
+    await b.line([]); b.api.hold(true); await b.api.replay(b.row('A')); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().paused, false); assert(b.sounds.length > 0);
+  },
+  async 'explicit resume while replay loads still waits for writing release'(b) {
+    const xs = await b.line(['B']); await b.api.start(xs[0]); const sounds = b.sounds.length;
+    const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    await b.focus(); b.api.hold(true); b.api.hold(false); pending.resolve(); await replaying; await flush();
+    assert.equal(b.sounds.length, sounds); await b.blur(); await b.advance(2200);
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().paused, false); assert(b.sounds.length > sounds);
+  },
+  async 'natural completion waits for the selected replay then continues the line'(b) {
+    const xs = await b.line(['B', 'C']); await b.api.start(xs[0]); const sounds = b.sounds.length;
+    const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, sounds);
+    pending.resolve(); await replaying; await flush(); assert.equal(b.api.state().t, 'A');
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, 'C');
+  },
+  async 'an empty replay after natural completion releases the line'(b) {
+    const xs = await b.line(['B', 'C']); await b.api.start(xs[0]);
+    const pending = b.replayText('A'), replaying = b.api.replay(b.row('A'));
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, null);
+    pending.resolve([]); await replaying; await flush(); assert.equal(b.api.state().t, 'C'); assert.equal(b.api.state().opened, '');
+  },
+  async 'a completed silence promise cannot erase a newer person pause'(b) {
+    await b.line([]);
+    // The Audio stub already fulfilled play(); only its .then callback is pending. This checks stale state
+    // protection, not whether a browser fulfills or rejects play() when pause() races it.
+    let resumed = false;
+    b.api.rest('between replies', ok => { resumed = ok; }); b.api.hold(true); await flush();
+    assert.equal(b.api.state().letGo, 'paused'); assert.equal(resumed, false);
+  },
+  async 'waiting silence respects an existing person pause'(b) {
+    await b.line([]); b.api.hold(true);
+    let resumed = false;
+    b.api.rest('the page opened', ok => { resumed = ok; }); await flush();
+    assert.equal(b.api.state().letGo, 'paused'); assert.equal(resumed, false);
   },
   async 'Skip invalidates pending sound before it resolves'(b) {
     const xs = await b.line(['A', 'B']), navigation = b.navigation();
