@@ -10168,3 +10168,173 @@ class ProviderMailProblemTest(unittest.TestCase):
                 self.assertEqual(result['code'], 'authentication')
                 self.assertNotIn('SECRET', str(result))
         self.assertIsNone(providers.get('codex').mail_problem('Error: some unknown problem SECRET', stopped=True))
+
+
+class ProjectRenameTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.server = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
+        self.base = f'http://127.0.0.1:{self.server.server_address[1]}'
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def rename(self, name, **extra):
+        data = urllib.parse.urlencode(dict(project=str(self.root), name=name, **extra)).encode()
+        return urllib.request.urlopen(urllib.request.Request(self.base + '/project/rename', data=data,
+                                      headers={'Origin': self.base}))
+
+    def test_rename_persists_the_label_and_delivers_one_person_directive(self):
+        from colony import project_names
+        before = console.session_name(self.root)
+        address = mail.address(self.root)
+        self.assertEqual(self.rename('  Garden journal  ').status, 200)
+        self.assertEqual(project_names.name_of(self.root), 'Garden journal')
+        self.assertEqual(json.loads((self.root / '.board/name.json').read_text())['name'], 'Garden journal')
+        notes = board.notes(self.root)
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]['author'], 'person')
+        for text in ['plants', 'Garden journal', 'Their new name:', 'What this means:', 'rename the project folder',
+                     'Colony registration', 'old mail address', 'impractical', 'proper bookkeeping']:
+            self.assertIn(text, notes[0]['text'])
+        self.assertEqual(self.rename('Garden journal').status, 200)
+        self.assertEqual(len(board.notes(self.root)), 1)
+        self.assertTrue(self.root.is_dir())
+        self.assertEqual(console.session_name(self.root), before)
+        self.assertEqual(mail.address(self.root), address)
+        self.assertEqual(mail.resolve(address), self.root)
+        self.assertEqual(board.projects(), [self.root])
+        self.assertNotIn('name', board.project_settings(self.root)[1])
+        status = json.load(urllib.request.urlopen(self.base + '/status'))
+        self.assertEqual(status['projects'][0]['name'], 'Garden journal')
+        self.assertEqual(status['projects'][0]['project'], str(self.root))
+        from colony.cli import _project
+        self.assertEqual(_project('plants'), self.root)
+        self.assertEqual(_project('Garden journal'), self.root)
+
+    def test_bad_or_cross_origin_names_make_no_changes(self):
+        for name in ['', '   ', 'x' * 121, 'a\nb', 'a\x00b', 'a\x7fb']:
+            with self.subTest(name=name), self.assertRaises(urllib.error.HTTPError) as error:
+                self.rename(name)
+            self.assertEqual(error.exception.code, 400)
+        request = urllib.request.Request(self.base + '/project/rename',
+                    data=urllib.parse.urlencode({'project': str(self.root), 'name': 'evil'}).encode(),
+                    headers={'Origin': 'https://elsewhere.example'})
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request)
+        self.assertEqual(error.exception.code, 403)
+        self.assertEqual(board.name_of(self.root), 'plants')
+        self.assertFalse((self.root / '.board/name.json').exists())
+        self.assertEqual(board.notes(self.root), [])
+
+    def test_markup_is_text_everywhere_and_internal_chat_id_is_stable(self):
+        label = "Garden <img src=x onerror=alert(1)> & ' \""
+        self.rename(label)
+        for page in [board.render(board.registry(), 0), board.all_projects_page(board.registry()),
+                     board.sidebar(board.registry(), 0), board.render(board.registry(), 0, 'chat')]:
+            self.assertIn(html.escape(label, quote=True), page)
+            self.assertNotIn('<img src=x onerror=alert(1)>', page)
+        self.assertIn("data-project='plants'", board.render(board.registry(), 0, 'chat'))
+        self.assertNotIn(label, board.settings_panel(0, self.root))
+
+    def test_shared_agent_renames_only_its_own_label_and_receives_the_instruction(self):
+        from colony import lead
+        other = Path(self.tmp.name) / 'other'
+        other.mkdir()
+        board.track(other)
+        lead.pair(self.root, other)
+        mine, theirs = len(board.notes(self.root)), len(board.notes(other))
+        self.rename('Garden keeper')
+        self.assertEqual(board.name_of(self.root), 'Garden keeper')
+        self.assertEqual(board.name_of(other), 'other')
+        self.assertEqual(len(board.notes(self.root)), mine + 1)
+        self.assertEqual(len(board.notes(other)), theirs)
+        self.assertIn('declared lead', board.notes(self.root)[-1]['text'])
+
+    def test_display_aliases_are_unique_and_folder_addresses_take_precedence(self):
+        from colony import project_names
+        from colony.cli import _project
+        other = Path(self.tmp.name) / 'other'
+        other.mkdir()
+        board.track(other)
+        self.rename('Same label')
+        project_names.rename(other, 'Same label')
+        with self.assertRaisesRegex(SystemExit, 'more than one'):
+            _project('Same label')
+        self.assertEqual(_project('plants'), self.root)
+        project_names.rename(other, 'plants')
+        self.assertEqual(_project('plants'), self.root)
+
+    def test_stale_list_positions_and_repeated_form_fields_cannot_rename_another_project(self):
+        other = Path(self.tmp.name) / 'other'
+        other.mkdir()
+        board.track(other)
+        registry = board.registry()
+        registry['projects'].reverse()
+        board.save_registry(registry)
+        self.rename('Garden journal', p='0')
+        self.assertEqual(board.name_of(self.root), 'Garden journal')
+        self.assertEqual(board.name_of(other), 'other')
+        for fields in [[('project', str(self.root)), ('project', str(other)), ('name', 'wrong')],
+                       [('project', str(self.root)), ('name', 'wrong'), ('name', 'also wrong')],
+                       [('project', str(self.root.parent)), ('name', 'wrong')]]:
+            request = urllib.request.Request(self.base + '/project/rename', data=urllib.parse.urlencode(fields).encode())
+            with self.assertRaises(urllib.error.HTTPError):
+                urllib.request.urlopen(request)
+        self.assertEqual(board.name_of(self.root), 'Garden journal')
+        self.assertEqual(board.name_of(other), 'other')
+        self.assertEqual(len(board.notes(self.root)), 1)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires the isolated Chrome fixture')
+    def test_phone_pencils_cancel_save_poll_and_escape(self):
+        script = r'''
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome',
+    headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const page = await browser.newPage({viewport: {width: 390, height: 844}});
+  const base = process.argv[1], folder = process.argv[2], label = process.argv[3], out = process.argv[4];
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  await page.goto(base + '/?p=0');
+  const pencil = page.locator('h1 .rename-project');
+  const box = await pencil.boundingBox();
+  assert(box.width >= 44 && box.height >= 44 && box.x + box.width <= 390, 'phone pencil must be reachable');
+  let posts = 0;
+  page.on('request', r => { if (r.url().endsWith('/project/rename')) posts++; });
+  const original = page.url();
+  page.once('dialog', d => d.dismiss());
+  await pencil.click();
+  await page.waitForTimeout(100);
+  assert(posts === 0 && page.url() === original, 'cancel must neither save nor navigate');
+  page.once('dialog', d => d.accept(label));
+  await pencil.click();
+  await page.waitForFunction(label => document.querySelector('h1 .project-label').textContent === label, label);
+  assert(posts === 1, 'one save');
+  assert(await page.locator('nav .project-label').first().textContent() === label, 'sidebar follows header');
+  assert(await page.locator('h1 img').count() === 0, 'markup must stay text');
+  await page.reload();
+  assert(await page.locator('h1 .project-label').textContent() === label, 'reload retains label');
+  await page.request.post(base + '/project/rename', {form: {project: folder, name: 'Changed on another device'}});
+  await page.waitForFunction(() => document.querySelector('h1 .project-label').textContent === 'Changed on another device');
+  await page.screenshot({path: out + '/rename-phone-header.png', fullPage: true});
+  await page.goto(base + '/projects');
+  const row = page.locator('.prow').first(), rowPencil = row.locator('.rename-project');
+  assert(await row.locator('.project-label').textContent() === 'Changed on another device', 'project list follows');
+  const listURL = page.url();
+  page.once('dialog', d => d.dismiss());
+  await rowPencil.click();
+  assert(page.url() === listURL, 'list pencil must not follow its project link');
+  await rowPencil.focus();
+  page.once('dialog', d => d.accept('Keyboard name'));
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('.prow .project-label').textContent === 'Keyboard name');
+  await page.screenshot({path: out + '/rename-phone-list.png', fullPage: true});
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+'''
+        artifacts = Path(os.environ['COLONY_TEST_ARTIFACTS'])
+        artifacts.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(['node', '-e', script, self.base, str(self.root), '<img src=x onerror=alert(1)>',
+                                 str(artifacts)], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

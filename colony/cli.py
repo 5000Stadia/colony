@@ -1317,9 +1317,15 @@ def cmd_noted(a):
 
 def _project(name):
     from . import board
-    for p in board.projects():
+    projects = board.projects()
+    for p in projects:
         if p.name == name:
             return p
+    named = [p for p in projects if board.name_of(p) == name]
+    if len(named) == 1:
+        return named[0]
+    if named:
+        raise SystemExit(f"more than one project named {name}; use its address from `colony projects`")
     raise SystemExit(f"no project named {name} on the board; `colony projects` lists them")
 
 
@@ -1329,7 +1335,9 @@ def cmd_projects(a):
         snap = console.snapshot(p, lines=1) if p.exists() else {"state": "missing", "lines": []}
         waiting = len(board.moments(p))
         goal = ' '.join(board.roadmap(p)["goal"].split()) if p.exists() else ""
-        print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' waiting on you' if waiting else '':16} {goal[:90]}")
+        label = board.name_of(p)
+        name = f" · {label}" if label != p.name else ""
+        print(f"{mail.address(p):22} {snap['state']:10} {str(waiting) + ' waiting on you' if waiting else '':16} {goal[:90]}{name}")
     return 0
 
 
