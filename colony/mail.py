@@ -250,9 +250,13 @@ def repair(root):
 def _repair(root):
     current = {m['id']: m for m in inbox(root)}
     history = {ident: [] for ident in current}
+    originals = {}
     for event in board.read(root, FILE):
-        if event['type'] == 'delivery' and event['of'] in history:
+        if event['type'] == 'message' and event['id'] in current:
+            originals.setdefault(event['id'], event)
+        elif event['type'] == 'delivery' and event['of'] in history:
             history[event['of']].append(event)
+    projects, sources = names(), {}
     for ident, m in current.items():
         if m['delivery']['status'] == 'reply-delayed' and m['answer']:
             answer = m['answer']
@@ -262,23 +266,31 @@ def _repair(root):
             history[ident].append(_record(root, m, 'handed', f"answer {answer['id']} {state}"))
         if history[ident]:
             try:
-                _feedback(root, m, history[ident])
+                _feedback(root, m, history[ident], originals[ident], projects, sources)
             except OSError:
                 # Sender storage cannot revoke an already flushed handoff. The watcher retries this log.
-                pass
+                # A failed flush may still have appended: reload before another message uses the cache.
+                sources.clear()
     return current
 
 
-def _feedback(root, message, history):
-    source = _source(message)
-    if not source:
+def _feedback(root, message, history, original, projects, sources):
+    stored = message.get('source_root')
+    source = Path(stored) if stored else next((p for p, name in projects.items() if name == message['from']), None)
+    if source not in projects:
         return
+    if source not in sources:
+        copies = {m['id']: m['delivery'] for m in messages(source)} if source != Path(root) else {}
+        sources[source] = copies, {n['id']: n for n in board.notes(source)}
+    copies, notes = sources[source]
     event = history[-1]
     if source != Path(root):
-        copy = next((m for m in messages(source) if m['id'] == message['id']), None)
-        if not copy or copy['delivery'] != message['delivery']:
+        if message['id'] not in copies:
+            board.append(source, FILE, original)
+            copies[message['id']] = None
+        if copies[message['id']] != message['delivery']:
             board.append(source, FILE, event)
-    notes = {n['id']: n for n in board.notes(source)}
+            copies[message['id']] = message['delivery']
     superseded = 'Superseded by the current mail delivery status.'
     seen = False
     for earlier in reversed(history[:-1]):
@@ -290,8 +302,10 @@ def _feedback(root, message, history):
     for earlier in history[:-1]:
         note = notes.get(earlier.get('note_id'))
         if note and not note['addressed_at']:
+            stamp = board.now()
             board.append(source, 'notes.jsonl', {'type': 'addressed', 'of': note['id'],
-                                                'at': board.now(), 'text': superseded})
+                                                'at': stamp, 'text': superseded})
+            note.update(addressed_at=stamp, reply=superseded)
     note_id = event.get('note_id')
     delayed = event['status'] in ('delayed', 'reply-delayed')
     if not note_id or note_id in notes or (not delayed and not seen):
@@ -305,9 +319,11 @@ def _feedback(root, message, history):
                  ('the previously reported block is no longer observed; the message was already handed to its session'
                   if history[-2]['status'] == 'reply-delayed' else 'handed to the recipient session'))
         text = phase + ('.' if message['answer'] else '. This confirms no read or answer.')
-    board.append(source, 'notes.jsonl', {'type': 'note', 'id': note_id, 'at': event['at'], 'author': 'colony',
-                                       'anchor': None, 'kind': 'mail-delivery',
-                                       'text': f"Mail {message['id']} to {message['to']}: {text}"})
+    note = {'type': 'note', 'id': note_id, 'at': event['at'], 'author': 'colony',
+            'anchor': None, 'kind': 'mail-delivery',
+            'text': f"Mail {message['id']} to {message['to']}: {text}"}
+    board.append(source, 'notes.jsonl', note)
+    notes[note_id] = dict(note, reply=None, addressed_at=None, delivered_at=None)
 
 
 def delivered(root, ms):

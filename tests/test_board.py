@@ -10074,6 +10074,64 @@ class MailDeliveryStatusTest(BoardBase):
         self.assertEqual(got['delivery']['status'], 'reply-delayed')
         self.assertEqual(len(board.notes(self.root)), 1)
 
+    def test_repair_reads_each_source_once_for_many_completed_messages(self):
+        originals = [self.send() for _ in range(16)]
+        mail.report(self.shop, originals, 'delayed', 'authentication expired', 'auth')
+        mail.delivered(self.shop, originals)
+        with patch.object(board, 'read', wraps=board.read) as reads, \
+                patch.object(mail, 'names', wraps=mail.names) as names, \
+                patch.object(board, 'append', wraps=board.append) as writes:
+            mail.repair(self.shop)
+        source_reads = [call.args[1] for call in reads.call_args_list if call.args[0] == self.root]
+        self.assertEqual(source_reads.count(mail.FILE), 1)
+        self.assertEqual(source_reads.count('notes.jsonl'), 1)
+        self.assertLessEqual(names.call_count, 2)
+        writes.assert_not_called()
+
+    def test_repair_restores_missing_original_before_receipt_and_stops_appending(self):
+        m = self.send(ask=True)
+        original = board.read(self.shop, mail.FILE)[0]
+        with patch.object(board, 'now', return_value='2026-10-29T00:00:00Z'):
+            mail.delivered(self.shop, [m])
+        with patch.object(board, 'now', return_value='2026-10-29T00:01:00Z'):
+            mail.report(self.shop, [m], 'reply-delayed', 'authentication expired', 'auth')
+        expected = mail.inbox(self.shop)[0]
+        event = board.read(self.shop, mail.FILE)[-1]
+        for orphaned in (False, True):
+            with self.subTest(orphaned_receipt=orphaned):
+                (self.root / '.board' / mail.FILE).write_text(json.dumps(event) + '\n' if orphaned else '')
+                mail.repair(self.shop)
+                restored = mail.messages(self.root)
+                self.assertEqual(len(restored), 1)
+                self.assertEqual(restored[0]['delivery'], expected['delivery'])
+                self.assertEqual(restored[0]['delivered_at'], '2026-10-29T00:00:00Z')
+                self.assertEqual([r for r in board.read(self.root, mail.FILE) if r['type'] == 'message'], [original])
+                with patch.object(board, 'append', wraps=board.append) as writes:
+                    mail.repair(self.shop)
+                writes.assert_not_called()
+        self.assertEqual(len(board.notes(self.root)), 1)
+
+    def test_repair_retries_partial_restoration_without_duplicate_message_or_receipt(self):
+        m = self.send()
+        mail.delivered(self.shop, [m])
+        receipt = mail.inbox(self.shop)[0]['delivered_at']
+        append = board.append
+        for failed_type in ('message', 'delivery'):
+            with self.subTest(partial_write=failed_type):
+                (self.root / '.board' / mail.FILE).write_text('')
+                def partial(root, filename, record):
+                    append(root, filename, record)
+                    if root == self.root and filename == mail.FILE and record['type'] == failed_type:
+                        raise OSError('source flush failed')
+                with patch.object(board, 'append', side_effect=partial):
+                    mail.repair(self.shop)
+                mail.repair(self.shop)
+                self.assertEqual([r['type'] for r in board.read(self.root, mail.FILE)], ['message', 'delivery'])
+                self.assertEqual(mail.messages(self.root)[0]['delivered_at'], receipt)
+                with patch.object(board, 'append', wraps=append) as writes:
+                    mail.repair(self.shop)
+                writes.assert_not_called()
+
     def test_local_receipt_failure_cannot_create_or_close_sender_notes(self):
         m = self.send()
         mail.report(self.shop, [m], 'delayed', 'old outage', 'network')
