@@ -907,12 +907,20 @@ PAGE = """
  <button data-k='up'>↑</button><button data-k='down'>↓</button><button data-mod='ctrl'>Ctrl</button><button data-mod='alt'>Alt</button>
  <button class='copy' id='history'>Select</button><button class='selectall' id='selectall'>Select all</button>
  <button class='send' data-k='enter'>Send</button></div>
-<div id='term'></div>
+<div id='term'><p id='console-state' role='status'>Opening Console…</p></div>
 <pre id='hist' hidden></pre>
 <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css'>
 <script src='https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js'></script>
 <script src='https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js'></script>
 <script>
+(() => {{
+const status = document.getElementById('console-state');
+if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {{
+  status.textContent = 'Console could not load. Check your connection, then ';
+  const retry = document.createElement('a'); retry.href = location.href; retry.textContent = 'reload Console';
+  status.append(retry); return;
+}}
+status.hidden = true;
 const term = new Terminal({{fontSize: 13, cursorBlink: true, theme: {{background: '#16171a'}}}});
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
@@ -920,28 +928,36 @@ term.open(document.getElementById('term'));
 fit.fit();
 // A phone drops the connection whenever the browser goes to the background, and the board may restart:
 // reconnect by itself, and reload the page if that keeps failing. The session runs on regardless.
-let ws, tries = 0;
+let ws, tries = 0, retry = null, left = false;
 const send = (m) => ws && ws.readyState === 1 && ws.send(JSON.stringify(m));
 // Full screen on a phone: the terminal takes what the chips above and the keys and tabs below leave.
 const refit = () => {{
   if (document.body.classList.contains('focus')) {{
-    const tabs = document.querySelector('.tabs'), keys = document.querySelector('.keys');
-    const tabsH = tabs && getComputedStyle(tabs).position === 'fixed' ? tabs.offsetHeight : 0;
-    keys.style.bottom = tabsH + 'px';
-    const h = (window.visualViewport ? visualViewport.height : innerHeight) - termEl.getBoundingClientRect().top - keys.offsetHeight - tabsH;
+    const keys = document.querySelector('.keys'), top = termEl.getBoundingClientRect().top;
+    let foot = window.visualViewport ? visualViewport.offsetTop + visualViewport.height : innerHeight;
+    // Auto's message box and player stay usable, with the terminal's keys just above them.
+    document.querySelectorAll('.tabs, #gc, #cplayer').forEach((el) => {{
+      const r = el.getBoundingClientRect();
+      if (!el.hidden && r.height && getComputedStyle(el).position === 'fixed') foot = Math.min(foot, r.top);
+    }});
+    keys.style.bottom = Math.max(0, innerHeight - foot) + 'px';
+    const h = foot - top - keys.offsetHeight;
     termEl.style.height = Math.max(120, h) + 'px';
   }}
   fit.fit(); send({{r: [term.cols, term.rows]}});
 }};
 function connect() {{
-  ws = new WebSocket(`${{location.protocol === 'https:' ? 'wss' : 'ws'}}://${{location.host}}/console/ws?p={pid}&t={token}`);
+  clearTimeout(retry); retry = null;
+  if (left || (ws && ws.readyState < 2)) return;
+  const socket = ws = new WebSocket(`${{location.protocol === 'https:' ? 'wss' : 'ws'}}://${{location.host}}/console/ws?p={pid}&t={token}`);
   ws.binaryType = 'arraybuffer';
   ws.onopen = () => {{ tries = 0; term.reset(); send({{r: [term.cols, term.rows]}}); term.focus(); }};
   ws.onmessage = (ev) => term.write(new Uint8Array(ev.data), () => {{ if (typeof showJump === 'function') showJump(); }});
   ws.onclose = () => {{
+    if (left || ws !== socket) return;
     if (++tries > 4) return location.reload();
     term.write('\\r\\n[reconnecting…]\\r\\n');
-    setTimeout(connect, 800 * tries);
+    retry = setTimeout(connect, 800 * tries);
   }};
 }}
 connect();
@@ -982,6 +998,11 @@ document.getElementById('fullscreen').addEventListener('click', () => focus(true
 // on; a tap still opens the keyboard. The touches land on a still layer over the terminal: a touch belongs
 // to the element it started on, and the terminal replaces its rows as it redraws, which ends the drag.
 const termEl = document.getElementById('term'), STEP = 14;
+// Auto may open, fold or resize after the terminal has fitted; its fixed controls then leave a different space.
+const overlays = [...document.querySelectorAll('#gc, #cplayer')];
+const layout = new ResizeObserver(refit);
+const placed = new MutationObserver(refit);
+overlays.forEach((el) => {{ layout.observe(el); placed.observe(el, {{attributes: true, attributeFilter: ['style', 'class', 'hidden']}}); }});
 const pad = document.createElement('div');
 pad.className = 'touchpad';
 termEl.appendChild(pad);
@@ -1075,5 +1096,15 @@ allBtn.addEventListener('click', () => {{
 }});
 window.addEventListener('resize', refit);
 if (window.visualViewport) visualViewport.addEventListener('resize', refit);
+const leave = (ev) => {{
+  if (ev.persisted) return;
+  left = true; clearTimeout(retry);
+  layout.disconnect(); placed.disconnect();
+  cancelAnimationFrame(glide); cancelAnimationFrame(frame);
+  if (ws) ws.close(); term.dispose();
+}};
+document.addEventListener('colony-leave', leave);
+window.addEventListener('pagehide', leave);
+}})();
 </script>
 """

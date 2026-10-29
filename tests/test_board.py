@@ -10298,6 +10298,74 @@ class ProviderMailProblemTest(unittest.TestCase):
         self.assertIsNone(providers.get('codex').mail_problem('Error: some unknown problem SECRET', stopped=True))
 
 
+class ConsoleBrowserTest(BoardBase):
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') and os.environ.get('COLONY_TEST_XTERM'),
+                         'requires isolated Chrome/Playwright and the existing pinned xterm CDN assets')
+    def test_phone_cold_player_navigation_rotation_and_reconnect(self):
+        board.track(self.root)
+        # A real browser terminal and the real WebSocket/tmux bridge, with only a harmless shell behind it.
+        console.COMMAND = "printf 'Console recovery fixture ready\\n'; exec /bin/sh"
+        catchup = patch.object(console, 'catch_up')
+        catchup.start(); self.addCleanup(catchup.stop)
+        asset_root = Path(os.environ['COLONY_TEST_XTERM'])
+        assets = {'xterm.js': ('application/javascript', (asset_root / 'xterm.js').read_bytes()),
+                  'addon-fit.js': ('application/javascript', (asset_root / 'addon-fit.js').read_bytes()),
+                  'xterm.css': ('text/css', (asset_root / 'xterm.css').read_bytes())}
+        assets['xterm.js'] = (assets['xterm.js'][0], assets['xterm.js'][1] + b'\n{const T=window.Terminal; window.Terminal=class extends T {constructor(...a){super(...a);window.fixtureTerminal=this;}};}')
+        body = console.PAGE.format(label='Shell', path='fixture', name='fixture', pid=0,
+                                   token=console.token(), focus='true', scrolled='')
+        for old, name in [('https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js', 'xterm.js'),
+                          ('https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js', 'addon-fit.js'),
+                          ('https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css', 'xterm.css')]:
+            body = body.replace(old, '/fixture/' + name)
+        def fixture(console_page):
+            return ("<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                    "<link rel='stylesheet' href='/static/board.css'></head><body>"
+                    '<script>' + board.player_js() + '</script><nav style="height:80px">Fixture projects</nav><main>'
+                    "<header><h1>Shell fixture</h1><div class='tabs'><a href='/fixture/chat'>Chat</a>"
+                    "<a href='/fixture/console'>Console</a></div></header>"
+                    + (body if console_page else '<p>Chat fixture</p>') + '</main></body></html>').encode()
+        class Handler(board.Handler):
+            def _get(self):
+                if self.path.startswith('/chat/line'):
+                    data = json.dumps({'line': [], 'projects': {'0': {'name': 'Shell fixture', 'href': '/fixture/chat'}},
+                                       'total': 0, 'ready': True}).encode()
+                    self.send_response(200); self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(data))); self.end_headers()
+                    return self.wfile.write(data)
+                if self.path in ('/fixture/chat', '/fixture/console'):
+                    return self._send(200, fixture(self.path.endswith('/console')))
+                name = self.path.removeprefix('/fixture/')
+                if name in assets:
+                    kind, data = assets[name]
+                    self.send_response(200); self.send_header('Content-Type', kind)
+                    self.send_header('Content-Length', str(len(data))); self.end_headers()
+                    return self.wfile.write(data)
+                return super()._get()
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        import ssl
+        cert, key = Path(self.tmp.name) / 'fixture.crt', Path(self.tmp.name) / 'fixture.key'
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
+                        '-subj', '/CN=localhost', '-keyout', str(key), '-out', str(cert)],
+                       check=True, capture_output=True)
+        secure = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); tls.load_cert_chain(cert, key)
+        secure.socket = tls.wrap_socket(secure.socket, server_side=True)
+        threading.Thread(target=secure.serve_forever, daemon=True).start()
+        self.addCleanup(secure.server_close); self.addCleanup(secure.shutdown)
+        artifacts = Path(os.environ['COLONY_TEST_ARTIFACTS']); artifacts.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(['node', str(ROOT / 'tests/console_browser.js'),
+                                 f'http://127.0.0.1:{server.server_address[1]}', str(artifacts),
+                                 f'https://127.0.0.1:{secure.server_address[1]}'],
+                                capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS phone Console cold, player navigation, rotation and reconnect', result.stdout)
+
+
 class ProjectRenameTest(BoardBase):
     def setUp(self):
         super().setUp()

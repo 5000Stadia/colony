@@ -2725,6 +2725,7 @@ PLAYER = """
     if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = got; return; }
     const from = location.href, to = method !== 'GET' && !redirected ? location.href : got;
     if (document.documentElement.classList.contains('media-open')) return;
+    document.dispatchEvent(new Event('colony-leave'));
     leave(); if (window.colonyPlayer) window.colonyPlayer.leave();
     try {
       if (how.push !== false) history.replaceState(Object.assign({}, history.state, {colony: 1, y: scrollY}), '');
@@ -2742,9 +2743,17 @@ PLAYER = """
     kept.forEach((x) => document.body.appendChild(x));
     window.colonyFrom = from;
     scrollTo(0, how.y || 0);
-    // each script runs in a block of its own: a name it declares can be declared again by the next page
-    document.body.querySelectorAll('script').forEach((old) => { const s = document.createElement('script');
-      s.textContent = '{\\n' + old.textContent + '\\n}'; old.replaceWith(s); });
+    // External dependencies load in document order before the page's inline code (Console needs xterm and fit).
+    // Inline classic scripts get their own block, so the next page can declare the same names again.
+    for (const old of [...document.body.querySelectorAll('script')]) {
+      const s = document.createElement('script');
+      [...old.attributes].forEach((a) => s.setAttribute(a.name, a.value));
+      const classic = !s.type || /^(text|application)\\/javascript$/i.test(s.type);
+      s.textContent = !s.src && classic ? '{\\n' + old.textContent + '\\n}' : old.textContent;
+      if (s.src) await new Promise((done) => { s.onload = s.onerror = done; old.replaceWith(s); });
+      else old.replaceWith(s);
+      if (mine !== going || document.documentElement.classList.contains('media-open')) return;
+    }
     if (window.colonyPlayer) window.colonyPlayer.placed();
   };
   O.add.call(window, 'popstate', (ev) => { if (ev.state && ev.state.colony) go(location.href, {push: false, y: ev.state.y}); });
@@ -10621,6 +10630,7 @@ body.copying .keys .selectall { display:block }
   white-space:pre-wrap; word-break:break-word; font:12.5px/1.45 ui-monospace,Menlo,monospace; background:#16171a; color:#d7d4ce;
   -webkit-user-select:text; user-select:text; -webkit-overflow-scrolling:touch }
 #term { height:calc(100vh - 130px); border-radius:10px; overflow:hidden; background:#16171a; padding:6px }
+#console-state { margin:12px; color:#d7d4ce } #console-state a { color:inherit }
 .mapbox > summary, .ms > summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:12px }
 .mapbox > summary { color:var(--accent); font-size:13px; margin-bottom:10px } .ms > summary h3 { margin:0 }
 .ms[open] > summary { margin-bottom:6px } .ms > summary .msdot { align-self:center }
