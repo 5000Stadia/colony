@@ -511,7 +511,7 @@ class PageTest(BoardBase):
         board.track(other)
         page = board.render(board.registry(), 0)
         self.assertLess(page.index("class='status'"), page.index("class='vision'"))
-        names = lambda: [n for n in re.findall(r"</span>([\w-]+)<span class='badge", board.sidebar(board.registry(), 0))]
+        names = lambda: re.findall(r"<span class='project-label'[^>]*>([\w-]+)</span>", board.sidebar(board.registry(), 0))
         board.woke(other)
         self.assertEqual(names()[0], "photonic")
         board.woke(self.root)
@@ -649,8 +649,9 @@ class ArchiveAndListTest(BoardBase):
         self.assertIn("Start a new nest", board.nest_form(0, self.root))
         nest.join(other, "holodeck")
         page = board.all_projects_page(board.registry())
-        self.assertLess(page.index("holodeck nest"), page.index("<b>photonic</b>"))
-        self.assertLess(page.index("Other projects"), page.index("<b>plants</b>"))
+        labels = {m[1]: m.start() for m in re.finditer(r"<b class='project-label'[^>]*>([\w-]+)</b>", page)}
+        self.assertLess(page.index("holodeck nest"), labels["photonic"])
+        self.assertLess(page.index("Other projects"), labels["plants"])
         self.assertIn("name='name' value='holodeck'>holodeck <span class='muted'>1</span></button>", board.nest_form(0, self.root),
                       "the nests there are, listed to join with a tap")
         self.assertIn("Take it out", board.nest_form(1, other))

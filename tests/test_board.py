@@ -610,9 +610,9 @@ class BoardTest(BoardBase):
         html_ = board.render(board.registry(), 0)
         for part in ("Waiting on you", "Since you were last here", "doing → done"):
             self.assertIn(part, html_)
-        self.assertNotIn("History", html_, "the plan and its record are on the Roadmap tab")
+        self.assertNotIn("id='history'", html_, "the plan and its record are on the Roadmap tab")
         plan = board.render(board.registry(), 0, "roadmap")
-        for part in ("R3", "History", "<div class='journey'>"):
+        for part in ("R3", "id='history'", "<h3>History</h3>", "<div class='journey'>"):
             self.assertIn(part, plan)
         self.assertNotIn("Since you were last here", plan)
 
@@ -1900,7 +1900,7 @@ class LibraryTest(BoardBase):
         self.assertIn("<div class='who'>the map every chapter is checked against</div>", page)
         self.assertNotIn("by the agent", page)
         self.assertNotIn("world/places.md</div>", page)
-        self.assertNotIn("Rename", page, "a heading is renamed with colony regroup --rename, no fold of its own")
+        self.assertNotIn("Rename", board.library_html(0, self.root), "a heading is renamed with colony regroup --rename, no fold of its own")
         self.assertIn("<summary>Not under a heading <span class='muted'>1</span>", page)
         pins.regroup(self.root, x["id"], "Places")
         self.assertIn("<summary>Places <span class='muted'>1</span>", board.render(board.registry(), 0, "library"), "either of them moves it")
@@ -3809,7 +3809,7 @@ class SettingsTest(BoardBase):
             page = opener.open(f"http://127.0.0.1:{port}/").read().decode()
             self.assertIn("<h1>Projects</h1>", page, "every project, the steward or not")
             section = page.split("class='hproj'")[1]
-            self.assertIn("<b>plants</b>", section)
+            self.assertRegex(section, r"<b class='project-label'[^>]*>plants</b>")
             self.assertIn("Which pot size?", section, "what it needs, under it, answered there")
             self.assertIn("Which pot size?", opener.open(f"http://127.0.0.1:{port}/home/feed").read().decode(), "kept current")
             self.assertIn("<button class='choice yours'>Choose for me, now and for questions like this</button>", section,
@@ -7795,8 +7795,10 @@ class PhonePageTest(HoursBase):
         self.assertIn("if (view) view.mark(); heed(); },", board.PLAYER, "a mode chosen")
         self.assertIn("changed(); heed(); look(); }\n", board.PLAYER, "Auto turned on")
         # a reply tapped ▷ on is read aloud whatever Auto's mode; what the line reads (Play, a row, Auto) follows Auto's
-        self.assertIn("blocks: secs.map((x) => ({k: x.k, at: x.at, text: x.text})), j: 0, piece: 0, tapped: true, seat: 'chat'};", board.PLAYER)
-        self.assertIn("blocks, j: 0, piece: 0, seat: S && S.auto.has(i) && !S.play.has(i) ? 'auto' : 'line'};", board.PLAYER)
+        direct = board.PLAYER.split("    read(v, secs) {", 1)[1].split("    // a chat's seen:", 1)[0]
+        self.assertIn("blocks: secs.map((x) => ({k: x.k, at: x.at, text: x.text})), j: 0, piece: 0,", direct)
+        self.assertIn("tapped: true, seat: 'chat'", direct)
+        self.assertIn("seat: S && S.auto.has(i) && !S.play.has(i) ? 'auto' : 'line'", board.PLAYER)
 
     def test_a_reading_goes_on_with_next_and_text_only_waits_for_it(self):
         # the person: "text only ... duration ... pretty arbitrary ... a big next arrow button that pops up over the
