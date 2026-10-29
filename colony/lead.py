@@ -84,18 +84,26 @@ def operation_lock(root, kind):
 
 
 def commit_plan(root, message, *, actor=None, source=None, before_revision=None, expected_revision=None):
-    """Commit the canonical plan by itself, even when the lead codes elsewhere."""
+    """Record the canonical plan: locally for private projects, otherwise in its own Git commit."""
     g = require_lead(root, actor)
     canonical = Path(g['canonical'])
-    git(canonical, 'add', '--', 'ROADMAP.md')
-    git(canonical, 'commit', '--only', '--no-verify', '-m', message,
-        '--trailer', 'Colony-Agent: ' + Path(g['lead']).name, '--', 'ROADMAP.md')
-    commit = git(canonical, 'rev-parse', 'HEAD')
+    commit = None
+    if board.is_private(canonical):
+        plan = (canonical / 'ROADMAP.md').read_bytes()
+        recorded_revision = hashlib.sha256(plan).hexdigest()
+        board.append(canonical, 'plan.jsonl', dict(at=board.now(), revision=recorded_revision,
+                     text=plan.decode('utf-8'), message=message, source=str(Path(source).resolve()) if source else None))
+        recorded = recorded_revision == revision(root)
+    else:
+        git(canonical, 'add', '--', 'ROADMAP.md')
+        git(canonical, 'commit', '--only', '--no-verify', '-m', message,
+            '--trailer', 'Colony-Agent: ' + Path(g['lead']).name, '--', 'ROADMAP.md')
+        commit = git(canonical, 'rev-parse', 'HEAD')
+        recorded = git(canonical, 'hash-object', 'ROADMAP.md') == git(canonical, 'rev-parse', commit + ':ROADMAP.md')
     # A stamped commit alone is not proof the agent knew the previous content:
     # an outside edit may already have been present before its own mutation.
     if (source is not None and str(Path(source).resolve()) == g['lead'] and before_revision
-            and expected_revision == revision(root)
-            and git(canonical, 'hash-object', 'ROADMAP.md') == git(canonical, 'rev-parse', commit + ':ROADMAP.md')):
+            and expected_revision == revision(root) and recorded):
         def credit(g):
             values = [g.get('engagements', {}).get(g['lead'], {})]
             values += [a for a in g['assignments'].values() if a['owner'] == g['lead']]

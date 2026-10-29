@@ -1554,7 +1554,9 @@ def cmd_lead(a):
             lead.switch(root, _project(a.switch), words=a.words or '')
             continuation.handoff(root)
         if a.commit_plan:
-            lead.commit_plan(root, a.commit_plan, actor=root)
+            commit = lead.commit_plan(root, a.commit_plan, actor=root)
+            if commit is None:
+                print('Private project: ROADMAP.md recorded locally in .board/plan.jsonl; no Git commit was created.')
         if a.tested:
             lead.tested(root, a.tested, a.checks or '', actor=root)
             if a.deployed:

@@ -128,6 +128,60 @@ class LeadTest(unittest.TestCase):
         self.assertFalse(lead.location().exists())
         self.assertFalse((board.home() / 'items').exists())
 
+    def test_private_plan_is_recorded_locally_and_cli_reports_no_git_commit(self):
+        root = self.base / 'private-project'; root.mkdir()
+        lead.git(root, 'init', '-q', '-b', 'main')
+        lead.git(root, 'config', 'user.name', 'Fixture')
+        lead.git(root, 'config', 'user.email', 'fixture@users.noreply.github.com')
+        (root / 'work.txt').write_text('public work\n')
+        initial = self.commit(root, 'Public foundation')
+        (root / '.board').mkdir()
+        (root / '.board/settings.json').write_text(json.dumps({'private': True}))
+        (root / '.git/info/exclude').write_text('/ROADMAP.md\n/.board/\n')
+        plan = PLAN + '\nPrivate plan words that must never enter Git.\n'
+        (root / 'ROADMAP.md').write_text(plan)
+        (root / 'work.txt').write_text('unfinished public change\n')
+        lead.git(root, 'add', '--', 'work.txt')
+        staged = lead.git(root, 'diff', '--cached')
+        result = subprocess.run([sys.executable, '-m', 'colony', 'lead', '--commit-plan', 'Private decision words'],
+                                cwd=root, capture_output=True, text=True, env=dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1])))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('recorded locally', result.stdout)
+        self.assertIn('no Git commit', result.stdout)
+        [record] = board.read(root, 'plan.jsonl')
+        self.assertEqual((record['text'], record['message'], record['revision']),
+                         (plan, 'Private decision words', lead.revision(root)))
+        self.assertEqual(lead.git(root, 'rev-parse', 'HEAD'), initial)
+        self.assertEqual(lead.git(root, 'diff', '--cached'), staged)
+        self.assertEqual(lead.git(root, 'ls-files', '--', 'ROADMAP.md', '.board'), '')
+        self.assertEqual(lead.git(root, 'log', '--format=%B'), 'Public foundation')
+
+    def test_private_own_plan_record_credits_only_the_previously_seen_revision(self):
+        self.pair()
+        lead.start_item(self.root, 'R2', actor=self.root)
+        lead.engage(self.root)
+        _, token = lead.engage(self.root, mark=False, with_receipt=True)
+        (self.root / '.board/settings.json').write_text(json.dumps({'private': True}))
+        path = self.root / 'ROADMAP.md'
+        before = lead.revision(self.root)
+        path.write_text(path.read_text() + '\nMy private progress.\n')
+        expected = lead.revision(self.root)
+        self.assertIsNone(lead.commit_plan(self.root, 'Private progress', source=self.root,
+                                          before_revision=before, expected_revision=expected))
+        g = lead.info(self.root)
+        for value in (g['engagements'][str(self.root)], g['assignments']['R2']):
+            self.assertEqual(value['looked_revision'], expected)
+            self.assertEqual(value['pending_look']['token'], token)
+        lead.acknowledge_engagement(self.root, token)
+        self.assertEqual(lead.engage(self.root), '')
+        path.write_text(path.read_text() + '\nAn unread outside change.\n')
+        before = lead.revision(self.root)
+        path.write_text(path.read_text() + '\nAnother own edit.\n')
+        lead.commit_plan(self.root, 'Private progress again', source=self.root,
+                         before_revision=before, expected_revision=lead.revision(self.root))
+        self.assertIn('canonical Vision/roadmap changed', lead.engage(self.root))
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), self.initial)
+
     def test_one_plan_owner_inheritance_and_generation(self):
         self.pair()
         active = lead.start_item(self.root, 'R2', actor=self.root)
