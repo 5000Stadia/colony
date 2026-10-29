@@ -2788,6 +2788,7 @@ class MonitorTest(BoardBase):
             if not w.updating:
                 break
             time.sleep(0.05)
+        w.tick()            # what that thread put in the inbox after this tick told it reaches the steward on the next
         for line in ("plants R3: reminders", "plants R4: pots", "plants R5: soil"):
             self.assertEqual(" ".join(sent).count(line), 1, f"{line}: once, not by both")
         (self.root / "ROADMAP.md").write_text(ROADMAP)
@@ -4573,7 +4574,8 @@ class PinTest(BoardBase):
             self.assertIn("stormy", (self.root / "notes.md").read_text())
             pdf = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['report.pdf']['id']}")
             self.assertEqual(pdf.headers["Content-Type"], "application/pdf")
-            self.assertEqual(pdf.headers["Content-Security-Policy"], "sandbox allow-scripts")
+            self.assertIsNone(pdf.headers["Content-Security-Policy"], "a sandboxed PDF opens blank on a phone, as Chat found")
+            self.assertEqual(pdf.headers["X-Content-Type-Options"], "nosniff")
             req = urllib.request.Request(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['The app']['id']}")
             class NoRedirect(urllib.request.HTTPRedirectHandler):
                 def redirect_request(self, *a):

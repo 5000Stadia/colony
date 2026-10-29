@@ -7651,7 +7651,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", showcase.mime(x))
             self.send_header("Content-Disposition", inline(path.name))
-            self.send_header("Content-Security-Policy", SANDBOX)
+            if path.suffix.lower() != ".pdf":         # as in Chat: a phone's PDF viewer is a plugin, a sandbox a blank page
+                self.send_header("Content-Security-Policy", SANDBOX)
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
@@ -7681,7 +7683,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", pins.mime(pin))
             self.send_header("Content-Disposition", inline(path.name))
-            self.send_header("Content-Security-Policy", SANDBOX)
+            if path.suffix.lower() != ".pdf":         # as in Chat: a phone's PDF viewer is a plugin, a sandbox a blank page
+                self.send_header("Content-Security-Policy", SANDBOX)
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
