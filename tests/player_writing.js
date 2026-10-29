@@ -6,7 +6,7 @@ const start = source.indexOf('(() => {\n  if (window.colonyPlayer');
 const end = source.indexOf('  const PICON =', start);
 assert(start >= 0 && end > start, 'production player closure found');
 const clearStart = source.indexOf('  async function clearShown()');
-const clearEnd = source.indexOf('  // Heard:', clearStart);
+const clearEnd = source.indexOf('  async function heardList()', clearStart);
 assert(clearStart > end && clearEnd > clearStart, 'production Clear handler found');
 const playStart = source.indexOf('  function playFrom(');
 assert(playStart > end && clearStart > playStart, 'production queue Play handler found');

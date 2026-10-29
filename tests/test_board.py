@@ -1431,7 +1431,7 @@ class ChatTest(BoardBase):
         nest.leave(other)
         side = board.sidebar(board.registry(), -1)
         self.assertNotIn("nestchip", side, "one: no nest to open")
-        self.assertIn(f"{self.root.name}<span class='badge gate'", side, "the project itself, in the menu")
+        self.assertRegex(side, r"<span class='project-label'[^>]*>" + re.escape(self.root.name) + r"</span>", "the project itself, in the menu")
 
     def test_a_project_has_a_colour_of_its_own_chosen_where_its_settings_are(self):
         board.track(self.root)

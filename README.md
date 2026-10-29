@@ -76,6 +76,13 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Pictures, PDFs and tables in Chat:** a corner button opens a fullscreen viewer that stays open through
   phone rotation. Start fitted to the width, zoom to 1.5×, 2×, 2.5× or 3×, and scroll within the viewer.
   Pictures and PDFs have Download; closing returns to the same place in Chat.
+- **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
+  the project and handle folder names and references where practical, keeping access and history working.
+  Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
+- **Document audio:** readable text and Markdown files have Play document, with a section queue, section
+  jumps and replay. Large documents are read in small chunks. Auto waits during document playback and
+  resumes afterward, respecting pause and Auto Off. Document playback uses the current page session;
+  the interrupted Chat reply remains saved. The player's **History** shows recent replies played, read or skipped.
 - **The front page:** every project, those waiting on you first, each with its line (working, idle, what it's on),
   its measures, and what it needs of you right under it, answered there with a tap or a reply.
 - **Waiting on you:** decisions a project put to you (gates, each with tap answers, **Choose for me** where
@@ -135,7 +142,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   carry on once the network is back. A console frozen mid-work (its working timer unchanged for 15 minutes)
   is restarted in the same conversation and told to carry on, up to 3 times a day; after that, you hear of it.
 - **Projects talk to each other:** `colony send NAME "…"` (`--ask` for an answer), `colony reply`,
-  and `colony projects` lists them with their goals, so an agent asks rather than guesses.
+  and `colony projects` lists them with their goals, so an agent asks rather than guesses. Sends report
+  queued status; known delivery or reply delays return the reason to the sender. Mail stays queued for
+  retry, and a session handoff is recorded separately from an answer.
 - **Turbo:** when a program's weekly usage runs more than 5 points behind pace (from day 2, aiming for 99%
   the hour before the reset), its projects with queued work are turned up, each as it ticks: stronger
   models, going deeper on its agreed work, research on a topic you type. Alongside the work, never instead
