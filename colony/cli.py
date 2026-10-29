@@ -1008,9 +1008,11 @@ def _hook_input():
         return {}
 
 
-def _console_hook_allowed(root, provider):
+def _console_hook_allowed(root, provider, payload=None):
     """Optional hook scope: a project's board console running the expected provider, never cwd alone."""
     from . import context, providers
+    if (provider or (payload or {}).get('session_id')) and not context.in_project(root, payload):
+        return False
     return (not provider or (os.environ.get("COLONY_CONSOLE") == context.seat(root)
                             and providers.PROVIDERS.get(provider) is context.program(root)))
 
@@ -1056,6 +1058,8 @@ def cmd_turn(a):
     if not (root / ".board").exists():
         return 0
     payload = _hook_input()
+    if not _console_hook_allowed(root, a.console, payload):
+        return 0
     if a.console == 'codex':
         from . import codex_remote
         if not codex_remote.accepts_hook(root, payload):
@@ -1093,6 +1097,8 @@ def cmd_notes(a):
         # Printed for the provider to put in the agent's context: Claude Code's hooks do (providers.py wire()).
         from . import mail, console, providers
         payload = _hook_input()
+        if not _console_hook_allowed(root, a.console, payload):
+            return 0
         if a.console == 'codex':
             from . import codex_remote
             if not codex_remote.accepts_hook(root, payload):

@@ -56,7 +56,20 @@ def seat(root):
     return monitor.name() if is_monitor(root) else console.session_name(root)
 
 
+def in_project(root, payload=None):
+    """Inherited console markers cannot make a scratch session part of this project."""
+    from . import lead
+    try:
+        folder = Path((payload or {}).get('cwd') or Path.cwd()).resolve()
+        allowed = [board.workdir(root), *lead.workspaces(root)]
+        return any(folder == path.resolve() for path in allowed)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def scoped(root, key, payload):
+    if not in_project(root, payload):
+        return False
     if os.environ.get('COLONY_CONSOLE') != seat(root) or providers.PROVIDERS.get(key) is not program(root):
         return False
     if payload.get('subagent') or payload.get('agent_id') or '/subagents/' in payload.get('transcript_path', ''):

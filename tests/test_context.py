@@ -24,7 +24,7 @@ class ContextTest(unittest.TestCase):
         self.path = self.root / 'rollout.jsonl'; self.path.touch()
         self.s = dict(provider='codex', id='exact-id', path=str(self.path))
         atomic_json(context.file(self.root, 'context-session.json'), self.s)
-        self.payload = dict(session_id='exact-id', transcript_path=str(self.path), hook_event_name='PreCompact')
+        self.payload = dict(session_id='exact-id', transcript_path=str(self.path), hook_event_name='PreCompact', cwd=str(self.root))
         context._cache.clear()
 
     def event(self, kind, payload):

@@ -90,6 +90,8 @@ class BoardBase(unittest.TestCase):
         self.root = base / "plants"
         self.root.mkdir()
         self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Fixture")
+        self.git("config", "user.email", "fixture@users.noreply.github.com")
         (self.root / "CLAUDE.md").write_text("Our own rules.\n")
         (self.root / ".claude").mkdir()
         (self.root / ".claude" / "settings.json").write_text(json.dumps({"model": "x"}))
@@ -2453,6 +2455,38 @@ class GlanceTest(BoardBase):
         self.assertEqual(main_hooks.read_bytes(), before)
         self.assertEqual(set(self.codex_launch_hooks()), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact"})
 
+    def test_a_scratch_session_inheriting_the_console_cannot_claim_its_project(self):
+        from colony import context
+        board.set_setting("provider", "claude")
+        board.track(self.root)
+        scratch = Path(self.tmp.name) / "scratch"
+        scratch.mkdir()
+        old, foreign = self.root / "own.jsonl", scratch / "test.jsonl"
+        for file in (old, foreign):
+            file.write_text(json.dumps(dict(type='user', message=dict(content='fixture'))) + '\n')
+        context_path = context.file(self.root, 'context-session.json')
+        own = dict(provider='claude', id='own', path=str(old))
+        board.save_json(context_path, own)
+        console.remember(self.root, 'own', str(old))
+        note = board.add_note(self.root, None, "Only for the real session", author='person')
+        env = dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=str(self.root),
+                   COLONY_CONSOLE=console.session_name(self.root))
+        payload = dict(session_id='scratch-test', transcript_path=str(foreign), hook_event_name='SessionStart')
+        for fields in ({'cwd': str(scratch)}, {}):
+            with self.subTest(fields=fields):
+                result = subprocess.run([sys.executable, '-m', 'colony', 'notes', '--deliver', '--session'],
+                                        cwd=scratch, env=env, input=json.dumps(dict(payload, **fields)),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(context_path.read_text()), own)
+                self.assertEqual(console.last_conversation(self.root), 'own')
+                self.assertIn(note['id'], [n['id'] for n in board.open_notes(self.root)])
+        result = subprocess.run([sys.executable, '-m', 'colony', 'notes', '--deliver', '--session'],
+                                cwd=self.root, env=env, input=json.dumps(dict(payload, cwd=str(self.root))),
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(context_path.read_text())['id'], 'scratch-test')
+
     def test_codex_hooks_in_shared_folder_only_act_for_matching_board_console(self):
         board.track(self.root)
         self.assertEqual(self.cli("track", ".", "--name", "plants-codex", "--provider", "codex", "--role", "helper").returncode, 0)
@@ -2812,13 +2846,15 @@ class GlanceTest(BoardBase):
         models.append(dict(id='claude-new-6', name='New 6', section='main',
                            thinking={'effort_options': [{'id': 'max'}]}))
         save_catalog()
-        monitor.Watcher().models_daily()
+        with patch('colony.codex_remote.check_version'):   # native compatibility has its own fixture tests
+            monitor.Watcher().models_daily()
         self.assertIn('claude-new-6', dict(providers.available(providers.get('claude'))),
                       'daily discovery reads the new native catalog after session-start discovery')
         stepup = self.root / ".claude" / "agents" / "colony-stepup.md"
         self.assertIn("model: claude-opus-5-5", stepup.read_text(), "no data yet: nothing changes")
         bench.add([rec("claude-new-6", "max", 70), rec("claude-new-6", "max", 1, "cost", bench_="Cost per Intelligence Index task", unit="usd")])
-        monitor.Watcher().models_daily()
+        with patch('colony.codex_remote.check_version'):
+            monitor.Watcher().models_daily()
         self.assertIn("model: claude-new-6", stepup.read_text(), "the tiers follow the data, with no proposal to agree")
         self.assertFalse(any("New 6" in n["text"] for n in board.notes(self.root)), "no note to each project")
 
@@ -6033,7 +6069,8 @@ class SignInTest(BoardBase):
         self.assertEqual(told.count("Claude Code is signed out"), 1, "told once")
         self.assertIn("Settings → Claude Code sign-in", told)
         self.assertIn("signed out since", board.settings_page(board.registry()))
-        with patch.object(type(claude), "signed_in", lambda self, run=None: True):
+        with patch.object(type(claude), "signed_in", lambda self, run=None: True), \
+                patch.object(type(providers.get("codex")), "signed_in", lambda self, run=None: True):
             monitor.Watcher().signin()
         self.assertNotIn("signed out since", board.settings_page(board.registry()))
 
