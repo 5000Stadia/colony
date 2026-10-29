@@ -1,6 +1,7 @@
 """The person's project names; paths remain the board's stable addresses."""
 import json
 from pathlib import Path
+import secrets
 import unicodedata
 
 
@@ -52,15 +53,31 @@ def rename(root, value, *, changed_by='person', why=''):
     root = Path(root)
     folder = root / '.board'
     folder.mkdir(exist_ok=True)
+
+    def deliver_pending(record):
+        # The name lock covers both the receipt check and append, including ambiguous write failures.
+        note = record.get('pending_note')
+        if note:
+            if not any(n['id'] == note['id'] for n in board.notes(root)):
+                board.append(root, 'notes.jsonl', note)
+            del record['pending_note']
+            atomic_json(folder / 'name.json', record)
+
     with (folder / 'name.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            saved = json.loads((folder / 'name.json').read_text())
+        except (FileNotFoundError, ValueError):
+            saved = {}
+        if isinstance(saved, dict):
+            # Finish the saved person's event before a retry or another rename can replace it.
+            deliver_pending(saved)
         before = name_of(root)
         if before == value:
             return False
         record = dict(name=value, previous_name=before, changed_by=changed_by, changed_at=board.now())
         if why.strip():
             record['why'] = why.strip()
-        atomic_json(folder / 'name.json', record)
         if changed_by == 'person':
             directive = (
                 f'The person renamed this project from {json.dumps(before, ensure_ascii=False)} '
@@ -68,5 +85,8 @@ def rename(root, value, *, changed_by='person', why=''):
                 f'Their new name: {value}\n'
                 'What this means: ' + guidance(root)
             )
-            board.add_note(root, None, directive, author='person')
+            record['pending_note'] = dict(type='note', id='n' + secrets.token_hex(4),
+                                         at=record['changed_at'], author='person', anchor=None, text=directive)
+        atomic_json(folder / 'name.json', record)
+        deliver_pending(record)
         return True

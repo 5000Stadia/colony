@@ -10723,3 +10723,91 @@ const {chromium} = require('/opt/colony-test-playwright');
         result = subprocess.run(['node', '-e', script, self.base, str(self.root), '<img src=x onerror=alert(1)>',
                                  str(artifacts)], capture_output=True, text=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class ProjectRenameRetryTest(unittest.TestCase):
+    def setUp(self):
+        from colony import project_names
+        self.names = project_names
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name) / 'plants'
+        self.root.mkdir()
+        guidance = patch.object(project_names, 'guidance', return_value='Keep the original project guidance.')
+        guidance.start()
+        self.addCleanup(guidance.stop)
+
+    def record(self):
+        return json.loads((self.root / '.board/name.json').read_text())
+
+    def test_retry_repairs_a_failed_note_with_the_original_person_event(self):
+        append = board.append
+        def fail_note(root, filename, value):
+            if filename == 'notes.jsonl':
+                raise OSError('note write failed')
+            return append(root, filename, value)
+        with patch.object(board, 'now', return_value='2026-10-28T10:00:00Z'), \
+                patch.object(board, 'append', side_effect=fail_note), self.assertRaises(OSError):
+            self.names.rename(self.root, 'Garden journal', why='Original reason')
+        before = self.record()
+        self.assertEqual(self.names.name_of(self.root), 'Garden journal')
+        self.assertEqual(board.notes(self.root), [])
+        # The retry caller supplies neither the origin nor the event time of the saved change.
+        with patch.object(board, 'now', return_value='2026-10-29T11:00:00Z'), \
+                patch.object(self.names, 'guidance', return_value='Changed guidance.'):
+            self.assertFalse(self.names.rename(self.root, 'Garden journal', changed_by='agent', why='Retry reason'))
+        notes = board.notes(self.root)
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(notes[0]['author'], 'person')
+        self.assertEqual(notes[0]['at'], '2026-10-28T10:00:00Z')
+        self.assertIn('from "plants" to "Garden journal"', notes[0]['text'])
+        self.assertIn('Keep the original project guidance.', notes[0]['text'])
+        for key in ('name', 'previous_name', 'changed_by', 'changed_at', 'why'):
+            self.assertEqual(self.record()[key], before[key])
+        saved_name = (self.root / '.board/name.json').read_bytes()
+        saved_notes = (self.root / '.board/notes.jsonl').read_bytes()
+        self.assertFalse(self.names.rename(self.root, 'Garden journal'))
+        self.assertEqual((self.root / '.board/name.json').read_bytes(), saved_name)
+        self.assertEqual((self.root / '.board/notes.jsonl').read_bytes(), saved_notes)
+
+    def test_write_then_error_retry_does_not_duplicate_an_already_addressed_note(self):
+        append = board.append
+        def write_then_fail(root, filename, value):
+            result = append(root, filename, value)
+            if filename == 'notes.jsonl':
+                raise OSError('note written but acknowledgement failed')
+            return result
+        with patch.object(board, 'now', side_effect=['2026-10-28T10:00:00Z', '2026-10-28T10:00:01Z']), \
+                patch.object(board, 'append', side_effect=write_then_fail), self.assertRaises(OSError):
+            self.names.rename(self.root, 'Garden journal')
+        [note] = board.notes(self.root)
+        board.append(self.root, 'notes.jsonl', dict(type='addressed', of=note['id'],
+                                                  at=board.now(), text='Acted on it.'))
+        saved_notes = (self.root / '.board/notes.jsonl').read_bytes()
+        with patch.object(board, 'now', return_value='2026-10-29T11:00:00Z'):
+            self.assertFalse(self.names.rename(self.root, 'Garden journal'))
+            self.assertFalse(self.names.rename(self.root, 'Garden journal'))
+        self.assertEqual((self.root / '.board/notes.jsonl').read_bytes(), saved_notes)
+        self.assertEqual(board.notes(self.root)[0]['at'], '2026-10-28T10:00:00Z')
+        self.assertEqual(board.notes(self.root)[0]['author'], 'person')
+        self.assertEqual(self.record()['previous_name'], 'plants')
+        self.assertEqual(self.record()['changed_at'], '2026-10-28T10:00:00Z')
+
+    def test_a_different_agent_rename_repairs_the_person_notice_before_replacing_the_record(self):
+        with patch.object(board, 'append', side_effect=OSError('note write failed')), self.assertRaises(OSError):
+            self.names.rename(self.root, 'Garden journal')
+        self.assertTrue(self.names.rename(self.root, 'Garden keeper', changed_by='agent'))
+        notes = board.notes(self.root)
+        self.assertEqual(len(notes), 1)
+        self.assertIn('from "plants" to "Garden journal"', notes[0]['text'])
+        self.assertNotIn('Garden keeper', notes[0]['text'])
+        self.assertEqual(notes[0]['author'], 'person')
+        self.assertEqual(self.record()['previous_name'], 'Garden journal')
+        self.assertEqual(self.record()['changed_by'], 'agent')
+
+    def test_an_agent_event_stays_quiet_even_if_the_person_retries_its_name(self):
+        self.assertTrue(self.names.rename(self.root, 'Garden keeper', changed_by='agent', why='Matches the work'))
+        saved = (self.root / '.board/name.json').read_bytes()
+        self.assertFalse(self.names.rename(self.root, 'Garden keeper'))
+        self.assertEqual((self.root / '.board/name.json').read_bytes(), saved)
+        self.assertEqual(board.notes(self.root), [])
