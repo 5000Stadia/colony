@@ -4,8 +4,10 @@ import shutil
 import shlex
 import re
 import os
+import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import unittest
@@ -8555,3 +8557,322 @@ class WakeTest(BoardBase):
         self.watch(now + 3800)
         self.assertIn("[colony] Wake: look over the week", " ".join(r["text"] for r in monitor.inbox()))
         self.assertTrue((monitor.home() / ".board" / "wakes.jsonl").exists(), "kept under the steward's home")
+
+
+class MigrateTest(BoardBase):
+    """R127: colony migrate packs colony's home, the projects on the board and its shelf, their conversations and the
+    program into one archive, leaving out sign-ins, keys and what the new machine makes again; unpacked under the same
+    home, everything is back byte for byte."""
+
+    ENV = ("HOME", "COLONY_BOARD_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COLONY_CODEX_SOURCE_HOME", "XDG_CONFIG_HOME")
+    SECRETS = {".claude/.credentials.json": "SECRET-claude-sign-in", ".codex/auth.json": "SECRET-codex-sign-in",
+               "colony/claude-token": "SECRET-long-lived-token", "colony/console-token": "SECRET-console",
+               "colony/page-secret": "SECRET-pages", "colony/bench/aa-key": "SECRET-aa-key",
+               "colony/connections/gmail.env": "TOKEN=SECRET-gmail",
+               "colony/connections/ebay/0123456789abcdef.env": "TOKEN=SECRET-ebay",
+               "colony/codex-remote/def456/auth.json": "SECRET-a-copied-codex-sign-in"}
+
+    def setUp(self):
+        super().setUp()
+        from colony import migrate
+        self.migrate = migrate
+        self._env = {k: os.environ.get(k) for k in self.ENV}
+        self.k = Path(self.tmp.name) / "k"                 # the person's home, in miniature
+        for k in self.ENV[2:]:
+            os.environ.pop(k, None)
+        os.environ.update(HOME=str(self.k), COLONY_BOARD_HOME=str(self.k / "colony"))   # not ~/.config/colony:
+        # there its tmux sessions would take the plain names of the person's own board (board.scoped)
+        self.disk = Path(self.tmp.name) / "disk"            # the other disk the archive goes to
+        k, home = self.k, self.k / "colony"
+        self.alpha, self.job, self.old = k / "Projects" / "alpha", k / "JOB", k / "old"
+        self.program = k / "Projects" / "colony"
+        self.gamma, self.elsewhere = self.program / "projects" / "gamma", k / "elsewhere"
+        self.helper = home / "agents" / "helper-x"
+        files = {
+            # a project on the board, with what is made again and a key of its own
+            "Projects/alpha/notes.md": "plans", "Projects/alpha/.env": "API_KEY=project-own",
+            "Projects/alpha/run.sh": "#!/bin/sh\necho hi\n", "Projects/alpha/node_modules/x/index.js": "x",
+            "Projects/alpha/.venv/pyvenv.cfg": "home = /usr/bin", "Projects/alpha/.venv/lib/site.py": "pass",
+            "Projects/alpha/src/__pycache__/a.cpython-312.pyc": "pyc", "Projects/alpha/src/a.py": "print(1)",
+            "Projects/alpha/.board/notes.jsonl": "", "JOB/cv.md": "cv", "old/README.md": "archived work",
+            "elsewhere/shared.md": "where helper-x works",
+            # the program's checkout, a project inside it, and a cache that says it is one
+            "Projects/colony/pyproject.toml": "[project]\nname='colony'\n", "Projects/colony/colony/__init__.py": "",
+            "Projects/colony/.pytest_cache/CACHEDIR.TAG": migrate.CACHE_TAG.decode() + "\n",
+            "Projects/colony/.pytest_cache/v/cache/lastfailed": "{}",
+            "Projects/colony/projects/gamma/ROADMAP.md": "# Roadmap\n", "Projects/colony/projects/gamma/.board/x": "",
+            # colony's home: what's kept, and what the new machine makes again
+            "colony/voice.json": "{}", "colony/bench/records.jsonl": "{}\n",
+            "colony/voice/env/pyvenv.cfg": "home = /usr/bin", "colony/voice/env/bin/python": "",
+            "colony/voice/kokoro-v1.0.onnx": "model", "colony/voice/voices-v1.0.bin": "voices",
+            "colony/voice/cache/a.wav": "clip", "colony/voice/samples/b.wav": "sample",
+            "colony/context-cache/c.json": "{}", "colony/line-scratch/d.jsonl": "",
+            "colony/monitor/CLAUDE.md": "the steward's brief",
+            "colony/agents/helper-x/.board/settings.json": json.dumps({"workdir": str(k / "elsewhere")}),
+            "colony/codex-remote/abc123/sessions/2026/10/rollout-1.jsonl": '{"type":"session_meta"}\n',
+            "colony/codex-remote/abc123/config.toml": "model = 'x'\n",
+            "colony/codex-remote/abc123/cache/catalog.json": "{}",
+            "colony/codex-remote/abc123/tmp/arg0": "", "colony/codex-remote/abc123/shell_snapshots/s.sh": "",
+            "stray/rollout-9.jsonl": '{"type":"session_meta"}\n',
+            # Claude Code: the board's conversations, the steward's, a helper's worktree's, and someone else's
+            f".claude/projects/{migrate.claude_key(k / 'Projects' / 'alpha')}/s1.jsonl":
+                '{"type":"user","message":{"role":"user","content":"hello alpha"}}\n',
+            f".claude/projects/{migrate.claude_key(k / 'Projects' / 'alpha')}--claude-worktrees-w1/s2.jsonl": "{}\n",
+            f".claude/projects/{migrate.claude_key(home)}-monitor/s3.jsonl": "{}\n",
+            f".claude/projects/{migrate.claude_key(k / 'Projects' / 'zeta')}/s4.jsonl": "not on the board\n",
+            ".claude/settings.json": "{}", **self.SECRETS}
+        for rel, text in files.items():
+            (k / rel).parent.mkdir(parents=True, exist_ok=True)
+            (k / rel).write_text(text)
+        (self.alpha / "run.sh").chmod(0o755)
+        (self.alpha / "notes.md").chmod(0o664)
+        (self.alpha / "latest").symlink_to("notes.md")
+        (home / "codex-remote" / "abc123" / "auth.json").symlink_to(k / ".codex" / "auth.json")
+        os.utime(self.alpha / "notes.md", (1700000000.123456, 1700000000.123456))
+        os.utime(k / "stray" / "rollout-9.jsonl", (time.time() - 3600,) * 2)    # a conversation at rest, not mid-work
+        from colony import autostart
+        self.units = autostart.path().parent                 # a project's own service, enabled, and colony's
+        (self.units / "default.target.wants").mkdir(parents=True)
+        (self.units / "alpha-watch.service").write_text("[Service]\nExecStart=/bin/true\n")
+        (self.units / "default.target.wants" / "alpha-watch.service").symlink_to("../alpha-watch.service")
+        (self.units / autostart.unit_name()).write_text("[Service]\nExecStart=colony board\n")
+        subprocess.run(["git", "init", "-q", str(self.program)], check=True)
+        board.save_registry({"projects": [str(self.alpha), str(self.job), str(self.helper)],
+                             "roots": [str(self.program / "projects")], "hidden": [],
+                             "settings": {"messaging": False, "active_hours": "off", "lan": False}})
+        (home / "archived.json").write_text(json.dumps({str(self.old): {"at": "2026-10-01T00:00:00Z", "why": "done"}}))
+        (home / "conversations.json").write_text(json.dumps({str(self.job): {"transcript": str(k / "stray" / "rollout-9.jsonl")}}))
+        for name, fake in (("program", lambda: self.program), ("_crontab", lambda: "15 2 * * * /home/k/JOB/nightly.sh\n")):
+            stand_in = patch.object(migrate, name, side_effect=fake)
+            stand_in.start()
+            self.addCleanup(stand_in.stop)
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        super().tearDown()
+
+    def members(self, archive):
+        with self.migrate._Reading(archive) as r:
+            names = [m.name for m in r.members()]
+            r.whole = True
+        return {"/" + n for n in names}
+
+    def pack(self):
+        said = []
+        archive = self.migrate.pack(self.disk, say=said.append)
+        return archive, "\n".join(said)
+
+    def test_pack_takes_the_right_paths_and_leaves_out_sign_ins_keys_and_what_is_made_again(self):
+        archive, said = self.pack()
+        self.assertTrue(archive.name.endswith(".tar.zst" if shutil.which("zstd") else ".tar.gz"))
+        got, k, home = self.members(archive), self.k, self.k / "colony"
+        alpha_talk = k / ".claude" / "projects" / self.migrate.claude_key(self.alpha)
+        for kept in (self.alpha / "notes.md", self.alpha / ".env", self.alpha / "latest", self.alpha / "src" / "a.py",
+                     self.job / "cv.md", self.old / "README.md", self.elsewhere / "shared.md",
+                     self.program / "pyproject.toml", self.gamma / "ROADMAP.md", home / "board.json",
+                     home / "voice.json", home / "bench" / "records.jsonl", home / "monitor" / "CLAUDE.md",
+                     home / "agents" / "helper-x" / ".board" / "settings.json",
+                     home / "codex-remote" / "abc123" / "sessions" / "2026" / "10" / "rollout-1.jsonl",
+                     home / "codex-remote" / "abc123" / "auth.json",           # the link to the person's sign-in, not it
+                     alpha_talk / "s1.jsonl", Path(str(alpha_talk) + "--claude-worktrees-w1") / "s2.jsonl",
+                     k / ".claude" / "projects" / (self.migrate.claude_key(home) + "-monitor") / "s3.jsonl",
+                     k / "stray" / "rollout-9.jsonl", self.units / "alpha-watch.service"):
+            self.assertIn(str(kept), got)
+        from colony import autostart
+        for left in [k / rel for rel in self.SECRETS] + [
+                home / "connections", self.alpha / "node_modules", self.alpha / ".venv", self.alpha / "src" / "__pycache__",
+                self.program / ".pytest_cache", home / "voice" / "env", home / "voice" / "kokoro-v1.0.onnx",
+                home / "voice" / "voices-v1.0.bin", home / "voice" / "cache", home / "voice" / "samples",
+                home / "context-cache", home / "line-scratch", home / "codex-remote" / "abc123" / "cache",
+                home / "codex-remote" / "abc123" / "tmp", home / "codex-remote" / "abc123" / "shell_snapshots",
+                k / ".claude" / "settings.json", k / ".claude" / "projects" / self.migrate.claude_key(k / "Projects" / "zeta"),
+                self.units / autostart.unit_name(), self.units / "default.target.wants"]:
+            self.assertFalse({g for g in got if g == str(left) or g.startswith(str(left) + "/")}, left)
+        # not one secret's words anywhere in the archive or beside it
+        stream = subprocess.run(["zstd", "-dc", str(archive)], capture_output=True).stdout if archive.suffix == ".zst" \
+            else __import__("gzip").decompress(archive.read_bytes())
+        beside = b"".join(p.read_bytes() for p in self.disk.glob("*.json"))
+        for text in self.SECRETS.values():
+            self.assertNotIn(text.split("=")[-1].encode(), stream + beside)
+        self.assertIn(b"project-own", stream, "a project's own key file is packed with it, as it needs it to run")
+        self.assertIn("Never packed", said)
+        self.assertIn("look like keys", said)
+        self.assertTrue((self.disk / "colony.pyz").is_file())
+        self.assertIn(f"python3 {self.disk / 'colony.pyz'} migrate --unpack {archive}", said)
+
+    def test_the_manifest_lists_what_was_left_out(self):
+        archive, _ = self.pack()
+        note = json.loads(next(self.disk.glob("*.manifest.json")).read_text())
+        home = self.k / "colony"
+        never = {r["path"]: r for r in note["left_out"]["sign_ins_and_keys"]}
+        for rel in (".claude/.credentials.json", ".codex/auth.json", "colony/claude-token",
+                    "colony/connections", "colony/bench/aa-key", "colony/console-token",
+                    "colony/page-secret", "colony/codex-remote/def456/auth.json"):
+            self.assertIn(str(self.k / rel), never, rel)
+        remade = {r["path"]: r["why"] for r in note["left_out"]["remade"]}
+        for path, why in ((home / "voice" / "env", "the voice's own Python"), (home / "voice" / "kokoro-v1.0.onnx", "model"),
+                          (home / "context-cache", "colony's reading"), (self.alpha / ".venv", "a Python environment"),
+                          (self.alpha / "node_modules", "node_modules"), (self.program / ".pytest_cache", "CACHEDIR.TAG"),
+                          (home / "codex-remote" / "abc123" / "cache", "Codex's own caches")):
+            self.assertIn(why, remade.get(str(path), ""), path)
+        self.assertEqual(note["home"], str(self.k))
+        self.assertEqual(note["machine"]["connection_keys"], ["ebay", "gmail"], "named, never their contents")
+        self.assertIn("nightly.sh", note["machine"]["crontab"])
+        self.assertEqual(note["machine"]["services_enabled"], ["alpha-watch.service"])
+        self.assertEqual(note["packed"]["entries"], len(self.members(archive)))
+        kinds = {p["path"]: p["kind"] for p in note["parts"]}
+        self.assertEqual((kinds[str(self.alpha)], kinds[str(self.old)], kinds[str(self.gamma)]), ("project", "archived", "project"))
+        self.assertEqual(next(p for p in note["parts"] if p["path"] == str(self.gamma))["inside"], str(self.program))
+        said = []
+        self.migrate.listing(say=said.append)
+        self.assertIn("The crontab (1 line)", "\n".join(said))
+        self.assertIn("alpha-watch.service", "\n".join(said))
+
+    def snapshot(self, paths):
+        out = {}
+        for top in paths:
+            for p in [top, *top.rglob("*")] if top.is_dir() else [top]:
+                st = os.lstat(p)
+                out[str(p)] = (stat.S_IFMT(st.st_mode), stat.S_IMODE(st.st_mode), round(st.st_mtime, 6),
+                               os.readlink(p) if p.is_symlink() else p.read_bytes() if p.is_file() else None)
+        return out
+
+    def test_unpack_restores_everything_byte_for_byte(self):
+        archive, _ = self.pack()
+        note = json.loads(next(self.disk.glob("*.manifest.json")).read_text())
+        outer = [Path(p["path"]) for p in note["parts"] if not p["inside"]]
+        before = {p: v for p, v in self.snapshot(outer).items() if p in self.members(archive) or Path(p) in outer}
+        for top in outer:
+            shutil.rmtree(top) if top.is_dir() else top.unlink()
+        with patch.object(self.migrate, "remake", return_value=["remade"]):
+            self.migrate.unpack(archive, say=lambda line: None)
+        after = {p: v for p, v in self.snapshot(outer).items() if p in before}
+        self.assertGreater(len(before), 60, "the whole miniature home, not a part of it")
+        self.assertEqual(sorted(after), sorted(before))
+        for p in before:
+            self.assertEqual(after[p][0::3], before[p][0::3], p)                    # its kind and its bytes or link
+            if before[p][0] != stat.S_IFLNK:
+                self.assertEqual(after[p][1], before[p][1], f"{p}: its permissions")
+            if before[p][0] == stat.S_IFREG:
+                self.assertAlmostEqual(after[p][2], before[p][2], places=3, msg=f"{p}: its time")
+        self.assertEqual(oct(stat.S_IMODE(os.lstat(self.alpha / "notes.md").st_mode)), "0o664")
+        self.assertFalse((self.k / "colony" / "claude-token").exists(), "sign-ins never come back from it")
+
+    def test_unpack_refuses_a_colony_already_there_unless_forced(self):
+        archive, _ = self.pack()
+        with patch.object(self.migrate, "remake", return_value=[]):
+            with self.assertRaises(SystemExit) as refused:
+                self.migrate.unpack(archive, say=lambda line: None)
+            self.assertIn("already holds a colony", str(refused.exception))
+            (self.alpha / "notes.md").write_text("changed since")
+            self.migrate.unpack(archive, force=True, say=lambda line: None)
+        self.assertEqual((self.alpha / "notes.md").read_text(), "plans")
+
+    def test_unpack_refuses_another_home_folder(self):
+        archive, _ = self.pack()
+        other = Path(self.tmp.name) / "someone"
+        os.environ.update(HOME=str(other), COLONY_BOARD_HOME=str(other / "colony"))
+        with self.assertRaises(SystemExit) as refused:
+            self.migrate.unpack(archive, say=lambda line: None)
+        self.assertIn(f"made for the home folder {self.k}", str(refused.exception))
+        self.assertFalse((other / "colony").exists(), "nothing was unpacked")
+
+    def test_unpack_writes_only_where_the_manifest_says_and_never_through_a_link(self):
+        inside, outside = self.k / "Projects" / "alpha", Path(self.tmp.name) / "outside"
+        for name, members in (("escape", [("file", str(outside / "planted"))]),
+                              ("through", [("link", str(inside / "door")), ("file", str(inside / "door" / "planted"))])):
+            archive = Path(self.tmp.name) / f"{name}.tar.gz"
+            note = json.dumps({"colony_migrate": 1, "home": str(self.k), "colony_home": str(self.k / "colony2"),
+                               "parts": [{"path": str(inside), "inside": None, "kind": "project"}], "files": 1, "bytes": 1,
+                               "made": "", "machine_name": "x"}).encode()
+            with tarfile.open(archive, "w:gz") as tar:
+                info = tarfile.TarInfo(self.migrate.MANIFEST)
+                info.size = len(note)
+                tar.addfile(info, io.BytesIO(note))
+                for kind, path in members:
+                    info = tarfile.TarInfo(path.lstrip("/"))
+                    if kind == "link":
+                        info.type, info.linkname = tarfile.SYMTYPE, str(outside)
+                        tar.addfile(info)
+                    else:
+                        info.size = 4
+                        tar.addfile(info, io.BytesIO(b"evil"))
+            os.environ["COLONY_BOARD_HOME"] = str(self.k / "colony2")
+            with self.assertRaises(SystemExit) as refused:
+                self.migrate.unpack(archive, say=lambda line: None)
+            self.assertIn("is outside what the manifest says" if name == "escape" else "through a link in the archive",
+                          str(refused.exception))
+            self.assertFalse((outside / "planted").exists(), name)
+
+    def test_pack_refuses_a_folder_inside_what_it_packs_and_a_disk_without_room(self):
+        with self.assertRaises(SystemExit) as refused:
+            self.migrate.pack(self.alpha / "backup", say=lambda line: None)
+        self.assertIn("inside", str(refused.exception))
+        with patch.object(self.migrate.shutil, "disk_usage", return_value=shutil._ntuple_diskusage(10, 10, 5)):
+            with self.assertRaises(SystemExit) as refused:
+                self.migrate.pack(self.disk, say=lambda line: None)
+        self.assertIn("free", str(refused.exception))
+        self.assertFalse(list(self.disk.glob("colony-*")), "nothing started")
+
+    def test_pack_says_plainly_when_a_console_is_mid_work(self):
+        board.save_json(self.k / "colony" / "working.json", {"at": time.time(), "roots": [str(self.alpha)]})
+        _, said = self.pack()
+        self.assertIn("Mid-work now: alpha. Packing goes on", said)
+        os.utime(self.k / "stray" / "rollout-9.jsonl")                          # JOB's conversation, written just now
+        board.save_json(self.k / "colony" / "working.json", {"at": time.time() - 600, "roots": [str(self.alpha)]})
+        _, said = self.pack()
+        self.assertIn("Mid-work now: JOB. Packing goes on", said, "a watch ten minutes old isn't believed")
+
+    def test_remake_makes_the_machine_again_and_says_what_is_left_to_the_person(self):
+        from colony import autostart, tailscale, voice
+        made, ran = [], []
+        note = {"program": str(self.program), "left_out": {"remade": [{"path": str(self.alpha / ".venv"),
+                                                                        "why": "a Python environment", "bytes": 1}]},
+                "parts": [{"kind": "service", "name": "kairos-dashboard.service"}, {"kind": "service", "name": "x.timer"}],
+                "machine": {"voice": True, "autostart": True, "lingers": True, "remote": "old.tail.ts.net", "https": True,
+                            "providers": ["claude", "codex"], "claude_token": True, "connection_keys": ["gmail"],
+                            "aa_key": True, "crontab": "# a comment\n15 2 * * * /home/k/JOB/nightly.sh\n",
+                            "services_enabled": ["kairos-dashboard.service"]}}
+
+        def run(cmd, **kw):
+            ran.append(cmd)
+            out = "colony starts with the machine" if "autostart" in " ".join(cmd) else ""
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        with patch.object(voice, "setup", side_effect=lambda say=None: made.append("voice")), \
+                patch.object(autostart, "available", return_value=True), \
+                patch.object(autostart, "lingers", return_value=False), \
+                patch.object(tailscale, "status", return_value={"installed": False, "running": False, "name": "", "ip": ""}), \
+                patch.object(self.migrate.subprocess, "run", side_effect=run), \
+                patch.object(self.migrate.shutil, "which", side_effect=lambda p: None if p in ("colony", "codex") else "/usr/bin/" + p), \
+                patch.object(self.migrate, "_has", return_value=True):
+            said = "\n".join(self.migrate.remake(note))
+        self.assertEqual(made, ["voice"])
+        self.assertIn("The voice: made again", said)
+        self.assertIn("The colony command: installed", said)
+        self.assertTrue(any(c[:4] == [sys.executable, "-m", "pip", "install"] and str(self.program) in c for c in ran))
+        self.assertIn("colony starts with the machine (it started at boot there too: sudo loginctl enable-linger", said)
+        self.assertTrue(any(c[0] == sys.executable and "autostart.turn(True)" in c[-1] for c in ran), "by the checkout's code")
+        self.assertIn("old.tail.ts.net), and Tailscale isn't installed here", said)
+        self.assertIn("sudo tailscale up --operator=$USER", said)
+        self.assertIn("Codex (https://developers.openai.com/codex)", said)
+        self.assertIn("Claude Code (claude, then /login); Codex (codex login)", said)
+        self.assertIn("the keys of gmail (the Connections page)", said)
+        self.assertIn("colony bench key", said)
+        self.assertIn(str(self.alpha), said)
+        self.assertIn("not started, the services projects set up for themselves: kairos-dashboard.service, x.timer. "
+                      "Enabled there: kairos-dashboard.service; each is started again with systemctl --user enable --now", said)
+        self.assertIn("crontab -e adds them again): 15 2 * * * /home/k/JOB/nightly.sh\n", said + "\n")
+        self.assertNotIn("a comment", said)
+        self.assertIn("colony board", said)
+
+    def test_the_command_lists_without_writing(self):
+        listed = subprocess.run([sys.executable, "-m", "colony", "migrate", "--list"], cwd=self.k, capture_output=True,
+                                text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
+        self.assertEqual(listed.returncode, 0, listed.stderr)
+        self.assertIn("alpha", listed.stdout)
+        self.assertIn("Never packed", listed.stdout)
+        self.assertFalse(self.disk.exists())

@@ -624,9 +624,10 @@ def _https_served(port):
     return _HTTPS["on"]
 
 
-def projects(reg=None):
+def projects(reg=None, adopt=True):
     """Every project on the board: those added by hand, then each subfolder of each project folder.
-    A subfolder seen for the first time is put on the board as it is found."""
+    A subfolder seen for the first time is put on the board as it is found (unless adopt is off: a look that only
+    reads, as colony migrate --list's)."""
     reg = reg or registry()
     out = [Path(p) for p in reg["projects"]]
     for root in map(Path, reg["roots"]):
@@ -636,7 +637,7 @@ def projects(reg=None):
             if (sub / ".git").is_file():          # a git worktree a project made for a branch: part of it, not another
                 continue
             if sub not in out and str(sub) not in reg["hidden"]:
-                if not (sub / ".board").exists():
+                if adopt and not (sub / ".board").exists():
                     track(sub, register=False)
                 out.append(sub)
     return out
@@ -1566,10 +1567,10 @@ def archive_together(roots, why=""):
     return out
 
 
-def archived_off():
+def archived_off(on=None):
     """Projects now off the board that can come back, each with when and why: archived, and those closed or taken off
-    before there was an Archived shelf. {path: row}"""
-    on = {str(p.resolve()) for p in projects()}
+    before there was an Archived shelf. {path: row}. on: the projects on the board, where the caller has them."""
+    on = {str(p.resolve()) for p in (projects() if on is None else on)}
     try:
         closed = json.loads(_closed_path().read_text())
     except (OSError, ValueError):

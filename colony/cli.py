@@ -31,6 +31,8 @@ waits on them for, its roadmap, and a steward that can act for them.
     colony urls                     every address the board can be opened at
     colony remote [--check|--off]   the board from your own devices, anywhere, through Tailscale (no one else)
     colony setup                    the steward walks you through first-time setup (again)
+    colony migrate --list | --pack DIR | --unpack ARCHIVE [--force]   carry colony to a fresh install: what it takes, in
+                                    one archive, and back in place there as if it had just restarted
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
                                     fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
     colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores, rote)
@@ -255,6 +257,19 @@ def cmd_voice(a):
         return 0
     print("Kokoro: " + ("ready; Chat reads replies in its voice" if voice.ready() else
                         "not installed; Chat uses the phone's own voice. `colony voice --setup` installs it (about 500 MB)"))
+    return 0
+
+
+def cmd_migrate(a):
+    """Carry colony to a fresh install under the same username (colony/migrate.py): --list what a pack takes, --pack it
+    into one archive, --unpack it on the new machine."""
+    from . import migrate
+    if a.list:
+        migrate.listing()
+    elif a.pack:
+        migrate.pack(a.pack)
+    else:
+        migrate.unpack(a.unpack, force=a.force)
     return 0
 
 
@@ -2001,6 +2016,15 @@ def main(argv=None):
     p.add_argument("--try", dest="try_", help="how to see or try it"); p.add_argument("--link", help="a URL or a file in the project")
     p.add_argument("--item", help="the roadmap item it comes from"); p.set_defaults(fn=cmd_show)
     sub.add_parser("setup", help="the steward walks you through first-time setup").set_defaults(fn=cmd_setup)
+    p = sub.add_parser("migrate", help="carry colony to a fresh install: what it takes, packed in one archive, and back "
+                       "in place there as if it had just restarted")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--list", action="store_true", help="what a pack takes, with sizes, and what it leaves out")
+    g.add_argument("--pack", metavar="DIR", help="pack it all into one archive in DIR (another disk)")
+    g.add_argument("--unpack", metavar="ARCHIVE", help="on the new machine: everything back in place, then what "
+                   "belongs to the machine made again")
+    p.add_argument("--force", action="store_true", help="unpack over a colony already here")
+    p.set_defaults(fn=cmd_migrate)
     p = sub.add_parser("bench", help="benchmark cards for the models the board can run")
     p.add_argument("what", nargs="?", choices=("card", "import", "pending", "discover", "fetch", "key")); p.add_argument("arg", nargs="?")
     p.set_defaults(fn=cmd_bench)
