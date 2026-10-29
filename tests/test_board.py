@@ -6864,6 +6864,70 @@ class ActiveHoursTest(HoursBase):
             httpd.shutdown()
             httpd.server_close()
 
+    def test_passive_player_posts_do_not_release_overnight_gates_or_updates(self):
+        # Reproduces the presence bypass, not a claim about which request caused the reported midnight update.
+        with self.clock(23, 30, day=6):
+            hours.seen()
+        with self.clock(23, 40, day=6) as last:
+            monitor.update(last)
+        with self.clock(0, 28):
+            gate = board.add_gate(self.root, "Which reminders first?")
+            monitor.queue("Scheduled news for the person", relay=True)
+        stamp = board.home() / "person-seen"
+        before = stamp.read_bytes()
+        updates = (board.home() / "updates.json").read_bytes()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        for path, form in (("/chat/measure", {"m": '{"when":"player-state"}'}),
+                           ("/chat/heard", {"how": "heard", "keys": "{}"}),
+                           ("/chat/heard", {"how": "seen", "keys": "{}"})):
+            with self.subTest(path=path, how=form.get("how")), self.clock(0, 50) as now:
+                with urllib.request.urlopen(urllib.request.Request(base + path,
+                        data=urllib.parse.urlencode(form).encode())) as response:
+                    response.read()
+                due = monitor.update_due(now)
+                text = monitor.update(now)
+                self.assertEqual((due, text), (None, None), "passive playback cannot make an overnight update eligible")
+                self.assertEqual(stamp.read_bytes(), before, "automatic reports do not renew the person's presence")
+                self.assertFalse(hours.present())
+                self.assertEqual(board.gates(self.root)[0]["held"], gate["held_until"])
+                self.assertEqual((board.home() / "updates.json").read_bytes(), updates)
+                self.assertEqual(monitor.inbox(), [])
+                self.assertEqual(monitor.claim(), [], "a previously queued relay stays held too")
+        with self.clock(1) as now:
+            with urllib.request.urlopen(urllib.request.Request(base + "/", headers={
+                    "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"})) as response:
+                response.read()
+            self.assertTrue(hours.present(), "the person's own navigation still releases what waits")
+            self.assertFalse(board.gates(self.root)[0]["held"])
+            self.assertEqual(monitor.update_due(now), last)
+            self.assertIn("Which reminders first?", monitor.update(now))
+            self.assertEqual(len(monitor.claim()), 1)
+
+    def test_explicit_player_actions_and_messages_still_mark_the_person_present(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        for minute, path, form in ((0, "/chat/heard", {"how": "skipped", "keys": "{}"}),
+                                   (16, "/chat/heard", {"how": "cleared", "keys": "{}"}),
+                                   (32, "/chat/send", {"p": "0", "text": "Keep going"})):
+            with self.subTest(path=path, how=form.get("how")), self.clock(1, minute) as now:
+                self.assertFalse(hours.present(), "the preceding action's quarter hour has ended")
+                with patch.object(console, "ensure", return_value="test-console"), \
+                        patch.object(console, "paste_into", return_value=True), \
+                        urllib.request.urlopen(urllib.request.Request(base + path,
+                        data=urllib.parse.urlencode(form).encode())) as response:
+                    response.read()
+                self.assertEqual(hours.last_seen(), now)
+                self.assertTrue(hours.active())
+        with self.clock(1, 48):
+            self.assertFalse(hours.active(), "genuine activity still expires after a quarter hour")
+
     def test_whether_the_hours_hold_and_when_they_next_begin(self):
         day = "07:30-23:45"
         for (h, m), on in (((3, 0), False), ((7, 29), False), ((7, 30), True), ((12, 0), True), ((23, 44), True),

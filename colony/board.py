@@ -8863,7 +8863,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._page_send()
         if not self._from_this_page():
             return self._send(403, b"not from this page")
-        if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status",):
+        if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status", "/chat/measure", "/chat/heard"):
             hours.seen()                               # the person tapped, typed or sent something
         if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:
             return self._send(413, b"that file is too large (25 MB at most)")
@@ -9343,7 +9343,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/chat/heard":                        # parts of the line heard, skipped, seen or cleared
             try:
                 keys = json.loads(values.get("keys", ["{}"])[0])
-                got = mark_line(projects(registry()), values.get("how", [""])[0], keys if isinstance(keys, dict) else {},
+                how = values.get("how", [""])[0]
+                if how in ("skipped", "cleared"):
+                    hours.seen()                         # an explicit action; heard/seen can arrive automatically
+                got = mark_line(projects(registry()), how, keys if isinstance(keys, dict) else {},
                                 values.get("dev", [""])[0], values.get("view", [""])[0])
             except ValueError:
                 return self._send(400, b"heard, skipped, seen or cleared, and the parts as {project: [keys]}")
