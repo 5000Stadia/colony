@@ -8340,3 +8340,168 @@ class ReaderLookTest(HoursBase):
             get("/?p=0", **audit, **{"Tailscale-User-Login": "person@example.com"})
         self.assertNotEqual((board.home() / "person-seen").read_bytes(), seen,
                             "through Tailscale Serve, with the person's identity on it, a look is always theirs")
+
+
+class WakeTest(BoardBase):
+    """R122: a timed wake lands as a note in the project's conversation when it comes due, kept in its .board."""
+
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        from colony import wakes
+        self.wakes = wakes
+        self.state = {"state": "idle"}
+        self.typed = []
+        for name, fake in (("snapshot", lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}),
+                           ("type_into", hearing(self.typed)), ("ensure", lambda *a, **k: None)):
+            stand_in = patch.object(console, name, side_effect=fake)
+            stand_in.start()
+            self.addCleanup(stand_in.stop)
+        steward = patch.object(monitor, "snapshot", return_value={"state": "working", "lines": []})
+        steward.start()
+        self.addCleanup(steward.stop)
+
+    @staticmethod
+    def local(y, mo, d, h, mi):
+        return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+    def rows(self, kind=None):
+        return [r for r in board.read(self.root, "wakes.jsonl") if kind is None or r["type"] == kind]
+
+    def watch(self, at, w=None):
+        """One pass of a watcher with the steward off, its clock fixed at `at`."""
+        w = w or monitor.Watcher(enabled=False)
+        with patch.object(hours, "clock", return_value=at):
+            w.tick()
+        return w
+
+    def test_at_in_and_every_schedule_in_local_time_with_tomorrow_rollover(self):
+        now = self.local(2026, 10, 28, 15, 0)
+        w = self.wakes.make(self.root, "the build", at="14:00", now=now)
+        self.assertEqual(board.epoch(w["due"]), self.local(2026, 10, 29, 14, 0), "past today: tomorrow, local")
+        w = self.wakes.make(self.root, "the reply", at="16:30", now=now)
+        self.assertEqual(board.epoch(w["due"]), self.local(2026, 10, 28, 16, 30), "still to come today: today")
+        w = self.wakes.make(self.root, "the price", at="2026-11-02T09:15", now=now)
+        self.assertEqual(board.epoch(w["due"]), self.local(2026, 11, 2, 9, 15), "an ISO date-time is local")
+        w = self.wakes.make(self.root, "month end", at="23:30", now=self.local(2026, 10, 31, 23, 45))
+        self.assertEqual(board.epoch(w["due"]), self.local(2026, 11, 1, 23, 30), "tomorrow across a month's end")
+        w = self.wakes.make(self.root, "deploy", within="2h", now=now)
+        self.assertEqual(board.epoch(w["due"]), now + 7200)
+        w = self.wakes.make(self.root, "daily", within="30m", every="1d", now=now)
+        self.assertEqual((board.epoch(w["due"]), w["every"]), (now + 1800, 86400))
+        w = self.wakes.make(self.root, "hourly", every="1h", now=now)
+        self.assertEqual(board.epoch(w["due"]), now + 3600, "--every alone: first due one step from now")
+        self.assertEqual(self.wakes.duration("1h30m"), 5400)
+        self.assertEqual(self.wakes.span(5400), "1h30m")
+
+    def test_nothing_under_five_minutes_and_nothing_unreadable(self):
+        now = self.local(2026, 10, 28, 15, 0)
+        for kw in (dict(within="4m"), dict(within="1m", every="1d"), dict(within="1h", every="2m"),
+                   dict(at="15:03"), dict(at="2026-10-28T14:00"), dict(within="soon"), dict(at="25:00"), {},
+                   dict(within="1h", at="16:00")):
+            with self.subTest(**kw), self.assertRaises(ValueError):
+                self.wakes.make(self.root, "x", now=now, **kw)
+        with self.assertRaises(ValueError):
+            self.wakes.make(self.root, "  ", within="1h", now=now)
+        self.assertEqual(self.wakes.make(self.root, "x", within="5m", now=now)["why"], "x", "five minutes is allowed")
+        self.assertEqual(len(self.rows("made")), 1, "a refused wake leaves no row")
+
+    def test_a_due_wake_waits_for_idle_and_the_persons_hours_then_fires_once_as_a_note(self):
+        board.set_setting("active_hours", "07:30-23:45")
+        night = self.local(2026, 10, 29, 2, 0)
+        self.wakes.make(self.root, "check the nightly build", at="01:00", now=night - 7200)
+        self.watch(night)
+        self.assertEqual(self.rows("fired"), [], "outside the person's hours it waits")
+        self.state["state"] = "working"
+        self.watch(self.local(2026, 10, 29, 8, 0))
+        self.assertEqual(self.rows("fired"), [], "while its console works it waits")
+        self.state["state"] = "needs you"
+        self.watch(self.local(2026, 10, 29, 8, 1))
+        self.assertEqual(self.rows("fired"), [], "a question on its screen is the person's: it waits")
+        self.state["state"] = "idle"
+        w = self.watch(self.local(2026, 10, 29, 8, 2))
+        self.assertEqual(len(self.rows("fired")), 1)
+        note = [n for n in board.open_notes(self.root) if n.get("kind") == "wake"]
+        self.assertEqual(len(note), 1)
+        self.assertEqual(note[0]["author"], "colony")
+        self.assertTrue(note[0]["text"].startswith("[colony] Wake: check the nightly build (set 2026-10-29 00:00 by you)"),
+                        note[0]["text"])
+        self.assertEqual(self.typed, ["[colony] You have an update from Colony."], "handed over with a prompt, as notes are")
+        self.watch(self.local(2026, 10, 29, 9, 0), w)
+        self.assertEqual(len(self.rows("fired")), 1, "fired once")
+        self.assertEqual(self.wakes.waiting(self.root), [])
+
+    def test_kept_across_a_restart_and_once_after_downtime_and_every_repeats_from_its_firing(self):
+        start = self.local(2026, 10, 28, 9, 0)
+        self.wakes.make(self.root, "the queue", within="1h", every="1h", now=start)
+        self.watch(start + 600)
+        self.assertEqual(self.rows("fired"), [], "not yet due")
+        # the board is down for five hours; a new Watcher (a restart) finds the wake in .board and fires it once
+        back = start + 5 * 3600 + 120
+        self.watch(back, monitor.Watcher(enabled=False))
+        fired = self.rows("fired")
+        self.assertEqual(len(fired), 1, "five missed hours fire once, not five times")
+        self.assertEqual(board.epoch(fired[0]["next"]), back + 3600, "the next is an hour from this firing")
+        self.watch(back + 1800)
+        self.assertEqual(len(self.rows("fired")), 1)
+        self.watch(back + 3600)
+        self.assertEqual(len(self.rows("fired")), 2)
+        self.assertEqual(len([n for n in board.notes(self.root) if n.get("kind") == "wake"]), 2)
+        self.assertEqual(len(self.rows("made")), 1, "made recorded once; each firing its own row, for counting use")
+
+    def test_cancel_from_the_cli_and_from_the_page(self):
+        env = dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=str(self.root))
+        run = lambda *a: subprocess.run([sys.executable, "-m", "colony", "wake", *a], cwd=self.root, capture_output=True,
+                                        text=True, env=env)
+        made = run("--in", "2h", "check the deploy")
+        self.assertEqual(made.returncode, 0, made.stderr)
+        self.assertIn("Kept as w", made.stdout)
+        named = run("plants", "--at", "2099-12-01T09:00", "--every", "1d", "the daily look")
+        self.assertEqual(named.returncode, 0, named.stderr)
+        self.assertEqual(run("--in", "1m", "too soon").returncode, 2)
+        listed = run("--list").stdout
+        self.assertIn("check the deploy", listed)
+        self.assertIn("every 1d", listed)
+        first, second = [w["id"] for w in self.wakes.waiting(self.root)]
+        self.assertEqual([r["by"] for r in self.rows("made")], ["agent", "agent"])
+        self.assertEqual(run("--cancel", first).returncode, 0)
+        self.assertEqual(run("--cancel", first).returncode, 2, "no longer waiting")
+        self.assertEqual([w["id"] for w in self.wakes.waiting(self.root)], [second])
+        page = board.render(board.registry(), 0, "overview")
+        self.assertIn("Timed wakes", page)
+        self.assertIn("the daily look", page)
+        self.assertIn(html.escape(self.wakes.when(self.wakes.waiting(self.root)[0]), quote=True), page)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/wake",
+                                                      data=urllib.parse.urlencode(dict(p=0, id=second)).encode())).close()
+        self.assertEqual(self.wakes.waiting(self.root), [])
+        self.assertEqual([r["by"] for r in self.rows("cancelled")], ["agent", "person"])
+        self.assertNotIn("Timed wakes", board.render(board.registry(), 0, "overview"), "none waiting: nothing shown")
+        self.assertIn(second, board.open_notes(self.root)[-1]["text"], "its agent hears the person cancelled it")
+
+    def test_a_codex_project_hears_it_the_same_way(self):
+        board.project_settings(self.root, {"provider": "codex"})
+        now = self.local(2026, 10, 28, 9, 0)
+        self.wakes.make(self.root, "look at the benchmark run", within="30m", now=now)
+        self.watch(now + 1900)
+        self.assertEqual(self.typed, ["[colony] You have an update from Colony."])
+        from colony import context
+        hook = json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": self.typed[0]})
+        heard = subprocess.run([sys.executable, "-m", "colony", "notes", "--deliver", "--console", "codex"], input=hook,
+                               cwd=self.root, capture_output=True, text=True,
+                               env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_PROJECT=str(self.root),
+                                        COLONY_CONSOLE=context.seat(self.root)))
+        self.assertIn("[colony] Wake: look at the benchmark run", heard.stdout, heard.stderr)
+
+    def test_the_stewards_wakes_reach_its_inbox(self):
+        now = self.local(2026, 10, 28, 9, 0)
+        self.wakes.make(monitor.home(), "look over the week", within="1h", now=now)
+        self.watch(now + 3700)
+        self.assertEqual(monitor.inbox(), [], "the steward is at work: it waits")
+        monitor.snapshot.return_value = {"state": "idle", "lines": []}
+        self.watch(now + 3800)
+        self.assertIn("[colony] Wake: look over the week", " ".join(r["text"] for r in monitor.inbox()))
+        self.assertTrue((monitor.home() / ".board" / "wakes.jsonl").exists(), "kept under the steward's home")

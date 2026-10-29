@@ -928,6 +928,47 @@ def cmd_rule(a):
     return 0
 
 
+def cmd_wake(a):
+    """A timed wake: a note to this project (or NAME, or the steward) when it comes due, in place of a sleeping process
+    or a cron job; or the ones waiting (--list), or one cancelled (--cancel ID)."""
+    from . import board, monitor, wakes
+    words = list(a.words)
+    if len(words) > 2:
+        raise SystemExit('colony wake: one project name at most, then why in quotes: colony wake --in 2h "why"')
+    making = not (a.list or a.cancel)
+    name = words.pop(0) if len(words) == 2 or (words and not making) else None
+    why = words[0] if words else ""
+    caller = board.root_of()
+    if not name:
+        root = caller
+    elif name in ("steward", monitor.name()):
+        root = monitor.home()
+    else:
+        root = _project(name)
+    steward, mine = monitor.home().resolve(), Path(root).resolve() == Path(caller).resolve()
+    by = "agent" if mine else "steward" if Path(caller).resolve() == steward else Path(caller).name
+    try:
+        if a.cancel:
+            wakes.cancel(root, a.cancel, by=by)
+            print(f"{a.cancel} cancelled.")
+            return 0
+        if making:
+            w = wakes.make(root, why, at=a.at, within=a.within, every=a.every, by=by)
+            print(f"Kept as {w['id']}: due {wakes.when(w)}" + (f", then every {a.every} after each firing" if a.every else "")
+                  + ". It arrives as a note once the console is idle, inside the person's active hours; nothing runs "
+                    "meanwhile. `colony wake --cancel ID` if it is no longer needed.")
+            return 0
+    except (ValueError, KeyError) as err:
+        print(err if isinstance(err, ValueError) else f"no waiting wake {a.cancel}", file=sys.stderr)
+        return 2
+    found = wakes.waiting(root)
+    for w in found:
+        print(f"{w['id']}  {wakes.when(w)}" + (f"  every {wakes.span(w['every'])}" if w.get("every") else "") + f"  {w['why']}")
+    if not found:
+        print("No wakes waiting.")
+    return 0
+
+
 def cmd_pins(a):
     """What the Library holds, under its headings as the board shows them; those under none last."""
     from . import board, pins
@@ -1919,6 +1960,13 @@ def main(argv=None):
     p = sub.add_parser("pin", help="keep a file in the project or a URL in its Library, for the person and you")
     p.add_argument("target"); p.add_argument("--title"); p.add_argument("--why")
     p.add_argument("--group", help="the Library heading it goes under"); p.set_defaults(fn=cmd_pin)
+    p = sub.add_parser("wake", help="a note to this project at a later time, to check back on something (no sleeping process, no cron)")
+    p.add_argument("words", nargs="*", metavar="[NAME] WHY", help="the project (or steward; this one by default), then what to check")
+    p.add_argument("--at", help="HH:MM (today, or tomorrow once past) or a local date-time, 2026-10-29T09:00")
+    p.add_argument("--in", dest="within", metavar="DURATION", help="30m, 2h, 1d")
+    p.add_argument("--every", metavar="DURATION", help="again this long after each firing")
+    p.add_argument("--list", action="store_true"); p.add_argument("--cancel", metavar="ID")
+    p.set_defaults(fn=cmd_wake)
     p = sub.add_parser("rule", help="the person's standing rules for this project: kept by colony, back at every session start")
     p.add_argument("text", nargs="?", help="the rule (with --retire: why it no longer holds)")
     p.add_argument("--words", help="the person's own words for it"); p.add_argument("--retire", metavar="ID")
@@ -2054,7 +2102,11 @@ def main(argv=None):
             print("colony steward COMMAND ...: the steward's commands are mute, helm, posture, scout, said, suggest, decided, supports, setup")
             return 0
         argv = argv[1:]
-    a = ap.parse_args(argv)
+    a, extra = ap.parse_known_args(argv)
+    if extra and a.cmd == "wake" and not any(x.startswith("-") for x in extra):
+        a.words += extra                             # colony wake NAME --in 2h "why": its words either side of the options
+    elif extra:
+        a = ap.parse_args(argv)                      # says what it doesn't know, as ever
     code = a.fn(a)
     if a.cmd in ("gate", "show", "ready", "connect", "consult", "vision", "send", "reply", "pin", "research",
                  "needs-you", "progress", "nest", "noted") and not code:

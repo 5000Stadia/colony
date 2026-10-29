@@ -136,6 +136,8 @@ steer all of them from one board, and the projects can write to each other.
 - A standing order from the person (from now on, always, never) is kept by colony, not your memory: `colony rule
   "the rule" --words "their words"`. It comes back at every session start, after a compaction too; when they lift
   one, `colony rule --retire ID "why"`.
+- To check back on something later, `colony wake --in 2h "what to check"` (or `--at HH:MM`, `--every 1d`), never a
+  sleeping process or cron: it comes as a note when you're idle in the person's hours (`--list`, `--cancel ID`).
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
   `--default "what stands if they skip it"`); where it has clear answers, `--option "..."` for each and `--recommended "..."` for
   yours: they answer with a tap. The answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`. An open gate stays on their list.
@@ -5231,6 +5233,20 @@ def rules_box(root, pid):
             f"compactions</summary><ul>{items}</ul></details>")
 
 
+def wakes_box(root, pid):
+    """The timed wakes the project's agent set, each with its next time and why, cancellable with a tap."""
+    from . import wakes
+    found = wakes.waiting(root)
+    if not found:
+        return ""
+    items = "".join(f"<li>{e(wakes.when(w))}{(' · every ' + e(wakes.span(w['every']))) if w.get('every') else ''} · "
+                    f"{e(w['why'])} <form class='inline' method='post' action='/wake'><input type='hidden' name='p' value='{pid}'>"
+                    f"<input type='hidden' name='id' value='{e(w['id'])}'><button class='quiet'>Cancel</button></form></li>"
+                    for w in found)
+    return (f"<details class='vision'><summary><b>Timed wakes</b> · {len(found)}, next {e(wakes.when(found[0]))}"
+            f"</summary><ul>{items}</ul></details>")
+
+
 def vision_box(root, pid):
     from . import vision
     road = roadmap(root)
@@ -5542,7 +5558,7 @@ def render(reg, pid, view="overview", show_all=""):
     front = view == "overview"
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
                + switch_line(root) + lead_status
-               + (f"{vision_box(root, pid)}{rules_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>"
+               + (f"{vision_box(root, pid)}{rules_box(root, pid)}{wakes_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>"
                   + project_usage(root) if front else "") + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
@@ -9142,6 +9158,20 @@ class Handler(BaseHTTPRequestHandler):
             back = f"/?p={form.get('p', '')}&view=overview"
             self.send_response(303)
             self.send_header("Location", back)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path == "/wake":
+            from . import wakes
+            try:
+                root = projects(reg)[int(form.get("p", ""))]
+                wakes.cancel(root, form.get("id", ""), by="person")
+                add_note(root, None, f"The person cancelled your timed wake {form.get('id', '')} on the board; it won't come.",
+                         author="colony", quiet=True)
+            except (ValueError, IndexError, KeyError):
+                pass
+            self.send_response(303)
+            self.send_header("Location", f"/?p={form.get('p', '')}&view=overview")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

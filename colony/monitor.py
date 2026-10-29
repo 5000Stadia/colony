@@ -953,6 +953,11 @@ class Watcher:
             lingering.tick()                        # background work gone quiet: named to its agent once, steward or not
         except Exception:
             pass
+        try:
+            from . import wakes
+            wakes.tick()                            # timed wakes due: a note each, handed over by mail() below
+        except Exception:
+            pass
         if not self.enabled or muted():
             self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:
