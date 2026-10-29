@@ -4559,6 +4559,23 @@ class MailWakeTest(BoardBase):
         watcher.mail()
         self.assertEqual(len(self.typed), 2, "healthy current output releases the queued notice")
 
+    def test_own_unsent_notice_is_retried_but_a_persons_draft_is_held_and_explained(self):
+        source, message = self.source_message()
+        notice = "[colony] You have mail from another project in the colony."
+        with patch.object(console, 'drafting', return_value=True), patch.object(console, 'draft', return_value=notice):
+            monitor.Watcher().mail()
+        self.assertEqual(self.typed, [notice], "type_into can finish sending its own unsent notice")
+        self.typed.clear()
+        watcher = monitor.Watcher()
+        with patch.object(console, 'drafting', return_value=True), patch.object(console, 'draft', return_value='PRIVATE unsent words'):
+            watcher.mail()
+            watcher.mail()
+        self.assertEqual(self.typed, [])
+        [copy] = mail.messages(source)
+        self.assertEqual(copy['delivery']['code'], 'console-draft')
+        self.assertNotIn('PRIVATE', copy['delivery']['reason'])
+        self.assertEqual(len([n for n in board.notes(source) if n.get('kind') == 'mail-delivery']), 1)
+
     def test_a_handed_ask_reports_reply_delay_and_working_restores_handed(self):
         source, message = self.source_message(ask=True)
         mail.delivered(self.root, [message])

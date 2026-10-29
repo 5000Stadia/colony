@@ -775,11 +775,16 @@ class Watcher:
             # A healthy start needs time to draw its prompt; wake it on the next look, one new console at a time.
             return woke_starting
 
+        person_drafting = console.drafting(name) and not (console.draft(name) or '').startswith('[colony]')
+        if person_drafting:
+            delayed({'code': 'console-draft', 'reason': 'recipient console has unsent input; the queued message waits'},
+                    retry=False, replies=False)
+            return woke_starting
         now = time.time()
         for i in resume:
             if now - self.nudged_at.get(i, now) > RENUDGE:
                 self.nudged.discard(i)
-        if state == 'idle' and not known and not console.drafting(name):
+        if state == 'idle' and not known:
             unclaimed = [m for m in letters if m['id'] in self.nudged
                          and now - self.nudged_at.get(m['id'], now) > RENUDGE]
             if unclaimed:
@@ -789,8 +794,6 @@ class Watcher:
         if waiting <= self.nudged:
             return woke_starting
         if state != 'idle' and not ((urgent or resume) and state == 'working'):
-            return woke_starting
-        if console.drafting(name):
             return woke_starting
         starting = console.age(name) < STARTUP_WINDOW
         if starting and woke_starting:
