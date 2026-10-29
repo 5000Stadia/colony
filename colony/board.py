@@ -3318,7 +3318,7 @@ PLAYER = """
     + "<label class='cpsw'><span class='cptxt'><b>Auto</b><span>Reads new replies as they land, from every project</span></span>"
     + "<input type='checkbox' class='cpauto' role='switch'><span class='cptoggle' aria-hidden='true'></span></label>"
     + "<button type='button' class='cplink cpsetopen'>Voice, speed, mode<span>›</span></button>"
-    + "<button type='button' class='cplink cpheardopen'>Heard<span>›</span></button></div>"
+    + "<button type='button' class='cplink cpheardopen'>History<span>›</span></button></div>"
     + "<div class='cpset' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>Reads as</div>"
     + "<div class='cpseg'><button type='button' data-m='both'>Audio + text</button><button type='button' data-m='audio'>Audio only</button>"
     + "<button type='button' data-m='text'>Text only</button></div><p class='cpmodesay'></p>"
@@ -3326,7 +3326,7 @@ PLAYER = """
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div>"
-    + "<div class='cpheard' hidden><button type='button' class='cpback'>‹ The line</button><ol class='cprows cpheardrows'></ol></div></div>";
+    + "<div class='cpheard' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>History</div><p>Recent replies played, read or skipped.</p><ol class='cprows cpheardrows'></ol></div></div>";
   const $ = (s) => bar.querySelector(s), pill = $('.cppill'), sheet = $('.cpsheet'), shade = $('.cpshade'), rows = $('.cpmain .cprows');
   const MODESAY = {both: "Read aloud, and the page goes with it, into each project's chat", audio: 'Read aloud; the page stays where you are',
     text: 'No sound: each reply shown in its chat, and ⏭ goes on'};
@@ -3437,12 +3437,12 @@ PLAYER = """
     if (r && r.ok) u.keys.forEach((k) => marked.delete(k));
     tag = ''; drawnSheet = ''; look();
   }
-  // Heard: the last twenty heard (skipped and seen too), to play one again; playing it writes nothing
+  // History: the last twenty heard, seen or skipped replies, to play one again; playing it writes nothing
   async function heardList() {
     const got = await fetched('/chat/line?heard=20', 'json'), list = $('.cpheardrows');
     const items = (got && got.heard) || [];
     list.replaceChildren(...items.map((x) => { const info = got.projects[x.p] || {}, li = row(x, info); on(li, 'click', () => again(x, info)); return li; }));
-    if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'Nothing heard yet.'; list.append(li); }
+    if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'No replies in history yet.'; list.append(li); }
   }
   // a ▷ under a reply, or one played again, steps in front of the line's reading, which goes on after it
   const stepIn = () => { opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null;

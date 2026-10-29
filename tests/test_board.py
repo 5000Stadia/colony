@@ -8591,6 +8591,16 @@ class LineTest(BoardBase):
             self.assertEqual(board.unclear(board.projects(board.registry()), later), 0, "ten minutes on, it stands")
         self.assertTrue(all(r["how"] != "unheard" for r in board.read(self.root, "heard.jsonl")), "no row un-hears a part")
 
+    def test_history_includes_played_read_and_skipped_but_not_cleared_or_waiting(self):
+        self.talk(self.root, *[x for n in range(5) for x in (("you", self.at(10, n * 2), f"q{n}"),
+                                                              ("say", self.at(10, n * 2 + 1), f"Answer {n}."))])
+        replies = self.line()["line"]
+        for reply, how in zip(replies, ("heard", "seen", "skipped", "cleared")):
+            self.mark(how, {"0": [k for k, _ in reply["b"]]})
+        history = board.heard_list(board.projects(board.registry()))["heard"]
+        self.assertEqual({x["w"] for x in history}, {f"Answer {n}." for n in range(3)})
+        self.assertEqual([x["w"] for x in self.line()["line"]], ["Answer 4."])
+
     def test_replay_writes_nothing_and_the_heard_list_holds_the_last_heard(self):
         self.talk(self.root, *[x for n in range(3) for x in (("you", self.at(10, n * 2), f"q{n}"),
                                                               ("say", self.at(10, n * 2 + 1), f"Answer {n}."))])
