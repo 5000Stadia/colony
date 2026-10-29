@@ -5000,6 +5000,20 @@ CHAT = """
   // letters and digits in the part as the page draws it (code left out, as plain() reads it), on from where the last
   // was found; not found, the part's start is what the page turns to.
   const lit = window.CSS && CSS.highlights && window.Highlight ? CSS.highlights : null;
+  // One mark, kept: its range is swapped, and the chat's area is repainted as it moves. Safari on the iPhone left the
+  // sentence before still marked as the next one was (the person, 2026-10-28: "Sometimes the text highlight doesnt
+  // un-highlight when the next sentence starts highlighting"): WebKit doesn't always repaint what a highlight leaves
+  // (its bugs 266250, 307491), so a transparent outline on the box changes, which repaints it and changes nothing seen
+  // (in three steps: two moves in one frame, flipped back and forth, would leave it as it was and nothing repainted).
+  const shone = lit ? new Highlight() : null;
+  let shook = 0;
+  const shine = (r) => { if (!lit) return;
+    const was = shone.size ? [...shone][0] : null;
+    if (was && r && ['startContainer', 'startOffset', 'endContainer', 'endOffset'].every((x) => was[x] === r[x])) return;  // as it was
+    if (!was && !r) return;
+    shone.clear(); if (r) shone.add(r);
+    if (r && lit.get('cpread') !== shone) lit.set('cpread', shone);
+    shook = (shook + 1) % 3; box.style.outline = shook ? `${shook}px solid transparent` : ''; };
   const letters = new WeakMap();
   const lettersOf = (el) => { let x = letters.get(el); if (x && x.len === el.textContent.length) return x;
     const map = [], keep = [], walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT,
@@ -5027,23 +5041,22 @@ CHAT = """
     [form, document.getElementById('gc'), document.querySelector('#cplayer:not(.cpidle) .cpbar')].forEach((el) => {
       if (el && !el.hidden && el.offsetHeight) { const r = el.getBoundingClientRect(); if (r.top > 0 && r.top < b) b = r.top; } });
     return b; };
-  const trace = (k, said) => { clearTimeout(turning); if (lit) lit.delete('cpread');
+  const trace = (k, said) => { clearTimeout(turning);
     followed = k && said && P.following() ? {k, said} : null;
-    if (!followed || !box.isConnected) return;
-    const [el, r] = find(k, said, false); if (!el) return;
-    if (r && lit) lit.set('cpread', new Highlight(r));
+    if (!followed || !box.isConnected) { shine(null); return; }
+    const [el, r] = find(k, said, false); shine(r); if (!el) return;
     turnTo(k, said); };
   const turnTo = (k, said) => {
     const again = () => { if (followed && followed.k === k && followed.said === said) turnTo(k, said); };
     if (typingNow()) { turning = setTimeout(again, 1500); return; }
     if (Date.now() - fingered < 4000) { turning = setTimeout(again, 4200 - (Date.now() - fingered)); return; }
     const [el, r] = find(k, said, true), what = r || el; if (!what) return;
-    if (r && lit) lit.set('cpread', new Highlight(r));              // found afresh: the chat may have drawn it again
+    if (r) shine(r);              // found afresh: the chat may have drawn it again
     const rs = [...what.getClientRects()]; if (!rs.length) return;
     if (Math.max(...rs.map((q) => q.bottom)) <= viewBottom()) return;  // all of it shows
     const by = Math.min(...rs.map((q) => q.top)) - viewTop() - 12;
     if (by > 0) { stick = false; window.scrollBy({top: by, behavior: 'smooth'}); } };
-  const relight = () => { if (!followed || !lit) return; const [, r] = find(followed.k, followed.said, true); if (r) lit.set('cpread', new Highlight(r)); };
+  const relight = () => { if (!followed || !lit) return; const [, r] = find(followed.k, followed.said, true); if (r) shine(r); };
   sheet.querySelector('.shut').addEventListener('click', () => { sheet.hidden = true; });
   document.addEventListener('click', (ev) => { if (!sheet.hidden && !ev.target.closest('#voicesheet, button.vset')) sheet.hidden = true; });
   // its speed, remembered on this device

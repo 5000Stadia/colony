@@ -8005,7 +8005,14 @@ class LineTest(BoardBase):
         # Audio + text: each sentence about to be heard in view, never scrolled back up, and marked softly
         self.assertIn("if (c >= LEAD + had / all * (d - LEAD)) i = m;", js)
         self.assertIn("if (by > 0) { stick = false; window.scrollBy({top: by, behavior: 'smooth'}); } };", chat)
-        self.assertIn("if (r && lit) lit.set('cpread', new Highlight(r));", chat)
+        self.assertIn("if (r) shine(r);", chat)
+        # one mark, its range swapped, and the box repainted as it moves: Safari left the sentence before still marked
+        self.assertIn("shone.clear(); if (r) shone.add(r);", chat)
+        self.assertIn("const [el, r] = find(k, said, false); shine(r); if (!el) return;", chat, "one move, one repaint")
+        self.assertIn("if (r && lit.get('cpread') !== shone) lit.set('cpread', shone);", chat)
+        self.assertIn("shook = (shook + 1) % 3; box.style.outline = shook ? `${shook}px solid transparent` : ''; };", chat)
+        self.assertNotIn("new Highlight(r)", chat, "a fresh Highlight for each sentence is what WebKit left painted")
+        self.assertNotIn("lit.delete('cpread')", chat)
         self.assertIn("::highlight(cpread)", css)
         # what the live trial reads off the phone: each pause and let-go with its cause, and how long the page was hidden
         self.assertIn("navigator.sendBeacon('/chat/measure'", js)
