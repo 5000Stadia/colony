@@ -7949,6 +7949,174 @@ class LineTest(BoardBase):
     def mark(self, how, keys, dev="desk", view="all"):
         return board.mark_line(board.projects(board.registry()), how, keys, dev, view)
 
+    def bounded_transcript(self, path):
+        real_open, test = open, self
+
+        class File:
+            def __init__(self, fh): self.fh = fh
+            def __enter__(self): return self
+            def __exit__(self, *args): self.fh.close()
+            def __getattr__(self, name): return getattr(self.fh, name)
+            def read(self, n=-1):
+                test.assertGreaterEqual(n, 0, 'transcript reads must be bounded')
+                return self.fh.read(n)
+            def readline(self, n=-1):
+                test.assertGreater(n, 0, 'transcript rows must be bounded before allocation')
+                return self.fh.readline(n)
+            def __iter__(self): return self
+            def __next__(self):
+                row = self.readline()
+                if not row: raise StopIteration
+                return row
+
+        def opened(name, *args, **kwargs):
+            fh = real_open(name, *args, **kwargs)
+            return File(fh) if Path(name) == path and args and args[0] == 'rb' else fh
+        return patch('builtins.open', side_effect=opened)
+
+    def test_a_first_seen_historical_session_starts_at_its_end_and_keeps_new_work(self):
+        path = self.talk(self.root, ('you', self.at(8, 0), 'Old work'), ('say', self.at(8, 1), 'Old reply'))
+        with path.open('r+b') as fh:                  # a large historic tool row, without allocating it
+            fh.seek(2_000_000)
+            fh.write(b'\n')
+        with self.bounded_transcript(path):
+            self.assertEqual(self.line()['total'], 0)
+            self.assertEqual(board._feed_state(self.root)['offset'], path.stat().st_size)
+            board._FEED.clear()                      # the EOF baseline survives a board restart
+            self.assertEqual(self.line()['total'], 0)
+        self.talk(self.root, ('you', self.at(10, 0), 'New work'), ('say', self.at(10, 1), 'New reply'))
+        self.assertEqual([r['text'] for r in board.read(self.root, 'line.jsonl')], [])
+        self.assertEqual(self.line()['total'], 1)
+        self.assertEqual([r['text'] for r in board.read(self.root, 'line.jsonl')], ['New reply'])
+
+    def test_giant_complete_and_growing_rows_are_discarded_in_bounded_pieces(self):
+        from colony import chat
+        path = self.talk(self.root, ('you', self.at(10, 0), 'Go'), ('say', self.at(10, 1), 'First'))
+        self.line()
+        self.talk(self.root, ('step', self.at(10, 2), 'x' * 5000), ('say', self.at(10, 3), 'After giant'))
+        with patch.object(chat, 'BIG', 500), self.bounded_transcript(path):
+            self.line()
+            with path.open('ab') as fh:
+                fh.write(b'{"type":"assistant","padding":"' + b'x' * 5000)
+            self.line()
+            with path.open('ab') as fh:
+                fh.write(b'"}\n')
+            self.talk(self.root, ('say', self.at(10, 4), 'After growing row'))
+            self.line()
+            chat.forget(path)
+            events = chat.events('claude', path)
+        self.assertEqual([r['text'] for r in board.read(self.root, 'line.jsonl')],
+                         ['First', 'After giant', 'After growing row'])
+        self.assertEqual([text for kind, text, _ in events if kind == 'say'],
+                         ['First', 'After giant', 'After growing row'])
+
+    def test_a_large_incremental_feed_keeps_the_start_and_end_of_every_batch(self):
+        from colony import chat
+        path = self.talk(self.root, ('you', self.at(10, 0), 'Go'), ('say', self.at(10, 1), 'First'))
+        self.line()
+        for i in range(30):
+            self.talk(self.root, ('say', self.at(10, 2, i), f'Fresh {i}'))
+        original = chat._tail
+        def small_tail(path, keep): return original(path, keep, limit=400)
+        with patch.object(chat, 'TAIL', 400), patch.object(chat, '_tail', side_effect=small_tail):
+            self.line()
+        rows = board.read(self.root, 'line.jsonl')
+        self.assertEqual([r['text'] for r in rows], ['First', *[f'Fresh {i}' for i in range(30)]])
+        self.assertEqual([r['k'] for r in rows], [f's{self.at(10, 0)}-{i}' for i in range(31)])
+        self.assertEqual(board._feed_state(self.root)['offset'], path.stat().st_size)
+
+    def test_an_old_turns_later_prose_keeps_chats_turn_and_part_keys(self):
+        from colony import chat
+        for provider in ('claude', 'codex'):
+            with self.subTest(provider=provider):
+                root = self.project(provider)
+                path = Path(self.tmp.name) / (provider + '-history.jsonl')
+                def write(kind, at, text):
+                    if provider == 'claude':
+                        content = text if kind == 'you' else [dict(type='text', text=text)] if kind == 'say' else [
+                            dict(type='tool_use', name='Bash', input=dict(command=text))]
+                        row = dict(type='user' if kind == 'you' else 'assistant', timestamp=at,
+                                   message=dict(content=content))
+                    else:
+                        payload = dict(type='function_call', name='exec', arguments=json.dumps(dict(cmd=text))) if kind == 'step' else dict(
+                            type='message', role='user' if kind == 'you' else 'assistant',
+                            content=[dict(type='input_text' if kind == 'you' else 'output_text', text=text)])
+                        row = dict(type='response_item', timestamp=at, payload=payload)
+                    with path.open('a') as fh:
+                        fh.write(json.dumps(row) + '\n')
+                write('you', self.at(8, 0), 'Old work')
+                write('say', self.at(10, 0), 'Old reply')
+                write('step', self.at(10, 1), 'inspect')
+                self.sessions[str(root.resolve())] = dict(provider=provider, id='old', path=str(path))
+                with self.bounded_transcript(path):
+                    board.line_feed(root)
+                self.assertEqual(board.read(root, 'line.jsonl'), [], 'adoption never queues historical prose')
+                self.assertEqual(board._feed_state(root)['offset'], path.stat().st_size)
+                stamp = path.stat()
+                os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1_000_000))
+                board.line_feed(root)
+                self.assertEqual(board.read(root, 'line.jsonl'), [], 'touching a baseline does not replay it')
+                board._FEED.pop(str(root), None)             # resume from the persisted EOF baseline
+                write('say', self.at(12, 0), 'Resumed without a new prompt')
+                write('say', self.at(12, 1), 'Finished that old turn')
+                board.line_feed(root)
+                rows = board.read(root, 'line.jsonl')
+                [turn] = chat.turns(chat.events(provider, path))
+                expected = [f"s{turn['at']}-{i}" for i, (_, text) in enumerate(turn['items'])
+                            if text in ('Resumed without a new prompt', 'Finished that old turn')]
+                self.assertEqual([r['k'] for r in rows], expected)
+                self.assertEqual([r['text'] for r in rows], ['Resumed without a new prompt', 'Finished that old turn'])
+
+    def test_replaced_or_rewritten_transcripts_at_least_as_large_are_read_again(self):
+        for replace in (False, True):
+            for grow in (False, True):
+                with self.subTest(replace=replace, grow=grow):
+                    root = self.project(f'rotation-{int(replace)}-{int(grow)}')
+                    path = self.talk(root, ('you', self.at(10, 0), 'Begin'), ('say', self.at(10, 1), 'Before.'))
+                    board.line_feed(root)
+                    original = path.read_bytes()
+                    changed = original.replace(self.at(10, 0).encode(), self.at(11, 0).encode()).replace(
+                        self.at(10, 1).encode(), self.at(11, 1).encode()).replace(b'Before.', b'After!!')
+                    if grow:
+                        changed += json.dumps(dict(type='assistant', timestamp=self.at(11, 2),
+                            message=dict(content=[dict(type='text', text='Larger replacement')]))).encode() + b'\n'
+                    target = path.with_suffix('.new') if replace else path
+                    target.write_bytes(changed)
+                    if replace:
+                        os.replace(target, path)
+                    board._FEED.pop(str(root), None)          # identity checks must survive a board restart
+                    with self.bounded_transcript(path):
+                        board.line_feed(root)
+                    rows = board.read(root, 'line.jsonl')
+                    self.assertEqual([r['text'] for r in rows], ['Before.', 'After!!'] + (['Larger replacement'] if grow else []))
+                    self.assertEqual([r['k'] for r in rows], [f's{self.at(10, 0)}-0', f's{self.at(11, 0)}-0'] + (
+                        [f's{self.at(11, 0)}-1'] if grow else []))
+
+    def test_a_failed_second_batch_retries_each_part_once_with_its_original_key(self):
+        from colony import chat
+        path = self.talk(self.root, ('you', self.at(10, 0), 'Go'), ('say', self.at(10, 1), 'First'))
+        board.line_feed(self.root)
+        before = json.loads(json.dumps(board._feed_state(self.root)))
+        for i in range(6):
+            self.talk(self.root, ('say', self.at(10, 2, i), f'Fresh {i}'))
+        original, calls = board.append_rows, []
+        def append(root, name, rows):
+            calls.append(name)
+            if len(calls) == 2:
+                raise OSError('second batch unavailable')
+            return original(root, name, rows)
+        with patch.object(chat, 'TAIL', 400):
+            with patch.object(board, 'append_rows', side_effect=append):
+                with self.assertRaisesRegex(OSError, 'second batch unavailable'):
+                    board.line_feed(self.root)
+            failed = json.loads(json.dumps(board._feed_state(self.root)))
+            board.line_feed(self.root)
+        rows = board.read(self.root, 'line.jsonl')
+        self.assertEqual([r['text'] for r in rows], ['First', *[f'Fresh {i}' for i in range(6)]])
+        self.assertEqual([r['k'] for r in rows], [f's{self.at(10, 0)}-{i}' for i in range(7)])
+        self.assertEqual(failed, before, 'failed reads cannot publish a turn without its matching offset')
+        self.assertEqual(board._feed_state(self.root)['offset'], path.stat().st_size)
+
     def test_a_reply_heard_in_all_is_heard_in_its_project_and_the_other_way_round(self):
         shop = self.project("shop")
         self.talk(self.root, ("you", self.at(10, 0), "water?"), ("say", self.at(10, 1), "Watered the fern."))

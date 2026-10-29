@@ -7,6 +7,7 @@ import os
 import re
 import threading
 from pathlib import Path
+from .jsonl import read_line
 
 TAIL = 40_000_000          # bytes from the transcript's end, first read: many turns, never a whole long session
 BIG = 300_000              # a line this long is a picture or a long tool output, never shown: not read
@@ -38,16 +39,24 @@ def _tail(path, keep, limit=TAIL):
                     c = {"end": max(0, size - limit), "mark": b"", "entries": [], "keep": keep}
                     fh.seek(c["end"])
                     if c["end"]:
-                        first = fh.readline()         # the first is cut mid-line
-                        c["end"] += len(first) if first.endswith(b"\n") else 0
+                        c["discard"] = True           # the first is cut mid-line
                 fh.seek(c["end"])
-                for line in fh:
-                    if not line.endswith(b"\n"):
-                        rest = line.strip()           # still being written: read, not kept, till its line ends
+                while True:
+                    line, complete = read_line(fh, BIG)
+                    if line == b"":
                         break
-                    c["end"] += len(line)
-                    c["mark"] = line[-64:]
-                    if len(line) > BIG:
+                    discard = c.get("discard") or line is None
+                    if not complete and not discard:
+                        rest = line.strip()           # a small unfinished row can still be shown provisionally
+                        break
+                    c["end"] = end = fh.tell()
+                    fh.seek(max(0, end - 64))
+                    c["mark"] = fh.read(min(64, end))
+                    fh.seek(end)
+                    c["discard"] = not complete
+                    if discard:
+                        if not complete:
+                            break                     # resume discarding this giant row when more bytes arrive
                         continue
                     try:
                         e = keep(json.loads(line))

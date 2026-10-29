@@ -1595,6 +1595,12 @@ def bring_back(roots):
     return [Path(k).name for k in back]
 
 
+def _bring_back_buttons(roots):
+    return "<div class='folderacts'>" + "".join(
+        f"<form method='post' action='/bring-back'><input type='hidden' name='path' value='{e(k)}'>"
+        f"<button class='quiet'>Bring back {e(Path(k).name)}</button></form>" for k in roots) + "</div>"
+
+
 def archived_shelf(link=False):
     """The Archived shelf: each group archived as one row, each project archived alone as its own, a tap bringing it
     back. With link, only a line saying what's there, pointing to All projects."""
@@ -1619,7 +1625,9 @@ def archived_shelf(link=False):
                         + (f"group · {len(it)} project{'s' * (len(it) != 1)} · " if name else "") + f"archived {e(when)}</span>"
                         + (f"<div class='who'>{e(', '.join(Path(k).name for k, _ in it))}</div>" if name else "")
                         + (f"<div class='who'>“{e(why)}”</div>" if why else "")
-                        + f"</div><form method='post' action='/bring-back'>{what}<button class='quiet'>Bring back</button></form></div>")
+                        + (_bring_back_buttons(k for k, _ in it) if name else "")
+                        + f"</div><form method='post' action='/bring-back'>{what}<button class='quiet'>"
+                        + ("Bring back group" if name else "Bring back") + "</button></form></div>")
     return (f"<h2 id='archived'>Archived</h2><div class='card'>{''.join(rows)}<p class='muted'>Off the board and {e(the_steward(possessive=True))} "
             "watch, nothing waking them. Brought back, each is where it was, in the same conversation: ask it anything.</p></div>")
 
@@ -4184,55 +4192,136 @@ def _line_feed(root):
         return
     st, since = _feed_state(root), iso_epoch(line_since())
     was = json.dumps(st, sort_keys=True)
-    rows = []
+    st = json.loads(was)                    # a failed later batch must not move the cached turn past its offset
     if st.get("session") != s["path"]:
         if st.get("session"):
-            rows += _feed_file(root, st, since, rows)            # the session before, to its end
+            _feed_file(root, st, since)                        # the session before, to its end
         st.clear()
         st.update(session=s["path"], provider=s["provider"])
-    rows += _feed_file(root, st, since, rows)
-    if rows:                                                     # the parts first, then where it got to
-        append_rows(root, "line.jsonl", rows)
+    _feed_file(root, st, since)
     if json.dumps(st, sort_keys=True) != was:
         save_json(root / ".board" / "line-feed.json", st)
+        _FEED[str(root)] = st
 
 
-def _feed_file(root, st, since, fresh):
+def _feed_file(root, st, since):
     """The parts one transcript gained since st's place in it, as the line's rows; st moves on past them. Only what was
     added is read (unchanged, the look is a stat), its lines read by its own program as Chat reads them."""
     from . import chat
+    from .jsonl import read_line
     path = Path(st["session"])
     try:
-        size = path.stat().st_size
+        stat = path.stat()
     except OSError:
-        return []
-    off, cut = st.get("offset"), False
-    if off is None or size < off:            # a first look, or one written anew: from where Chat begins reading it
-        off, st["turn"] = max(0, size - chat.TAIL), None
-        cut = off > 0
-    if size == off:
-        return []
+        return
+    if (st.get("offset") == stat.st_size and st.get("identity") == [stat.st_dev, stat.st_ino]
+            and st.get("stamp") == [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]):
+        return
     scratch = home() / "line-scratch" / (hashlib.sha1(str(root).encode()).hexdigest()[:12] + ".jsonl")
-    scratch.parent.mkdir(parents=True, exist_ok=True)
-    end = off
-    with open(path, "rb") as fh, open(scratch, "wb") as out:
-        fh.seek(off)
-        if cut:
-            end += len(fh.readline())        # mid-line there: the first is not whole
-        for line in fh:
-            if not line.endswith(b"\n"):
-                break                        # still being written: the next look takes it whole
-            end += len(line)
-            if len(line) <= chat.BIG:        # a picture or a long tool output, which no reader reads
-                out.write(line)
-    try:
-        # PROVIDER: events(path), each program's reading of its own transcript, here of the lines it gained
-        evs = chat.events(st["provider"], scratch)
-    finally:
-        chat.forget(scratch)
-        scratch.unlink(missing_ok=True)
-    st["offset"] = end
-    return _parts_of(evs, st, since, line_rows(root)["rows"], fresh)
+    with open(path, "rb") as fh:
+        stat = os.fstat(fh.fileno())
+        size, identity = stat.st_size, [stat.st_dev, stat.st_ino]
+        stamp = [size, stat.st_mtime_ns, stat.st_ctime_ns]
+        off, cut = st.get("offset"), st.get("discard", False)
+
+        def marker(end):
+            # Only hashes survive in the checkpoint, never fragments of the person's transcript.
+            position = fh.tell()
+            fh.seek(0)
+            digest = hashlib.sha256(fh.read(min(512, end)))
+            fh.seek(max(0, end - 64))
+            digest.update(fh.read(min(64, end)))
+            fh.seek(position)
+            return digest.hexdigest()
+
+        def checkpoint(end, discard):
+            current = os.fstat(fh.fileno())
+            st.update(offset=end, discard=discard, identity=identity, mark=marker(end),
+                      stamp=[current.st_size, current.st_mtime_ns, current.st_ctime_ns])
+
+        historical = False
+        if off is None and size:
+            first = fh.readline(64_001)
+            try:
+                meta = json.loads(first)
+                born = iso_epoch(meta.get("timestamp") or (meta.get("snapshot") or {}).get("timestamp", ""))
+            except (ValueError, AttributeError, TypeError):
+                born = 0
+            historical = stat.st_mtime < since or (born and born < since)
+        changed = st.get("stamp") != stamp
+        replaced = off is not None and (size < off or st.get("identity", identity) != identity or (
+            changed and st.get("mark") and marker(off) != st["mark"]))
+        if off is None or replaced:         # a first look, or written anew: from where Chat begins reading it
+            off, st["turn"] = max(0, size - chat.TAIL), None
+            cut = off > 0
+        if size == off:
+            if changed or "mark" not in st:
+                checkpoint(off, cut)
+            return
+        scratch.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(scratch, "wb") as out:
+                fh.seek(off)
+                if historical:
+                    # Adopt at this exact EOF, but keep Chat's bounded last-turn context for a later
+                    # assistant-only continuation. The native reader applies its usual entry limits.
+                    if cut:
+                        read_line(fh, chat.BIG)
+                    while fh.tell() < size:
+                        chunk = fh.read(min(64_000, size - fh.tell()))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                    out.flush()
+                    _parts_of(chat.events(st["provider"], scratch), st, float("inf"), (), [])
+                    fh.seek(size - 1)
+                    checkpoint(size, fh.read(1) != b"\n")
+                    return
+                end, count, written = off, 0, 0
+                known = set(line_rows(root)["rows"])
+                budget = min(1_000_000, max(1, chat.TAIL // 2))
+
+                def flush(out):
+                    nonlocal count, written
+                    if not count:
+                        return
+                    out.flush()
+                    try:
+                        # Each batch fits the native Chat reader's tail and entry limits. Its turn continues in st.
+                        evs = chat.events(st["provider"], scratch)
+                        rows = _parts_of(evs, st, since, known, [])
+                        if rows:
+                            append_rows(root, "line.jsonl", rows)
+                            known.update(r["k"] for r in rows)
+                    finally:
+                        chat.forget(scratch)
+                    out.seek(0)
+                    out.truncate()
+                    count, written = 0, 0
+
+                while True:
+                    line, complete = read_line(fh, chat.BIG)
+                    if line == b"":
+                        break
+                    discard = cut or line is None
+                    if not complete and not discard:
+                        break                    # a small unfinished row waits at its original offset
+                    end = fh.tell()
+                    cut = not complete
+                    if discard:
+                        if not complete:
+                            break                # resume discarding an oversized or initially cut row next time
+                        continue
+                    out.write(line)
+                    count += 1
+                    written += len(line)
+                    if count >= 1000 or written >= budget:
+                        flush(out)
+                flush(out)
+                checkpoint(end, cut)
+        finally:
+            chat.forget(scratch)
+            scratch.unlink(missing_ok=True)
 
 
 def _parts_of(evs, st, since, known, fresh):
@@ -7000,9 +7089,10 @@ def nest_page(reg, name):
                  "with no projects left keeps its shared vision, if it has one.</p></details>")
     away = [k for k in archived_off() if nest.nest_of(k) == name]
     if away:
-        out.append(f"<div class='archrow'><div class='muted'>Archived: {e(', '.join(Path(k).name for k in away))}</div>"
+        out.append(f"<div class='archrow'><div><div class='muted'>Archived: {e(', '.join(Path(k).name for k in away))}</div>"
+                   + _bring_back_buttons(away) + "</div>"
                    f"<form method='post' action='/bring-back'><input type='hidden' name='nest' value='{e(name)}'>"
-                   f"<button class='quiet'>Bring back</button></form></div>")
+                   f"<button class='quiet'>Bring back group</button></form></div>")
     if members:
         out.append(f"<details class='more'><summary>Archive the group</summary><form method='post' action='/nest/archive' "
                    f"class='nestadd'><input type='hidden' name='name' value='{e(name)}'><input name='why' placeholder="

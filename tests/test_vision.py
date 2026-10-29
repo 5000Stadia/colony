@@ -570,6 +570,36 @@ class ArchiveAndListTest(BoardBase):
         board.track(other)
         return other
 
+    def test_an_archived_group_offers_each_project_separately_and_labels_group_restore(self):
+        from colony import nest
+        board.track(self.root)
+        roots = [self.root]
+        for i in range(6):
+            root = Path(self.tmp.name) / f'project-{i}'
+            root.mkdir()
+            (root / 'ROADMAP.md').write_text(ROADMAP)
+            board.track(root)
+            roots.append(root)
+        for root in roots:
+            nest.join(root, 'holodeck')
+        board.archive_together(roots)
+        for page in (board.archived_shelf(), board.nest_page(board.registry(), 'holodeck')):
+            forms = re.findall(r"<form[^>]*action='/bring-back'[^>]*>.*?</form>", page, re.S)
+            chosen = [f for f in forms if f"name='path' value='{self.root}'" in f]
+            self.assertEqual(len(chosen), 1, 'a single project must have its own restore control')
+            self.assertIn('Bring back plants', chosen[0])
+            self.assertTrue(any("name='nest'" in f and '>Bring back group<' in f for f in forms))
+        httpd = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{httpd.server_address[1]}/bring-back',
+                                                          data=urllib.parse.urlencode({'path': str(self.root)}).encode())).close()
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+        self.assertEqual(board.projects(), [self.root])
+        self.assertEqual(set(board.archived_off()), {str(r) for r in roots[1:]})
+
     def test_a_group_is_archived_together_and_comes_back_together_from_the_shelf(self):
         from colony import nest
         board.track(self.root)
