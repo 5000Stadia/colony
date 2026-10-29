@@ -375,7 +375,7 @@ class VisionTest(BoardBase):
             self.assertEqual(caught.exception.code, 409)
             self.assertIn('Keep my unsaved draft &lt;here&gt;', caught.exception.read().decode())
             self.assertEqual(board.roadmap(self.root)['vision'], 'New.\nMore.')
-            page = urllib.request.urlopen(base + '/?p=0&view=roadmap').read().decode()
+            page = urllib.request.urlopen(base + '/?p=0').read().decode()      # the vision's fold is the Overview's (R126)
             self.assertIn('Edit vision', page)
             self.assertIn('Vision history', page)
         finally:
@@ -699,9 +699,10 @@ class StewardPageTest(BoardBase):
         self.assertTrue(monitor.helm_for(self.root))
         page = board.monitor_page(board.registry())
         self.assertIn("1 of 2", page)
-        self.assertIn("class='prow out'", page)
+        # its list of projects is All projects' (the steward's page repeated it: R126), where one left out says so
+        self.assertIn("class='prow out'", board.all_projects_page(board.registry()))
 
-    def test_nests_fold_in_the_menu_shut_unless_shown_and_open_in_the_stewards_list(self):
+    def test_nests_fold_in_the_menu_shut_unless_shown_and_open_in_all_projects(self):
         from colony import nest
         board.track(self.root)
         other = Path(self.tmp.name) / "photonic"
@@ -717,8 +718,8 @@ class StewardPageTest(BoardBase):
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
         self.assertIn("data-fold='nav:holodeck' data-open='0'>", board.sidebar(reg, -1))
         self.assertIn("data-fold='nav:holodeck' data-open='1' data-pin=1>", board.sidebar(reg, mine))
-        self.assertIn("data-nest='holodeck' data-fold='steward:holodeck' data-open='1'", board.monitor_page(reg))
-        self.assertIn("localStorage.setItem('fold:'", board.monitor_page(reg))
+        self.assertIn("data-nest='holodeck' data-fold='list:holodeck' data-open='1'", board.all_projects_page(reg))
+        self.assertIn("localStorage.setItem('fold:'", board.all_projects_page(reg))
 
 
 class NestOrderTest(BoardBase):
@@ -737,7 +738,7 @@ class NestOrderTest(BoardBase):
         board.woke(names[0])
         groups = lambda: list(dict.fromkeys(here for _, _, here in board.arranged(board.projects())))
         self.assertEqual(groups()[0], "holodeck", "by activity, until the person orders them")
-        self.assertIn("class='grip'", board.monitor_page(board.registry()))
+        self.assertIn("class='grip'", board.all_projects_page(board.registry()))
         port = None
         from http.server import ThreadingHTTPServer
         server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
@@ -788,7 +789,7 @@ class PinTest(BoardBase):
         items[str(self.root.resolve())] = {"R9": {"state": "doing", "started": time.time() + 5, "at": time.time() + 5}}
         board.save_json(board.home() / "items.json", items)
         self.assertEqual(board.arranged(board.projects())[0][1].resolve(), self.root.resolve(), "an item taken up counts")
-        page = board.monitor_page(board.registry())
+        page = board.all_projects_page(board.registry())
         self.assertIn(">Pinned<", page)
         self.assertIn("pinbtn on", page)
         self.assertNotIn("data-nest='\x01", page)

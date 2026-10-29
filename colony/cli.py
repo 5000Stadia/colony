@@ -628,8 +628,19 @@ def cmd_pin(a):
     except FileNotFoundError:
         print(f"no file {a.target} in this project", file=sys.stderr)
         return 2
-    print(f"pinned {pin['id']}: {pin['title']}")
+    print(f"pinned {pin['id']}: {pin['title']}" + (f" under \"{pin['group']}\"" if pin.get("group") else ""))
+    # the headings in use, so the next pin can go under one of them (before this, an agent had to read pins.jsonl)
+    print("Headings in use: " + _headings(pins.pins(root)))
     return 0
+
+
+def _headings(kept):
+    """The Library's headings in use, each with how many it holds; those under none, counted last."""
+    counts = {}
+    for p in kept:
+        counts[p.get("group") or ""] = counts.get(p.get("group") or "", 0) + 1
+    named = [f"\"{g}\" ({n})" for g, n in counts.items() if g]
+    return ", ".join(named + ([f"under none ({counts['']})"] if "" in counts else [])) or "none yet"
 
 
 def cmd_show(a):
@@ -650,6 +661,10 @@ def cmd_show(a):
         print(f"colony: {err}", file=sys.stderr)
         return 2
     print(f"shown {x['id']}: {x['title']} (the person may comment; it arrives as a note)")
+    before = showcase.earlier(root, x)
+    if before:                       # a new version of a deliverable: one card, the earlier showings kept under it
+        print(f"It becomes the card for {x['link']}, its earlier showings ({len(before)}) folded under it, each kept with its "
+              "date, story and comments.")
     return 0
 
 
@@ -906,9 +921,14 @@ def cmd_rule(a):
 
 
 def cmd_pins(a):
+    """What the Library holds, under its headings as the board shows them; those under none last."""
     from . import board, pins
-    for p in pins.pins(board.root_of()):
-        print(f"{p['id']}  {p['kind']:6} {p['by']:6} {p['title']}  ({p['target']})")
+    kept = pins.pins(board.root_of())
+    heads = list(dict.fromkeys(p.get("group") or "" for p in sorted(kept, key=lambda p: p["at"])))
+    for g in [h for h in heads if h] + [""] * ("" in heads):
+        print(f"{g or 'Under no heading'}:")
+        for p in (p for p in kept if (p.get("group") or "") == g):
+            print(f"  {p['id']}  {p['kind']:6} {p['by']:6} {p['title']}  ({p['target']})")
     return 0
 
 

@@ -32,6 +32,35 @@ def get(root, sid):
     return next((x for x in entries(root) if x["id"] == sid), None)
 
 
+def same(link):
+    """What makes two entries' links the same deliverable: the link as kept, a web address's closing slash aside."""
+    return link.rstrip("/") if is_url({"link": link}) else link
+
+
+def versions(root):
+    """The entries as the Showcase shows them, newest first: one card per deliverable, its latest showing, with each
+    earlier entry of the same link under it (its "earlier", newest first), none deleted or merged. An entry without a
+    link stands alone. (P4: one atlas had been shown three times, a PDF three times, each as a card of its own.)"""
+    cards, by_link = [], {}
+    for x in entries(root):
+        k = same(x.get("link") or "")
+        if k and k in by_link:
+            by_link[k]["earlier"].append(x)
+            continue
+        card = dict(x, earlier=[])
+        cards.append(card)
+        if k:
+            by_link[k] = card
+    return cards
+
+
+def earlier(root, entry):
+    """The entries shown before `entry` with the same link: the ones a new showing folds under itself."""
+    k = same(entry.get("link") or "")
+    return [x for x in entries(root) if k and x["id"] != entry["id"] and same(x.get("link") or "") == k
+            and x["at"] <= entry["at"]]
+
+
 def add(root, title, what, try_="", link="", item=None):
     """A deliverable for the person to see. `link` is a URL or a file in the project (kept as its path in it)."""
     title, what, link = title.strip(), what.strip(), (link or "").strip()

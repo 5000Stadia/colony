@@ -8,6 +8,7 @@ items), .board/gates.jsonl (what the agent has put in the person's hands) and .b
 person's comments on past work, gates and roadmap items not yet reached). The board remembers only which
 projects it shows and when the person last caught up on each. It answers only itself.
 """
+import contextvars
 import hashlib
 import html
 import json
@@ -1205,7 +1206,7 @@ def status(n, road_items):
 def where(n):
     a = n["anchor"] or {}
     return (f"on pinned {a['pin']}" if a.get("pin") else f"on gate {a['gate']}" if a.get("gate") else f"on roadmap item {a['item']}" if a.get("item")
-            else f"from page {a['page']}" if a.get("page")
+            else f"from page {a['page']}" if a.get("page") else f"on file {a['file']}" if a.get("file")
             else f"on commit {a['commit']}" if a.get("commit") else "on the whole project")
 
 
@@ -1976,9 +1977,15 @@ def since(root, seen):
     opened = [g for g in gates(root) if g["at"] > at]
     replies = [n for n in notes(root) if n["addressed_at"] and n["addressed_at"] > at]
     pinned = [p for p in pins.pins(root) if p["at"] > at and p["by"] != "person"]
+    shown = [x for x in showcase.entries(root) if x["at"] > at]       # each showing, a new version of one included
     moved_at = stamp(git(root, "log", "-1", "--format=%aI", "--", "ROADMAP.md").strip()) if moved else ""
     return {"head": head, "commits": commits, "count": int(count) if count.isdigit() else len(commits), "moved": moved,
-            "moved_at": moved_at, "opened": opened, "replies": replies, "pinned": pinned, "first": not seen}
+            "moved_at": moved_at, "opened": opened, "replies": replies, "pinned": pinned, "shown": shown, "first": not seen}
+
+
+# Whether the page being made is the person's own look. Colony's audit, reading every page from this machine to check
+# them (R126), is not: it leaves their hours and their last look at each project as they were (Handler._the_persons).
+PERSONS_LOOK = contextvars.ContextVar("persons_look", default=True)
 
 
 def page_base(root, mark=True):
@@ -1986,6 +1993,7 @@ def page_base(root, mark=True):
     it on an earlier day (when, and the commit it stood at), or on a first look, the start of the day before, marked
     first: they were never here, so there is no "since you were last here" to tell. Each look (at either page) is kept
     on this machine, with the board: the pages read the same all day, and turn over with the person's day."""
+    mark = mark and PERSONS_LOOK.get()
     path = home() / "today.json"
     with board_lock("today") if mark else nullcontext():
         try:
@@ -3840,12 +3848,11 @@ IMAGES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".svg")
 
 
 def chat_file(key, root, target):
-    """The address a file in the project is shown at in the chat, or None: nothing outside its folder is served."""
-    from . import pins
-    path = pins.inside(root, html.unescape(target)) if root else None
-    if not path or not path.is_file():
-        return None
-    return f"/chat/file?p={urllib.parse.quote(str(key))}&f={urllib.parse.quote(str(path))}"
+    """The address a file in the project is shown at in the chat: the opener's, as every file link on the board opens
+    (R126); or None: nothing outside its folder, nor what isn't there."""
+    from . import opener
+    got = opener.link(key, root, html.unescape(target)) if root else None
+    return got[0] if got else None
 
 
 def chat_prose(text, key=None, root=None):
@@ -5189,48 +5196,69 @@ def _inline(text):
     return re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
 
 
-def prose(text):
+def prose(text, inline=None, doc=False, ids=None):
     """Markdown written in a file, as a page shows it: paragraphs flow (a line wrapped in the file isn't a break on
     the page), lists stay lists, headings stay headings, tables are tables (scrolling sideways on a phone if wide)
-    and a quote is set off."""
+    and a quote is set off. As a document (doc: the opener's reading page), as Markdown says: headings at their own
+    levels, each an anchor its links can land on; numbered lists numbered and a task's box shown; a rule drawn; code
+    fenced as written; a line ending in two spaces breaks; front matter left out. inline: how a line's words are drawn
+    (the reading page finds their links from the file's own folder)."""
+    inline = inline or _inline
+    ids = set() if ids is None else ids              # a document's heading anchors, each once
     out, para, items, rows, quote = [], [], [], [], []
+    lines = (text or "").splitlines()
+    if doc and lines and lines[0].strip() == "---":   # front matter: what the file says of itself, not its text
+        end = next((k for k, l in enumerate(lines[1:60], 1) if l.strip() in ("---", "...")), None)
+        lines = lines[end + 1:] if end else lines
 
     def cells(line):
         return [c.strip() for c in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
 
     def flush():
         if para:
-            out.append(f"<p>{_inline(' '.join(para))}</p>")
+            out.append(f"<p>{inline(' '.join(para)).replace(chr(2), '<br>')}</p>")
             para.clear()
         if items:
             # an item indented under another is a list within it, as deep as it goes (they read flat before)
-            html_, stack = [], []                   # stack: the indent of each list open, outermost first
-            for indent, *words in items:
-                while len(stack) > 1 and indent < stack[-1]:
-                    stack.pop()
-                    html_.append("</li></ul>")
-                if not stack or indent > stack[-1]:
-                    stack.append(indent)
-                    html_.append("<ul>")
+            html_, stack = [], []                   # stack: each list open, outermost first (its indent, ul or ol)
+            for indent, number, *words in items:
+                while len(stack) > 1 and indent < stack[-1][0]:
+                    html_.append(f"</li></{stack.pop()[1]}>")
+                if not stack or indent > stack[-1][0]:
+                    stack.append((indent, "ol" if number is not None else "ul"))
+                    html_.append(f"<ol start='{number}'>" if number not in (None, 1) else f"<{stack[-1][1]}>")
                 else:
                     html_.append("</li>")
-                html_.append(f"<li>{_inline(' '.join(words))}")
-            out.append("".join(html_) + "</li></ul>" * len(stack))
+                html_.append(f"<li>{inline(' '.join(words))}")
+            out.append("".join(html_) + "".join(f"</li></{tag}>" for _, tag in reversed(stack)))
             items.clear()
         if rows:
             head = len(rows) > 1 and all(re.fullmatch(r":?-{3,}:?", c) for c in cells(rows[1]))
             body = rows[2:] if head else rows
             out.append("<div class='mdtable'><table>"
-                       + (f"<tr>{''.join(f'<th>{_inline(c)}</th>' for c in cells(rows[0]))}</tr>" if head else "")
-                       + "".join(f"<tr>{''.join(f'<td>{_inline(c)}</td>' for c in cells(r))}</tr>" for r in body)
+                       + (f"<tr>{''.join(f'<th>{inline(c)}</th>' for c in cells(rows[0]))}</tr>" if head else "")
+                       + "".join(f"<tr>{''.join(f'<td>{inline(c)}</td>' for c in cells(r))}</tr>" for r in body)
                        + "</table></div>")
             rows.clear()
         if quote:
-            out.append(f"<blockquote>{prose(chr(10).join(quote))}</blockquote>")
+            out.append(f"<blockquote>{prose(chr(10).join(quote), inline, doc, ids)}</blockquote>")
             quote.clear()
-    for raw in (text or "").splitlines():
+    fence = None                                     # a document's fenced code: its opening mark, and its lines
+    for raw in lines:
         line = raw.strip()
-        bullet = re.match(r"^(?:[-*+]|\d+[.)])\s+(.*)", line)
+        if doc and fence:
+            if line.startswith(fence[0]):
+                out.append(f"<pre>{e(chr(10).join(fence[1]))}</pre>")
+                fence = None
+            else:
+                fence[1].append(raw)
+            continue
+        if doc and line.startswith(("```", "~~~")):
+            flush()
+            fence = (line[:3], [])
+            continue
+        bullet = re.match(r"^(?:[-*+]|(\d+)[.)])\s+(.*)", line)
+        rule = doc and re.fullmatch(r"(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|=+", line)
         if line.startswith("|"):
             if not rows:
                 flush()
@@ -5245,21 +5273,51 @@ def prose(text):
             flush()
         if not line:
             flush()
-        elif line.startswith("#"):
+        elif rule and para and not items:            # a line underlined: a heading, as Markdown makes one
+            words = " ".join(para)
+            para.clear()
+            level = 1 if line.startswith("=") else 2
+            out.append(f"<h{level} id='{heading_id(words, ids)}'>{inline(words)}</h{level}>")
+        elif rule and not line.startswith("="):
             flush()
-            out.append(f"<h3>{_inline(line.lstrip('#').strip())}</h3>")
+            out.append("<hr>")
+        elif line.startswith("#") and (not doc or re.match(r"#{1,6}(\s|$)", line)):
+            flush()
+            words = line.lstrip("#").strip()
+            if doc:
+                words, level = re.sub(r"\s+#+$", "", words), min(len(line) - len(line.lstrip("#")), 6)
+                out.append(f"<h{level} id='{heading_id(words, ids)}'>{inline(words)}</h{level}>")
+            else:
+                out.append(f"<h3>{inline(words)}</h3>")
         elif bullet:
             if para:
                 flush()
-            items.append([len(raw.expandtabs(4)) - len(raw.expandtabs(4).lstrip()), bullet.group(1)])
+            words = bullet.group(2)
+            if doc:                                  # a task's box, ticked or not
+                words = re.sub(r"^\[([ xX])\]\s+", lambda m: "☐ " if m.group(1) == " " else "☑ ", words)
+            items.append([len(raw.expandtabs(4)) - len(raw.expandtabs(4).lstrip()),
+                          int(bullet.group(1)) if doc and bullet.group(1) else None, words])
         elif items and raw[:1] in (" ", "\t"):
             items[-1].append(line)                       # a list item wrapped onto the next line
         else:
             if items:
                 flush()
-            para.append(line)
+            # a line ending in two spaces (or a backslash) breaks there, in a document; elsewhere lines simply flow
+            para.append(line.rstrip("\\").rstrip() + "\x02" if doc and (raw.endswith("  ") or line.endswith("\\")) else line)
+    if fence:
+        out.append(f"<pre>{e(chr(10).join(fence[1]))}</pre>")
     flush()
-    return "".join(out)
+    return "".join(out).replace("\x02", "")
+
+
+def heading_id(words, ids):
+    """A heading's anchor in a document: as GitHub makes it, so a link to a section lands; a second the same, numbered."""
+    base = re.sub(r"\s", "-", re.sub(r"[^\w\s-]", "", re.sub(r"[*_`]", "", words).strip().lower())) or "section"
+    found, n = base, 1
+    while found in ids:
+        found, n = f"{base}-{n}", n + 1
+    ids.add(found)
+    return e(found)
 
 
 def first_sentence_of(text):
@@ -5407,15 +5465,19 @@ def render(reg, pid, view="overview", show_all=""):
     pin = (f"<a class='ppin{' on' if pinned else ''}' href='#' onclick='return pinProject(event, {pid}, {0 if pinned else 1})'>"
            f"<span class='ppinmark'>📌</span>{'Unpin' if pinned else 'Pin'}</a>")
     # time its agent has spent at work, all told: turns only, never the time it sat waiting
-    secs = providers.of(root).active_seconds(root)
+    secs = providers.of(root).active_seconds(root) if view == "overview" else 0
     active = f" · Active: {span(secs)}" if secs and secs >= 60 else ""
     # the day's page opens on the day itself: the vision and the project's state are a tab away. The status says what
     # the project is at, from its roadmap, and whether anything waits on the person.
     waiting = len(moments(root)) if view == "overview" else 0
     lead_status = status_card(pid, seen(console.snapshot(root)), at_work(root), waiting) if view == "overview" else ""
+    # the vision, the standing rules and the plan's count are the Overview's: repeated on every tab, they took 39 to 54%
+    # of a phone's first screen before the tab's own content (the sections review, 2026-10-28)
+    front = view == "overview"
     out.append(f"<header class='project'><div class='titlerow'><h1>{e(root.name)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
-               + switch_line(root) + lead_status + f"{vision_box(root, pid)}{rules_box(root, pid) if view == 'overview' else ''}"
-               f"<p class='muted'>Roadmap: {done}/{total}{active}</p>" + (project_usage(root) if view == "overview" else "") + "</header>")
+               + switch_line(root) + lead_status
+               + (f"{vision_box(root, pid)}{rules_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>"
+                  + project_usage(root) if front else "") + "</header>")
     if view == "showcase":
         out.append(showcase_html(pid, root))
     elif view == "library":                 # what the project knows and has made, found where it is
@@ -5445,7 +5507,8 @@ def render(reg, pid, view="overview", show_all=""):
         every, kept = hints.cached(root), hints.settled(root)
         found = hints.open_hints(root, every)
         done = [(k, t) for k, _, t in every if k in kept]
-        if found or done:               # where the plan may have drifted from its work, read by rule: the agent's to judge
+        if found:                       # where the plan may have drifted from its work, read by rule: the agent's to judge
+            # (none open, none shown: "Shape hints 0" was a fold with nothing for the person in it)
             out.append(f"<details class='card fold hints'><summary><h3>Shape hints</h3><span class='muted'>{len(found)}</span>"
                        f"</summary><ul>{''.join(f'<li>{e(t)}</li>' for _, _, t in found)}</ul>"
                        + (f"<p class='muted small'>Settled by the agent under the present vision:</p><ul class='muted small'>"
@@ -5454,33 +5517,18 @@ def render(reg, pid, view="overview", show_all=""):
                          "when a milestone finishes.</p></details>")
         if road["milestones"]:
             its = items(road)
-            order = list(its)
             branched = any(it["links"] for it in its.values())          # only what the plan says waits on what
-            out.append(journey_html(road, item_times(root)))
             if branched:                   # the map only where the plan itself says what waits on what
                 out.append(f"<details class='mapbox'><summary>Map of the roadmap"
                        f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
-            # Every milestone loads folded. The one where work last started comes first, and within each, what is in
-            # progress (newest first), then what's to come, then what's done (newest first). Finished milestones
-            # fold together into Completed, last. One in progress shows whether its agent is at work right now.
+            # One list in the plan's order (journey_html), every milestone loading folded. Opened, a milestone's items
+            # as its card drew them: what is in progress (newest first), what's to come, what's done (newest first),
+            # each with its steering, notes, decisions waiting and time.
             times = item_times(root)
             when = lambda it: times.get(it["id"], {}).get("since", "")
-            finished = lambda m: m["items"] and all(i["state"] == "done" for i in m["items"])
-            started = lambda m: max((when(i) for i in m["items"] if i["state"] == "doing"), default=None)
             live = console.snapshot(root, lines=1)["state"].replace(" ", "-")
-            open_ms = [m for m in road["milestones"] if not finished(m)]
-            done_ms = [m for m in road["milestones"] if finished(m)]
-            open_ms.sort(key=lambda m: (started(m) is not None, started(m) or ""), reverse=True)
-            for k, m in enumerate(open_ms + done_ms):
-                if done_ms and k == len(open_ms):
-                    out.append(f"<details class='card ms done-group'><summary><h3>Completed</h3><span class='muted'>"
-                               f"{len(done_ms)} milestone{'s' * (len(done_ms) > 1)} · {sum(len(m['items']) for m in done_ms)} items "
-                               f"{elapsed([times.get(i['id'], {}) for m in done_ms for i in m['items']], True)}</span></summary>")
-                dot = (f"<span class='sdot msdot {live}' data-p='{pid}' title='In progress; its agent is {e(live.replace('-', ' '))}'></span>"
-                       if started(m) is not None else "")
-                done_m = sum(1 for i in m["items"] if i["state"] == "done")
-                out.append(f"<details id='ms-{e(m['id'])}' class='{'ms' if finished(m) else 'card ms'}'><summary>{dot}<h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3>"
-                           f"<span class='muted'>{done_m}/{len(m['items'])} {elapsed([times.get(i['id'], {}) for i in m['items']], finished(m))}</span></summary>")
+
+            def inside(m):
                 doing = sorted((i for i in m["items"] if i["state"] == "doing"), key=when, reverse=True)
                 done_i = sorted((i for i in m["items"] if i["state"] == "done"), key=when, reverse=True)
                 drawn = {}
@@ -5503,9 +5551,8 @@ def render(reg, pid, view="overview", show_all=""):
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
                         + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
-                out.append(part_body(m, drawn) + "</details>")
-            if done_ms:
-                out.append("</details>")
+                return part_body(m, drawn)
+            out.append(journey_html(road, times, inside, live, pid))
             out.append(f"<script>{TICK}</script>")
         else:
             out.append("<div class='card muted'>No roadmap yet: the agent keeps it in ROADMAP.md.</div>")
@@ -5697,6 +5744,7 @@ def since_html(pid, root, base):
     minutes earlier read "Since you were last here · Oct 27" on its first day)."""
     if base.get("first"):
         return ""
+    from . import opener
     s = since(root, base)
     times = item_times(root) if s["moved"] else {}
     road = f"/?p={pid}&view=roadmap"
@@ -5707,8 +5755,12 @@ def since_html(pid, root, base):
     events += [(g["at"], False, f"gate opened: {e(short(g['question'], 100))}") for g in s["opened"]]
     events += [(n["addressed_at"], False, f"{'your' if n.get('author') == 'person' else e(the_steward(possessive=True).replace(chr(39), chr(8217)))} note "
                 f"“{e(short(n['text'], 40))}” answered: {e(short(n['reply'] or '', 70))}") for n in told]
-    events += [(p["at"], False, f"the agent pinned <a href='/pin/open?p={pid}&id={e(p['id'])}'>{e(short(p['title'], 70))}</a>")
-               for p in s["pinned"]]
+    # each through the opener, as the Library and the Showcase open them; one whose file is gone, named only
+    linked = lambda got, title: (f"<a href='{e(got[0])}'{opener.NEW_TAB if got[1] else ''}>{e(short(title, 70))}</a>"
+                                 if got else e(short(title, 70)))
+    events += [(p["at"], False, f"the agent pinned {linked(opener.pin_link(pid, root, p), p['title'])}") for p in s["pinned"]]
+    # what is new to see: a line while it is newer than the person's last look, never a block standing for weeks (P2)
+    events += [(x["at"], False, f"new to see: {linked(opener.entry_link(pid, root, x), x['title'])}") for x in s["shown"]]
     events += [(g["answered_at"], False, f"decided: {e(short(g['question'], 70))} <b>{e(short(g['answer'], 70))}</b>")
                for g in gates(root) if g["answered_at"] and g["answered_at"] > (base.get("at") or "")]
     events.sort(key=lambda ev: ev[0] or "", reverse=True)
@@ -5723,7 +5775,8 @@ def since_html(pid, root, base):
     if len(events) + s["count"] > len(shown):
         counts = [(len(s["moved"]), "item moved", "items moved", f"{road}#roadmap"), (len(s["opened"]), "gate opened", "gates opened", ""),
                   (len(told), "note answered", "notes answered", f"{road}&all=messages#messages"),
-                  (len(s["pinned"]), "pin", "pins", "#pinned"), (s["count"], "commit", "commits", f"{road}#history")]
+                  (len(s["pinned"]), "pin", "pins", "#pinned"),
+                  (len(s["shown"]), "new to see", "new to see", f"/?p={pid}&view=showcase"), (s["count"], "commit", "commits", f"{road}#history")]
         said = [(f"<a href='{href}'>{n} {one if n == 1 else many}</a>" if href else f"{n} {one if n == 1 else many}")
                 for n, one, many, href in counts if n]
         more = f"<p class='more muted'>In all: {' · '.join(said)}</p>"
@@ -5761,10 +5814,11 @@ W, H, GX, GY = 172, 56, 38, 16
 
 
 def library_html(pid, root, q=""):
-    """The Library tab: what the person and the agent keep to refer to, under their headings, each opening as it is
-    (a text one to edit together, a page to run). It starts empty. Finding a file in the project is only a way to
-    add one: a search, its results each with Add."""
-    from . import library
+    """The Library tab: what the person and the agent keep to refer to, under their headings, each opening through
+    the opener (a document to read, with Edit at its foot; a page to run). It starts empty. Finding a file in the
+    project is only a way to add one: a search, its results each with Add. A heading has no Rename of its own: in 11
+    projects none was ever renamed or moved, and `colony regroup --rename` still renames one."""
+    from . import library, opener
     hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=library'>"
     groups = {}
     for x in sorted(pins.pins(root), key=lambda x: x["at"]):
@@ -5775,26 +5829,27 @@ def library_html(pid, root, q=""):
     for g in heads:
         rows = []
         for x in reversed(groups[g]):
-            row = pin_row(pid, x)
+            row = pin_row(pid, root, x)
             move = (f"<form class='add regroup' method='post' action='/pin/group'>{hidden}<input type='hidden' name='id' value='{e(x['id'])}'>"
                     f"<input name='group' list='libheads-{pid}' value='{e(x.get('group') or '')}' placeholder='Heading'>"
                     f"<button class='quiet'>Move</button></form>")
             rows.append(row.replace("<div class='pinmenu'>", "<div class='pinmenu'>" + move, 1))
-        rename = (f"<details class='renamehead'><summary>Rename</summary><form class='add regroup' method='post' action='/pin/rename'>"
-                  f"{hidden}<input type='hidden' name='old' value='{e(g)}'><input name='new' value='{e(g)}' placeholder='Heading'>"
-                  f"<button class='quiet'>Rename</button></form></details>")
         out.append(f"<details class='libgroup d1' open><summary>{e(g or 'Not under a heading')} <span class='muted'>{len(rows)}</span>"
-                   f"</summary>{rename}{''.join(rows)}</details>")
+                   f"</summary>{''.join(rows)}</details>")
     if not groups:
         out.append("<div class='card muted'>Empty, and ready for what you'll both keep returning to: a world's places and people, "
                    "a set of policies, research you build on, a page you work on together. Add one, or the agent will when "
                    "something earns a place. Only what keeps its value stays: unpin what no longer does.</div>")
     out.append(f"<datalist id='libheads-{pid}'>{known}</datalist>")
     gone = pins.archived(root)
+
+    def reach(x):                       # an archived one opens as the others do; one whose file left, named only
+        got = opener.pin_link(pid, root, x)
+        return (f"<a class='pintitle' href='{e(got[0])}'{opener.NEW_TAB if got[1] else ''}>{e(x['title'])}</a>" if got
+                else f"<span class='pintitle gone'>{e(x['title'])}</span>")
     if gone:                            # folded, and never read to the agent: what's done costs nothing to keep
         out.append(f"<details class='libgroup d1 archive'><summary>Archive <span class='muted'>{len(gone)}</span></summary>" + "".join(
-            f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(x['id'])}' target='_blank' "
-            f"rel='noopener'>{e(x['title'])}</a><form method='post' action='/pin/restore'>{hidden}<input type='hidden' name='id' "
+            f"<div class='pin'><div class='pinline'>{reach(x)}<form method='post' action='/pin/restore'>{hidden}<input type='hidden' name='id' "
             f"value='{e(x['id'])}'><button class='quiet'>Restore</button></form></div><div class='who'>"
             f"archived {e(local_day(x['archived']['at']))}{' by the agent' if x['archived'].get('by') == 'agent' else ''}"
             + (f" · {e(x['archived']['why'])}" if x["archived"].get("why") else "") + "</div></div>" for x in gone) + "</details>")
@@ -5877,18 +5932,21 @@ def lead_clause(text, n=70):
     return short(head, n)
 
 
-def journey_html(road, times=None):
-    """The roadmap as a journey down the page: what's finished in one line, each open milestone a stop (a ring of its
-    progress, its kind, a dot per item: filled when done, glowing while in progress, hollow to come; lanes as rows
-    of their own), what is being worked on now, and at the end the vision it all heads for. A stop opens its list."""
+def journey_html(road, times=None, inside=None, live="", pid=0):
+    """The roadmap as one list down the page, in the plan's order: the path to the vision (P3; it replaces R32's cards,
+    latest started first, which listed every open milestone a second time). What's finished shows as medals; each
+    open milestone, one with no items yet included, is a stop (a ring of its progress, its kind, a dot per item: filled
+    when done, glowing while in progress, hollow to come; lanes as rows of their own; what is being worked on now, its
+    agent's dot and its time) that opens in place to its items, inside(m). At the end the vision it all heads for,
+    then the finished milestones folded together into Completed, which a medal opens."""
     ms = road["milestones"]
+    times, inside = times or {}, inside or (lambda m: "")
     done = lambda m: m["items"] and all(i["state"] == "done" for i in m["items"])
-    finished, open_ = [m for m in ms if done(m)], [m for m in ms if not done(m) and m["items"]]
+    finished, open_ = [m for m in ms if done(m)], [m for m in ms if not done(m)]
     dot = lambda i: f"<i class='jd {i['state']}' title='{e(i['id'])} · {e(lead_clause(i['text'], 80))}'></i>"
     out = []
     if finished:
         # what's been done, as medals: each milestone finished, its items, and when it was won; a tap opens it
-        times = times or {}
         when = lambda m: max((times.get(i["id"], {}).get("since") or "" for i in m["items"]), default="")
         medals = sorted(finished, key=when)
         n = sum(len(m["items"]) for m in finished)
@@ -5915,15 +5973,29 @@ def journey_html(road, times=None):
         later = "later" in (m["id"] + " " + m["title"]).lower()
         now = (f"<span class='jnow'>Now: {e(lead_clause(doing[0]['text']))}" + (f" <span class='muted'>+{len(doing) - 1}</span>" if len(doing) > 1 else "")
                + "</span>") if doing else ""
-        out.append(f"<a class='jstop{' live' if doing else ''}{' later' if later else ''}' href='#ms-{e(m['id'])}' "
-                   f"onclick=\"var d=document.getElementById('ms-{e(m['id'])}'); if (d) d.open=true\">"
-                   f"<span class='jring' style='--p:{round(100 * d / len(its))}'><b>{d}</b><small>/{len(its)}</small></span>"
-                   f"<span class='jbody'><span class='jtitle'><b>{e(m['id'])}</b> {e(short(m['title'], 70))}"
-                   f"<span class='jkind' title='{e(kind)}'>{KIND_MARK.get(kind, '')}</span></span>{dots}{now}</span></a>")
+        # while one of its items is under way: whether its agent is at work right now, kept current by the page
+        agent = (f"<span class='sdot msdot {live}' data-p='{pid}' title='In progress; its agent is {e(live.replace('-', ' '))}'></span>"
+                 if doing else "")
+        took_ = elapsed([times.get(i["id"], {}) for i in its], False)
+        out.append(f"<details id='ms-{e(m['id'])}' class='jms{' live' if doing else ''}{' later' if later else ''}'>"
+                   f"<summary class='jstop'><span class='jring' style='--p:{round(100 * d / len(its)) if its else 0}'><b>{d}</b>"
+                   f"<small>/{len(its)}</small></span><span class='jbody'><span class='jtitle'>{agent}<b>{e(m['id'])}</b> "
+                   f"{e(short(m['title'], 70))}<span class='jkind' title='{e(kind)}'>{KIND_MARK.get(kind, '')}</span></span>"
+                   f"{dots if its else ''}{now}" + (f"<span class='jtook muted'>{took_}</span>" if took_ else "")
+                   + f"</span></summary><div class='jitems'>"
+                   + (inside(m) if its else "<p class='muted'>No items yet.</p>") + "</div></details>")
     vision = first_sentence_of(road.get("vision") or road.get("goal") or "")
     if vision:
         out.append(f"<div class='jdest'><span class='jflag'>⚑</span><span>{e(vision)}</span></div>")
-    return "".join(out) + "</div>"
+    out.append("</div>")
+    if finished:                       # the finished, folded together: their medals above open them here
+        out.append(f"<details class='card ms done-group'><summary><h3>Completed</h3><span class='muted'>"
+                   f"{len(finished)} milestone{'s' * (len(finished) > 1)} · {sum(len(m['items']) for m in finished)} items "
+                   f"{elapsed([times.get(i['id'], {}) for m in finished for i in m['items']], True)}</span></summary>"
+                   + "".join(f"<details id='ms-{e(m['id'])}' class='ms'><summary><h3>{e(m['id'])}{' — ' + e(m['title']) if m['title'] else ''}</h3>"
+                             f"<span class='muted'>{len(m['items'])}/{len(m['items'])} {elapsed([times.get(i['id'], {}) for i in m['items']], True)}"
+                             f"</span></summary>{inside(m)}</details>" for m in finished) + "</details>")
+    return "".join(out)
 
 
 def part_body(m, drawn):
@@ -6575,8 +6647,8 @@ def focus(root):
 
 
 def monitor_page(reg, view="overview"):
-    """The steward, like a project: Overview (what needs the person, every project's status, what the
-    steward decided), Helm (its stance toward each project), Console."""
+    """The steward, like a project: Overview (what it said, the projects it follows, what it decided, and how much
+    waits on the person), Helm (its stance toward each project), Chat, Console."""
     from . import monitor
     if MONITOR:                          # a board started without its steward doesn't start one by being looked at
         monitor.ensure()
@@ -6648,8 +6720,7 @@ def monitor_page(reg, view="overview"):
                          + (f"<details><summary>What it decided here</summary>{made}</details>" if made else "") + "</div>")
         body = head + ("".join(cards) if len(cards) > 1 else cards[0] + "<p class='muted'>No projects yet.</p>")
         return shell(reg, -1, body)
-    # Every project at a glance first, one line each (what it is at, what waits on the person), then what waits on them,
-    # project by project, then, folded, what the steward decided.
+    # What it last said first, then how much waits on the person, the projects it follows, and, folded, what it decided.
     made = monitor.decisions(None, 10)
     recent = "".join(f"<div class='note'><span class='who'>{e(Path(d['project']).name)} · {e(local_day(d['at'], clock=True))}</span>"
                      f"<div>{e(d['text'])}</div></div>" for d in made)
@@ -6663,11 +6734,13 @@ def monitor_page(reg, view="overview"):
               f"{sum(1 for p in plist if p.exists())}</span></summary><form class='options' method='post' action='/steward/involved'>"
               f"<p class='muted'>Unchecked, {e(the_steward())} leaves a project out: it doesn't wake for it, report on it or scout for it, "
               f"and hears of it only when you bring it up.</p>{follows}<button>Save</button></form></details>") if plist else ""
-    body = (head + said + "<div class='listtop'><h2>Projects</h2><a href='/projects'>All projects →</a></div>"
-            + (f"<div class='card plist'>{project_list(plist, fold='steward')}</div>" if plist else "<p class='muted'>No projects yet.</p>")
-            + archived_shelf(link=True) + follow
-            + f"<h2>Needs you</h2><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
-            f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>"
+    # Only its own parts, and how much waits on the person a tap from Needs you: its list of projects repeated the chip
+    # row and the sidebar, and its Needs you (5,178 px on a phone) the front page's and the Needs you page's (the
+    # sections review, 2026-10-28). The count is the Needs you chip's: what waits in the projects it follows.
+    waiting = sum(len(moments(p)) for p in plist if p.exists() and monitor.involved(p))
+    wait = (f"<p class='waitline'><a href='/needs-you'>{waiting} waiting →</a></p>" if waiting
+            else "<p class='waitline muted'>Nothing waits on you.</p>")
+    body = (head + said + wait + follow
             + (f"<details class='card fold'><summary><h3>What {e(the_steward())} decided</h3><span class='muted'>{len(made)}"
                f"{' · ' + e(on_day(made[0]['at'])) if on_day(made[0]['at']) else ''}</span></summary>{recent}</details>" if made else ""))
     return shell(reg, -1, body)
@@ -6696,38 +6769,100 @@ def status_card(pid, snap, work="", waiting=None):
             + "</a>")
 
 
+PATHLIKE = re.compile(r"(?<![\w/~.:@-])((?:[\w-][\w.-]*/)+[\w.-]*|[\w-][\w.-]*\.[A-Za-z][A-Za-z0-9]{0,5})(?![\w/-])")
+ADDRESS = re.compile(r"https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'\"]")
+
+
+def try_html(text, pid, root, x):
+    """How to see or try an entry, its paths and addresses as links through the opener (7 of 22 Try texts named a
+    folder, a file or an address the person couldn't tap): a path only where it is in the project, so none leads
+    nowhere, found from the project's folder or the entry's own; each carrying the entry, as its card does."""
+    from . import opener
+    here = [Path(root)] + ([(Path(root) / x["link"]).parent] if x.get("link") and not showcase.is_url(x) else [])
+
+    def path(m):
+        word = m.group(1).rstrip(".")
+        got = next((g for g in (opener.link(pid, root, word, entry=x["id"], here=h) for h in here) if g), None)
+        rest = m.group(1)[len(word):]
+        return (f"<a href='{e(got[0])}'{opener.NEW_TAB if got[1] else ''}>{e(word)}</a>{e(rest)}" if got else e(m.group(1)))
+
+    out, at = [], 0
+    for m in ADDRESS.finditer(text):
+        out.append(try_paths(text[at:m.start()], path))
+        out.append(f"<a href='{e(opener.address(pid, m.group(0)))}'{opener.NEW_TAB}>{e(m.group(0))}</a>")
+        at = m.end()
+    out.append(try_paths(text[at:], path))
+    return "".join(out)
+
+
+def try_paths(text, path):
+    """Plain text with each path-like word put through path(match), the rest escaped."""
+    out, at = [], 0
+    for m in PATHLIKE.finditer(text):
+        out.append(e(text[at:m.start()]) + path(m))
+        at = m.end()
+    return "".join(out) + e(text[at:])
+
+
 def showcase_html(pid, root):
-    """What the project made that's worth seeing, newest first: what it is, how to see or try it, and the person's
-    comments, none required. The rest folds into Earlier, the project's history of what it showed."""
-    rows = showcase.entries(root)
+    """What the project made that's worth seeing, newest first: what it is (three lines, the rest a tap away), how to see
+    or try it (its paths and addresses links), one button saying what it opens, and the person's comments, none
+    required. A deliverable shown again is one card, its earlier showings folded under it with their dates, stories
+    and comments (P4). Past the newest few, the rest fold into Earlier, the project's history of what it showed. All
+    of it opens through the opener, each carrying its entry, so a comment where it opens is on that showing."""
+    from . import opener
+    rows = showcase.versions(root)
     if not rows:
         return ("<h2>Showcase</h2><p class='muted'>Nothing shown yet. When a deliverable reaches a stage where it should be "
                 "good, the agent puts it here: what it is and how to see it. Comment if you like; nothing waits on you.</p>")
     back = f"/?p={pid}&view=showcase"
 
+    def opens(x, button=True):
+        """The picture, fitted to the screen and a tap to open it whole; or one button that says what it opens."""
+        if not x.get("link"):
+            return ""
+        got = opener.entry_link(pid, root, x)
+        if not got:
+            return f"<p class='muted'>{e(x['link'])} is no longer in the project.</p>"
+        tab = opener.NEW_TAB if got[1] else ""
+        if button and not showcase.is_url(x) and showcase.mime(x).startswith("image/"):
+            return f"<a class='shotlink' href='{e(got[0])}'{tab}><img class='shot' src='{e(got[0])}' alt='{e(x['title'])}' loading='lazy'></a>"
+        return f"<a class='{'open' if button else 'opensmall'}' href='{e(got[0])}'{tab}>{e(opener.open_label(x))}</a>"
+
+    def said(x):
+        return "".join(f"<div class='note'><span class='who'>you · {e(local_day(c['at']))}</span><div>{e(c['text'])}</div></div>"
+                       for c in x["comments"])
+
+    def story(x, clamp=True):
+        # "What" ran 133 to 677 characters, a card 442 to 895 px on a phone: three lines, then More
+        what = (f"<div class='what clamp'>{e(x['what'])}</div><button type='button' class='quiet more' hidden "
+                "onclick=\"this.previousElementSibling.classList.remove('clamp'); this.remove()\">More</button>"
+                if clamp else f"<div class='what'>{e(x['what'])}</div>")
+        return what + (f"<div class='try'><b>Try:</b> {try_html(x['try'], pid, root, x)}</div>" if x.get("try") else "")
+
     def card(x):
         hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='id' value='{e(x['id'])}'>"
                   f"<input type='hidden' name='back' value='{e(back)}'>")
-        link = ""
-        if x.get("link"):
-            new_tab = " target='_blank' rel='noopener'"
-            href = f"/showcase/open?p={pid}&id={e(x['id'])}"
-            image = not showcase.is_url(x) and showcase.mime(x).startswith("image/")
-            link = (f"<a href='{href}'{new_tab}><img class='shot' src='{href}' alt='{e(x['title'])}'></a>" if image
-                    else f"<a class='open' href='{href}'{new_tab}>Open {e(x['link'] if not showcase.is_url(x) else 'it')} →</a>")
-        said = "".join(f"<div class='note'><span class='who'>you · {e(local_day(c['at']))}</span><div>{e(c['text'])}</div></div>"
-                       for c in x["comments"])
-        return (f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b>"
+        before = "".join(f"<div class='showing'><div class='showhead'><b>{e(y['title'])}</b><span class='who'>{e(y.get('item') or '')} "
+                         f"{e(local_day(y['at']))}</span></div>{story(y, clamp=False)}{opens(y, button=False)}{said(y)}</div>"
+                         for y in x["earlier"])
+        return (f"<div class='card show' id='s-{e(x['id'])}'><div class='showhead'><b>{e(x['title'])}</b>"
                 f"<span class='who'>{e(x.get('item') or '')} {e(local_day(x['at']))}</span></div>"
-                f"<div>{e(x['what'])}</div>" + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "")
-                + link + f"{said}"
-                f"<details><summary class='muted'>Comment</summary><form class='add' method='post' action='/showcase/comment'>"
+                + story(x) + opens(x) + said(x)
+                + f"<details><summary class='muted'>Comment</summary><form class='add' method='post' action='/showcase/comment'>"
                 f"{hidden}<textarea name='text' placeholder='What you think of it: it reaches the agent'></textarea>"
-                f"<button>Send</button></form></details></div>")
+                f"<button>Send</button></form></details>"
+                + (f"<details class='showings'><summary class='muted'>Shown before · {len(x['earlier'])}</summary>{before}</details>"
+                   if x["earlier"] else "") + "</div>")
     fresh, earlier = rows[:showcase.FRESH], rows[showcase.FRESH:]
+    # "More" only where the three lines hide something: measured once laid out, and again as a fold opens (inside a
+    # closed one nothing has a height yet)
+    more = ("<script>(() => { const measure = () => document.querySelectorAll('.show .what.clamp').forEach((w) => {"
+            " const m = w.nextElementSibling; if (m && m.classList.contains('more')) m.hidden = w.scrollHeight <= w.clientHeight + 2; });"
+            " measure(); document.addEventListener('toggle', measure, true); })();</script>")
     return ("<h2>Showcase</h2>" + "".join(card(x) for x in fresh)
             + (f"<details class='card'><summary><h3>Earlier ({len(earlier)})</h3></summary>"
-               + "".join(card(x) for x in earlier) + "</details>" if earlier else ""))
+               + "".join(card(x) for x in earlier) + "</details>" if earlier else "") + more)
 
 
 def nest_page(reg, name):
@@ -6774,18 +6909,20 @@ def nest_page(reg, name):
                    f"<p class='muted'>Off the board and {e(the_steward(possessive=True))} watch at once (an agent at work finishes that turn "
                    "first), nothing waking it. All projects → Archived brings it back, each in the same conversation.</p></details>")
     out.append("</div>")
+    from . import opener
     links = [(i, p, x) for i, p in members if p.exists() for x in pins.pins(p)]
-    new_tab, icons = " target='_blank' rel='noopener'", {"url": "🔗", "upload": "📎"}
+    icons = {"url": "🔗", "upload": "📎"}
+    tap = lambda got, words, cls: (f"<a class='{cls}' href='{e(got[0])}'{opener.NEW_TAB if got[1] else ''}>{words}</a>" if got
+                                   else f"<span class='{cls} gone'>{words}</span>")
+    named = lambda x: icons.get(x["kind"], "📄") + " " + e(x["title"])
     out.append(f"<h2>Links ({len(links)})</h2><div class='card'>" + ("".join(
-        f"<div class='pin'><a class='pintitle' href='/pin/open?p={i}&id={e(x['id'])}'{'' if pins.is_text(x) else new_tab}>"
-        f"{icons.get(x['kind'], '📄')} {e(x['title'])}</a> <span class='who'>{e(p.name)}</span></div>"
+        f"<div class='pin'>{tap(opener.pin_link(i, p, x), named(x), 'pintitle')} <span class='who'>{e(p.name)}</span></div>"
         for i, p, x in links) or "<p class='muted'>Nothing pinned in these projects yet.</p>") + "</div>")
     demos = sorted(((i, p, x) for i, p in members if p.exists() for x in showcase.entries(p)),
                    key=lambda r: r[2]["at"], reverse=True)
     out.append(f"<h2>Demos ({len(demos)})</h2>")
     for i, p, x in demos:
-        open_it = (f"<a class='open' href='/showcase/open?p={i}&id={e(x['id'])}' target='_blank' rel='noopener'>Open →</a>"
-                   if x.get("link") else "")
+        open_it = tap(opener.entry_link(i, p, x), e(opener.open_label(x)), "open") if x.get("link") else ""
         out.append(f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b><span class='who'>{e(p.name)} · "
                    f"{e(local_day(x['at']))}</span></div><div>{e(x['what'])}</div>"
                    + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "") + open_it
@@ -6795,25 +6932,30 @@ def nest_page(reg, name):
     return shell(reg, -2, "".join(out))
 
 
-def pin_row(pid, p):
-    """One thing in the Library: tap to open (a text file opens to edit), comment to the agent about it, or unpin it."""
+def pin_row(pid, root, p):
+    """One thing in the Library: its title over two lines, then why it is kept; a tap opens it through the opener (a
+    document to read, Edit at its foot), and its ⋯ holds a comment to the agent about it and Archive. Who pinned it
+    and its path are left off: "by the agent" led 56 of the 57 pins ever made, and the path, last, was always cut off
+    (the sections review). One whose file has left the project says so, with nothing to tap that leads nowhere."""
+    from . import opener
     icon = {"url": "🔗", "upload": "📎"}.get(p["kind"], "📄")
-    new_tab = "" if pins.is_text(p) else " target='_blank' rel='noopener'"
+    got = opener.pin_link(pid, root, p)
     hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='id' value='{e(p['id'])}'>"
-    return (f"<div class='pin'><div class='pinline'><a class='pintitle' href='/pin/open?p={pid}&id={e(p['id'])}'{new_tab}>"
-            f"{icon} {e(p['title'])}</a><details class='pinmore'><summary>⋯</summary><div class='pinmenu'>"
+    title = (f"<a class='pintitle' href='{e(got[0])}'{opener.NEW_TAB if got[1] else ''}><span class='pt'>{icon} {e(p['title'])}</span></a>"
+             if got else f"<span class='pintitle gone'><span class='pt'>{icon} {e(p['title'])}</span></span>")
+    why = p.get("why", "") if got else "no longer in the project"
+    return (f"<div class='pin'><div class='pinline'>{title}<details class='pinmore'><summary>⋯</summary><div class='pinmenu'>"
             f"<form class='add' method='post' action='/pin/comment'>{hidden}"
             f"<textarea name='text' placeholder='Comment to the agent about this'></textarea><button>Send</button></form>"
             f"<form class='add regroup' method='post' action='/unpin'>{hidden}<input name='why' placeholder='Why it is done (optional)'>"
             f"<button class='quiet'>Archive</button></form></div></details></div>"
-            f"<div class='who'>{'by the agent · ' if p['by'] == 'agent' else ''}"
-            + (f"{e(p['why'])} · " if p.get("why") else "")
-            + f"{e(p['target'] if p['kind'] != 'url' else p['target'][:60])}</div></div>")
+            + (f"<div class='who'>{e(why)}</div>" if why else "") + "</div>")
 
 
 def pinned_section(pid, root):
-    """The Library's newest few, at the top of the Overview, the rest a tap away."""
-    rows = [pin_row(pid, p) for p in pins.pins(root)]
+    """The Library's newest few, at the top of the Overview, the rest a tap away: a direct list, as it was, not its
+    headings (P2: they would mostly read "Not under a heading · 19", as quality-lab's would)."""
+    rows = [pin_row(pid, root, p) for p in pins.pins(root)]
     if not rows:
         return ""                          # nothing kept, no section: adding is also under Message, at the top
     return (f"<div class='pinned' id='pinned'><div class='pinhead'><h2>Library</h2><a href='/?p={pid}&view=library'>"
@@ -6883,14 +7025,52 @@ def pin_browse(root, rel=""):
 
 
 def pin_editor(reg, pid, pin):
-    """A pinned text file, to read and edit in place; saving tells the agent quietly."""
+    """A pinned text file, to edit in place (Edit at the foot of its reading page); saving tells the agent quietly. The
+    form carries what the file was as it opened (its time and size), so a save over a change made meanwhile (an agent
+    writing it) overwrites nothing (P4)."""
+    from . import opener
     root = projects(reg)[pid]
     path = pins.inside(root, pin["target"])
-    text = path.read_text(errors="replace") if path and path.exists() else ""
+    st = path.stat() if path and path.exists() else None
+    text = path.read_text(errors="replace") if st else ""
+    reader = opener.ref(pid, pin["target"], pin=pin["id"])
     body = (f"<form class='editor' method='post' action='/pin/save'><input type='hidden' name='p' value='{pid}'>"
-            f"<input type='hidden' name='id' value='{e(pin['id'])}'><div class='editbar'><a href='/?p={pid}'>← {e(Path(root).name)}</a>"
-            f"<b>{e(pin['title'])}</b><button>Save</button></div><textarea name='text' spellcheck='true'>{e(text)}</textarea></form>")
+            f"<input type='hidden' name='id' value='{e(pin['id'])}'><input type='hidden' name='back' value='{e(reader)}'>"
+            + (f"<input type='hidden' name='mtime' value='{st.st_mtime_ns}'><input type='hidden' name='size' value='{st.st_size}'>" if st else "")
+            + f"<div class='editbar'><a href='{e(reader)}' onclick='if (history.length > 1) {{ history.back(); return false; }}'>"
+            f"← {e(pin['title'])}</a><button>Save</button></div><textarea name='text' spellcheck='true'>{e(text)}</textarea></form>")
     return shell(reg, pid, body, wide=True)
+
+
+def kept_draft(root, path, text):
+    """The person's draft of a file that changed while they edited it, kept beside the board's own records (named for
+    the file and the time; never in git) so nothing they wrote is lost: its path in the project."""
+    folder = Path(root) / ".board" / "drafts"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / ".gitignore").write_text("*\n")
+    rel = str(Path(path).resolve().relative_to(Path(root).resolve()))
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", str(Path(rel).with_suffix(""))).strip("-") or "draft"
+    draft = folder / f"{name}-{time.strftime('%Y-%m-%d-%H%M%S')}{Path(rel).suffix}"
+    draft.write_text(text)
+    return str(draft.relative_to(Path(root)))
+
+
+def clash_page(reg, pid, pin, draft, kept):
+    """A save that would have overwritten a change made while the person edited: nothing was overwritten. Their draft,
+    kept, and the file as it is now, side by side, with the way to edit it as it now stands."""
+    from . import opener
+    root = projects(reg)[pid]
+    path = pins.inside(root, pin["target"])
+    now_text = path.read_text(errors="replace") if path and path.exists() else ""
+    reader = opener.ref(pid, pin["target"], pin=pin["id"])
+    body = (f"<div class='readtop'><a class='back' href='{e(reader)}'>‹ {e(Path(pin['target']).name)}</a></div>"
+            f"<h1>Not saved: {e(pin['title'])} changed while you edited it</h1>"
+            f"<p>The file was written to (by the agent, most likely) after you opened it, so your save would have overwritten "
+            f"that change. Nothing was overwritten: your draft is kept at <a href='{e(opener.ref(pid, kept))}'><code>{e(kept)}</code></a>, "
+            f"and the agent has been told where.</p><p><a class='open' href='/pin/edit?p={pid}&id={e(pin['id'])}'>Edit it as it is now</a></p>"
+            f"<div class='clash'><div><h3>Yours</h3><textarea readonly>{e(draft)}</textarea></div>"
+            f"<div><h3>Now in the file</h3><textarea readonly>{e(now_text)}</textarea></div></div>")
+    return shell(reg, pid, body)
 
 
 def waiting_items(p, snap=None):
@@ -8179,10 +8359,67 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, to):
+        self.send_response(303)
+        self.send_header("Location", to)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _file(self, key, root, path):
+        """A project's file as the browser's own viewer shows it: a page sandboxed (with its colony.send, never the
+        steward's), a PDF not (a phone's PDF viewer is a plugin, which a sandbox refuses: a blank page)."""
+        data = path.read_bytes()
+        if key != "steward" and path.suffix.lower() in (".html", ".htm"):
+            data = page_with_send(key, root, path, data)
+        self.send_response(200)
+        self.send_header("Content-Type", pins.content_type(path.name))
+        self.send_header("Content-Disposition", inline(path.name))
+        if path.suffix.lower() != ".pdf":
+            self.send_header("Content-Security-Policy", SANDBOX)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        return self.wfile.write(data)
+
+    def _open(self, reg, plist, q):
+        """The opener (opener.py): a file, a folder or an address of a project or the steward's, as the board shows
+        it. A path outside its folder, or one not there, is not found."""
+        from . import monitor, opener
+        one = lambda k: (q.get(k) or [""])[0]
+        if one("u"):                                   # an address on this machine, as the device asking reaches it
+            return (self._redirect(opener.reach(one("u"), self.headers.get("Host", ""))) if re.match(r"https?://", one("u"), re.I)
+                    else self._send(404, b"not an address"))
+        key = one("p")                                 # the steward's own files as p=steward, never read as project 0
+        root = monitor.home() if key == "steward" else plist[int(key)] if key.isdigit() and int(key) < len(plist) else None
+        path = pins.inside(root, one("f")) if root else None
+        if not path or not path.exists():
+            return self._send(404, b"the file is gone")
+        if opener.kind(path) == "raw":
+            return self._file(key, root, path)
+        return self._send(200, opener.page(reg, key, root, path, pin_id=one("pin"), entry_id=one("s"), whole=bool(one("whole")),
+                                           referer=self.headers.get("Referer", ""), sent=bool(one("sent"))).encode())
+
+    def _the_persons(self):
+        """Whether this request is the person's own look, kept as theirs (their active hours, their last look at each
+        project). Only colony's audit says otherwise (R126: reading every page and file to check them), and only straight
+        from this machine: through Tailscale Serve every request reaches the board from here too, the person's identity
+        on it, so one carrying that is always theirs."""
+        if self.headers.get("X-Colony-Audit") != "read-only" or self.client_address[0] not in ("127.0.0.1", "::1"):
+            return True
+        return any(self.headers.get(h) for h in ("Tailscale-User-Login", "X-Forwarded-For", "Forwarded"))
+
     def do_GET(self):
+        token = PERSONS_LOOK.set(self._the_persons())
+        try:
+            return self._get()
+        finally:
+            PERSONS_LOOK.reset(token)
+
+    def _get(self):
         if not self._from_this_page():
             return self._send(403, b"not from this page")
-        if self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document":
+        if PERSONS_LOOK.get() and self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document":
             hours.seen()                               # the person opened a page (a page keeping itself current isn't them)
         url = urllib.parse.urlparse(self.path)
         if url.path == "/monitor":                     # the steward's page was once /monitor: old links and bookmarks still work
@@ -8233,66 +8470,33 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, pin_add_page(reg, pid).encode())
         if url.path == "/pins/browse":
             return self._send(200, pin_browse(plist[pid], (q.get("dir") or [""])[0]).encode())
-        if url.path == "/showcase/open":
-            x = showcase.get(plist[pid], (q.get("id") or [""])[0])
+        if url.path == "/open":                       # every file link the person taps on the board (opener.py)
+            return self._open(reg, plist, q)
+        if url.path == "/showcase/open":              # an entry's older address: the opener takes it, the entry kept
+            from . import opener
+            x = showcase.get(plist[pid], (q.get("id") or [""])[0]) if plist else None
             if not x or not x.get("link"):
                 return self._send(404, b"no such showcase entry")
-            if showcase.is_url(x):
-                target = x["link"]
-                host = self.headers.get("Host", "").split(":")[0]
-                parts = urllib.parse.urlsplit(target)
-                if parts.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and host not in ("", "localhost", "127.0.0.1"):
-                    target = urllib.parse.urlunsplit(parts._replace(netloc=host + (f":{parts.port}" if parts.port else "")))
-                self.send_response(303)
-                self.send_header("Location", target)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            path = pins.inside(plist[pid], x["link"])
-            if not path or not path.is_file():
-                return self._send(404, b"the file is gone")
-            data = path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", showcase.mime(x))
-            self.send_header("Content-Disposition", inline(path.name))
-            if path.suffix.lower() != ".pdf":         # as in Chat: a phone's PDF viewer is a plugin, a sandbox a blank page
-                self.send_header("Content-Security-Policy", SANDBOX)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            return self.wfile.write(data)
-        if url.path == "/pin/open":
-            pin = pins.get(plist[pid], (q.get("id") or [""])[0])
+            if showcase.is_url(x):                    # a link to this machine's localhost, at its own address for a phone
+                return self._redirect(opener.reach(x["link"], self.headers.get("Host", "")))
+            return self._redirect(opener.ref(pid, x["link"], entry=x["id"]))
+        if url.path == "/pin/open":                   # a pin's older address: the opener takes it, the pin kept
+            from . import opener
+            pin = pins.get(plist[pid], (q.get("id") or [""])[0]) if plist else None
             if not pin:
                 return self._send(404, b"no such pin")
             if pin["kind"] == "url":
-                target = pin["target"]
-                host = self.headers.get("Host", "").split(":")[0]
-                # a link to this machine's localhost works from a phone at the machine's own address
-                parts = urllib.parse.urlsplit(target)
-                if parts.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and host not in ("", "localhost", "127.0.0.1"):
-                    netloc = host + (f":{parts.port}" if parts.port else "")
-                    target = urllib.parse.urlunsplit(parts._replace(netloc=netloc))
-                self.send_response(303)
-                self.send_header("Location", target)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            if pins.is_text(pin):
-                return self._send(200, pin_editor(reg, pid, pin).encode())
-            path = pins.inside(plist[pid], pin["target"])
+                return self._redirect(opener.reach(pin["target"], self.headers.get("Host", "")))
+            return self._redirect(opener.ref(pid, pin["target"], pin=pin["id"]))
+        if url.path == "/pin/edit":                   # Edit, at the foot of a pinned text file's reading page
+            pin = pins.get(plist[pid], (q.get("id") or [""])[0]) if plist else None
+            path = pins.inside(plist[pid], pin["target"]) if pin and pins.is_text(pin) else None
             if not path or not path.is_file():
-                return self._send(404, b"the file is gone")
-            data = path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", pins.mime(pin))
-            self.send_header("Content-Disposition", inline(path.name))
-            if path.suffix.lower() != ".pdf":         # as in Chat: a phone's PDF viewer is a plugin, a sandbox a blank page
-                self.send_header("Content-Security-Policy", SANDBOX)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            return self.wfile.write(data)
+                return self._send(404, b"no such pinned text")
+            return self._send(200, pin_editor(reg, pid, pin).encode())
+        if url.path == "/sweep":                      # every pin and entry on one page, for the person's iPhone check (R126)
+            from . import opener
+            return self._send(200, opener.sweep(reg).encode())
         if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
             from . import voice
             clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0])
@@ -8328,19 +8532,7 @@ class Handler(BaseHTTPRequestHandler):
             path = pins.inside(root, (q.get("f") or [""])[0])
             if not path or not path.is_file():
                 return self._send(404, b"the file is gone")
-            data = path.read_bytes()
-            if key != "steward" and path.suffix.lower() in (".html", ".htm"):
-                data = page_with_send(key, root, path, data)
-            self.send_response(200)
-            self.send_header("Content-Type", pins.content_type(path.name))
-            self.send_header("Content-Disposition", inline(path.name))
-            if path.suffix.lower() != ".pdf":         # a phone's PDF viewer is a plugin, which a sandbox refuses: a blank page
-                self.send_header("Content-Security-Policy", SANDBOX)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Cache-Control", "private, max-age=300")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            return self.wfile.write(data)
+            return self._file(key, root, path)          # as the opener serves it (Chat's links are the opener's now)
         if url.path == "/chat/line":                  # the unheard line, every project's; or the replies heard last
             if q.get("heard"):
                 n = q["heard"][0]
@@ -9104,6 +9296,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if path == "/open/comment":                       # a comment on a file opened in the reader, the file named
+            from . import monitor
+            key, text = form.get("p", ""), form.get("text", "").strip()
+            back = form.get("back", "")
+            try:
+                root = monitor.home() if key == "steward" else projects(reg)[int(key)] if key.isdigit() else None
+            except IndexError:
+                root = None
+            found = pins.inside(root, form.get("f", "")) if root else None
+            if not found or not found.exists():
+                return self._send(404, b"No such file")
+            rel = str(found.relative_to(Path(root).resolve()))
+            if text and key == "steward":
+                monitor.queue(f"The person, on {rel} in your folder (opened on the board): {text}")
+            elif text:
+                add_note(root, {"file": rel}, f"On {rel}, opened on the board: {text}", author="person")
+            self.send_response(303)
+            self.send_header("Location", back if back.startswith("/") and not back.startswith("//") else "/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         pid = int(form.get("p", "0"))
         if pid == -1 and path == "/console/stop":
             from . import monitor
@@ -9269,7 +9482,17 @@ class Handler(BaseHTTPRequestHandler):
             pin = pins.get(root, form["id"])
             target = pins.inside(root, pin["target"]) if pin and pins.is_text(pin) else None
             if target:
-                target.write_text(form.get("text", "").replace("\r\n", "\n"))
+                draft = form.get("text", "").replace("\r\n", "\n")
+                st = target.stat() if target.exists() else None
+                opened = (form.get("mtime"), form.get("size"))
+                if opened != (None, None) and opened != ((str(st.st_mtime_ns), str(st.st_size)) if st else (None, None)):
+                    # changed since the editor opened it: the person's draft is kept, the file stands, nothing is lost
+                    kept = kept_draft(root, target, draft)
+                    add_note(root, {"pin": pin["id"]}, f"The person's edit of the pinned {pins.describe(pin)} on the board came "
+                             f"after a change to it since they opened it, so nothing was overwritten: their draft is kept at "
+                             f"{kept}.", author='colony', quiet=True)
+                    return self._send(409, clash_page(reg, pid, pin, draft, kept).encode())
+                target.write_text(draft)
                 add_note(root, {"pin": pin["id"]}, f"The person edited the pinned {pins.describe(pin)} on the board.", author='colony', quiet=True)
         elif path == "/clear" and form.get("key"):
             for key in form["key"].split(","):                # a moment may hold several items
@@ -9405,7 +9628,6 @@ nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pc) 13%, var(--s
 nav.noproj .proj[style]:not(.on) { background:var(--sunk) }
 @media (prefers-color-scheme: dark) { nav .proj[style]:not(.on) { background:color-mix(in srgb, var(--pcd) 16%, var(--sunk)) } }
 nav .proj[style].on { background:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style].on { background:var(--pcd) } }
-.renamehead { margin:0 0 4px } .renamehead > summary { font-size:12px; color:var(--muted); cursor:pointer }
 .pinmenu .regroup input { flex:1; min-width:0 } .pinmenu .regroup { display:flex; gap:6px }
 .libsearch input { width:100%; font-size:16px; padding:8px 12px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--ink); margin:6px 0 10px }
 .libgroup { border-bottom:1px solid var(--line); padding:4px 0 } .libgroup > summary { cursor:pointer; padding:8px 0; font-weight:600 }
@@ -9431,14 +9653,18 @@ a.jmedal { flex:none; width:118px; scroll-snap-align:start; display:flex; flex-d
 .jtick { color:var(--accent); font-weight:700 } .jflag { font-size:20px; color:var(--accent) }
 .jtick::before, .jflag::before { content:''; position:absolute; left:14px; width:28px; height:28px; border-radius:50%; background:var(--bg); z-index:-1 }
 .jdest span:last-child { font-weight:600 }
-a.jstop { position:relative; display:flex; gap:12px; align-items:flex-start; padding:10px 8px 10px 0; color:var(--ink); text-decoration:none;
-  border-radius:12px }
-a.jstop:hover { background:var(--sunk) } a.jstop.later { opacity:.65 }
+/* one list in the plan's order: a stop is a fold's line, opening in place to its items (P3) */
+.jstop { position:relative; display:flex; gap:12px; align-items:flex-start; padding:10px 8px 10px 0; color:var(--ink); text-decoration:none;
+  border-radius:12px; list-style:none; cursor:pointer } .jstop::-webkit-details-marker { display:none }
+.jstop:hover { background:var(--sunk) } .jms.later > .jstop { opacity:.65 }
+.jms > .jstop .jtitle::after { content:' ▸'; color:var(--muted) } .jms[open] > .jstop .jtitle::after { content:' ▾' }
+.jstop .msdot { display:inline-block; vertical-align:middle; margin-right:6px } .jtook .timer { font-size:12px }
+.jitems { position:relative; padding:0 0 10px 60px } .jitems > .lanes, .jitems > .pieces { margin-top:4px }
 .jring { flex:none; z-index:1; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center;
   background:conic-gradient(var(--accent) calc(var(--p) * 1%), var(--line) 0); position:relative; font-size:13px }
 .jring::after { content:''; position:absolute; inset:5px; border-radius:50%; background:var(--bg) }
 .jring b, .jring small { position:relative; z-index:1 } .jring small { color:var(--muted); font-size:10px }
-a.jstop.live .jring { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent) }
+.jms.live > .jstop .jring { box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent) }
 .jbody { display:flex; flex-direction:column; gap:5px; min-width:0; padding-top:2px }
 .jtitle { font-size:15px; line-height:1.3 } .jkind { margin-left:6px; color:var(--muted); font-size:12px }
 .jdots, .jlane { display:flex; flex-wrap:wrap; gap:4px; align-items:center }
@@ -9852,11 +10078,45 @@ details.fold[open] > summary, details.versions[open] > summary { margin-bottom:8
 /* once the showcase's stars; the reading-speed controls (.voicesheet, .composerbar) are laid out with it too */
 .rate { display:flex; gap:2px; margin-top:6px }
 .show { min-width:0 } .show .showhead { flex-wrap:wrap } .show > div { overflow-wrap:anywhere }
-.show .try { margin-top:6px } .show .open { display:inline-block; max-width:100%; margin-top:6px; overflow-wrap:anywhere } .show .shot { display:block; max-width:100%; margin-top:8px; border-radius:6px }
+/* a card: three lines of what it is, then More; one button saying what it opens; a picture fitted to the screen */
+.show .what.clamp { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden }
+.show button.more { padding:4px 0; border:0; background:none; color:var(--accent); font-size:13px; cursor:pointer }
+.show .try { margin-top:6px; overflow-wrap:anywhere }
+.show a.open { display:block; max-width:100%; margin:10px 0 4px; padding:9px 12px; border-radius:10px; text-align:center;
+  background:var(--accent); color:var(--card); font-weight:600; text-decoration:none; overflow-wrap:anywhere }
+.show a.opensmall { display:inline-block; margin-top:4px; font-size:14px; overflow-wrap:anywhere }
+.show .shotlink { display:block; margin-top:8px } .show .shot { display:block; max-width:100%; max-height:60vh; width:auto; height:auto; border-radius:6px }
+.showings > summary { cursor:pointer; padding:6px 0 } .showing { border-top:1px solid var(--line); padding:8px 0 }
 .pinhead a { margin-left:auto; font-size:14px; text-decoration:none } .pin { padding:7px 0; border-top:1px solid var(--line) }
-.pinline { display:flex; align-items:center; gap:8px } .pintitle { text-decoration:none; font-weight:600; flex:1; min-width:0;
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+/* a row: its title over two lines (21 of 43 were cut to one on a phone), then why it is kept, on one */
+.pinline { display:flex; align-items:center; gap:8px } .pintitle { display:block; text-decoration:none; font-weight:600; flex:1; min-width:0 }
+.pintitle .pt { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere }
+.pin .who { white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .pintitle.gone { color:var(--muted); font-weight:400 }
 .pin > a.pintitle { display:block }
+/* the reading page (opener.py): the document at a readable width, light and dark, its actions at its foot */
+.readtop, .readabout, .reader, .readfoot, .sent { max-width:42em; margin-left:auto; margin-right:auto }
+.readtop .back { display:inline-block; padding:8px 0; font-size:15px; text-decoration:none } .readabout { margin-top:0; margin-bottom:12px }
+.reader { font-size:16.5px; line-height:1.6; overflow-wrap:anywhere }
+.reader h1, .reader h2, .reader h3, .reader h4, .reader h5, .reader h6 { color:var(--ink); text-transform:none; letter-spacing:0; line-height:1.3 }
+.reader h1 { font-size:24px; margin:6px 0 12px } .reader h2 { font-size:19.5px; margin:26px 0 8px } .reader h3 { font-size:17px; margin:22px 0 6px }
+.reader h4, .reader h5, .reader h6 { font-size:15.5px; margin:18px 0 4px } .reader p { margin:0 0 12px }
+.reader ul, .reader ol { padding-left:22px; margin:0 0 12px } .reader li { margin:3px 0 }
+.reader img { display:block; max-width:100%; height:auto; border-radius:8px } .reader a.pic { display:block; margin:8px 0 }
+.reader pre { overflow-x:auto; padding:10px; border-radius:8px; background:var(--sunk); font-size:13px; line-height:1.45 }
+.reader code { background:var(--sunk); padding:1px 4px; border-radius:4px } .reader pre code { background:none; padding:0 }
+.reader pre.plain { white-space:pre-wrap; overflow-wrap:anywhere; background:transparent; padding:0; font-size:13.5px; line-height:1.5 }
+.reader hr { border:0; border-top:1px solid var(--line); margin:22px 0 } .reader .cut { margin-top:18px; color:var(--muted) }
+.readfoot { display:flex; gap:10px; align-items:flex-start; margin-top:20px; padding-top:12px; border-top:1px solid var(--line) }
+.readcomment { flex:1; min-width:0 } .readcomment > summary { display:inline-block; list-style:none; cursor:pointer }
+.readcomment > summary::-webkit-details-marker { display:none }
+.readcomment > summary, a.readedit { padding:11px 18px; border:1px solid var(--line); border-radius:10px; background:var(--card); text-decoration:none }
+.readcomment[open] > summary { margin-bottom:8px } .sent { color:var(--accent) }
+.folder a.frow { display:block; padding:10px 0; border-top:1px solid var(--line); text-decoration:none; overflow-wrap:anywhere }
+.fpics { display:grid; gap:14px; margin-top:12px } .fpic { margin:0 } .fpic img { display:block; max-width:100%; max-height:70vh; border-radius:8px }
+.clash { display:grid; gap:12px } .clash textarea { width:100%; min-height:40vh; font:13px/1.45 ui-monospace,Menlo,monospace }
+@media (min-width:900px) { .clash { grid-template-columns:1fr 1fr } }
+.sweep > div { padding:9px 0; border-top:1px solid var(--line) } .sweep > div:first-child { border-top:0 }
+.sweep a { text-decoration:none } .sweep a:visited { color:var(--muted) } .waitline { margin:12px 0 } .waitline a { font-weight:600; text-decoration:none }
 .pinmore { position:relative } .pinmore summary { list-style:none; cursor:pointer; padding:0 8px; color:var(--muted) }
 .pinmore summary::-webkit-details-marker { display:none }
 .pinmenu { position:absolute; right:0; z-index:10; width:min(360px, calc(100vw - 32px)); padding:10px; border-radius:10px;
@@ -10008,6 +10268,6 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   .navfoot a { min-height:44px; min-width:44px; display:inline-flex; align-items:center; justify-content:center }
   details > summary, details.more > summary, details.morepins > summary { padding-top:12px; padding-bottom:12px }
   .pinmore > summary { min-width:44px; min-height:44px; padding:0; display:flex; align-items:center; justify-content:center }
-  .pintitle { line-height:44px } a.go, a.dayline, a.showall, .pinlink a, .listtop a, .pinhead a, .nhead a, .titlerow > a {
+  .pintitle { padding:11px 0; line-height:1.3 } a.go, a.dayline, a.showall, .pinlink a, .listtop a, .pinhead a, .nhead a, .titlerow > a {
     display:inline-block; padding-top:12px; padding-bottom:12px } }
 """

@@ -612,10 +612,12 @@ class BoardTest(BoardBase):
             self.assertIn(part, plan)
         self.assertNotIn("Since you were last here", plan)
 
-    def test_the_roadmap_folds_puts_the_latest_work_first_and_what_is_finished_last(self):
+    def test_the_roadmap_is_one_list_in_the_plans_order_each_milestone_opening_in_place_with_what_its_card_had(self):
+        # P3, accepted by the person: "The one Roadmap list runs in plan order, the path to the vision, with live work
+        # marked ... It replaces R32's latest-started-first cards. Everything the cards do carries over"
         board.track(self.root)
         road = """# Roadmap\n\nA tool for my plants.\n\n## M0 — setup\n\n- [x] R0 repo\n\n## M1 — v1\n\n- [x] R1 add plants
-- [ ] R2 water log\n- [ ] R3 reminders\n\n## M2 — v2\n\n- [ ] R4 sharing\n- [ ] R5 export\n"""
+- [ ] R2 water log\n- [ ] R3 reminders\n\n## M2 — v2\n\n- [ ] R4 sharing\n- [ ] R5 export\n\n## M3 — v3, not yet planned\n"""
         (self.root / "ROADMAP.md").write_text(road)
         board.item_times(self.root)                                 # the first look: no times yet
         walk = lambda old, new: (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace(old, new))
@@ -624,25 +626,40 @@ class BoardTest(BoardBase):
         walk("- [ ] R3", "- [~] R3"); tick()
         walk("- [ ] R5", "- [~] R5"); tick()
         walk("- [~] R2", "- [x] R2"); tick()
+        board.add_gate(self.root, "Daily or weekly reminders?", "R3")
+        board.add_note(self.root, {"item": "R3"}, "weekly is plenty", author="person")
         page = board.render(board.registry(), 0, "roadmap")
-        heads = re.findall(r"<details (?:id='[^']*' )?class='([^']*ms[^']*)'[^>]*><summary>(<span class='sdot msdot[^>]*></span>)?<h3>([^<]*)", page)
-        stops = re.findall(r"<a class='jstop[^']*' href='#ms-([^']+)'.*?<b>(\d+)</b><small>/(\d+)</small>", page)
-        self.assertEqual(stops, [("M1", "2", "3"), ("M2", "0", "2")], "the journey: each open milestone a stop, in the plan's order")
+        stops = re.findall(r"<details id='ms-(M\d)' class='jms[^']*'><summary class='jstop'><span class='jring'[^>]*><b>(\d+)</b>"
+                           r"<small>/(\d+)</small>", page)
+        self.assertEqual(stops, [("M1", "2", "3"), ("M2", "0", "2"), ("M3", "0", "0")],
+                         "one list in the plan's order, the path to the vision; a milestone with no items yet listed too")
+        for m in ("M0", "M1", "M2", "M3"):
+            self.assertEqual(page.count(f"id='ms-{m}'"), 1, "each milestone once: the second list, of cards, is gone")
+        self.assertNotIn("class='card ms'", page)
         self.assertIn("<span class='jseal'>✓</span><b>M0</b><span class='jmname'>setup</span>", page, "what's done, as a medal")
         self.assertIn("<span>Done</span><span class='muted'>1 milestone · 1 items</span>", page)
-        self.assertIn("A tool for my plants.", page.split("class='jdest'")[1], "heading for the vision")
-        self.assertEqual([h[2].split(" —")[0] for h in heads], ["M2", "M1", "Completed", "M0"],
-                         "where work last started first; finished last, folded together")
-        self.assertNotIn(" open><summary><h3>M", page, "every milestone loads folded")
-        self.assertTrue(heads[0][1] and heads[1][1], "in progress: a dot that says whether its agent is at work")
-        m1 = page[page.index("<h3>M1 — v1"):page.index("Completed")]
+        self.assertIn("d.closest('details.done-group')", page, "a medal opens it in Completed")
+        dest, done = page.index("class='jdest'"), page.index("<h3>Completed</h3>")
+        self.assertIn("A tool for my plants.", page[dest:done], "heading for the vision, at the end of the path")
+        self.assertLess(done, page.index("id='ms-M0'"), "the finished, folded together into Completed")
+        self.assertNotRegex(page, r"<details id='ms-[^']*' class='[^']*' open", "every milestone loads folded")
+        m1 = page[page.index("id='ms-M1'"):page.index("id='ms-M2'")]
+        m2 = page[page.index("id='ms-M2'"):page.index("id='ms-M3'")]
+        self.assertIn("<span class='sdot msdot", m1, "in progress: a dot that says whether its agent is at work")
+        self.assertIn("<span class='sdot msdot", m2)
+        self.assertNotIn("msdot", page[page.index("id='ms-M3'"):dest])
+        self.assertIn("<span class='jnow'>Now: reminders", m1)
         self.assertEqual(re.findall(r"<span class='muted iid'>(R\d)</span>", m1), ["R3", "R2", "R1"], "in progress, to come, then the latest done first")
         self.assertLess(m1.index("Doing · 1"), m1.index("Done · 2"), "grouped, each by its title")
-        m2 = page[page.index("<h3>M2 — v2"):page.index("<h3>M1")]
         self.assertEqual(re.findall(r"<span class='muted iid'>(R\d)</span>", m2), ["R5", "R4"], "what started last goes to the top")
-        self.assertIn("<span class='muted'>2/3 <span class='timer running'", m1, "done of all, then the time since it began, counting on")
+        self.assertIn("<span class='badge gate'>1 waiting</span>", m1, "a decision waiting on its item, as the card showed it")
+        self.assertIn("weekly is plenty", m1, "the item's notes, and a box for another")
+        self.assertIn("action='/note'", m1)
+        self.assertIn("href='/item?p=0&id=R3'>Open R3: its work, gates and full thread →</a>", m1)
+        self.assertIn("<span class='jtook muted'><span class='timer running'", m1, "the time since it began, counting on")
         self.assertIn("<span class='ititle'>water log</span> <span class='muted iid'>R2</span> <span class='timer' data-base='", m1, "done: its time holds")
         self.assertNotIn("<span class='muted iid'>R1</span> <span class='timer", m1, "done before the board looked: no time to show")
+        self.assertIn("No items yet.", page[page.index("id='ms-M3'"):dest])
         self.assertIn("<script>", page[page.index("Completed"):], "timers count on in the page")
         self.assertEqual([board.took(x) for x in (30, 60 * 12, 60 * 130, 86400 + 3 * 3600)], ["<1m", "12m", "2h 10m", "1d 3h"])
 
@@ -663,8 +680,8 @@ class BoardTest(BoardBase):
         (board.home() / "items.json").write_text(json.dumps(every))
         self.assertIn("first", board.item_times(self.root)["R3"], "an older record is read again from the history")
         page = board.render(board.registry(), 0, "roadmap")
-        self.assertIn(f"<span class='muted'>2/3 <span class='timer running' data-base='0' data-starts='{times['R3']['first']:.0f}'>", page,
-                      "a milestone's heading: the calendar since its first item was taken up, not the items' sum")
+        self.assertIn(f"<span class='jtook muted'><span class='timer running' data-base='0' data-starts='{times['R3']['first']:.0f}'>", page,
+                      "a milestone's line: the calendar since its first item was taken up, not the items' sum")
 
     def test_the_overview_says_how_long_its_agent_has_been_at_work(self):
         board.track(self.root)
@@ -947,8 +964,8 @@ class ChatTest(BoardBase):
         shot.write_bytes(b"\x89PNG")
         (self.root / "report.pdf").write_bytes(b"%PDF")
         said = board.chat_prose(f"See ![the gap]({shot}) and [the report]({self.root}/report.pdf), not ![this](/etc/hostname)", 0, self.root)
-        self.assertIn("<img src='/chat/file?p=0&f=", said)
-        self.assertIn("📄 the report</a>", said)
+        self.assertIn("<img src='/open?p=0&f=.board/uploads/gap.png'", said, "through the opener, as every file link (R126)")
+        self.assertIn("href='/open?p=0&f=report.pdf' target='_blank' rel='noopener'>📄 the report</a>", said)
         self.assertIn("![this](/etc/hostname)", said, "outside the project: left as words")
         self.assertIsNone(board.chat_file(0, self.root, "../../etc/hostname"))
         self.assertIsNone(board.chat_file(0, self.root, "/etc/hostname"))
@@ -1582,7 +1599,13 @@ class LibraryTest(BoardBase):
         pins.add(self.root, "picks.html", "Pick a layout")
         page = board.render(board.registry(), 0, "library")
         self.assertIn("<summary>World <span class='muted'>1</span>", page)
-        self.assertIn("by the agent · the map every chapter is checked against · world/places.md", page)
+        # a row is its title (over two lines on a phone) and why it is kept: "by the agent" led 56 of the 57 pins ever
+        # made, and the path, last, was always cut off (the sections review)
+        self.assertIn("<span class='pt'>📄 Places</span></a>", page)
+        self.assertIn("<div class='who'>the map every chapter is checked against</div>", page)
+        self.assertNotIn("by the agent", page)
+        self.assertNotIn("world/places.md</div>", page)
+        self.assertNotIn("Rename", page, "a heading is renamed with colony regroup --rename, no fold of its own")
         self.assertIn("<summary>Not under a heading <span class='muted'>1</span>", page)
         pins.regroup(self.root, x["id"], "Places")
         self.assertIn("<summary>Places <span class='muted'>1</span>", board.render(board.registry(), 0, "library"), "either of them moves it")
@@ -1639,8 +1662,7 @@ class HintTest(BoardBase):
         hints.keep(self.root, "later-done:M6", "Later is our record of what was set aside and then done; it stays")
         self.assertEqual(hints.open_hints(self.root), [], "settled with its reasoning")
         page = board.render(board.registry(), 0, "roadmap")
-        self.assertIn("<h3>Shape hints</h3><span class='muted'>0</span>", page)
-        self.assertIn("Later is our record of what was set aside", page, "the reasoning shows beside it")
+        self.assertNotIn("<h3>Shape hints</h3>", page, "none open, none shown: a fold reading 0 held nothing for the person")
         (self.root / "ROADMAP.md").write_text((self.root / "ROADMAP.md").read_text().replace("Grow plants well.", "Grow plants and sell them."))
         self.assertEqual([k for k, _, _ in hints.open_hints(self.root)], ["later-done:M6"], "a new vision: open again")
 
@@ -4597,8 +4619,13 @@ class PinTest(BoardBase):
             page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?p=0").read().decode()
             self.assertIn("<h2>Library</h2>", page)
             self.assertIn("The app", page)
-            editor = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['Chapter 2']['id']}").read().decode()
-            self.assertIn("# Chapter 2", editor, "a text file opens to edit")
+            reading = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['Chapter 2']['id']}")
+            self.assertTrue(reading.url.endswith(f"/open?p=0&f=notes.md&pin={ps['Chapter 2']['id']}"), "an old link: the opener takes it")
+            reading = reading.read().decode()
+            self.assertIn("<h1 id='chapter-2'>Chapter 2</h1>", reading, "a text file opens to read, rendered")
+            self.assertIn(f"href='/pin/edit?p=0&id={ps['Chapter 2']['id']}'>Edit</a>", reading, "and Edit, at its foot")
+            editor = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/edit?p=0&id={ps['Chapter 2']['id']}").read().decode()
+            self.assertIn("# Chapter 2", editor, "Edit opens today's editor")
             post("/pin/save", p=0, id=ps["Chapter 2"]["id"], text="# Chapter 2\nIt was a dark and stormy night.\n")
             self.assertIn("stormy", (self.root / "notes.md").read_text())
             pdf = urllib.request.urlopen(f"http://127.0.0.1:{port}/pin/open?p=0&id={ps['report.pdf']['id']}")
@@ -4705,6 +4732,318 @@ class PinTest(BoardBase):
         finally:
             httpd.shutdown()
             httpd.server_close()
+
+
+class ReaderTest(BoardBase):
+    """The opener (R126, option B, the person's "Lets go B" and their four accepted points): one address for every file
+    link they tap, formatting only what a phone shows badly; the trims; a deliverable shown again as one card."""
+
+    def serve(self):
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        return httpd
+
+    def fetch(self, path, follow=True, **headers):
+        """(status, headers, body) of a GET, its redirect followed or not."""
+        class Stay(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a):
+                return None
+        try:
+            r = urllib.request.build_opener(*([] if follow else [Stay])).open(urllib.request.Request(self.base + path, headers=headers))
+            return r.status, r.headers, r.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as err:
+            return err.code, err.headers, err.read().decode("utf-8", "replace")
+
+    def post(self, path, **fields):
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(self.base + path, data=urllib.parse.urlencode(fields).encode()))
+            return r.status, r.read().decode()
+        except urllib.error.HTTPError as err:
+            return err.code, err.read().decode()
+
+    def test_the_opener_formats_only_what_a_phone_shows_badly_and_nothing_outside_the_project(self):
+        from colony import opener
+        board.track(self.root)
+        (self.root / "docs" / "shots").mkdir(parents=True)
+        (self.root / "docs" / "shots" / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (self.root / "docs" / "gear.md").write_text("# Gear\n")
+        (self.root / "docs" / "brief.md").write_text(
+            "# The short version\n\nA line wrapped\nin the file, [the gear](gear.md), [its tent](gear.md#gear), [the shots](shots/),\n"
+            "[gone](nowhere.md), [outside](../../etc/hostname) and [the web](https://example.com/x).\n\n![a shot](shots/a.png)\n\n"
+            "1. first\n2. second\n\n---\n\nThe app runs at http://localhost:5173/case.\n\n"
+            "- **Your test day, as worked out in [the gear](gear.md):** fine, and [`gear.md`](gear.md) as code.\n")
+        (self.root / "notes.txt").write_text("Keep  this spacing\nand this line\n")
+        (self.root / "book.pdf").write_bytes(b"%PDF-1.4 x")
+        (self.root / "page.html").write_text("<html><head><title>Picks</title></head><body>pick one</body></html>")
+        httpd = self.serve()
+        status, _, doc = self.fetch("/open?p=0&f=docs/brief.md")
+        self.assertEqual(status, 200)
+        article = doc.split("<article class='reader'>")[1].split("</article>")[0]
+        self.assertIn("<h1 id='the-short-version'>The short version</h1>", article, "a heading at its own level")
+        self.assertIn("A line wrapped in the file", article, "wrapped lines join, as Markdown says")
+        self.assertIn("<a href='/open?p=0&amp;f=docs/gear.md'>the gear</a>", article, "found from the document's own folder")
+        self.assertIn("<a href='/open?p=0&amp;f=docs/gear.md#gear'>its tent</a>", article)
+        self.assertIn("<a href='/open?p=0&amp;f=docs/shots'>the shots</a>", article, "a folder, through the same route")
+        self.assertIn(", gone,", article.replace("\n", " "), "nothing there: its words, never a dead link")
+        self.assertNotIn("etc/hostname", article, "outside the project: its words only")
+        self.assertIn("<a href='https://example.com/x' target='_blank' rel='noopener'>the web</a>", article, "outside links as links")
+        self.assertIn("<img src='/open?p=0&amp;f=docs/shots/a.png' alt='a shot' loading='lazy'>", article, "its picture as itself")
+        self.assertIn("<ol><li>first</li><li>second</li></ol><hr>", article, "numbered as numbered, a rule as a rule")
+        self.assertIn("<a href='/open?p=0&amp;u=http%3A%2F%2Flocalhost%3A5173%2Fcase' target='_blank' rel='noopener'>", article,
+                      "an address on this machine, through the localhost rewrite")
+        self.assertIn("<li><strong>Your test day, as worked out in <a href='/open?p=0&amp;f=docs/gear.md'>the gear</a>:</strong> fine, "
+                      "and <a href='/open?p=0&amp;f=docs/gear.md'><code>gear.md</code></a> as code.</li>", article,
+                      "bold around a link, as SnackStand's brief has it (the audit found its asterisks showing)")
+        for source in ("](", "# The", "1. first", "---", "**"):
+            self.assertNotIn(source, article, "no source on the page")
+        _, _, txt = self.fetch("/open?p=0&f=notes.txt")
+        self.assertIn("<pre class='plain'>Keep  this spacing\nand this line\n</pre>", txt, "a text file as written, not joined")
+        status, headers, _ = self.fetch("/open?p=0&f=book.pdf")
+        self.assertEqual((status, headers["Content-Type"], headers["Content-Security-Policy"]), (200, "application/pdf", None),
+                         "a PDF to the browser's own viewer, unsandboxed: a phone's viewer is a plugin a sandbox refuses")
+        _, headers, page = self.fetch("/open?p=0&f=page.html")
+        self.assertEqual(headers["Content-Security-Policy"], "sandbox allow-scripts", "a page runs as no origin")
+        self.assertIn("window.colony={send:", page, "with colony.send, as Chat gives it")
+        _, _, folder = self.fetch("/open?p=0&f=docs")
+        self.assertIn("<a class='frow' href='/open?p=0&amp;f=docs/shots'>📁 shots/</a>", folder, "a folder lists what is in it")
+        self.assertIn("<a class='frow' href='/open?p=0&amp;f=docs/brief.md'>📄 brief.md", folder)
+        _, _, shots = self.fetch("/open?p=0&f=docs/shots")
+        self.assertIn("<img src='/open?p=0&amp;f=docs/shots/a.png' alt='a.png' loading='lazy'>", shots, "its pictures, each a tap")
+        port = httpd.server_address[1]
+        case = "/open?p=0&u=" + urllib.parse.quote("http://localhost:5173/case", safe="")
+        self.assertEqual(self.fetch(case, follow=False)[1]["Location"], "http://localhost:5173/case", "from this machine, as it is")
+        httpd.lan = True
+        self.assertEqual(self.fetch(case, follow=False, Host=f"192.168.1.5:{port}")[1]["Location"], "http://192.168.1.5:5173/case",
+                         "from a phone, at the machine's own address")
+        httpd.lan = False
+        (self.root / "out").symlink_to("/etc")
+        for refused in ("/open?p=0&f=../../etc/hostname", "/open?p=0&f=/etc/hostname", "/open?p=0&f=out/hostname",
+                        "/open?p=7&f=notes.txt", "/open?p=-1&f=notes.txt", "/open?p=0&f=missing.md", "/open?p=0&u=javascript:alert(1)"):
+            self.assertEqual(self.fetch(refused)[0], 404, refused)
+        # a very long file: its first part, the whole a tap away, rendered, never its source; a cut-off preview never editable
+        (self.root / "long.md").write_text("# Long\n\n" + "".join(f"Line {k}.\n\n" for k in range(30)))
+        pins.add(self.root, "long.md", "Long", by="agent")
+        with patch.object(opener, "LONG", 60):
+            _, _, cut = self.fetch("/open?p=0&f=long.md")
+            _, _, whole = self.fetch("/open?p=0&f=long.md&whole=1")
+        self.assertIn("href='/open?p=0&amp;f=long.md&amp;whole=1'>Open the whole file</a>", cut)
+        self.assertNotIn("Line 29.", cut)
+        self.assertNotIn("/pin/edit", cut, "a cut-off preview is never editable")
+        self.assertIn("<p>Line 29.</p>", whole, "the whole file, rendered")
+        self.assertIn("/pin/edit", whole)
+        # the steward's own files open from its home, never read as project 0, and its page gets no colony.send
+        home = monitor.home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "plan.md").write_text("# The steward's plan\n")
+        (home / "page.html").write_text("<html><head></head><body>its page</body></html>")
+        _, _, plan = self.fetch("/open?p=steward&f=plan.md")
+        self.assertIn("<h1 id='the-stewards-plan'>The steward&#x27;s plan</h1>", plan)
+        self.assertIn("action='/open/comment'", plan)
+        self.assertNotIn("/pin/edit", plan)
+        _, headers, stewards = self.fetch("/open?p=steward&f=page.html")
+        self.assertNotIn("window.colony", stewards)
+        self.assertEqual(headers["Content-Security-Policy"], "sandbox allow-scripts")
+        self.assertEqual(self.fetch("/open?p=steward&f=notes.txt")[0], 404, "the steward's folder, not project 0's")
+        self.post("/open/comment", p="steward", f="plan.md", text="Fine by me", back="/open?p=steward&f=plan.md")
+        self.assertIn("Fine by me", " ".join(r["text"] for r in monitor.inbox()), "a comment there reaches the steward")
+
+    def test_every_file_link_the_person_taps_goes_through_the_opener_and_old_links_hand_over(self):
+        from colony import nest
+        board.track(self.root)
+        (self.root / "brief.md").write_text("# Brief\n")
+        (self.root / "shot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        p = pins.add(self.root, "brief.md", "The brief", by="agent")
+        pins.add(self.root, "http://localhost:5173", "The app", kind="url")
+        x = showcase.add(self.root, "The brief, shown", "the plan", "Read brief.md", link="brief.md")
+        shot = showcase.add(self.root, "A shot", "a picture", link="shot.png")
+        nest.join(self.root, "garden")
+        reg = board.registry()
+        pages = {v: board.render(reg, 0, v) for v in ("overview", "library", "showcase")}
+        pages["nest"] = board.nest_page(reg, "garden")
+        pages["chat"] = board.chat_prose(f"See [the brief]({self.root}/brief.md) and ![a shot]({self.root}/shot.png)", 0, self.root)
+        pages["since"] = board.since_html(0, self.root, {"at": "2000-01-01T00:00:00Z", "head": ""})
+        for name, page in pages.items():
+            for old in ("/pin/open", "/showcase/open", "/chat/file"):
+                self.assertNotIn(old, page, f"{name}: no file link by its old address")
+        pinned = f"href='/open?p=0&amp;f=brief.md&amp;pin={p['id']}'"
+        for name in ("overview", "library", "since"):
+            self.assertIn(pinned, pages[name], f"{name}: a pin opens through the opener")
+        self.assertIn(f"href='/open?p=0&amp;f=brief.md&amp;s={x['id']}'", pages["showcase"])
+        self.assertIn(f"href='/open?p=0&amp;f=brief.md&amp;s={x['id']}'", pages["since"], "a Since line, carrying its entry")
+        self.assertIn(f"<img class='shot' src='/open?p=0&amp;f=shot.png&amp;s={shot['id']}'", pages["showcase"])
+        self.assertIn("href='/open?p=0&amp;u=http%3A%2F%2Flocalhost%3A5173' target='_blank'", pages["library"])
+        self.assertIn("href='/open?p=0&f=brief.md' target='_blank' rel='noopener'>📄 the brief</a>", pages["chat"])
+        self.assertIn("/open?p=0&amp;f=brief.md", pages["nest"])
+        self.serve()
+        status, headers, _ = self.fetch(f"/showcase/open?p=0&id={x['id']}", follow=False)
+        self.assertEqual((status, headers["Location"]), (303, f"/open?p=0&f=brief.md&s={x['id']}"), "an old link hands over, its entry kept")
+        status, headers, _ = self.fetch(f"/pin/open?p=0&id={p['id']}", follow=False)
+        self.assertEqual((status, headers["Location"]), (303, f"/open?p=0&f=brief.md&pin={p['id']}"), "and a pin's, the pin kept")
+
+    def test_an_edit_that_meets_a_change_made_meanwhile_keeps_the_draft_and_overwrites_nothing(self):
+        board.track(self.root)
+        (self.root / "brief.md").write_text("# Brief\n\nFirst.\n")
+        (self.root / "loose.md").write_text("# Not pinned\n")
+        p = pins.add(self.root, "brief.md", "The brief", by="agent")
+        self.serve()
+        _, _, editor = self.fetch(f"/pin/edit?p=0&id={p['id']}")
+        opened = dict(re.findall(r"name='(mtime|size)' value='(\d+)'", editor))
+        self.assertEqual(set(opened), {"mtime", "size"}, "the form carries what the file was as it opened")
+        (self.root / "brief.md").write_text("# Brief\n\nFirst, and the agent's second.\n")        # the agent writes meanwhile
+        status, page = self.post("/pin/save", p=0, id=p["id"], text="# Brief\n\nMine.\n", **opened)
+        self.assertEqual(status, 409)
+        self.assertEqual((self.root / "brief.md").read_text(), "# Brief\n\nFirst, and the agent's second.\n", "nothing overwritten")
+        [draft] = (self.root / ".board" / "drafts").glob("brief-*.md")
+        self.assertEqual(draft.read_text(), "# Brief\n\nMine.\n", "the person's draft, kept on disk, named for the file and time")
+        self.assertEqual((draft.parent / ".gitignore").read_text(), "*\n", "never in git")
+        self.assertIn("Mine.", page)
+        self.assertIn("First, and the agent&#x27;s second.", page, "both shown")
+        told = [n for n in board.notes(self.root) if ".board/drafts/brief-" in n["text"]]
+        self.assertTrue(len(told) == 1 and told[0]["quiet"], "the agent hears where the draft is, quietly")
+        _, _, editor = self.fetch(f"/pin/edit?p=0&id={p['id']}")
+        now = dict(re.findall(r"name='(mtime|size|back)' value='([^']+)'", editor))
+        self.assertEqual(html.unescape(now["back"]), f"/open?p=0&f=brief.md&pin={p['id']}", "saved, back to its reading page")
+        status, after = self.post("/pin/save", p=0, id=p["id"], text="# Brief\n\nMine, again.\n", **dict(now, back=html.unescape(now["back"])))
+        self.assertEqual((self.root / "brief.md").read_text(), "# Brief\n\nMine, again.\n", "unchanged meanwhile: saved")
+        self.assertIn("<p>Mine, again.</p>", after, "back on its reading page")
+        _, _, loose = self.fetch("/open?p=0&f=loose.md")
+        self.assertNotIn("/pin/edit", loose, "unpinned: read-only, so a phone can't write any file in the project")
+        self.assertIn("action='/open/comment'", loose, "Comment only")
+
+    def test_each_tab_shows_its_own_thing_once_and_a_row_its_title_and_why(self):
+        board.track(self.root)
+        reg = board.registry()
+        front = board.render(reg, 0, "overview")
+        self.assertIn("<b>Vision</b>", front)
+        self.assertIn("Roadmap: 1/3", front)
+        for view in ("roadmap", "library", "showcase"):
+            page = board.render(reg, 0, view)
+            self.assertNotIn("<b>Vision</b>", page, f"{view}: the vision fold is the Overview's")
+            self.assertNotIn("Roadmap: 1/3", page, f"{view}: and the plan's count")
+        (self.root / "gone.md").write_text("# Gone\n")
+        pins.add(self.root, "gone.md", "An old draft", "kept for the record", by="agent")
+        (self.root / "gone.md").unlink()
+        library = board.render(reg, 0, "library")
+        self.assertIn("<span class='pintitle gone'><span class='pt'>📄 An old draft</span></span>", library,
+                      "a pin whose file left the project, named, with nothing to tap that leads nowhere")
+        self.assertIn("<div class='who'>no longer in the project</div>", library)
+
+    def test_a_showcase_card_is_three_lines_one_button_and_its_try_as_links(self):
+        board.track(self.root)
+        (self.root / "notes" / "screens").mkdir(parents=True)
+        (self.root / "notes" / "screens" / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (self.root / "notes" / "results.md").write_text("# Results\n")
+        (self.root / "report.pdf").write_bytes(b"%PDF-1.4 x")
+        x = showcase.add(self.root, "The report", "word " * 120, "Screenshots in notes/screens (at 1440 and 390); results in "
+                         "notes/results.md, not notes/gone.md, or the app at http://localhost:8765/.", link="report.pdf")
+        shot = showcase.add(self.root, "A screen", "the outbox", link="notes/screens/a.png")
+        showcase.add(self.root, "The atlas", "the economy now", link="https://claude.ai/artifact/abc")
+        page = board.render(board.registry(), 0, "showcase")
+        card = page.split(f"id='s-{x['id']}'")[1]
+        self.assertIn("<div class='what clamp'>", card, "what it is: three lines")
+        self.assertIn(">More</button>", card, "then More")
+        self.assertIn(f"<a class='open' href='/open?p=0&amp;f=report.pdf&amp;s={x['id']}' target='_blank' rel='noopener'>"
+                      "Open report.pdf</a>", card, "one button that says what it opens")
+        self.assertIn(f"<a href='/open?p=0&amp;f=notes/screens&amp;s={x['id']}'>notes/screens</a>", card, "Try's paths as links")
+        self.assertIn(f"<a href='/open?p=0&amp;f=notes/results.md&amp;s={x['id']}'>notes/results.md</a>,", card)
+        self.assertIn("not notes/gone.md, or", card, "a path not there stays words: no dead link")
+        self.assertIn("<a href='/open?p=0&amp;u=http%3A%2F%2Flocalhost%3A8765%2F' target='_blank' rel='noopener'>"
+                      "http://localhost:8765/</a>.", card, "an address, through the rewrite")
+        pic = page.split(f"id='s-{shot['id']}'")[1].split("<div class='card show'")[0]
+        self.assertIn(f"<img class='shot' src='/open?p=0&amp;f=notes/screens/a.png&amp;s={shot['id']}'", pic,
+                      "a picture fitted to the screen, a tap to open it whole")
+        self.assertNotIn("class='open'", pic, "the picture is its one way in")
+        self.assertIn(">Open the artifact on claude.ai</a>", page)
+        self.assertNotIn("Open it →", page)
+
+    def test_a_link_shown_again_is_one_card_its_earlier_showings_kept_under_it(self):
+        board.track(self.root)
+        (self.root / "atlas.pdf").write_bytes(b"%PDF-1.4 x")
+        first = self.cli("show", "Atlas v1", "--what", "the first cut", "--link", "atlas.pdf")
+        [a] = showcase.entries(self.root)
+        showcase.comment(self.root, a["id"], "The legend is too small")
+        second = self.cli("show", "Atlas v2", "--what", "every source in", "--try", "start on page 2", "--link", "atlas.pdf")
+        self.assertNotIn("fold", first.stdout)
+        self.assertIn("It becomes the card for atlas.pdf, its earlier showings (1) folded under it", second.stdout,
+                      "the agent hears that its new version took the card")
+        b = showcase.entries(self.root)[0]
+        page = board.render(board.registry(), 0, "showcase")
+        self.assertEqual(page.count("<div class='card show'"), 1, "one card for the deliverable")
+        card = page.split(f"id='s-{b['id']}'")[1]
+        self.assertLess(card.index("Atlas v2"), card.index("Shown before · 1"))
+        before = card.split("Shown before · 1")[1]
+        for kept in ("Atlas v1", "the first cut", "The legend is too small", board.local_day(a["at"])):
+            self.assertIn(kept, before, "its date, story and comments intact")
+        self.assertIn(f"href='/open?p=0&amp;f=atlas.pdf&amp;s={a['id']}'", before, "opened from the history fold: that showing")
+        self.assertEqual([x["id"] for x in showcase.entries(self.root)], [b["id"], a["id"]], "none deleted or merged")
+        since = board.since_html(0, self.root, {"at": "2000-01-01T00:00:00Z", "head": ""})
+        for x in (a, b):
+            self.assertIn(f"new to see: <a href='/open?p=0&amp;f=atlas.pdf&amp;s={x['id']}'", since, "Since lists each showing")
+
+    def test_a_comment_where_a_file_opens_is_on_what_it_was_opened_from_and_back_keeps_their_place(self):
+        board.track(self.root)
+        (self.root / "brief.md").write_text("# Brief\n")
+        (self.root / "loose.md").write_text("# Loose\n")
+        p = pins.add(self.root, "brief.md", "The brief", by="agent")
+        a = showcase.add(self.root, "Brief v1", "first", link="brief.md")
+        b = showcase.add(self.root, "Brief v2", "second", link="brief.md")
+        self.serve()
+        _, _, from_old = self.fetch(f"/open?p=0&f=brief.md&s={a['id']}")
+        self.assertIn("action='/showcase/comment'", from_old)
+        self.assertIn(f"name='id' value='{a['id']}'", from_old, "a showing keeps its identity")
+        self.post("/showcase/comment", p=0, id=a["id"], text="v1 read better", back=f"/open?p=0&f=brief.md&s={a['id']}&sent=1")
+        self.assertEqual([c["text"] for c in showcase.get(self.root, a["id"])["comments"]], ["v1 read better"])
+        self.assertEqual(showcase.get(self.root, b["id"])["comments"], [])
+        self.assertIn("action='/pin/comment'", self.fetch(f"/open?p=0&f=brief.md&pin={p['id']}")[2], "from a pin: on the pin")
+        self.post("/open/comment", p=0, f="loose.md", text="Is this still current?", back="/open?p=0&f=loose.md")
+        [n] = [n for n in board.notes(self.root) if (n["anchor"] or {}).get("file")]
+        self.assertEqual((n["anchor"], n["author"]), ({"file": "loose.md"}, "person"))
+        self.assertIn("on file loose.md: On loose.md, opened on the board: Is this still current?", board.render_notes([n], "Notes:"))
+        self.assertEqual(self.post("/open/comment", p=0, f="../../etc/hostname", text="x", back="/")[0], 404)
+        self.assertIn("<p class='sent'>Sent: it reaches the agent as a message.</p>", self.fetch("/open?p=0&f=loose.md&sent=1")[2])
+        _, _, came = self.fetch(f"/open?p=0&f=brief.md&pin={p['id']}", Referer=self.base + "/?p=0&view=library")
+        self.assertIn("href='/?p=0&amp;view=library' onclick='return readBack(this, 1)'>‹ Library</a>", came,
+                      "back the way they came, in the browser's history: their place on the page kept")
+        _, _, cold = self.fetch(f"/open?p=0&f=brief.md&s={b['id']}")
+        self.assertIn(f"href='/?p=0&amp;view=showcase#s-{b['id']}' onclick='return readBack(this, 0)'>‹ Showcase</a>", cold,
+                      "opened from nowhere: back to where it lives")
+
+    def test_agents_see_the_headings_in_use_and_each_pins_heading(self):
+        board.track(self.root)
+        for name in ("places", "people", "notes"):
+            (self.root / f"{name}.md").write_text(f"# {name}\n")
+        self.assertIn('Headings in use: "World" (1)', self.cli("pin", "places.md", "--group", "World").stdout)
+        self.cli("pin", "people.md", "--group", "World")
+        self.assertIn('Headings in use: "World" (2), under none (1)', self.cli("pin", "notes.md").stdout)
+        listing = self.cli("pins").stdout
+        self.assertLess(listing.index("World:"), listing.index("places.md"))
+        self.assertLess(listing.index("people.md"), listing.index("Under no heading:"))
+        self.assertLess(listing.index("Under no heading:"), listing.index("notes.md"))
+
+    def test_the_sweep_lists_every_pin_and_entry_across_the_projects_each_a_tap(self):
+        from colony import opener
+        board.track(self.root)
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
+        (shop / "ROADMAP.md").write_text(ROADMAP)
+        board.track(shop)
+        (self.root / "brief.md").write_text("# Brief\n")
+        (self.root / "old.md").write_text("# Old\n")
+        p = pins.add(self.root, "brief.md", "The brief", by="agent")
+        pins.add(self.root, "old.md", "Old notes", by="agent")
+        (self.root / "old.md").unlink()
+        x = showcase.add(self.root, "The brief, shown", "the plan", link="brief.md")
+        bare = showcase.add(shop, "The menu", "no link to it")
+        page = opener.sweep(board.registry())
+        self.assertIn("4 in all.", page)
+        self.assertIn(f"href='/open?p=0&amp;f=brief.md&amp;pin={p['id']}'", page, "as the Library opens it")
+        self.assertIn(f"href='/open?p=0&amp;f=brief.md&amp;s={x['id']}'", page, "as the Showcase opens it")
+        self.assertIn("📄 Old notes · no longer in the project", page, "named, not a dead link")
+        self.assertIn(f"href='/?p=1&amp;view=showcase#s-{bare['id']}'", page, "an entry with no link opens its card")
+        self.assertLess(page.index("<h2>plants</h2>"), page.index("<h2>shop</h2>"))
 
 
 class ClearTest(BoardBase):
@@ -6654,7 +6993,9 @@ class PhonePageTest(HoursBase):
         self.assertIn("<h3>History</h3>", page)
         self.assertNotIn("Mail with other projects", page, "no mail, no section")
 
-    def test_the_stewards_page_lists_projects_first_then_what_waits_project_by_project_and_folds_its_log(self):
+    def test_the_stewards_page_keeps_its_own_parts_and_what_waits_is_a_count_a_tap_from_needs_you(self):
+        # the sections review (2026-10-28): its list of projects repeated the chip row and the sidebar, and its Needs you
+        # (5,178 px on a phone) the front page's and the Needs you page's; what it said, follows and decided are its own
         shop = self.shop()
         with self.clock(14):
             for k in range(5):
@@ -6665,11 +7006,15 @@ class PhonePageTest(HoursBase):
             monitor.muted(True)
             with patch.object(monitor, "ensure"):
                 page = board.monitor_page(board.registry())
+            needs = board.needs_page(board.registry())
         self.assertIn("you decide · muted</span>", page, "its state in the menu's words beside its name")
         self.assertNotIn("<p class='muted'>Muted:", page, "not four lines on what that means")
-        projects_, needs = page.split("<h2>Needs you</h2>")
-        self.assertIn("<b>plants</b>", projects_, "every project at a glance, first")
-        self.assertIn(">R2 water log", projects_)
+        own = page.split("<main", 1)[1]                      # the page itself, past the sidebar's own list of projects
+        self.assertIn("<a href='/needs-you'>6 waiting →</a>", own, "how much waits, a tap from Needs you")
+        for gone in ("<h2>Needs you</h2>", "Plants question 0?", "<h2>Projects</h2>", ">R2 water log", "Archived:"):
+            self.assertNotIn(gone, own)
+        self.assertIn("<h3>Projects it follows</h3>", own)
+        # Needs you itself, on its own page, reads as it did on the steward's
         self.assertLess(needs.index(">plants</a>"), needs.index("Plants question 0?"))
         self.assertLess(needs.index("Plants question 4?"), needs.index(">shop</a>"), "each project's own, together")
         self.assertEqual(self.NUM.findall(needs)[-1], ("1", "Open on Sundays?"), "numbered as its own page numbers it")
@@ -7807,3 +8152,67 @@ class FirstRunTest(BoardBase):
         threading.Timer(0.3, later, [rollout, said]).start()
         self.assertEqual(providers.get("codex").turn_text({"turn_id": "t1", "transcript_path": str(rollout)}),
                          ("t1", "Which format?"), "Codex without its last words: its rollout, read again")
+
+
+class ReaderLookTest(HoursBase):
+    """What is new to see, by the person's last look (P2), and colony's audit of every page, which never counts as one
+    (plan §8)."""
+
+    def test_new_to_see_is_a_since_line_while_newer_than_their_last_look_never_a_standing_block(self):
+        (self.root / "brief.md").write_text("# Brief\n")
+        pins.add(self.root, "brief.md", "The brief", by="agent")
+        with self.clock(10, day=5):
+            showcase.add(self.root, "Seen already", "shown before their last look")
+        with self.clock(14, day=6):
+            board.render(board.registry(), 0)                          # their last look, yesterday
+        with self.clock(9):
+            x = showcase.add(self.root, "The brief, shown", "the plan in one read", link="brief.md")
+        with self.clock(15):
+            page = board.render(board.registry(), 0)
+        since = page.split("Since you were last here")[1].split("</div>")[0]
+        self.assertIn(f"new to see: <a href='/open?p=0&amp;f=brief.md&amp;s={x['id']}'>The brief, shown</a>", since,
+                      "a line in Since, linked through the opener")
+        self.assertNotIn("Seen already", since, "only what is newer than their last look")
+        self.assertNotIn("New to see</h", page, "no standing block calling one entry new for weeks")
+        library = page.split("<div class='pinned' id='pinned'>")[1]
+        self.assertNotIn("Not under a heading", library, "the Overview's Library: a direct list, its newest")
+        self.assertIn("<span class='pt'>📄 The brief</span>", library)
+
+    def test_the_audit_reads_every_page_and_file_without_counting_as_the_persons_look(self):
+        # plan §8: "the crawl of every pin and entry must not count as the person's look ... a test proves the records
+        # are unchanged after it and that an unseen showing is still new"
+        (self.root / "brief.md").write_text("# Brief\n\nSee [the gear](gear.md).\n")
+        (self.root / "gear.md").write_text("# Gear\n")
+        with self.clock(14, day=6):
+            board.render(board.registry(), 0)                          # the person's last look, yesterday
+            hours.seen()
+        with self.clock(9):
+            x = showcase.add(self.root, "The brief, shown", "the plan in one read", link="brief.md")
+            pins.add(self.root, "gear.md", "Gear", by="agent")
+        records = lambda: {name: (board.home() / name).read_bytes() for name in ("person-seen", "today.json")}
+        before = records()
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        get = lambda path, **h: urllib.request.urlopen(urllib.request.Request(base + path, headers=dict(
+            {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"}, **h))).read().decode("utf-8", "replace")
+        audit = {"X-Colony-Audit": "read-only"}
+        with self.clock(15):                                           # the audit, today
+            pages = [get(path, **audit) for path in ("/?p=0", "/?p=0&view=library", "/?p=0&view=showcase", "/sweep")]
+            links = {html.unescape(h) for page in pages for h in re.findall(r"href='(/open\?[^'#]+)", page)}
+            self.assertTrue({f"/open?p=0&f=brief.md&s={x['id']}", "/open?p=0&f=gear.md"} <= {l.split("&pin=")[0] for l in links})
+            for link in links:
+                self.assertIn("<", get(link, **audit))
+        self.assertEqual(records(), before, "their hours and their last looks, as they were")
+        with self.clock(9, day=8):                                    # the person's own look, the next day
+            look = get("/?p=0")
+        self.assertIn(f"new to see: <a href='/open?p=0&amp;f=brief.md&amp;s={x['id']}'", look,
+                      "an unseen showing is still new: the audit's look was never taken for theirs")
+        self.assertNotEqual(records(), before, "their own look is kept")
+        seen = (board.home() / "person-seen").read_bytes()
+        with self.clock(10, day=8):                                   # only straight from this machine
+            get("/?p=0", **audit, **{"Tailscale-User-Login": "person@example.com"})
+        self.assertNotEqual((board.home() / "person-seen").read_bytes(), seen,
+                            "through Tailscale Serve, with the person's identity on it, a look is always theirs")
