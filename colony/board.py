@@ -2576,8 +2576,10 @@ def trouble_bar():
 
 
 def shell(reg, pid, body, wide=False):
+    from . import media
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
             f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
+            f"<link rel='stylesheet' href='/static/media.css?v={media.version()}'><script type='module' src='/static/media.js?v={media.version()}'></script>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{trouble_bar()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
 
@@ -2684,6 +2686,7 @@ PLAYER = """
     } catch (e) {}
     while (ahead.size > 6) ahead.delete(ahead.keys().next().value); };
   const go = async (url, how = {}) => {
+    if (document.documentElement.classList.contains('media-open')) return;
     const mine = ++going, method = (how.method || 'GET').toUpperCase(), root = document.documentElement;
     root.classList.add('going');                   // on its way: the page dims, so a tap is seen to have landed
     let r = null, html = '', got = url, redirected = false;
@@ -2691,17 +2694,20 @@ PLAYER = """
     if (hit && Date.now() - hit.at < 30000) { ahead.delete(url); html = hit.html; got = hit.url; }    // fetched ahead: at once
     else {
       try { r = await fetch(url, {method, body: how.body, credentials: 'same-origin'}); } catch (e) {}
+      if (document.documentElement.classList.contains('media-open')) { root.classList.remove('going'); return; }
       if (mine !== going) return;
       root.classList.remove('going');
       if (!r) { if (method === 'GET') location.href = url; return; }
       if (!(r.headers.get('content-type') || '').includes('text/html')) { if (method === 'GET') location.href = r.url; return; }
       html = await r.text(); got = r.url; redirected = r.redirected;
+      if (document.documentElement.classList.contains('media-open')) { root.classList.remove('going'); return; }
     }
     root.classList.remove('going');
     const doc = new DOMParser().parseFromString(html, 'text/html');
     if (mine !== going) return;
     if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = got; return; }
     const from = location.href, to = method !== 'GET' && !redirected ? location.href : got;
+    if (document.documentElement.classList.contains('media-open')) return;
     leave(); if (window.colonyPlayer) window.colonyPlayer.leave();
     try {
       if (how.push !== false) history.replaceState(Object.assign({}, history.state, {colony: 1, y: scrollY}), '');
@@ -2749,9 +2755,9 @@ PLAYER = """
     if (method === 'GET') { action.search = new URLSearchParams(d).toString(); go(action.href); }
     else go(action.href, {method, body: multi ? d : new URLSearchParams(d)});
   });
-  window.colonyNav = {keep: O, prefetch, go: (u) => busy() ? go(new URL(u, location.href).href) : (location.href = u),
-    replace: (u) => busy() ? go(new URL(u, location.href).href, {replace: true}) : location.replace(u),
-    reload: () => busy() ? go(location.href, {replace: true}) : location.reload()};
+  window.colonyNav = {keep: O, prefetch, go: (u) => document.documentElement.classList.contains('media-open') ? Promise.resolve() : busy() ? go(new URL(u, location.href).href) : (location.href = u),
+    replace: (u) => document.documentElement.classList.contains('media-open') ? Promise.resolve() : busy() ? go(new URL(u, location.href).href, {replace: true}) : location.replace(u),
+    reload: () => document.documentElement.classList.contains('media-open') ? Promise.resolve() : busy() ? go(location.href, {replace: true}) : location.reload()};
 })();
 (() => {
   if (window.colonyPlayer || !window.colonyNav) return;
@@ -3986,9 +3992,23 @@ def chat_file(key, root, target):
     return got[0] if got else None
 
 
+def chat_attachments(key, root, text):
+    from . import media
+    out = []
+    for target in re.findall(r'^Attached: (.+)$', text, flags=re.M):
+        target = target.strip()
+        url = chat_file(key, root, target)
+        if url and target.lower().endswith(IMAGES):
+            out.append(media.picture(url, Path(target).name))
+        elif url and target.lower().endswith('.pdf'):
+            out.append(media.pdf(url, Path(target).name))
+    return ''.join(out)
+
+
 def chat_prose(text, key=None, root=None):
     """An agent's prose in the chat: markdown as the page shows it, code blocks kept as they are, links live; a
     picture in the project shown as itself (![what](path)), and a link to any other file there (a PDF) opens it."""
+    from . import media
     out = []
     for k, part in enumerate(re.split(r"^```[^\n]*\n", text, flags=re.M)):
         if k % 2:                                            # inside a fence, up to its closing one
@@ -4000,16 +4020,21 @@ def chat_prose(text, key=None, root=None):
 
     def picture(m):
         url = chat_file(key, root, m.group(2))
-        return (f"<a class='shot' href='{url}' target='_blank' rel='noopener'><img src='{url}' alt='{m.group(1)}' loading='lazy'></a>"
+        return (media.picture(url, html.unescape(m.group(1)))
                 if url and m.group(2).lower().endswith(IMAGES) else m.group(0))
 
     def link(m):
         url = chat_file(key, root, m.group(2)) if not m.group(2).startswith("http") else None
         if url:
+            if m.group(2).lower().endswith('.pdf'):
+                return media.pdf(url, html.unescape(m.group(1)))
+            if m.group(2).lower().endswith(IMAGES):
+                return media.picture(url, html.unescape(m.group(1)))
             return f"<a class='file' href='{url}' target='_blank' rel='noopener'>📄 {m.group(1)}</a>"
         return f"<a href='{m.group(2)}' target='_blank' rel='noopener'>{m.group(1)}</a>"
     page = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", picture, page)
-    return re.sub(r"(?<!!)\[([^\]]+)\]\(((?:https?://|/)[^)\s]+)\)", link, page)
+    page = re.sub(r"(?<!!)\[([^\]]+)\]\(((?:https?://|/)[^)\s]+|[^)\s]+\.(?:pdf|png|jpe?g|gif|webp|heic|svg))\)", link, page, flags=re.I)
+    return re.sub(r"<div class='mdtable'><table>.*?</table></div>", lambda m: media.table(m[0]), page, flags=re.S)
 
 
 NOTE_FROM = {"monitor": "The person's steward", "suggestion": "The steward suggests", "colony": "Colony",
@@ -4620,9 +4645,7 @@ def chat_feed(key, root, shown=SHOWN):
     for i, t in enumerate(turns):
         k = f"{e(t['at'])}"
         if t["from"] == "you":                          # with the pictures it sent, as pictures
-            shots = "".join(f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
-                            for a in re.findall(r"^Attached: (.+)$", t["text"], flags=re.M)
-                            if a.strip().lower().endswith(IMAGES) and (u := chat_file(key, root, e(a.strip()))))
+            shots = chat_attachments(key, root, t['text'])
             to = REPLY.match(t["text"])
             said = t["text"][to.end():] if to else t["text"]
             out.append(f"<div class='msg you'>" + (f"<div class='re'>↩ {e(to.group(1))}</div>" if to else "")
@@ -4892,9 +4915,10 @@ CHAT = """
   window.addEventListener('scroll', () => { stick = atEnd(); ended(); }, {passive: true});
   // The latest is the last message. Typing, the page has room below it (so it never ends above the keyboard, where a
   // phone measures the visible part short), and the latest is brought just above the box.
-  const typingNow = () => document.body.classList.contains('typing');
+  const typingNow = () => document.body.classList.contains('typing') || document.documentElement.classList.contains('media-open');
   const lastBottom = () => { const el = box.lastElementChild; return el ? el.getBoundingClientRect().bottom + window.scrollY : 0; };
   const toEnd = () => { if (!typingNow()) return window.scrollTo(0, document.body.scrollHeight);
+    if (document.documentElement.classList.contains('media-open')) return;
     const by = lastBottom() + form.offsetHeight + 24 - shownTo();
     // a scroll the phone makes while its keyboard is up shifts the whole page for a moment (the bar at the top slips
     // away and back): only a real move is made, by what it needs from where the eye is (counting the keyboard's pan
@@ -4930,7 +4954,7 @@ CHAT = """
   // caught on the way down: a scroll inside a part (the floating Needs you scrolls in itself) never reaches the window
   ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true, capture: true}));
   async function refresh() {
-    if (!box.isConnected || Date.now() - moving < 1200) return;
+    if (!box.isConnected || document.documentElement.classList.contains('media-open') || Date.now() - moving < 1200) return;
     // an answer being written in the conversation (to what it needs of the person) is never redrawn away
     if ([...box.querySelectorAll('textarea')].some((t) => t.value.trim()) || box.contains(document.activeElement) &&
         document.activeElement.matches('textarea, select, input')) return;
@@ -4938,8 +4962,8 @@ CHAT = """
       const r = await fetch('/chat/feed?p=' + key + (shown ? '&n=' + shown : ''), {cache: 'no-store',
         headers: tag ? {'If-None-Match': tag} : {}});
       if (r.status === 304 || !r.ok) return;
-      tag = r.headers.get('ETag') || '';
-      const html = await r.text(); if (html === last) return;
+      const html = await r.text(); if (document.documentElement.classList.contains('media-open')) return;
+      tag = r.headers.get('ETag') || ''; if (html === last) return;
       // a part being read stays in view as replies land under it: the page keeps its place rather than following them
       const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick && !box.querySelector('.say.reading'), was = lastBottom();
       const shut = [...box.querySelectorAll('details:not([open])')].map((d) => d.dataset.k);   // what came open, folded by them
@@ -4955,6 +4979,7 @@ CHAT = """
       // make it new: an open Needs you was swapped for a fresh one at each update, its place in it lost, a tap on it too
       // (and every reply's ▷, marked as resting, with its row)
       const have = new Map(), as = (h) => h.replace('class="say reading"', 'class="say"').replace(/ open=""/g, '')
+        .replace(/<span class="media-pdf-preview"[^>]*>[\\s\\S]*?<\\/span>/g, '<span class="media-pdf-preview"></span>')
         .replace(/^(<details[^>]*?) style="[^"]*"/, '$1').replace(/ data-on="play"| data-p="false"/g, '');
       [...box.children].forEach((c) => { if (!c.classList.contains('mine')) {
         const k = as(c.outerHTML); have.set(k, (have.get(k) || []).concat([c])); } });
@@ -5096,7 +5121,7 @@ CHAT = """
   // a part's words for the voice, code left out: a copy apart from the page has no layout, so its innerText ran each
   // paragraph into the next ("twice.A command"), and its sentences could not be told apart; each paragraph, item and
   // heading now ends with a blank line, so a clip is a sentence or two as the voice is meant to start
-  const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre').forEach((p) => p.remove());
+  const plain = (els) => els.map((el) => { const c = el.cloneNode(true); c.querySelectorAll('pre, .media-expand, .media-pdf-preview').forEach((p) => p.remove());
     c.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, tr, br').forEach((b) => b.after('\\n\\n'));
     return c.textContent; }).join('\\n\\n').replace(/[*_`#>|]/g, '').trim();
   const KOKORO = box.dataset.voice === '1', picker = document.getElementById('kvoice');
@@ -5228,7 +5253,7 @@ CHAT = """
   setInterval(() => {
     if (!box.isConnected) return;
     // (the line's sheet open over the chat hides it: what is behind the shade isn't being read)
-    const covered = !!document.querySelector('#cplayer .cpsheet:not([hidden])');
+    const covered = document.documentElement.classList.contains('media-open') || !!document.querySelector('#cplayer .cpsheet:not([hidden])');
     const waiting = document.visibilityState === 'visible' && P.quiet() && !covered ? P.unheard(key) : new Map();
     if (!waiting.size) { shownSince.clear(); return; }
     const top = viewTop(), bottom = viewBottom(), t0 = Date.now(), turns = new Map(), last = new Map();
@@ -8610,7 +8635,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def _file(self, key, root, path):
+    def _file(self, key, root, path, download=False):
         """A project's file as the browser's own viewer shows it: a page sandboxed (with its colony.send, never the
         steward's), a PDF not (a phone's PDF viewer is a plugin, which a sandbox refuses: a blank page)."""
         data = path.read_bytes()
@@ -8618,7 +8643,7 @@ class Handler(BaseHTTPRequestHandler):
             data = page_with_send(key, root, path, data)
         self.send_response(200)
         self.send_header("Content-Type", pins.content_type(path.name))
-        self.send_header("Content-Disposition", inline(path.name))
+        self.send_header("Content-Disposition", inline(path.name).replace('inline;', 'attachment;', 1) if download else inline(path.name))
         if path.suffix.lower() != ".pdf":
             self.send_header("Content-Security-Policy", SANDBOX)
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -8641,7 +8666,7 @@ class Handler(BaseHTTPRequestHandler):
         if not path or not path.exists():
             return self._send(404, b"the file is gone")
         if opener.kind(path) == "raw":
-            return self._file(key, root, path)
+            return self._file(key, root, path, download=one('download') == '1')
         return self._send(200, opener.page(reg, key, root, path, pin_id=one("pin"), entry_id=one("s"), whole=bool(one("whole")),
                                            referer=self.headers.get("Referer", ""), sent=bool(one("sent"))).encode())
 
@@ -8879,6 +8904,19 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/css; charset=utf-8")
             self.send_header("Cache-Control", "public, max-age=31536000, immutable")   # its address changes with it
             self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            return self.wfile.write(data)
+        if url.path.startswith('/static/'):
+            from . import media
+            asset = media.asset(url.path.removeprefix('/static/'))
+            if asset is None:
+                return self._send(404, b'not here')
+            data, kind = asset
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Cache-Control', 'public, max-age=3600')
+            self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             return self.wfile.write(data)
         if url.path == "/home/feed":

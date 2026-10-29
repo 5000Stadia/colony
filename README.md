@@ -73,6 +73,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
   nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
   without it, the phone's own voice reads.
+- **Pictures, PDFs and tables in Chat:** a corner button opens a fullscreen viewer that stays open through
+  phone rotation. Start fitted to the width, zoom to 1.5×, 2×, 2.5× or 3×, and scroll within the viewer.
+  Pictures and PDFs have Download; closing returns to the same place in Chat.
 - **The front page:** every project, those waiting on you first, each with its line (working, idle, what it's on),
   its measures, and what it needs of you right under it, answered there with a tap or a reply.
 - **Waiting on you:** decisions a project put to you (gates, each with tap answers, **Choose for me** where

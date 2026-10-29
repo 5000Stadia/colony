@@ -1259,8 +1259,8 @@ class ChatTest(BoardBase):
         shot.write_bytes(b"\x89PNG")
         (self.root / "report.pdf").write_bytes(b"%PDF")
         said = board.chat_prose(f"See ![the gap]({shot}) and [the report]({self.root}/report.pdf), not ![this](/etc/hostname)", 0, self.root)
-        self.assertIn("<img src='/open?p=0&f=.board/uploads/gap.png'", said, "through the opener, as every file link (R126)")
-        self.assertIn("href='/open?p=0&f=report.pdf' target='_blank' rel='noopener'>📄 the report</a>", said)
+        self.assertIn("<img src='/open?p=0&f=.board/uploads/gap.png'", html.unescape(said), "through the opener, as every file link (R126)")
+        self.assertIn("href='/open?p=0&f=report.pdf' target='_blank' rel='noopener'>📄 the report</a>", html.unescape(said))
         self.assertIn("![this](/etc/hostname)", said, "outside the project: left as words")
         self.assertIsNone(board.chat_file(0, self.root, "../../etc/hostname"))
         self.assertIsNone(board.chat_file(0, self.root, "/etc/hostname"))
@@ -9390,3 +9390,108 @@ class MigrateTest(BoardBase):
         actions = [text.index(x) for x in ("To install here:", "Sign in again", "Then enter again:", "Then start colony:")]
         self.assertEqual(actions, sorted(actions))
         self.assertIn("sign in first", text)
+
+class ChatMediaTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        (self.root / 'wide.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="teal"/><text x="40" y="90" font-size="50" fill="white">A wide picture</text></svg>')
+        objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>']
+        for page, stream in ((3, 4), (5, 6), (7, 8)):
+            objects.append(f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 9 0 R >> >> /Contents {stream} 0 R >>'.encode())
+            text = f'BT /F1 32 Tf 40 700 Td (Page {(page - 1) // 2}) Tj ET'.encode()
+            objects.append(f'<< /Length {len(text)} >>\nstream\n'.encode() + text + b'\nendstream')
+        objects.append(b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+        data, offsets = b'%PDF-1.4\n', [0]
+        for i, obj in enumerate(objects, 1):
+            offsets.append(len(data)); data += f'{i} 0 obj\n'.encode() + obj + b'\nendobj\n'
+        start = len(data)
+        data += f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode()
+        data += b''.join(f'{offset:010d} 00000 n \n'.encode() for offset in offsets[1:])
+        data += f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{start}\n%%EOF\n'.encode()
+        (self.root / 'three-pages.pdf').write_bytes(data)
+
+    def serve_media(self):
+        prose = board.chat_prose('![Wide picture](wide.svg)\n\n[Three page PDF](/' + str((self.root / 'three-pages.pdf')).lstrip('/') + ')\n\n'
+                                 '| Item | Product category | Shipping and packing instructions | Package dimensions | Unit price | Storage locations | Ready status |\n|---|---|---|---|---|---|---|\n'
+                                 '| 1 | Outdoor lantern and spare battery bundle | Pack the lantern in a padded box, label the spare batteries, and include the illustrated setup guide. | Large | 25 | 45; 6/6 bins | Ready |\n\n'
+                                 '| Another | Independent chart |\n|---|---|\n| Long identifier | ' + 'a' * 150 + ' |', 0, self.root)
+        # Execute real NAV, CSS and media code, without starting the live player or any model/voice service.
+        nav = board.PLAYER[:board.PLAYER.index('\n})();') + len('\n})();')]
+        normalize = board.CHAT.split('as = (h) => ', 1)[1].split(';\n', 1)[0]
+        page = ("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<link rel='stylesheet' href='/static/board.css'><link rel='stylesheet' href='/static/media.css'>"
+                "<script>window.colonyPlayer={busy:()=>true,leave(){},placed(){}};</script><script>" + nav + "</script>"
+                + '<script>window.mediaNormalize = (h) => ' + normalize + '; window.mediaIncoming = ' + json.dumps(prose).replace('</', '<\\/') + ';</script>'
+                "<script type='module' src='/static/media.js'></script><main><div style='height:650px'></div>"
+                "<div class='chat'><p>" + ('An ordinary sample message wraps naturally as the viewport changes. ' * 40)
+                + "</p><div class='say reading' id='media-anchor'>" + prose + "</div></div><div style='height:800px'></div></main>"
+                "<form id='media-composer' class='composer' style='position:fixed;bottom:0;left:12px;right:12px;margin:0'><textarea aria-label='Message'>A draft stays here</textarea></form>").encode()
+        class Handler(board.Handler):
+            def _get(self):
+                if self.path == '/media-fixture':
+                    return self._send(200, page)
+                return super()._get()
+
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        return f'http://127.0.0.1:{server.server_address[1]}'
+
+    def test_media_previews_and_controls_keep_the_existing_file_boundary(self):
+        from colony import media
+        text = board.chat_prose('![Picture](wide.svg)\n\n[PDF](three-pages.pdf)\n\n| A | B |\n|---|---|\n| 1 | 2 |', 0, self.root)
+        for kind in ('image', 'pdf', 'table'):
+            self.assertIn(f"data-media='{kind}'", text)
+        self.assertEqual(text.count('class=\'media-expand\''), 3)
+        attached = board.chat_attachments(0, self.root, f'Attached: {self.root}/wide.svg\nAttached: {self.root}/three-pages.pdf')
+        self.assertIn("data-media='image'", attached)
+        self.assertIn("data-media='pdf'", attached)
+        outside = board.chat_prose('![secret](/etc/hostname)\n\n[secret](/etc/secret.pdf)\n\n[remote](https://example.com/x.pdf)', 0, self.root)
+        self.assertNotIn('data-media=', outside)
+        self.assertNotIn('data-src=', outside)
+        for path in ('../board.py', 'pdfjs/6.4.299/../../board.py', 'pdfjs/6.4.299/pdf.sandbox.mjs', 'pdfjs/6.4.299/wasm/quickjs-eval.wasm'):
+            self.assertIsNone(media.asset(path))
+        self.assertTrue(media.asset('pdfjs/6.4.299/pdf.mjs')[0].startswith(b'/**'))
+        base = self.serve_media()
+        for name in ('wide.svg', 'three-pages.pdf'):
+            response = urllib.request.urlopen(base + '/open?p=0&f=' + name + '&download=1')
+            self.assertTrue(response.headers['Content-Disposition'].startswith('attachment;'))
+            self.assertIn(name, response.headers['Content-Disposition'])
+        for path in ('/open?p=0&f=/etc/hostname&download=1', '/open?p=0&f=missing.pdf&download=1', '/static/../board.py'):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(base + path)
+            self.assertEqual(error.exception.code, 404)
+
+    def test_pdf_and_viewer_assets_survive_the_migration_zipapp(self):
+        from colony import migrate
+        target = Path(self.tmp.name) / 'program'; target.mkdir()
+        archive = migrate._pyz(target)
+        result = subprocess.run([sys.executable, '-I', '-c',
+                                 "import sys; sys.path.insert(0, sys.argv[1]); from colony import media; "
+                                 "assert '.pyz/' in media.__file__; "
+                                 "assert b'media-viewer' in media.asset('media.js')[0]; "
+                                 "assert media.asset('pdfjs/6.4.299/pdf.worker.mjs')[0]; "
+                                 "assert media.asset('pdfjs/6.4.299/standard_fonts/FoxitSerif.pfb')[0]", str(archive)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_install_wheel_includes_every_viewer_and_pdf_asset(self):
+        import zipfile
+        from colony import media
+        dest = Path(self.tmp.name) / 'wheel'; dest.mkdir()
+        result = subprocess.run([sys.executable, '-I', '-c', 'import sys; from setuptools.build_meta import build_wheel; build_wheel(sys.argv[1])', str(dest)],
+                                cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with zipfile.ZipFile(next(dest.glob('*.whl'))) as wheel:
+            expected = {'media.js', 'media.css', 'pdfjs-assets.json'} | set(json.loads(media.STATIC.joinpath('pdfjs-assets.json').read_text()))
+            self.assertTrue({'colony/static/' + name for name in expected} <= set(wheel.namelist()))
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_phone_media_fit_zoom_rotation_download_and_scroll_anchor(self):
+        result = subprocess.run(['node', str(ROOT / 'tests/media_viewer.js'), self.serve_media()], text=True,
+                                capture_output=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS phone image, chart and multipage PDF', result.stdout)
