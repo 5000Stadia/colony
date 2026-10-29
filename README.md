@@ -23,6 +23,20 @@ the board.
 `colony stop` ends everything. `~/colony/start` brings the board back, and each console returns to its
 conversation when you open it.
 
+### Moving to a fresh machine
+
+`colony migrate --list` shows the folders, conversations and settings to take, their sizes, and what stays
+behind. It also names home-folder files referenced by services or scheduled jobs outside the archive;
+copy those separately. For a copy to rely on before wiping a drive, run `colony stop`, then
+`colony migrate --pack /path/to/another-disk`.
+
+On the new machine, use the same username and home path, then run
+`python3 /path/to/another-disk/colony.pyz migrate --unpack /path/to/archive`. It restores the projects and
+their conversations, reports each setup step, and tells you what to install, sign in to and enter again
+before starting the board. Provider sign-ins and Colony connection keys stay behind; a project's own key
+files travel with it, so keep the archive private. Python environments, dependencies and voice files are
+made again. Moving to a different home path comes later.
+
 ### The board from anywhere, safely (Tailscale)
 
 The board has no login of its own, so never put it on the internet. [Tailscale](https://tailscale.com) (free

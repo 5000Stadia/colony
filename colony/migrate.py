@@ -22,6 +22,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -357,8 +358,38 @@ def _outside(plan):
             if str(p) not in met and (p.exists() or p.is_symlink())]
 
 
+def _strays(plan, machine):
+    """Existing home-folder paths referenced by services/cron, outside all packed roots. Only name them: unrelated
+    project code is never silently added to a migration. Shell words keep quoted paths with spaces together."""
+    text = machine["crontab"]
+    for part in plan.parts:
+        if part["kind"] == "service":
+            try:
+                text += "\n" + Path(part["path"]).read_text(errors="replace")
+            except OSError:
+                pass
+    home, found = str(Path.home()), set()
+    text = text.replace("%h", home).replace("${HOME}", home).replace("$HOME", home)
+    for line in text.splitlines():
+        words = shlex.shlex(line, posix=True, punctuation_chars=";&|<>()")
+        words.whitespace_split = True
+        try:
+            for word in words:
+                word = os.path.expanduser(word)
+                start = word.find(home + "/")
+                if start < 0:
+                    continue
+                path = Path(word[start:]).resolve()
+                if path.exists() and not any(path == p["path"] or _under(path, p["path"]) for p in plan.parts):
+                    found.add(str(path))
+        except ValueError:                              # an unfinished quoted command cannot be read as shell words
+            continue
+    return sorted(found)
+
+
 def manifest(plan, reg=None):
     """What the archive holds and leaves out, for the person and for the unpack: of a key, only its name."""
+    settings = machine(reg)
     return {"colony_migrate": FORMAT, "made": board.now(), "machine_name": socket.gethostname(),
             "user": os.environ.get("USER", ""), "home": str(Path.home()), "colony_home": str(board.home()),
             "program": str(program()) if program() else None,
@@ -367,7 +398,7 @@ def manifest(plan, reg=None):
             "files": plan.files, "bytes": plan.bytes,
             "left_out": {"remade": plan.left, "sign_ins_and_keys": plan.kept_out + _outside(plan),
                          "unreadable": plan.unreadable, "sockets_and_pipes": plan.special},
-            "keylike_packed": plan.keylike, "machine": machine(reg)}
+            "keylike_packed": plan.keylike, "machine": settings, "outside_but_run": _strays(plan, settings)}
 
 
 def report(plan, say=print):
@@ -421,10 +452,14 @@ def listing(say=print):
     """colony migrate --list."""
     plan = Plan(parts()).survey()
     report(plan, say)
-    lines = _cron(machine())
+    settings = machine()
+    lines = _cron(settings)
     if lines:
         say(f"The crontab ({len(lines)} line{'s' * (len(lines) != 1)}) isn't a file a pack can carry: its manifest keeps "
             "the lines, and the unpack shows them to add again.")
+    if outside := _strays(plan, settings):
+        say("Not in the archive, though referenced by this machine's services or crontab: " + ", ".join(outside)
+            + ". Copy these separately before wiping the old drive.")
     return plan
 
 
@@ -611,6 +646,9 @@ def pack(dest, say=print):
         raise SystemExit(f"colony: {dest} has {size(free)} free, and the archive can take up to {size(need)} (less once "
                          "compressed, but a pack is never started that might not finish): make room, or choose another disk")
     busy = _at_work(plan)
+    if shutil.which("tmux") and _board_running():
+        say("Colony is running: its own files can change while they are copied. For a copy to rely on before wiping "
+            "the old drive, colony stop first; every console resumes its conversation after the move.")
     if busy:
         say(f"Mid-work now: {', '.join(busy)}. Packing goes on: a conversation still being written is taken as it stands "
             "at that moment, whole up to there. For the cleanest copy, colony stop first (each console resumes its "
@@ -719,52 +757,64 @@ def unpack(archive, force=False, say=print):
     say(f"Unpacked: colony's home, {kinds.count('project')} project folder(s) on the board and {kinds.count('archived')} "
         f"archived, {kinds.count('claude')} folder(s) of Claude Code's conversations"
         + (", and the colony program" if "program" in kinds else "") + ".")
-    for line in remake(note):
-        say(line)
+    remake(note, say=say)
     return note
 
 
-def remake(note):
-    """What belongs to this machine, made again as the old one had it, each step said; then what's the person's: programs
-    to install, sign-ins and keys, and what projects set up for themselves outside their folders."""
+def remake(note, say=print):
+    """What belongs to this machine, made again as the old one had it, each step said as it goes; what the old machine
+    ran that the archive doesn't carry; then what's the person's to do, in order: install, sign in, keys, start."""
     m = note["machine"]
     checkout = Path(note["program"]) if note.get("program") else None
-    out = ["This machine:", "  The colony command: " + _command(checkout),
-           "  The voice: " + (_voice() if m["voice"] else "it wasn't set up there (colony voice --setup, about 500 MB)"),
-           "  Starting with the machine: " + (_autostart(checkout, m) if m["autostart"] else
-                                              "it was off there (Settings › Start with the machine turns it on)"),
-           "  Remote access: " + _remote(m)]
-    needed = [("tmux", "tmux", "sudo apt install tmux"), ("git", "git", "sudo apt install git")]
-    needed += [("Claude Code", "claude", "https://claude.com/claude-code")] if "claude" in m["providers"] else []
-    needed += [("Codex", "codex", "https://developers.openai.com/codex")] if "codex" in m["providers"] else []
+    agents = [("Claude Code", "claude", "https://claude.com/claude-code")] if "claude" in m["providers"] else []
+    agents += [("Codex", "codex", "https://developers.openai.com/codex")] if "codex" in m["providers"] else []
+    late = [label for label, program_, _ in agents if not shutil.which(program_)]
+    say("This machine:")
+    say("  The colony command: " + _command(checkout))
+    if m["voice"]:
+        say("  The voice: making it again (Kokoro, about 500 MB: a few minutes)…")
+        say("  The voice: " + _voice())
+    else:
+        say("  The voice: it wasn't set up there (colony voice --setup, about 500 MB)")
+    if m["autostart"]:
+        # the service keeps the PATH it finds programs on as it is written: one installed later isn't on it
+        say("  Starting with the machine: " + _autostart(checkout, m)
+            + (f"; once {' and '.join(late)} {'is' if len(late) == 1 else 'are'} installed, colony settings autostart on "
+               "again, so it finds " + ("it" if len(late) == 1 else "them") if late else ""))
+    else:
+        say("  Starting with the machine: it was off there (Settings › Start with the machine turns it on)")
+    say("  Remote access: " + _remote(m))
+    envs = sorted({str(Path(r["path"]).parent) for r in note["left_out"]["remade"]
+                   if r["why"] in ("a Python environment", "node_modules")})
+    if envs:
+        say("Left behind in these folders, to be made again when next needed (a Python environment, node_modules): "
+            + ", ".join(envs[:8]) + (", …" if len(envs) > 8 else ""))
+    services = [p["name"] for p in note["parts"] if p["kind"] == "service"]
+    if services:
+        on = [s for s in m.get("services_enabled", []) if s in services]
+        say(f"Back in place but not started, the services projects set up for themselves: {', '.join(services)}"
+            + (f". Enabled there: {', '.join(on)}; each is started again with systemctl --user enable --now NAME, "
+               "once its project runs here" if on else ""))
+    if _cron(m):
+        say("The old machine's crontab had these lines, set up by projects (crontab -e adds them again): "
+            + " | ".join(_cron(m)))
+    if note.get("outside_but_run"):
+        say("Not in the archive, though the old machine's services or crontab ran them: "
+            + ", ".join(note["outside_but_run"]))
+    needed = [("tmux", "tmux", "sudo apt install tmux"), ("git", "git", "sudo apt install git"), *agents]
     missing = [f"{label} ({how})" for label, program_, how in needed if not shutil.which(program_)]
     if missing:
-        out.append("To install here: " + "; ".join(missing))
-    signs = (["Claude Code (claude, then /login)"] if "claude" in m["providers"] else []) \
-        + (["Codex (codex login)"] if "codex" in m["providers"] else [])
-    out.append("Sign in again, as sign-ins never travel in the archive: " + "; ".join(signs))
+        say("To install here: " + "; ".join(missing))
+    say("Sign in again, as sign-ins never travel in the archive: "
+        + "; ".join((["Claude Code (claude, then /login)"] if "claude" in m["providers"] else [])
+                    + (["Codex (codex login)"] if "codex" in m["providers"] else [])))
     later = (["colony's long-lived Claude sign-in (claude setup-token, pasted in Settings)"] if m["claude_token"] else []) \
         + ([f"the keys of {', '.join(m['connection_keys'])} (the Connections page)"] if m["connection_keys"] else []) \
         + (["the Artificial Analysis key (colony bench key)"] if m["aa_key"] else [])
     if later:
-        out.append("Then enter again: " + "; ".join(later))
-    envs = sorted({str(Path(r["path"]).parent) for r in note["left_out"]["remade"]
-                   if r["why"] in ("a Python environment", "node_modules")})
-    if envs:
-        out.append("Left behind in these folders, to be made again when next needed (a Python environment, "
-                   f"node_modules): {', '.join(envs[:8])}" + (", …" if len(envs) > 8 else ""))
-    services = [p["name"] for p in note["parts"] if p["kind"] == "service"]
-    if services:
-        on = [s for s in m.get("services_enabled", []) if s in services]
-        out.append(f"Back in place but not started, the services projects set up for themselves: {', '.join(services)}"
-                   + (f". Enabled there: {', '.join(on)}; each is started again with systemctl --user enable --now NAME, "
-                      "once its project runs here" if on else ""))
-    if _cron(m):
-        out.append("The old machine's crontab had these lines, set up by projects (crontab -e adds them again): "
-                   + " | ".join(_cron(m)))
-    out.append("Then start colony: colony board. Consoles that were running come back in their own conversations, as "
-               "after a restart.")
-    return out
+        say("Then enter again: " + "; ".join(later))
+    say("Then start colony: colony board. Consoles that were running come back in their own conversations, as after a "
+        "restart, and any with a note waiting starts at once: so sign in first.")
 
 
 def _command(checkout):

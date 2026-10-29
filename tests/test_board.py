@@ -9304,7 +9304,9 @@ class MigrateTest(BoardBase):
                 patch.object(self.migrate.subprocess, "run", side_effect=run), \
                 patch.object(self.migrate.shutil, "which", side_effect=lambda p: None if p in ("colony", "codex") else "/usr/bin/" + p), \
                 patch.object(self.migrate, "_has", return_value=True):
-            said = "\n".join(self.migrate.remake(note))
+            messages = []
+            self.migrate.remake(note, say=messages.append)
+            said = "\n".join(messages)
         self.assertEqual(made, ["voice"])
         self.assertIn("The voice: made again", said)
         self.assertIn("The colony command: installed", said)
@@ -9331,3 +9333,60 @@ class MigrateTest(BoardBase):
         self.assertIn("alpha", listed.stdout)
         self.assertIn("Never packed", listed.stdout)
         self.assertFalse(self.disk.exists())
+
+    def test_an_idle_running_board_still_warns_before_a_drive_wipe_copy(self):
+        with patch.object(self.migrate, "_board_running", return_value=True), \
+                patch.object(self.migrate, "_at_work", return_value=[]):
+            _, said = self.pack()
+        self.assertIn("Colony is running", said)
+        self.assertIn("colony stop", said)
+        self.assertIn("before wiping", said)
+
+    def test_services_and_cron_name_existing_home_paths_outside_the_archive(self):
+        outside, cron = self.k / "Outside Project", self.k / ".local/bin/nightly.sh"
+        outside.mkdir()
+        script = outside / "run.py"
+        script.write_text("OUTSIDE-CODE-NOT-PACKED")
+        cron.parent.mkdir(parents=True, exist_ok=True)
+        cron.write_text("OUTSIDE-CRON-NOT-PACKED")
+        (self.units / "alpha-watch.service").write_text(
+            '[Service]\nWorkingDirectory="%h/Outside Project"\n'
+            'ExecStart=/usr/bin/python3 "%h/Outside Project/run.py"\n'
+            f'Environment=NOT_AN_EXTRA_DEPENDENCY={self.alpha}/notes.md\n')
+        with patch.object(self.migrate, "_crontab", return_value='0 3 * * * "$HOME/.local/bin/nightly.sh"\n'):
+            archive, _ = self.pack()
+            note = json.loads(next(self.disk.glob("*.manifest.json")).read_text())
+            said = []
+            self.migrate.listing(say=said.append)
+        self.assertEqual(set(note["outside_but_run"]), {str(outside), str(script), str(cron)})
+        for path in (outside, script, cron):
+            self.assertIn(str(path), "\n".join(said))
+            self.assertNotIn(str(path), self.members(archive))
+        with patch.object(self.migrate, "_command", return_value="here"), \
+                patch.object(self.migrate, "_remote", return_value="off"):
+            restored = []
+            self.migrate.remake(note, say=restored.append)
+        self.assertIn("Not in the archive", "\n".join(restored))
+        self.assertIn(str(outside), "\n".join(restored))
+
+    def test_remake_reports_progress_before_slow_steps_and_finishes_with_ordered_actions(self):
+        said = []
+        note = {"program": str(self.program), "parts": [], "left_out": {"remade": []}, "machine": {
+            "voice": True, "autostart": True, "lingers": False, "remote": "", "https": False,
+            "providers": ["codex"], "claude_token": False, "connection_keys": ["mail"], "aa_key": False,
+            "crontab": "", "services_enabled": []}}
+        def voice():
+            self.assertIn("making it again", said[-1], "a long voice setup announces itself before it starts")
+            self.assertTrue(any("The colony command: here" in line for line in said))
+            return "made again"
+        with patch.object(self.migrate, "_command", return_value="here"), \
+                patch.object(self.migrate, "_voice", side_effect=voice), \
+                patch.object(self.migrate, "_autostart", return_value="on"), \
+                patch.object(self.migrate, "_remote", return_value="off"), \
+                patch.object(shutil, "which", side_effect=lambda name: None if name == "codex" else "/usr/bin/" + name):
+            self.migrate.remake(note, say=said.append)
+        text = "\n".join(said)
+        self.assertIn("colony settings autostart on again", text)
+        actions = [text.index(x) for x in ("To install here:", "Sign in again", "Then enter again:", "Then start colony:")]
+        self.assertEqual(actions, sorted(actions))
+        self.assertIn("sign in first", text)
