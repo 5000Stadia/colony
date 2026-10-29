@@ -2578,7 +2578,8 @@ def trouble_bar():
 def shell(reg, pid, body, wide=False):
     from . import media
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
-            f"<title>Projects — board</title><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
+            f"<title>Colony</title><meta name='application-name' content='Colony'>"
+            f"<meta name='apple-mobile-web-app-title' content='Colony'><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<link rel='stylesheet' href='/static/media.css?v={media.version()}'><script type='module' src='/static/media.js?v={media.version()}'></script>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{trouble_bar()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
