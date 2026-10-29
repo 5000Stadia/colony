@@ -664,58 +664,159 @@ class Watcher:
             self._mail()
 
     def _mail(self):
-        """Wake a project that has something it hasn't been handed: mail from another project, or a note or
-        gate answer from the person whose moment has come. Start its session if it isn't running, and once
-        it is idle, nudge it; its delivery hook then hands everything over. A busy session, or one waiting
-        on a question, is left alone until its turn ends, unless the mail is urgent. The end of a safe pause wakes
-        a project whatever its screen seems to say (a misread one stayed asleep all evening), short of a choice on
-        it, which typing would answer; a nudge that doesn't hand it over is tried again. What a session's start
-        brings (standing context, what was handed over before and is still open) wakes nothing, and consoles that
-        have just started are woken one per look, so a reboot's or an update's worth of them don't all take a turn
-        at the same moment."""
-        from . import mail, usage, vision
-        closing = board.closing()
-        woke_starting = False
+        """Check delivery health before suppressing repeated nudges. Hooks alone confirm handoff."""
+        from . import mail
+        closing, woke_starting = board.closing(), False
         for p in board.projects():
             if not p.exists():
                 continue
-            row = closing.get(str(p))
-            if row and any(n["id"] == row["note"] and n["delivered_at"] for n in board.notes(p)):
-                continue                            # landing its work to close: what's new waits until it reopens
-            letters = [m for m in mail.inbox(p) if not m["delivered_at"]]
-            notes = [n for n in board.open_notes(p) if not n["delivered_at"] and not n.get("quiet")
-                     and not vision.is_update(n)]
-            resume = [n["id"] for n in notes if n.get("kind") == "resume"]
-            for i in resume:
-                if time.time() - self.nudged_at.get(i, time.time()) > RENUDGE:
-                    self.nudged.discard(i)
-            waiting = {m["id"] for m in letters} | {n["id"] for n in notes}
-            if not waiting or waiting <= self.nudged:
-                continue
-            state = console.snapshot(p, lines=1)["state"]
-            urgent = any(m.get("urgent") for m in letters)
-            if str(p) in usage.paused() and not urgent:
-                continue                            # paused at a usage limit: what waits is handed over at its next turn
-            urgent = urgent or bool(resume)
-            if state == "off":
+            try:
+                repair = getattr(mail, "repair", None)
+                if repair:
+                    repair(p)
+                woke_starting = self._mail_project(p, closing.get(str(p)), woke_starting)
+            except Exception as err:
+                # One broken console or inbox must not hold every other project's mail. Exception text can
+                # contain launch commands, credentials or project material; only its category is safe to relay.
+                try:
+                    incoming = mail.inbox(p)
+                    known = {'code': 'console-check',
+                             'reason': f"recipient delivery check failed ({type(err).__name__}); underlying cause is unknown"}
+                    mail.report(p, [m for m in incoming if not m['delivered_at']], 'delayed', **known)
+                    mail.report(p, [m for m in incoming if m['delivered_at'] and m['ask'] and not m['answer']],
+                                'reply-delayed', **known)
+                except Exception:
+                    pass
+
+    def _mail_project(self, p, closing, woke_starting):
+        from . import mail, vision
+        incoming = mail.inbox(p)
+        letters = [m for m in incoming if not m['delivered_at']]
+        asks = [m for m in incoming if m['delivered_at'] and m['ask'] and not m['answer']]
+        notes = [n for n in board.open_notes(p) if not n['delivered_at'] and not n.get('quiet')
+                 and not vision.is_update(n)]
+        waiting = {m['id'] for m in letters} | {n['id'] for n in notes}
+        if not waiting and not asks:
+            return woke_starting
+
+        def delayed(known, *, retry=True, replies=True):
+            mail.report(p, letters, 'delayed', **known)
+            if replies:
+                mail.report(p, asks, 'reply-delayed', **known)
+            # The notice may have landed before this failure arose. Once it clears, try again immediately.
+            if retry:
+                self.nudged.difference_update(m['id'] for m in letters)
+                for m in letters:
+                    self.nudged_at.pop(m['id'], None)
+
+        if closing and any(n['id'] == closing['note'] and n['delivered_at'] for n in board.notes(p)):
+            delayed({'code': 'project-closing', 'reason': 'recipient is closing; new mail waits until it reopens'})
+            return woke_starting
+
+        name, provider = console.session_name(p), providers.of(p)
+
+        def health(snap):
+            state = snap['state']
+            if state != 'working':
+                end = console.died(name) if state == 'off' else None
+                text = '\n'.join(end['lines']) if end else (
+                    '\n'.join(snap.get('lines', [])) if state == 'off' else console.screen(name))
+                problem = provider.mail_problem(text, stopped=state == 'off')
+                if problem:
+                    snap['delivery_blocker'] = problem
+            known = mail.blocker(p, snap)
+            # A cached sign-out is explicitly only a last check. It must not prevent a fresh attempt.
+            if known and known['code'] in ('signed-out', 'console-off'):
+                known = None
+            if not known and state == 'needs you':
+                known = {'code': 'waiting-choice', 'reason': 'recipient console is waiting for a choice on screen'}
+            return known
+
+        def off_problem(*, attempted=False):
+            end = console.died(name)
+            if not console.COMMAND and not providers.installed(provider):
+                return {'code': 'program-missing', 'reason': f"recipient program {provider.program} is not installed"}
+            if end:
+                return {'code': 'console-stopped',
+                        'reason': f"recipient console stopped with an error (exit {int(end['status'])}); underlying cause is unknown"}
+            when = ' after its startup attempt' if attempted else ''
+            return {'code': 'console-off',
+                    'reason': f'recipient console is not running{when}; underlying cause is unknown'}
+
+        snap = console.snapshot(p, lines=12)
+        state = snap['state']
+        known = health(snap)
+        urgent = any(m.get('urgent') for m in letters)
+        resume = [n['id'] for n in notes if n.get('kind') == 'resume']
+        if known:
+            delayed(known, retry=not (known['code'] == 'usage-pause' and urgent), replies=state != 'working')
+        if state == 'working' or (not known and state != 'off'):
+            mail.report(p, [m for m in asks if m['delivery']['status'] == 'reply-delayed'], 'handed')
+        if known and ((known['code'] == 'usage-pause' and not urgent)
+                      or (known['code'] != 'usage-pause' and state != 'off')):
+            return woke_starting                  # retain the safe pause's existing nonurgent guard
+        if not waiting:
+            if state == 'off' and not known:
+                delayed(off_problem())
+            return woke_starting                  # already-handed backlog alone never starts another turn
+        if state == 'off':
+            try:
                 console.ensure(p)
-            elif state == "idle" or (urgent and state == "working"):
-                name = console.session_name(p)
-                starting = console.age(name) < STARTUP_WINDOW
-                if starting and woke_starting:
-                    continue                        # another console that has just started was woken this look
-                what = " and ".join(filter(None, [
-                    "a note from the person on the board" if any(n.get('author') not in ('colony', 'observation', 'monitor', 'suggestion') for n in notes) else "",
-                    f"a note from {board.steward_role()}" if any(n.get('author') == 'monitor' for n in notes) else "",
-                    "a suggestion from " + (board.steward_role() if board.steward_named() else "the steward")
-                    if any(n.get('author') == 'suggestion' for n in notes) else "",
-                    "an update from Colony" if any(n.get('author') == 'colony' for n in notes) else "",
-                    "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
-                    "mail from another project in the colony" if letters else ""]))
-                if console.type_into(name, f"[colony] You have {what}."):
-                    self.nudged |= waiting          # else someone is typing there, or its box isn't up: tried again
-                    self.nudged_at.update((i, time.time()) for i in resume)
-                    woke_starting = woke_starting or starting
+            except Exception as err:
+                delayed({'code': 'console-start',
+                         'reason': f"recipient console could not start ({type(err).__name__}); underlying cause is unknown"})
+                return woke_starting
+            snap = console.snapshot(p, lines=12)
+            known = health(snap)
+            if known:
+                delayed(known)
+            elif snap['state'] == 'off':
+                delayed(off_problem(attempted=True))
+            # A healthy start needs time to draw its prompt; wake it on the next look, one new console at a time.
+            return woke_starting
+
+        now = time.time()
+        for i in resume:
+            if now - self.nudged_at.get(i, now) > RENUDGE:
+                self.nudged.discard(i)
+        if state == 'idle' and not known and not console.drafting(name):
+            unclaimed = [m for m in letters if m['id'] in self.nudged
+                         and now - self.nudged_at.get(m['id'], now) > RENUDGE]
+            if unclaimed:
+                mail.report(p, unclaimed, 'delayed', code='handoff-unconfirmed',
+                            reason='recipient notification was accepted but no hook confirmed handoff; cause is unknown')
+                self.nudged.difference_update(m['id'] for m in unclaimed)
+        if waiting <= self.nudged:
+            return woke_starting
+        if state != 'idle' and not ((urgent or resume) and state == 'working'):
+            return woke_starting
+        if console.drafting(name):
+            return woke_starting
+        starting = console.age(name) < STARTUP_WINDOW
+        if starting and woke_starting:
+            return woke_starting
+        what = " and ".join(filter(None, [
+            "a note from the person on the board" if any(n.get('author') not in ('colony', 'observation', 'monitor', 'suggestion') for n in notes) else "",
+            f"a note from {board.steward_role()}" if any(n.get('author') == 'monitor' for n in notes) else "",
+            "a suggestion from " + (board.steward_role() if board.steward_named() else "the steward")
+            if any(n.get('author') == 'suggestion' for n in notes) else "",
+            "an update from Colony" if any(n.get('author') == 'colony' for n in notes) else "",
+            "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
+            "mail from another project in the colony" if letters else ""]))
+        try:
+            accepted = console.type_into(name, f"[colony] You have {what}.")
+        except Exception:
+            accepted = False
+        if accepted:
+            self.nudged |= waiting
+            self.nudged_at.update((i, now) for i in ({m['id'] for m in letters} | set(resume)))
+            return woke_starting or starting
+        # A race may have replaced the input box with a choice or a provider failure since our first glance.
+        snap = console.snapshot(p, lines=12)
+        known = health(snap) or {'code': 'console-input',
+                                 'reason': 'recipient console did not accept notification; underlying cause is unknown'}
+        delayed(known)
+        return woke_starting
 
     def close(self):
         """Each project being closed (`colony close`) comes off the board once the turn its note started has ended with

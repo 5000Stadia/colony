@@ -4366,13 +4366,13 @@ class MessagingTest(BoardBase):
         board.track(shop)
         run = lambda cwd, *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=cwd, capture_output=True,
                                              text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
-        self.assertIn("sent", run(self.root, "send", "shop", "Which CSV columns do you export?", "--ask").stdout)
+        self.assertIn("queued", run(self.root, "send", "shop", "Which CSV columns do you export?", "--ask").stdout)
         got = run(shop, "notes", "--deliver").stdout
         self.assertIn("plants asks: Which CSV columns do you export?", got)
         self.assertEqual(run(shop, "notes", "--deliver").stdout, "", "handed over once")
         self.assertIn("haven't answered", run(shop, "notes", "--deliver", "--session").stdout, "an open question is repeated")
         [q] = mail.inbox(shop)
-        self.assertIn("answered", run(shop, "reply", q["id"], "sku,name,qty,price").stdout)
+        self.assertIn("queued", run(shop, "reply", q["id"], "sku,name,qty,price").stdout)
         self.assertIn("shop writes: sku,name,qty,price", run(self.root, "notes", "--deliver").stdout)
         self.assertEqual(mail.unanswered(shop), [])
         self.assertIn("Which CSV columns", run(self.root, "mail").stdout, "the sender keeps its side of the thread")
@@ -4412,7 +4412,13 @@ class MailWakeTest(BoardBase):
         board.track(self.root)
         self.saved = (console.snapshot, console.type_into, console.ensure, monitor.snapshot)
         self.typed, self.started, self.state = [], [], {"state": "idle"}
-        console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}
+        console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"] if root == self.root else "working", "lines": []}
+        self.screen = "❯ "
+        for target, replacement in (("screen", lambda name: self.screen), ("drafting", lambda name: False),
+                                    ("died", lambda name: None), ("age", lambda name: 1000)):
+            mock = patch.object(console, target, replacement)
+            mock.start()
+            self.addCleanup(mock.stop)
         console.type_into = hearing(self.typed)
         console.ensure = lambda root, name=None, label=None, settle=0: self.started.append(root)
         monitor.snapshot = lambda: {"state": "working", "lines": []}
@@ -4505,6 +4511,222 @@ class MailWakeTest(BoardBase):
                 patch("colony.vision.observe_all"), patch("colony.continuation.tick_all"), patch.object(w, "freshen"):
             w.tick()
         checked.assert_called_once()
+
+    def source_message(self, *, ask=False):
+        source = Path(self.tmp.name) / "shop"
+        source.mkdir(exist_ok=True)
+        (source / "ROADMAP.md").write_text(ROADMAP)
+        if source not in board.projects():
+            board.track(source)
+        with patch.object(mail, "sender", return_value=(source, "shop")):
+            message = mail.send("plants", "Please check the export", ask=ask)
+        return source, message
+
+    def test_pause_reports_once_across_watcher_restart_then_hook_confirms_handoff(self):
+        from colony import usage
+        source, message = self.source_message()
+        usage.folder().mkdir(parents=True, exist_ok=True)
+        (usage.folder() / "paused.json").write_text(json.dumps({str(self.root): {
+            "provider": "claude", "window": "5-hour", "resets_at": time.time() + 3600}}))
+        for watcher in (monitor.Watcher(), monitor.Watcher()):
+            watcher.mail()
+        self.assertEqual(self.typed, [])
+        [copy] = mail.messages(source)
+        self.assertEqual(copy["delivery"]["status"], "delayed")
+        self.assertIn("usage limit", copy["delivery"]["reason"])
+        receipts = [n for n in board.notes(source) if n.get("kind") == "mail-delivery"]
+        self.assertEqual(len(receipts), 1)
+        self.assertFalse(mail.inbox(self.root)[0]["delivered_at"])
+        (usage.folder() / "paused.json").write_text("{}")
+        monitor.Watcher().mail()
+        self.assertEqual(len(self.typed), 1)
+        self.assertFalse(mail.inbox(self.root)[0]["delivered_at"], "typing is not a hook acknowledgement")
+        mail.delivered(self.root, [message])
+        self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "handed")
+
+    def test_current_auth_failure_is_checked_even_after_notification_then_retried_when_clear(self):
+        source, message = self.source_message()
+        watcher = monitor.Watcher()
+        watcher.mail()
+        self.screen = "  ⎿ API Error: 401 secret-token-private.example\n❯ "
+        watcher.mail()
+        self.assertEqual(len(self.typed), 1, "a known current error holds another attempt")
+        self.assertNotIn(message["id"], watcher.nudged)
+        [copy] = mail.messages(source)
+        self.assertEqual(copy["delivery"]["code"], "authentication")
+        self.assertNotIn("secret", copy["delivery"]["reason"])
+        self.screen = "● An old example: API Error: 401\n❯ "
+        watcher.mail()
+        self.assertEqual(len(self.typed), 2, "healthy current output releases the queued notice")
+
+    def test_a_handed_ask_reports_reply_delay_and_working_restores_handed(self):
+        source, message = self.source_message(ask=True)
+        mail.delivered(self.root, [message])
+        self.screen = "  ⎿ API Error: 429 request blocked\n❯ "
+        watcher = monitor.Watcher()
+        watcher.mail()
+        [copy] = mail.messages(source)
+        self.assertEqual(copy["delivery"]["status"], "reply-delayed")
+        self.assertTrue(copy["delivered_at"])
+        self.screen = "❯ "
+        watcher.mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "handed", "clear health restores reply availability")
+        self.screen = "  ⎿ API Error: 429 request blocked\n❯ "
+        watcher.mail()
+        self.state["state"] = "working"
+        watcher.mail()
+        [copy] = mail.messages(source)
+        self.assertEqual(copy["delivery"]["status"], "handed")
+        self.assertIsNone(copy["answer"])
+        self.assertEqual(self.typed, [])
+
+    def test_a_handed_fyi_is_not_watched_for_reply_failures(self):
+        source, message = self.source_message()
+        mail.delivered(self.root, [message])
+        self.screen = "  ⎿ API Error: 401 failed\n❯ "
+        monitor.Watcher().mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "handed")
+        self.assertEqual([n for n in board.notes(source) if n.get("kind") == "mail-delivery"], [])
+
+    def test_failed_start_does_not_stop_another_recipients_notification(self):
+        source, message = self.source_message()
+        self.state["state"] = "off"
+        board.add_note(source, None, "Please continue", author="person")
+        console.snapshot = lambda root, lines=6, name=None: {"state": "off" if root == self.root else "idle", "lines": []}
+        console.ensure = lambda *a, **k: (_ for _ in ()).throw(OSError("secret launch command"))
+        monitor.Watcher().mail()
+        self.assertEqual(len(self.typed), 1)
+        [copy] = mail.messages(source)
+        self.assertEqual(copy["delivery"]["code"], "console-start")
+        self.assertNotIn("secret", copy["delivery"]["reason"])
+
+    def test_refused_or_failed_input_keeps_mail_queued_with_unknown_cause(self):
+        source, message = self.source_message()
+        watcher = monitor.Watcher()
+        for failure in (False, OSError("secret command")):
+            with patch.object(console, "type_into", side_effect=[failure] if failure is False else failure):
+                watcher.mail()
+            [copy] = mail.messages(source)
+            self.assertEqual(copy["delivery"]["code"], "console-input")
+            self.assertIn("did not accept", copy["delivery"]["reason"])
+            self.assertNotIn("secret", copy["delivery"]["reason"])
+            self.assertFalse(copy["delivered_at"])
+            self.assertNotIn(message["id"], watcher.nudged)
+
+    def test_unacknowledged_notification_is_retried_only_when_idle_without_a_draft(self):
+        source, message = self.source_message()
+        watcher = monitor.Watcher()
+        watcher.mail()
+        self.assertIn(message["id"], watcher.nudged_at)
+        watcher.nudged_at[message["id"]] -= monitor.RENUDGE + 1
+        self.state["state"] = "working"
+        watcher.mail()
+        self.assertEqual(len(self.typed), 1)
+        self.state["state"] = "idle"
+        with patch.object(console, "drafting", return_value=True):
+            watcher.mail()
+        self.assertEqual(len(self.typed), 1)
+        watcher.mail()
+        self.assertEqual(len(self.typed), 2)
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "handoff-unconfirmed")
+        self.assertEqual(len(mail.messages(self.root)), 1, "retry only the notice, never append the letter again")
+        self.assertFalse(mail.inbox(self.root)[0]["delivered_at"])
+
+    def test_busy_is_normal_queue_choice_is_specific_and_cached_signout_does_not_hold_retry(self):
+        source, message = self.source_message()
+        watcher = monitor.Watcher()
+        self.state["state"] = "working"
+        watcher.mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "queued")
+        self.assertEqual([n for n in board.notes(source) if n.get("kind") == "mail-delivery"], [])
+        self.state["state"] = "needs you"
+        watcher.mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "waiting-choice")
+        self.assertEqual(self.typed, [])
+        self.state["state"] = "idle"
+        with patch.object(board, "signed_out", return_value={"claude": "yesterday"}):
+            watcher.mail()
+        self.assertEqual(len(self.typed), 1)
+
+    def test_closing_project_reports_the_reason_mail_waits(self):
+        source, message = self.source_message()
+        note = board.add_note(self.root, None, "Close now", author="person")
+        board.append(self.root, "notes.jsonl", {"type": "delivered", "of": note["id"], "at": board.now()})
+        with patch.object(board, "closing", return_value={str(self.root): {"note": note["id"]}}):
+            monitor.Watcher().mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "project-closing")
+        self.assertEqual(self.typed, [])
+
+    def test_live_provider_failures_hold_urgent_mail_without_native_probes(self):
+        source, message = self.source_message()
+        with patch.object(mail, "sender", return_value=(source, "shop")):
+            mail.send("plants", "urgent direction", urgent=True)
+        watcher = monitor.Watcher()
+        for diagnostic, code in (("429 too many requests", "usage-limit"),
+                                 ("503 unavailable", "server-error"),
+                                 ("Connection error private-host", "network")):
+            self.screen = f"  ⎿ API Error: {diagnostic}\n❯ "
+            with patch.object(providers.of(self.root), "signed_in", side_effect=AssertionError("no auth probe")):
+                watcher.mail()
+            self.assertEqual(self.typed, [])
+            self.assertEqual(mail.messages(source)[0]["delivery"]["code"], code)
+        self.screen = "  ⎿ API Error: 401 old\n❯ investigate\n● Fixed the issue.\n❯ "
+        watcher.mail()
+        self.assertEqual(len(self.typed), 1, "a passed error before a successful reply does not block")
+
+    def test_off_handed_ask_reports_missing_program_or_current_exit_without_starting_backlog(self):
+        source, message = self.source_message(ask=True)
+        mail.delivered(self.root, [message])
+        self.state["state"] = "off"
+        monitor.Watcher().mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "console-off")
+        with patch.object(console, "COMMAND", ""), patch.object(providers, "installed", return_value=False):
+            monitor.Watcher().mail()
+        self.assertEqual(self.started, [], "already-handed backlog does not restart a stopped project")
+        self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "reply-delayed")
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "program-missing")
+        with patch.object(console, "died", return_value={"status": 1, "lines": ["API Error: 401 private token"]}):
+            monitor.Watcher().mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "authentication")
+        self.assertNotIn("private", mail.messages(source)[0]["delivery"]["reason"])
+        with patch.object(console, "died", return_value={"status": 7, "lines": ["unexpected private stack"]}):
+            monitor.Watcher().mail()
+        self.assertEqual(mail.messages(source)[0]["delivery"]["code"], "console-stopped")
+        self.assertIn("exit 7", mail.messages(source)[0]["delivery"]["reason"])
+
+    def test_safe_pause_preserves_one_urgent_nudge_without_oscillating_a_working_ask(self):
+        from colony import usage
+        source, message = self.source_message(ask=True)
+        mail.delivered(self.root, [message])
+        with patch.object(mail, "sender", return_value=(source, "shop")):
+            mail.send("plants", "urgent direction", urgent=True)
+        self.state["state"] = "working"
+        paused = {str(self.root): {"provider": "claude", "window": "5-hour", "resets_at": time.time() + 3600}}
+        watcher = monitor.Watcher()
+        with patch.object(usage, "paused", return_value=paused):
+            watcher.mail()
+            watcher.mail()
+        self.assertEqual(len(self.typed), 1)
+        self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "handed")
+        self.assertEqual(len([n for n in board.notes(source) if n.get("kind") == "mail-delivery"]), 1)
+
+    def test_healthy_start_waits_normally_and_only_one_new_console_is_nudged_per_look(self):
+        source, message = self.source_message()
+        board.add_note(source, None, "Please continue", author="person")
+        self.state["state"] = "off"
+        def start(root, *args, **kwargs):
+            self.started.append(root)
+            self.state["state"] = "idle"
+        console.ensure = start
+        console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": []}
+        watcher = monitor.Watcher()
+        with patch.object(console, "age", return_value=1):
+            watcher.mail()
+            self.assertEqual(len(self.typed), 1, "the other project can wake while this one draws its prompt")
+            self.assertEqual(mail.messages(source)[0]["delivery"]["status"], "queued")
+            watcher.mail()
+        self.assertEqual(len(self.typed), 2)
+        self.assertFalse(mail.inbox(self.root)[0]["delivered_at"])
 
 
 class MenuTest(BoardBase):
