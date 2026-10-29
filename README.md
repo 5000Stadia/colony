@@ -79,8 +79,12 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   and Library use these controls too. Reader tables scroll within their own area, and Back and Project links
   keep the reader with the project it came from.
 - **Auto follows your place:** text follows playback only while Chat is open, with five seconds to browse
-  after a touch or scroll. Audio may continue elsewhere without bringing you back to Chat. Selecting a
-  History item returns to that entry when text is enabled; audio-only playback leaves the view alone.
+  after a touch or scroll by default; change that delay in the playback settings. Audio may continue elsewhere
+  without bringing you back to Chat. A small status icon shows when text following is held, and a separate
+  Return button stays visible away from Chat and takes you to the current or last played message without
+  changing the audio mode. Selecting a History
+  item returns to that entry when text is enabled; audio-only playback leaves the view alone. Typing holds
+  playback while its bounded audio buffer keeps preparing, ready to resume from cached or in-flight clips.
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
   the project and handle folder names and references where practical, keeping access and history working.
   Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
