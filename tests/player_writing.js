@@ -661,6 +661,19 @@ const cases = {
     assert.equal(b.api.state().section, 0);
   },
 
+  async 'Clear during document cannot restore its cleared suspended reply'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    await b.api.clear(); b.api.section(1); const n = b.sounds.length; await b.end();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, n);
+  },
+  async 'filtered Clear keeps document and resumes remaining queued Auto reply'(b) {
+    const xs = await b.line(['A', 'B']); await b.api.start(xs[0]);
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
+    b.api.clearOnly(['A']); await b.api.clear(); assert.equal(b.api.state().document, true);
+    b.api.section(1); await b.end(); assert.equal(b.api.state().t, 'B');
+  },
+
 };
 (async () => {
   let failures = 0;

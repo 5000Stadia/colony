@@ -1277,7 +1277,7 @@ class ChatTest(BoardBase):
         self.assertIn("else requestAnimationFrame(() => grow())", page)
         self.assertIn("x.addEventListener('click', () => { gfile.value = ''; chosen(); }); gfiles.append(n, x);", page)
         # held back by a touch, the read-along looks again once the page is let be, while the same part plays
-        self.assertIn("if (Date.now() - touched < 8000) { later(s, 8200 - (Date.now() - touched)); return null; }", page)
+        self.assertIn("if (!canFollow()) { later(s, readingFollow.remaining()); return null; }", page)
         self.assertIn("refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); }", board.CHAT)
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
@@ -7807,13 +7807,13 @@ class PhonePageTest(HoursBase):
         # the line it goes on to the next reply, its glyph the lock screen's (R123), the rest of this one counted skipped
         self.assertIn("<button type='button' class='cpnext' aria-label='Skip to the next reply'>\" + PICON.skip", board.PLAYER)
         self.assertNotIn("cpskip", board.PLAYER)
-        self.assertIn("function skip() { if (!N) return; markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped');", board.PLAYER)
+        self.assertIn("markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped');", board.PLAYER)
         self.assertNotIn("PICON.check", board.PLAYER, "no ✓ on the last: ⏭ is always the way on")
         self.assertIn("html.autoon .cpbar .cpnext::before", board.CSS)
         self.assertNotIn(".cphold::before", board.CSS)
         self.assertIn("next", board.ICONS)
         # a tap on Next (or the rest of the player) isn't a finger moving the page: the page goes on with what is read
-        self.assertIn("if (!(ev.target.closest && ev.target.closest('#cplayer, #gc'))) fingered = Date.now();", board.CHAT)
+        self.assertIn("if (!explicit && !mayFollow()) { refocus = setTimeout", board.CHAT)
 
     def test_each_question_in_a_chats_needs_you_can_be_read_aloud(self):
         # the person: "a small play button in the needs you box questions by each individual question heading"
@@ -8228,7 +8228,7 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 148, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 152, result.stdout)
 
 
 class DocumentAudioTest(BoardBase):
@@ -8800,7 +8800,7 @@ class LineTest(BoardBase):
         self.assertIn("ks.some((k) => P.willRead(key, k, waiting.get(k).at, t))", chat)
         # Audio + text: each sentence about to be heard in view, never scrolled back up, and marked softly
         self.assertIn("if (c >= LEAD + had / all * (d - LEAD)) i = m;", js)
-        self.assertIn("if (by > 0) { stick = false; window.scrollBy({top: by, behavior: 'smooth'}); } };", chat)
+        self.assertIn("if (by > 0) { stick = false; scrollReading(() => window.scrollBy({top: by, behavior: 'smooth'})); } };", chat)
         self.assertIn("if (r) shine(r);", chat)
         # one mark, its range swapped, and the box repainted as it moves: Safari left the sentence before still marked
         self.assertIn("shone.clear(); if (r) shone.add(r);", chat)
@@ -10811,3 +10811,48 @@ class ProjectRenameRetryTest(unittest.TestCase):
         self.assertFalse(self.names.rename(self.root, 'Garden keeper'))
         self.assertEqual((self.root / '.board/name.json').read_bytes(), saved)
         self.assertEqual(board.notes(self.root), [])
+
+
+class ReadingFollowTest(BoardBase):
+    def test_production_gesture_clock_and_programmatic_scroll(self):
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is needed for the production reading-follow clock')
+        result = subprocess.run([node, str(ROOT / 'tests/reading_follow.js')], input=board.player_js(), text=True,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS production reading-follow clock', result.stdout)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
+    def test_phone_auto_navigation_and_chat_follow_wait_five_seconds_after_interaction(self):
+        board.track(self.root)
+        feed = ("<div class='msg'><section class='say' data-k='part1' data-t='A'><p>First part. Another sentence.</p></section>"
+                "<div style='height:1600px'></div><section class='say' data-k='part2' data-t='A'><p>Second part. More sentences.</p></section>"
+                "<section class='say' data-k='explicit' data-t='E'><p>Opening sentence.</p>"
+                "<div style='height:1600px'></div><p>Last sentence.</p></section></div>")
+        with patch.object(board, 'chat_feed', return_value=feed), patch('colony.voice.ready', return_value=False):
+            chat = board.chat_page('0', self.root)
+        link = "<a id='fixture-manual' href='/fixture/reading-manual' style='position:fixed;right:12px;top:100px;z-index:99'>Manual page</a>"
+        chosen = ("<button type='button' onclick='colonyPlayer.read({key:0,name:\"plants\",href:\"/fixture/reading-chat\",kokoro:false},"
+                  "[{t:\"E\",k:\"explicit\",text:\"Opening sentence. Last sentence.\"}])'>Play chosen reply</button>")
+        pages = {
+            '/fixture/reading-source': "<h1>Source Chat</h1><div id='chat'><p style='height:2500px'>Keep my reading place.</p></div><form id='composer'><textarea></textarea></form>",
+            '/fixture/reading-chat': link + chat,
+            '/fixture/reading-manual': '<h1>Manual page</h1>' + chosen,
+            '/fixture/reading-external': "<h1>Dependency Chat</h1><div id='chat'></div><form id='composer'><textarea></textarea></form><script src='/fixture/reading-dependency.js'></script><script>window.fixtureActivated=(window.fixtureActivated||0)+1;</script>",
+        }
+        reg = board.registry()
+        class Handler(board.Handler):
+            def _get(self):
+                if self.path in pages:
+                    return self._send(200, board.shell(reg, 0, pages[self.path]).encode())
+                return super()._get()
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        result = subprocess.run(['node', str(ROOT / 'tests/reading_follow_browser.js'), f'http://127.0.0.1:{server.server_address[1]}'],
+                                text=True, capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS five-second Auto reading grace', result.stdout)
