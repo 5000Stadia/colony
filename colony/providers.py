@@ -73,6 +73,56 @@ def _stamp(entry):
         return 0.0
 
 
+def _mail_diagnostic(text, prompt, error, assistant, stopped):
+    """The last output row before the current input, never the input or an earlier successful reply."""
+    lines = re.sub(r"\x1b\[[0-9;]*m", "", text).splitlines()
+    inputs = [i for i, line in enumerate(lines) if re.match(prompt, line)]
+    if inputs:
+        lines = lines[:inputs[-1]]
+    elif not stopped:
+        return None
+    rows = [(i, line) for i, line in enumerate(lines)
+            if line.strip() and not re.match(r"^\s*[─━]{4,}", line)]
+    if not rows:
+        return None
+    at, line = rows[-1]
+    found = re.fullmatch(error, line)
+    if not found:
+        return None
+    # An assistant's quoted example or tool output is not the program's own diagnostic. A later input starts
+    # another turn; within a reply, conservatively leave the reason unknown rather than guessing from its prose.
+    last_input = max((i for i, line in enumerate(lines[:at]) if re.match(prompt, line)), default=-1)
+    if any(re.match(assistant, line) or line.lstrip().startswith("```") for line in lines[last_input + 1:at]):
+        return None
+    return found.group("error")
+
+
+def _mail_reason(provider, diagnostic):
+    """A known cause without any provider error body, which may contain tokens, URLs or project material."""
+    if diagnostic is None:
+        return None
+    body = re.sub(r"^(?:API Error:|Error:)\s*", "", diagnostic, flags=re.I)
+    http = re.match(r"(?:(?:unexpected status|HTTP(?: status)?)[ :]+)?([45]\d\d)\b", body, re.I)
+    status = int(http[1]) if http else None
+    if status == 401:
+        code, why = 'authentication', 'authentication failed (HTTP 401)'
+    elif status == 403:
+        code, why = 'authorization', 'access refused (HTTP 403)'
+    elif status == 429:
+        code, why = 'usage-limit', 'request rate limit reached (HTTP 429)'
+    elif status and 500 <= status <= 599:
+        code, why = 'server-error', f'provider request failed (HTTP {status})'
+    elif re.match(r"(?:Invalid (?:authentication |API )?(?:token|key|credentials)|authentication failed|not logged in)\b", body, re.I):
+        code, why = 'authentication', 'authentication failed'
+    elif hit := re.match(r"You've hit your (?:(session|usage|weekly|monthly spend|rate) )?limit\b", body):
+        code, why = 'usage-limit', (hit[1] + ' ' if hit[1] else 'usage ') + 'limit reached'
+    elif provider.NETWORK.match(body):
+        code, why = 'network', 'provider connection failed'
+    else:
+        return None
+    return {'code': code, 'reason': f'{provider.label} {why}.'}
+
+
 TURN_WAIT = 2.0             # seconds an end-of-turn hook reads the transcript again while the turn shows no words yet
 
 
@@ -170,6 +220,11 @@ class Provider:
         """"working" | "needs you" | "idle" from its terminal screen: the watcher and the steward's wake-ups depend
         on it, so it matches the CLI's own busy and prompt markers. Required."""
         raise NotImplementedError
+
+    def mail_problem(self, text, *, stopped=False):
+        """A current console diagnostic preventing a reply, {code, reason}, or None when unknown. Reasons contain
+        only a known cause, never arbitrary console text. stopped permits diagnostics from a verified dead console."""
+        return None
 
     # --- its models
     def model_name(self, value):
@@ -885,6 +940,17 @@ class ClaudeCode(Provider):
         return ("## This project is part of a colony" in (claude_md.read_text() if claude_md.exists() else "")
                 and all(h['command'] in hooks for entries in hook_entries(self).values() for e in entries for h in e['hooks']))
 
+    def mail_problem(self, text, *, stopped=False):
+        # PROVIDER: Claude Code's API-error/usage rows, before its current input box. Unmarked errors only count
+        # when the caller verified that this console ended; ordinary assistant prose and drafts never count.
+        marker = r"\s*⎿\s*"
+        if stopped:
+            marker = r"(?:\s*⎿\s*)?"
+        diagnostic = _mail_diagnostic(text, r"^\s*❯(?!\s*\d+\.)|^>\s*$",
+                                      marker + r"(?P<error>API Error: .+|You've hit your .+)",
+                                      r"^\s*●\s", stopped)
+        return _mail_reason(self, diagnostic)
+
     def classify(self, screen):
         """Claude Code shows "esc to interrupt" while it works and a numbered choice when it asks permission;
         anything else is waiting for the person to type. On a narrow window (a phone attached) the status line
@@ -1517,6 +1583,15 @@ class Codex(Provider):
                         helpers.append({"key": f"{tid}@{e.get('timestamp')}", "id": tid, "name": names.get(tid) or tid,
                                         "at": _stamp(e), "error": error})
         return dict(stop, helpers=helpers[::-1], ok_at=0.0) if stop else None
+
+    def mail_problem(self, text, *, stopped=False):
+        # PROVIDER: Codex draws request failures with ■; a dead console may instead leave its CLI's Error line.
+        marker = r"\s*■\s*"
+        if stopped:
+            marker = r"(?:\s*■\s*)?"
+        diagnostic = _mail_diagnostic(text, r"^\s*›(?!\s*\d+\.)",
+                                      marker + r"(?P<error>.+)", r"^\s*•\s", stopped)
+        return _mail_reason(self, diagnostic)
 
     def classify(self, screen):
         """Codex shows "• Working (3s • esc to interrupt)" while it works, and a numbered choice marked `›`

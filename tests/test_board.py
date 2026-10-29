@@ -9703,3 +9703,79 @@ class MailDeliveryStatusTest(BoardBase):
             for future in futures:
                 future.result()
         self.assertEqual(len(board.notes(self.root)), 1)
+class ProviderMailProblemTest(unittest.TestCase):
+    """Only a current provider diagnostic can explain another project's unanswered mail."""
+
+    def claude(self, output, draft=''):
+        return output + '\n────────────────────\n❯ ' + draft + '\n────────────────────'
+
+    def codex(self, output, draft=''):
+        return output + '\n› ' + draft
+
+    def test_unknown_provider_has_no_diagnostic(self):
+        self.assertIsNone(providers.Provider().mail_problem('API Error: 401 Invalid token', stopped=True))
+
+    def test_claude_current_limit_and_authentication_are_safe_and_specific(self):
+        p = providers.get('claude')
+        limit = p.mail_problem(self.claude("  ⎿ You've hit your session limit · resets 3:40pm (America/Los_Angeles)"))
+        self.assertEqual(limit['code'], 'usage-limit')
+        self.assertIn('session', limit['reason'])
+        auth = p.mail_problem(self.claude('  ⎿ API Error: 401 Invalid authentication token SECRET-TOKEN'))
+        self.assertEqual(auth, {'code': 'authentication', 'reason': 'Claude Code authentication failed (HTTP 401).'})
+        self.assertNotIn('SECRET', str(auth))
+
+    def test_codex_current_http_authentication_and_usage_errors(self):
+        p = providers.get('codex')
+        self.assertEqual(p.mail_problem(self.codex('■ unexpected status 401 Unauthorized: SECRET-TOKEN')),
+                         {'code': 'authentication', 'reason': 'Codex authentication failed (HTTP 401).'})
+        self.assertEqual(p.mail_problem(self.codex("■ You've hit your usage limit. Visit https://example.test/private")),
+                         {'code': 'usage-limit', 'reason': 'Codex usage limit reached.'})
+
+    def test_actual_http_rate_and_server_status_remain_known_causes(self):
+        for key, wrap, row in [('claude', self.claude, '  ⎿ API Error: '),
+                               ('codex', self.codex, '■ unexpected status ')]:
+            with self.subTest(provider=key):
+                p = providers.get(key)
+                hit = p.mail_problem(wrap(row + '429 Too Many Requests'))
+                self.assertEqual(hit['code'], 'usage-limit')
+                self.assertIn('429', hit['reason'])
+                down = p.mail_problem(wrap(row + '503 Service Unavailable'))
+                self.assertEqual(down['code'], 'server-error')
+                self.assertIn('503', down['reason'])
+
+    def test_network_errors_use_the_existing_provider_vocabulary(self):
+        for key, wrap, row in [('claude', self.claude, "  ⎿ API Error: Can't reach the API server"),
+                               ('codex', self.codex, '■ stream disconnected before completion: error sending request')]:
+            with self.subTest(provider=key):
+                result = providers.get(key).mail_problem(wrap(row))
+                self.assertEqual(result['code'], 'network')
+                self.assertNotIn('error sending request', result['reason'])
+        self.assertIsNone(providers.get('codex').mail_problem(self.codex('■ stream disconnected before completion: Incomplete response returned')))
+
+    def test_history_success_quotes_assistant_prose_and_drafts_are_not_failures(self):
+        for key, wrap, error, reply in [('claude', self.claude, '  ⎿ API Error: 401 Invalid token', '● Everything works now.'),
+                                       ('codex', self.codex, '■ unexpected status 401 Unauthorized', '• Everything works now.')]:
+            p = providers.get(key)
+            cases = [wrap(error + '\n' + reply), wrap('> ' + error), wrap('The log said: ' + error),
+                     wrap('```\n' + error + '\n```'), wrap('All done.', error),
+                     wrap('All done.', 'Please explain:\n' + error),
+                     wrap(reply + '\n  ' + error.strip())]
+            for case in cases:
+                with self.subTest(provider=key, screen=case):
+                    self.assertIsNone(p.mail_problem(case))
+            self.assertIsNone(p.mail_problem('API Error: 401 Invalid token'))
+
+    def test_a_new_request_can_fail_after_an_earlier_success(self):
+        for key, wrap, output in [('claude', self.claude, '● Previous success.\n❯ New request\n  ⎿ API Error: 401 Invalid token'),
+                                  ('codex', self.codex, '• Previous success.\n› New request\n■ unexpected status 401 Unauthorized')]:
+            with self.subTest(provider=key):
+                self.assertEqual(providers.get(key).mail_problem(wrap(output))['code'], 'authentication')
+
+    def test_verified_stopped_console_can_supply_an_unmarked_diagnostic(self):
+        for key, row in [('claude', 'API Error: 401 Invalid token SECRET'),
+                         ('codex', 'Error: unexpected status 401 Unauthorized SECRET')]:
+            with self.subTest(provider=key):
+                result = providers.get(key).mail_problem(row, stopped=True)
+                self.assertEqual(result['code'], 'authentication')
+                self.assertNotIn('SECRET', str(result))
+        self.assertIsNone(providers.get('codex').mail_problem('Error: some unknown problem SECRET', stopped=True))
