@@ -2725,6 +2725,23 @@ PLAYER = """
     s.ts.add(id); return id; };
   const leave = () => { const s = scope; scope = fresh();
     s.ls.forEach(([x, t, f, o]) => O.rm.call(x, t, f, o)); s.is.forEach((id) => O.ci.call(window, id)); s.ts.forEach((id) => O.ct.call(window, id)); };
+  // A label first drops a phone's keyboard, moving the + before its click arrives. Keep the writing focus on
+  // press, then open the picker directly in the lift/click's user activation (Safari needs that synchronous call).
+  // Delegated, so Chat and inline Needs you forms added by navigation share the global composer's behavior.
+  const attachButton = (ev) => ev.target.closest && ev.target.closest('button.attach, button.gcattach');
+  const touchedAttachments = new WeakSet();
+  O.add.call(document, 'pointerdown', (ev) => { const button = attachButton(ev); if (!button || ev.button !== 0) return;
+    touchedAttachments.delete(button); ev.preventDefault(); });
+  O.add.call(document, 'touchend', (ev) => { const button = attachButton(ev); if (!button) return;
+    ev.preventDefault();
+    const touch = ev.changedTouches[0], r = button.getBoundingClientRect();
+    if (!touch || touch.clientX < r.left || touch.clientX > r.right || touch.clientY < r.top || touch.clientY > r.bottom) return;
+    touchedAttachments.add(button); const file = button.form && button.form.querySelector('input[type=file]');
+    if (file) file.click(); }, {passive: false});
+  O.add.call(document, 'click', (ev) => { const button = attachButton(ev); if (!button) return;
+    ev.preventDefault(); const touched = touchedAttachments.delete(button);
+    if (touched && ev.detail) return;                    // a compatibility click must not open a second picker
+    const file = button.form && button.form.querySelector('input[type=file]'); if (file) file.click(); });
   const busy = () => !!(window.colonyPlayer && window.colonyPlayer.busy());
   // The page changes in place: the new one's body comes in, the player stays, and its scripts run as they would have.
   // A page the player will show next is fetched ahead and kept half a minute, so going there is at once.
@@ -3858,7 +3875,7 @@ PLAYER = """
   // Chat page it stands in for the page's own box; Auto off, or reading aloud alone, the page's box is as it was.
   const gc = document.createElement('form'); gc.id = 'gc'; gc.className = 'gc'; gc.hidden = true;
   gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gcbox'><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
-    + "<div class='gcfiles' hidden></div><div class='gcrow'><label class='gcattach' aria-label='Attach photos or files'>+<input type='file' multiple hidden></label>"
+    + "<div class='gcfiles' hidden></div><div class='gcrow'><button type='button' class='gcattach' aria-label='Attach photos or files'>+</button><input type='file' multiple hidden>"
     + "<textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div></div>";
   document.body.appendChild(gc);
   const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
@@ -5112,7 +5129,7 @@ def chat_page(key, root):
             "<div class='attached' hidden></div>"
             f"<textarea name='text' rows='1' placeholder='Message {e(name_of(root) if key != 'steward' else the_steward())}'></textarea>"
             # under the words, as the app has it: attach, reading aloud (its speed, its voice), send; it goes where the box goes
-            "<div class='composerbar'><label class='attach' aria-label='Attach photos or files'>+<input type='file' name='file' multiple hidden></label>"
+            "<div class='composerbar'><button type='button' class='attach' aria-label='Attach photos or files'>+</button><input type='file' name='file' multiple hidden>"
             "<span class='gap'></span><button class='send' aria-label='Send'>↑</button></div></form>"
             # this chat's voice and speed, kept for the player (Auto is the line's, R123)
             "<div class='voicesheet' id='voicesheet' hidden>"
@@ -6716,7 +6733,7 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
                 + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
                 + ("" if points else "<input type='hidden' name='reply' value='1'>")
                 + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea>"
-                + ("" if points else "<label class='attach' aria-label='Attach photos or files'>+<input type='file' name='file' multiple hidden></label>")
+                + ("" if points else "<button type='button' class='attach' aria-label='Attach photos or files'>+</button><input type='file' name='file' multiple hidden>")
                 + f"<button>{button}</button></form>")
     if gate["answer"]:
         answer_text = ("Cleared without an answer." if gate.get("cleared") else e(gate["answer"])
@@ -10318,7 +10335,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .round { margin:0 0 8px; padding:6px 10px; border-left:3px solid var(--line); color:var(--muted) } .round p { margin:4px 0 }
 .round > summary { cursor:pointer } .round.now { border-left-color:var(--accent); color:var(--ink) }
 .chat details.need form .attach { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; margin-right:6px;
-  border-radius:50%; background:var(--sunk); cursor:pointer; font-size:20px }
+  min-height:36px; padding:0; border:0; border-radius:50%; background:var(--sunk); color:var(--ink); cursor:pointer; font-size:20px }
 .gatechoices { display:flex; flex-direction:column; gap:6px; margin:8px 0 } .gatechoices form { margin:0 }
 .gatechoices button.choice, .chat details.need .gatechoices button.choice { width:100%; min-height:40px; text-align:left; white-space:normal; padding:8px 12px; border-radius:12px;
   border:1px solid var(--line); background:var(--sunk); color:var(--ink); font:inherit; cursor:pointer }
@@ -10360,7 +10377,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .gcrow textarea { flex:1; min-width:0; border:0; background:transparent; resize:none; font:inherit; font-size:16px; line-height:1.4; color:var(--ink);
   padding:7px 0; max-height:140px; outline:none; box-shadow:none }
 .gcattach { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; flex:none; margin:1px 0;
-  border-radius:50%; color:var(--accent); font-size:22px; cursor:pointer; background:var(--sunk) }
+  min-height:34px; padding:0; border:0; border-radius:50%; color:var(--accent); font-size:22px; cursor:pointer; background:var(--sunk) }
 .gcfiles { margin:0 0 4px 14px; padding:2px 4px 2px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
   background:var(--card); border:1px solid var(--line); display:flex; align-items:center; gap:4px; white-space:nowrap }
 .gcfiles[hidden] { display:none } .gcfiles span { overflow:hidden; text-overflow:ellipsis }
