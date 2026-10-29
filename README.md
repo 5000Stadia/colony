@@ -73,6 +73,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
   nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
   without it, the phone's own voice reads.
+  The attachment **+** opens photos or files on the first tap while typing, keeping the draft and selection.
 - **Pictures, PDFs and tables in Chat and document readers:** a corner button opens a fullscreen viewer that stays open through
   phone rotation. Start fitted to the width, zoom to 1.5×, 2×, 2.5× or 3×, and scroll within the viewer.
   Pictures and PDFs have Download; closing returns to the same reading position. Files opened from Showcase
@@ -273,6 +274,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections` (they start no real agent).
+Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment` (they start no real agent).
 
 MIT licensed: see [LICENSE](LICENSE).
