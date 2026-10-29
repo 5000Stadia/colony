@@ -9514,3 +9514,192 @@ class ChatMediaTest(BoardBase):
                                 capture_output=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS phone image, chart and multipage PDF', result.stdout)
+
+
+class MailDeliveryStatusTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.set_setting('messaging', 'on')
+        board.track(self.root)
+        self.shop = Path(self.tmp.name) / 'shop'
+        self.shop.mkdir()
+        board.track(self.shop)
+        self.source = patch.object(mail, 'sender', return_value=(self.root, 'plants'))
+        self.source.start()
+        self.addCleanup(self.source.stop)
+
+    def send(self, **kwargs):
+        return mail.send('shop', 'Which columns?', **kwargs)
+
+    def test_handoff_is_mirrored_without_waking_healthy_sender(self):
+        m = self.send(ask=True)
+        self.assertEqual(m['delivery']['status'], 'queued')
+        mail.delivered(self.shop, [m])
+        for root in (self.root, self.shop):
+            got = mail.messages(root)[0]
+            self.assertTrue(got['delivered_at'])
+            self.assertEqual(got['delivery']['status'], 'handed')
+            self.assertIsNone(got['answer'])
+        self.assertEqual(board.notes(self.root), [])
+
+    def test_delay_deduplicates_after_reload_and_obsolete_unread_note_is_closed(self):
+        m = self.send()
+        mail.report(self.shop, [m], 'delayed', 'authentication expired', 'auth')
+        mail.report(self.shop, mail.inbox(self.shop), 'delayed', 'authentication expired', 'auth')
+        self.assertEqual(len(board.notes(self.root)), 1)
+        self.assertIn(m['id'], board.notes(self.root)[0]['text'])
+        mail.delivered(self.shop, mail.inbox(self.shop))
+        self.assertEqual(board.open_notes(self.root), [])
+        self.assertEqual(len(board.notes(self.root)), 1, 'unseen delay needs no recovery wake')
+
+    def test_read_delay_gets_one_recovery_and_reply_delay_keeps_receipt(self):
+        m = self.send(ask=True)
+        mail.report(self.shop, [m], 'delayed', 'quota exhausted', 'rate-limit')
+        board.delivered(self.root, board.notes(self.root))
+        mail.delivered(self.shop, [m])
+        self.assertEqual(len(board.notes(self.root)), 2)
+        receipt = mail.messages(self.root)[0]['delivered_at']
+        mail.report(self.shop, mail.inbox(self.shop), 'reply-delayed', 'signed out', 'auth')
+        self.assertEqual(mail.messages(self.root)[0]['delivered_at'], receipt)
+        self.assertIn('reply', board.notes(self.root)[-1]['text'])
+        mail.report(self.shop, mail.inbox(self.shop), 'reply-delayed', 'signed out', 'auth')
+        self.assertEqual(len(board.notes(self.root)), 3)
+
+    def test_preflight_uses_cached_pause_and_auth_without_duplicate_note(self):
+        from colony import usage
+        with patch.object(usage, 'paused', return_value={str(self.shop): {'provider': 'claude', 'window': 'weekly'}}):
+            m = self.send()
+        self.assertEqual(m['delivery']['status'], 'delayed')
+        self.assertIn('weekly', m['delivery']['reason'])
+        self.assertEqual(board.notes(self.root), [])
+        with patch.object(usage, 'paused', return_value={}), patch.object(board, 'signed_out', return_value={'claude': 'yesterday'}):
+            blocked = mail.blocker(self.shop)
+        self.assertIn('last check', blocked['reason'])
+        self.assertIn('signed out', blocked['reason'])
+
+    def test_legacy_route_and_unregistered_source_cannot_write_arbitrary_folder(self):
+        m = {'type': 'message', 'id': 'legacy', 'at': board.now(), 'from': 'plants', 'to': 'shop',
+             'text': 'Which columns?', 'ask': True, 're': None}
+        for root in (self.root, self.shop):
+            board.append(root, mail.FILE, m)
+        mail.report(self.shop, [m], 'delayed', 'off', 'off')
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'delayed')
+        foreign = Path(self.tmp.name) / 'unregistered'
+        foreign.mkdir()
+        forged = dict(m, id='forged', source_root=str(foreign), **{'from': 'unknown'})
+        board.append(self.shop, mail.FILE, forged)
+        mail.report(self.shop, [forged], 'delayed', 'off', 'off')
+        self.assertFalse((foreign / '.board').exists())
+
+    def test_source_failure_prevents_recipient_queue_and_recipient_failure_is_recorded(self):
+        append = board.append
+        def broken_source(root, filename, record):
+            if root == self.root and filename == mail.FILE:
+                raise OSError('source disk full')
+            return append(root, filename, record)
+        with patch.object(board, 'append', side_effect=broken_source):
+            with self.assertRaisesRegex(OSError, 'source disk full'):
+                self.send()
+        self.assertEqual(mail.inbox(self.shop), [])
+        def broken_recipient(root, filename, record):
+            if root == self.shop and filename == mail.FILE:
+                raise OSError('recipient disk full')
+            return append(root, filename, record)
+        with patch.object(board, 'append', side_effect=broken_recipient):
+            with self.assertRaisesRegex(OSError, 'm[0-9a-f]+.*recipient disk full'):
+                self.send()
+        m = mail.messages(self.root)[0]
+        self.assertEqual(m['delivery']['status'], 'failed')
+        self.assertIn('recipient disk full', m['delivery']['reason'])
+
+    def test_cli_is_queued_shows_reason_and_file_error_has_no_traceback(self):
+        from argparse import Namespace
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from colony import cli
+        args = Namespace(to='shop', text='Which columns?', ask=True, urgent=False)
+        output = StringIO()
+        with redirect_stdout(output):
+            cli.cmd_send(args)
+        self.assertIn('queued', output.getvalue())
+        self.assertIn('answer expected', output.getvalue())
+        with patch.object(mail, 'send', side_effect=OSError('m123: source disk full')):
+            with self.assertRaisesRegex(SystemExit, 'm123: source disk full'):
+                cli.cmd_send(args)
+
+
+    def test_changed_delay_reason_is_fresh_but_unread_old_reason_is_suppressed(self):
+        m = self.send()
+        mail.report(self.shop, [m], 'delayed', 'quota exhausted', 'rate-limit')
+        mail.report(self.shop, [m], 'delayed', 'authentication expired', 'auth')
+        self.assertEqual(len(board.open_notes(self.root)), 1)
+        self.assertIn('authentication expired', board.open_notes(self.root)[0]['text'])
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['reason'], 'authentication expired')
+
+    def test_preflight_fresh_diagnostic_precedes_cache_and_off_never_exposes_pane(self):
+        from colony import usage
+        snap = {'state': 'off', 'lines': ['secret private pane text'],
+                'delivery_blocker': {'reason': 'fresh quota diagnostic', 'code': 'rate-limit'}}
+        with patch.object(usage, 'paused', return_value={}), patch.object(board, 'signed_out', return_value={'claude': 'yesterday'}):
+            self.assertEqual(mail.blocker(self.shop, snap)['reason'], 'fresh quota diagnostic')
+        with patch.object(usage, 'paused', return_value={}), patch.object(board, 'signed_out', return_value={}):
+            blocked = mail.blocker(self.shop, {'state': 'off', 'lines': snap['lines']})
+        self.assertEqual(blocked['code'], 'console-off')
+        self.assertNotIn('secret', blocked['reason'])
+
+    def test_cli_shows_delay_reason_in_send_reply_and_mail(self):
+        from argparse import Namespace
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from colony import cli
+        with patch.object(mail, 'blocker', return_value={'code': 'auth', 'reason': 'authentication expired'}):
+            output = StringIO()
+            with redirect_stdout(output):
+                cli.cmd_send(Namespace(to='shop', text='Which columns?', ask=True, urgent=False))
+            self.assertIn('authentication expired', output.getvalue())
+        m = mail.messages(self.root)[0]
+        with patch.object(mail, 'reply', return_value=m):
+            output = StringIO()
+            with redirect_stdout(output):
+                cli.cmd_reply(Namespace(id='original', text='answer'))
+            self.assertIn('queued', output.getvalue())
+            self.assertIn('authentication expired', output.getvalue())
+        output = StringIO()
+        with patch.object(board, 'root_of', return_value=self.root), redirect_stdout(output):
+            cli.cmd_mail(Namespace(project=None, last=10))
+        self.assertIn('[delayed: authentication expired]', output.getvalue())
+        self.assertEqual(board.notes(self.root), [], 'CLI directly reported the reason')
+
+    def test_stale_delay_cannot_replace_handoff_or_invent_reply_delay(self):
+        m = self.send()
+        mail.delivered(self.shop, [m])
+        returned = mail.report(self.shop, [m], 'delayed', 'old outage', 'off')
+        self.assertEqual(returned[0]['delivery']['status'], 'handed')
+        mail.report(self.shop, [m], 'reply-delayed', 'old outage', 'off')
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'handed')
+        self.assertEqual(board.notes(self.root), [])
+
+
+    def test_partial_recipient_write_is_explicit_and_later_handoff_repairs_source_status(self):
+        append = board.append
+        def partial(root, filename, record):
+            append(root, filename, record)
+            if root == self.shop and filename == mail.FILE and record['type'] == 'message':
+                raise OSError('flush failed')
+        with patch.object(board, 'append', side_effect=partial):
+            with self.assertRaisesRegex(OSError, 'partial write may have queued it.*flush failed'):
+                self.send()
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'failed')
+        mail.delivered(self.shop, mail.inbox(self.shop))
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'handed')
+        self.assertTrue(mail.messages(self.root)[0]['delivered_at'])
+
+    def test_report_serializes_competing_delay_notifications(self):
+        from concurrent.futures import ThreadPoolExecutor
+        m = self.send()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(mail.report, self.shop, [m], 'delayed', 'quota exhausted', 'rate-limit')
+                       for _ in range(2)]
+            for future in futures:
+                future.result()
+        self.assertEqual(len(board.notes(self.root)), 1)

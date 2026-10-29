@@ -1469,9 +1469,12 @@ def cmd_send(a):
         m = mail.send(a.to, mail.read_text(a.text), ask=a.ask, urgent=a.urgent)
     except KeyError:
         raise SystemExit(f"no project named {a.to}; `colony projects` lists them")
-    except PermissionError as err:
+    except OSError as err:
         raise SystemExit(str(err))
-    print(f"sent {m['id']} to {a.to}" + (" (it will answer with colony reply)" if a.ask else ""))
+    delivery = m.get('delivery', {})
+    print(f"queued {m['id']} to {a.to} for session handoff" + (" (answer expected via colony reply)" if a.ask else ""))
+    if delivery.get('status') == 'delayed':
+        print(f"delivery delayed: {delivery['reason']}")
     return 0
 
 
@@ -1481,7 +1484,11 @@ def cmd_reply(a):
         m = mail.reply(a.id, mail.read_text(a.text))
     except KeyError:
         raise SystemExit(f"no message {a.id} here; `colony mail` lists them")
-    print(f"answered {a.id}: sent {m['id']} to {m['to']}")
+    except OSError as err:
+        raise SystemExit(str(err))
+    print(f"reply to {a.id}: queued {m['id']} to {m['to']} for session handoff")
+    if m.get('delivery', {}).get('status') == 'delayed':
+        print(f"delivery delayed: {m['delivery']['reason']}")
     return 0
 
 
@@ -1495,7 +1502,10 @@ def cmd_mail(a):
     for m in ms[-a.last:]:
         way = f"from {mail.shown(m['from'])}" if m["to"] == me else f"to {m['to']}"
         flag = (" [answered]" if m["answer"] else " [asks]") if m["ask"] else ""
-        print(f"{m['id']}  {m['at'][:16]}  {way}{flag}: {m['text']}")
+        delivery = m.get('delivery', {})
+        state = delivery.get('status', 'handed' if m.get('delivered_at') else 'queued')
+        detail = f" [{state}" + (f": {delivery['reason']}" if delivery.get('reason') else "") + "]"
+        print(f"{m['id']}  {m['at'][:16]}  {way}{flag}{detail}: {m['text']}")
     return 0
 
 
