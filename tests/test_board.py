@@ -9942,6 +9942,146 @@ class MailDeliveryStatusTest(BoardBase):
             for future in futures:
                 future.result()
         self.assertEqual(len(board.notes(self.root)), 1)
+
+    def test_identical_report_repairs_failed_sender_receipt(self):
+        m = self.send()
+        append = board.append
+        def broken(root, filename, record):
+            if root == self.root and filename == mail.FILE:
+                raise OSError('source disk full')
+            append(root, filename, record)
+        with patch.object(board, 'append', side_effect=broken):
+            mail.delivered(self.shop, [m])
+        self.assertTrue(mail.inbox(self.shop)[0]['delivered_at'])
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'queued')
+        mail.delivered(self.shop, [m])
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'handed')
+        self.assertEqual(board.notes(self.root), [])
+
+    def test_repair_finishes_handed_fyi_without_redelivery(self):
+        m = self.send()
+        append = board.append
+        def broken(root, filename, record):
+            if root == self.root and filename == mail.FILE:
+                raise OSError('source disk full')
+            append(root, filename, record)
+        with patch.object(board, 'append', side_effect=broken):
+            mail.delivered(self.shop, [m])
+        receipt = mail.inbox(self.shop)[0]['delivered_at']
+        mail.repair(self.shop)
+        mail.repair(self.shop)
+        self.assertEqual(mail.deliver(self.shop, mark=False), ([], []))
+        self.assertEqual(mail.messages(self.root)[0]['delivered_at'], receipt)
+        self.assertEqual(len([r for r in board.read(self.root, mail.FILE) if r['type'] == 'delivery']), 1)
+        self.assertEqual(board.notes(self.root), [])
+
+    def test_repair_preserves_first_handoff_after_multiple_missed_statuses(self):
+        m = self.send(ask=True)
+        append = board.append
+        def broken(root, filename, record):
+            if root == self.root and filename == mail.FILE:
+                raise OSError('source disk full')
+            append(root, filename, record)
+        with patch.object(board, 'append', side_effect=broken):
+            with patch.object(board, 'now', return_value='2026-10-29T00:00:00Z'):
+                mail.delivered(self.shop, [m])
+            with patch.object(board, 'now', return_value='2026-10-29T00:01:00Z'):
+                mail.report(self.shop, [m], 'reply-delayed', 'authentication expired', 'auth')
+        self.assertEqual(mail.messages(self.root)[0]['delivery']['status'], 'queued')
+        mail.repair(self.shop)
+        got = mail.messages(self.root)[0]
+        self.assertEqual(got['delivered_at'], '2026-10-29T00:00:00Z')
+        self.assertEqual(got['delivery']['status'], 'reply-delayed')
+        self.assertEqual(len(board.notes(self.root)), 1)
+
+    def test_local_receipt_failure_cannot_create_or_close_sender_notes(self):
+        m = self.send()
+        mail.report(self.shop, [m], 'delayed', 'old outage', 'network')
+        append = board.append
+        def broken(root, filename, record):
+            if root == self.shop and filename == mail.FILE:
+                raise OSError('recipient disk full')
+            append(root, filename, record)
+        with patch.object(board, 'append', side_effect=broken):
+            with self.assertRaisesRegex(OSError, 'recipient disk full'):
+                mail.report(self.shop, [m], 'delayed', 'authentication expired', 'auth')
+        self.assertEqual(len(board.notes(self.root)), 1)
+        self.assertEqual(len(board.open_notes(self.root)), 1)
+        self.assertIn('old outage', board.open_notes(self.root)[0]['text'])
+        mail.report(self.shop, [m], 'delayed', 'authentication expired', 'auth')
+        self.assertEqual(len(board.notes(self.root)), 2)
+        self.assertEqual(len(board.open_notes(self.root)), 1)
+
+    def test_partial_sender_note_write_is_repaired_without_duplicate_or_orphan(self):
+        m = self.send()
+        append = board.append
+        def partial(root, filename, record):
+            append(root, filename, record)
+            if root == self.root and filename == 'notes.jsonl':
+                raise OSError('source flush failed')
+        with patch.object(board, 'append', side_effect=partial):
+            mail.report(self.shop, [m], 'delayed', 'authentication expired', 'auth')
+        mail.repair(self.shop)
+        self.assertEqual(len(board.read(self.root, 'notes.jsonl')), 1)
+        self.assertEqual(len(board.notes(self.root)), 1)
+        with patch.object(board, 'append', side_effect=partial):
+            mail.delivered(self.shop, [m])
+        mail.repair(self.shop)
+        self.assertEqual(board.open_notes(self.root), [])
+        self.assertEqual(len(board.notes(self.root)), 1, 'automatic closure is not evidence the sender saw a delay')
+
+    def test_partial_recovery_note_write_has_one_durable_identity(self):
+        m = self.send()
+        mail.report(self.shop, [m], 'delayed', 'authentication expired', 'auth')
+        board.delivered(self.root, board.notes(self.root))
+        append = board.append
+        def partial(root, filename, record):
+            append(root, filename, record)
+            if root == self.root and filename == 'notes.jsonl' and record['type'] == 'note':
+                raise OSError('source flush failed')
+        with patch.object(board, 'append', side_effect=partial):
+            mail.delivered(self.shop, [m])
+        mail.repair(self.shop)
+        mail.repair(self.shop)
+        self.assertEqual(len([r for r in board.read(self.root, 'notes.jsonl') if r['type'] == 'note']), 2)
+        self.assertEqual(len(board.open_notes(self.root)), 1)
+        self.assertIn('handed to the recipient session', board.open_notes(self.root)[0]['text'])
+
+    def test_answer_queued_clears_reply_delay_during_repair(self):
+        m = self.send(ask=True)
+        mail.delivered(self.shop, [m])
+        mail.report(self.shop, [m], 'reply-delayed', 'authentication expired', 'auth')
+        board.delivered(self.root, board.notes(self.root))
+        with patch.object(mail, 'sender', return_value=(self.shop, 'shop')):
+            answer = mail.reply(m['id'], 'Use the first two.')
+        self.assertEqual(mail.unanswered(self.shop), [])
+        mail.repair(self.shop)
+        mail.repair(self.shop)
+        original = next(row for row in mail.messages(self.root) if row['id'] == m['id'])
+        self.assertEqual(original['delivery']['status'], 'handed')
+        self.assertIn(answer['id'], original['delivery']['reason'])
+        self.assertIn('queued', original['delivery']['reason'])
+        self.assertEqual(len(board.open_notes(self.root)), 1)
+        self.assertIn(answer['id'], board.open_notes(self.root)[0]['text'])
+        self.assertNotIn('authentication expired', board.open_notes(self.root)[0]['text'])
+
+    def test_reply_recovery_and_safe_pause_do_not_claim_unproved_limits(self):
+        from colony import usage
+        m = self.send(ask=True)
+        mail.delivered(self.shop, [m])
+        mail.report(self.shop, [m], 'reply-delayed', 'authentication expired', 'auth')
+        board.delivered(self.root, board.notes(self.root))
+        mail.delivered(self.shop, [m])
+        recovery = board.open_notes(self.root)[0]['text']
+        self.assertIn('no longer observed', recovery)
+        self.assertNotIn('can resume', recovery)
+        with patch.object(usage, 'paused', return_value={str(self.shop): {'window': 'weekly'}}):
+            reason = mail.blocker(self.shop)['reason']
+        self.assertIn('configured', reason)
+        self.assertIn('safe-pause', reason)
+        self.assertNotIn('usage limit', reason)
+
+
 class ProviderMailProblemTest(unittest.TestCase):
     """Only a current provider diagnostic can explain another project's unanswered mail."""
 

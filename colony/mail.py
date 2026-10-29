@@ -10,6 +10,7 @@ Claude Code (see console.type_into).
 """
 import secrets
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import board
@@ -65,7 +66,7 @@ def blocker(root, snap=None):
     if paused:
         window = paused.get('window', 'usage')
         reset = usage.when(paused.get('resets_at'))
-        return {'code': 'usage-pause', 'reason': f"recipient is paused at its {window} usage limit; resets {reset}"}
+        return {'code': 'usage-pause', 'reason': f"recipient is in its configured {window} safe-pause window; resets {reset}"}
     if snap and snap.get('delivery_blocker'):
         known = snap['delivery_blocker']
         return {'code': known.get('code', ''), 'reason': known['reason']}
@@ -130,8 +131,8 @@ def messages(root):
             out[e['of']]['delivery'] = {'status': 'handed', 'reason': '', 'code': '', 'at': e['at']}
         elif e['type'] == 'delivery' and e['of'] in out:
             out[e['of']]['delivery'] = {k: v for k, v in e.items() if k not in ('type', 'of')}
-            if e['status'] == 'handed' and not out[e['of']]['delivered_at']:
-                out[e['of']]['delivered_at'] = e['at']
+            if not out[e['of']]['delivered_at']:
+                out[e['of']]['delivered_at'] = e.get('handed_at') or (e['at'] if e['status'] == 'handed' else None)
     for m in out.values():
         if m["re"] in out:
             out[m["re"]]["answer"] = m
@@ -173,27 +174,54 @@ def _source(message):
         return None
 
 
-def report(root, messages, status, reason='', code='', *, notify=True):
-    """Record delivery reality in both copies; only meaningful delays and seen-delay recovery wake a sender.
-
-    Handed means a hook handed the message to the session, never proof that it was read or answered.
-    Reload the log for deduplication: watcher restarts and stale caller dictionaries cannot repeat a notice.
-    """
+@contextmanager
+def _lock(root):
     import fcntl
     path = Path(root) / '.board' / 'mail.lock'
     with path.open('a') as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        return _report(root, messages, status, reason, code, notify=notify)
+        yield
+
+
+def report(root, originals, status, reason='', code='', *, notify=True):
+    """Record the recipient's reality first, then finish sender feedback, retrying after partial writes.
+
+    Handed means a hook handed the message to the session, never proof that it was read or answered.
+    """
+    with _lock(root):
+        updated = _report(root, originals, status, reason, code, notify=notify)
+        current = _repair(root)
+        return [current[m['id']] for m in updated]
+
+
+def _record(root, message, status, reason='', code='', *, notify=True):
+    previous = message['delivery']
+    event = {'type': 'delivery', 'of': message['id'], 'at': board.now(), 'status': status,
+             'reason': reason, 'code': code}
+    if message['delivered_at'] or status == 'handed':
+        event['handed_at'] = message['delivered_at'] or event['at']
+    if status in ('delayed', 'reply-delayed'):
+        event['reported'] = bool(previous.get('reported') or not notify)
+        if notify:
+            event['note_id'] = 'n' + secrets.token_hex(4)
+    elif previous['status'] in ('delayed', 'reply-delayed'):
+        event['note_id'] = 'n' + secrets.token_hex(4)
+    # The stable note identity must exist here before any sender log or note can be changed.
+    board.append(root, FILE, event)
+    message['delivery'] = {k: v for k, v in event.items() if k not in ('type', 'of')}
+    if status == 'handed' and not message['delivered_at']:
+        message['delivered_at'] = event['at']
+    return event
 
 
 def _report(root, originals, status, reason, code, *, notify):
     if status not in ('delayed', 'reply-delayed', 'handed'):
         raise ValueError(f'unknown mail delivery status: {status}')
-    current = {m['id']: m for m in messages(root)}
+    current = {m['id']: m for m in inbox(root)}
     updated = []
     for original in originals:
         m = current.get(original['id'])
-        if not m or m['to'] != address(root):
+        if not m:
             continue
         previous = m['delivery']
         if status == 'delayed' and m['delivered_at']:
@@ -202,41 +230,84 @@ def _report(root, originals, status, reason, code, *, notify):
         if status == 'reply-delayed' and (not m['delivered_at'] or not m['ask'] or m['answer']):
             updated.append(m)
             continue
+        if status == 'handed' and previous['status'] == 'handed':
+            updated.append(m)
+            continue
         if (previous.get('status'), previous.get('reason', ''), previous.get('code', '')) == (status, reason, code):
             updated.append(m)
             continue
-        source = _source(m)
-        seen = previous.get('reported', False)
-        old_note = None
-        if source and previous.get('note_id'):
-            old_note = next((n for n in board.notes(source) if n['id'] == previous['note_id']), None)
-            if old_note:
-                seen = seen or bool(old_note['delivered_at'] or old_note['addressed_at'])
-                if not old_note['addressed_at']:
-                    board.append(source, 'notes.jsonl', {'type': 'addressed', 'of': old_note['id'], 'at': board.now(),
-                                                        'text': 'Superseded by the current mail delivery status.'})
-        event = {'type': 'delivery', 'of': m['id'], 'at': board.now(), 'status': status,
-                 'reason': reason, 'code': code}
-        if status in ('delayed', 'reply-delayed'):
-            event['reported'] = bool(seen or not notify)
-            if source and notify:
-                phase = 'reply delayed (the message was already handed to its session)' if status == 'reply-delayed' else 'delivery delayed; message remains queued'
-                note = board.add_note(source, None, f"Mail {m['id']} to {m['to']}: {phase}: {reason}",
-                                      author='colony', kind='mail-delivery')
-                event['note_id'] = note['id']
-        elif source and seen and previous['status'] in ('delayed', 'reply-delayed'):
-            phase = ('the recipient can resume its reply; the message was already handed to its session'
-                     if previous['status'] == 'reply-delayed' else 'handed to the recipient session')
-            board.add_note(source, None, f"Mail {m['id']} to {m['to']}: {phase}. This confirms no read or answer.",
-                           author='colony', kind='mail-delivery')
-        board.append(root, FILE, event)
-        if source and source != Path(root):
-            board.append(source, FILE, event)
-        m['delivery'] = {k: v for k, v in event.items() if k not in ('type', 'of')}
-        if status == 'handed' and not m['delivered_at']:
-            m['delivered_at'] = event['at']
+        _record(root, m, status, reason, code, notify=notify)
         updated.append(m)
     return updated
+
+
+def repair(root):
+    """Finish pending sender feedback, even for handed FYI or answered asks, without delivering mail again."""
+    with _lock(root):
+        _repair(root)
+
+
+def _repair(root):
+    current = {m['id']: m for m in inbox(root)}
+    history = {ident: [] for ident in current}
+    for event in board.read(root, FILE):
+        if event['type'] == 'delivery' and event['of'] in history:
+            history[event['of']].append(event)
+    for ident, m in current.items():
+        if m['delivery']['status'] == 'reply-delayed' and m['answer']:
+            answer = m['answer']
+            state = ('was handed to the sender session' if answer['delivered_at'] else
+                     'was recorded; its delivery is unconfirmed' if answer['delivery']['status'] == 'failed' else
+                     'is queued for the sender')
+            history[ident].append(_record(root, m, 'handed', f"answer {answer['id']} {state}"))
+        if history[ident]:
+            try:
+                _feedback(root, m, history[ident])
+            except OSError:
+                # Sender storage cannot revoke an already flushed handoff. The watcher retries this log.
+                pass
+    return current
+
+
+def _feedback(root, message, history):
+    source = _source(message)
+    if not source:
+        return
+    event = history[-1]
+    if source != Path(root):
+        copy = next((m for m in messages(source) if m['id'] == message['id']), None)
+        if not copy or copy['delivery'] != message['delivery']:
+            board.append(source, FILE, event)
+    notes = {n['id']: n for n in board.notes(source)}
+    superseded = 'Superseded by the current mail delivery status.'
+    seen = False
+    for earlier in reversed(history[:-1]):
+        if earlier['status'] not in ('delayed', 'reply-delayed'):
+            break
+        note = notes.get(earlier.get('note_id'), {})
+        seen = seen or earlier.get('reported') or note.get('delivered_at') or (
+            note.get('addressed_at') and note.get('reply') != superseded)
+    for earlier in history[:-1]:
+        note = notes.get(earlier.get('note_id'))
+        if note and not note['addressed_at']:
+            board.append(source, 'notes.jsonl', {'type': 'addressed', 'of': note['id'],
+                                                'at': board.now(), 'text': superseded})
+    note_id = event.get('note_id')
+    delayed = event['status'] in ('delayed', 'reply-delayed')
+    if not note_id or note_id in notes or (not delayed and not seen):
+        return
+    if delayed:
+        phase = ('reply delayed (the message was already handed to its session)' if event['status'] == 'reply-delayed'
+                 else 'delivery delayed; message remains queued')
+        text = f"{phase}: {event['reason']}"
+    else:
+        phase = (event['reason'] or
+                 ('the previously reported block is no longer observed; the message was already handed to its session'
+                  if history[-2]['status'] == 'reply-delayed' else 'handed to the recipient session'))
+        text = phase + ('.' if message['answer'] else '. This confirms no read or answer.')
+    board.append(source, 'notes.jsonl', {'type': 'note', 'id': note_id, 'at': event['at'], 'author': 'colony',
+                                       'anchor': None, 'kind': 'mail-delivery',
+                                       'text': f"Mail {message['id']} to {message['to']}: {text}"})
 
 
 def delivered(root, ms):
@@ -270,7 +341,8 @@ def instruction(dest, text):
     project: the person's intent; the agent writes the message with its own context."""
     return (f"[colony] The person asks you to message the {dest} project in the colony. What it should be about: {text} — "
             f"Write it so their agent can act on it without our context. If you need an answer, "
-            f"`colony send {dest} --ask \"...\"`; otherwise `colony send {dest} \"...\"`. Then tell the person it is sent.")
+            f"`colony send {dest} --ask \"...\"`; otherwise `colony send {dest} \"...\"`. "
+            f"Then tell the person the returned queue or delivery status and any known reason.")
 
 
 def read_text(value):
