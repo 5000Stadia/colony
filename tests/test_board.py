@@ -5583,7 +5583,7 @@ class ReaderTest(BoardBase):
         card = page.split(f"id='s-{x['id']}'")[1]
         self.assertIn("<div class='what clamp'>", card, "what it is: three lines")
         self.assertIn(">More</button>", card, "then More")
-        self.assertIn(f"<a class='open' href='/open?p=0&amp;f=report.pdf&amp;s={x['id']}' target='_blank' rel='noopener'>"
+        self.assertIn(f"<a class='open' href='/open?p=0&amp;f=report.pdf&amp;s={x['id']}&amp;viewer=1'>"
                       "Open report.pdf</a>", card, "one button that says what it opens")
         self.assertIn(f"<a href='/open?p=0&amp;f=notes/screens&amp;s={x['id']}'>notes/screens</a>", card, "Try's paths as links")
         self.assertIn(f"<a href='/open?p=0&amp;f=notes/results.md&amp;s={x['id']}'>notes/results.md</a>,", card)
@@ -5615,13 +5615,14 @@ class ReaderTest(BoardBase):
         before = card.split("Shown before · 1")[1]
         for kept in ("Atlas v1", "the first cut", "The legend is too small", board.local_day(a["at"])):
             self.assertIn(kept, before, "its date, story and comments intact")
-        self.assertIn(f"href='/open?p=0&amp;f=atlas.pdf&amp;s={a['id']}'", before, "opened from the history fold: that showing")
+        self.assertIn(f"href='/open?p=0&amp;f=atlas.pdf&amp;s={a['id']}&amp;viewer=1'", before, "opened from the history fold: that showing")
         self.assertEqual([x["id"] for x in showcase.entries(self.root)], [b["id"], a["id"]], "none deleted or merged")
         since = board.since_html(0, self.root, {"at": "2000-01-01T00:00:00Z", "head": ""})
         for x in (a, b):
-            self.assertIn(f"new to see: <a href='/open?p=0&amp;f=atlas.pdf&amp;s={x['id']}'", since, "Since lists each showing")
+            self.assertIn(f"new to see: <a href='/open?p=0&amp;f=atlas.pdf&amp;s={x['id']}&amp;viewer=1'", since, "Since lists each showing")
 
     def test_a_comment_where_a_file_opens_is_on_what_it_was_opened_from_and_back_keeps_their_place(self):
+        from colony import opener
         board.track(self.root)
         (self.root / "brief.md").write_text("# Brief\n")
         (self.root / "loose.md").write_text("# Loose\n")
@@ -5643,10 +5644,10 @@ class ReaderTest(BoardBase):
         self.assertEqual(self.post("/open/comment", p=0, f="../../etc/hostname", text="x", back="/")[0], 404)
         self.assertIn("<p class='sent'>Sent: it reaches the agent as a message.</p>", self.fetch("/open?p=0&f=loose.md&sent=1")[2])
         _, _, came = self.fetch(f"/open?p=0&f=brief.md&pin={p['id']}", Referer=self.base + "/?p=0&view=library")
-        self.assertIn("href='/?p=0&amp;view=library' onclick='return readBack(this, 1)'>‹ Library</a>", came,
-                      "back the way they came, in the browser's history: their place on the page kept")
+        self.assertIn(f"href='{html.escape(opener.return_ref(self.root, 'library'), quote=True)}'>‹ Back to Library</a>", came,
+                      "back to this project's Library through its registered identity")
         _, _, cold = self.fetch(f"/open?p=0&f=brief.md&s={b['id']}")
-        self.assertIn(f"href='/?p=0&amp;view=showcase#s-{b['id']}' onclick='return readBack(this, 0)'>‹ Showcase</a>", cold,
+        self.assertIn(f"href='{html.escape(opener.return_ref(self.root, 'showcase', 's-' + b['id']), quote=True)}'>‹ Back to Showcase</a>", cold,
                       "opened from nowhere: back to where it lives")
 
     def test_agents_see_the_headings_in_use_and_each_pins_heading(self):
@@ -9833,6 +9834,133 @@ class ChatMediaTest(BoardBase):
                                 capture_output=True, timeout=90)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS phone image, chart and multipage PDF', result.stdout)
+
+
+class ReaderMediaTest(BoardBase):
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        docs = self.root / 'docs'; docs.mkdir()
+        (docs / 'picture.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600"><rect width="1200" height="600" fill="teal"/><text x="40" y="90" font-size="50" fill="white">Sample inventory</text></svg>')
+        objects = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+                   b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>']
+        words = b'BT /F1 30 Tf 40 700 Td (Sample packing list) Tj ET'
+        objects += [f'<< /Length {len(words)} >>\nstream\n'.encode() + words + b'\nendstream', b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']
+        pdf, offsets = b'%PDF-1.4\n', [0]
+        for i, obj in enumerate(objects, 1):
+            offsets.append(len(pdf)); pdf += f'{i} 0 obj\n'.encode() + obj + b'\nendobj\n'
+        xref = len(pdf); pdf += f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode()
+        pdf += b''.join(f'{offset:010d} 00000 n \n'.encode() for offset in offsets[1:])
+        pdf += f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+        (docs / 'packing.pdf').write_bytes(pdf)
+        prose = ('# Sample inventory\n\n' + 'Ordinary prose wraps naturally on a phone. ' * 40 + '\n\n'
+                 '| Item number | Product category | Shipping and packing instructions | Package dimensions | Unit price | Storage locations | Ready status |\n'
+                 '|---|---|---|---|---|---|---|\n'
+                 '| 1 | Outdoor lantern bundle | Pack the lantern in a padded carton and include the illustrated setup guide. | Large carton | 25 | Six bins | Ready |\n\n'
+                 '| Reference | Long stock identifier | Notes |\n|---|---|---|\n| Sample | ' + 'a' * 150 + ' | Long tokens stay inside this table. |\n\n'
+                 '![Sample picture](picture.svg)\n\n[Sample packing list](packing.pdf)\n\n## Finish\n\nEnd of the sample document.\n')
+        (docs / 'inventory.md').write_text(prose)
+        self.entry = showcase.add(self.root, 'Inventory guide', 'A sample document', link='docs/inventory.md')
+        self.picture_entry = showcase.add(self.root, 'Sample picture', 'A wide sample picture', link='docs/picture.svg')
+        self.pdf_entry = showcase.add(self.root, 'Packing list', 'A sample PDF', link='docs/packing.pdf')
+        self.pin = pins.add(self.root, 'docs/packing.pdf', 'Packing list')
+
+    def another_project(self):
+        from colony import nest
+        self.other = Path(self.tmp.name) / 'other-project'; self.other.mkdir()
+        (self.other / 'ROADMAP.md').write_text(ROADMAP)
+        board.track(self.other)
+        for root in (self.root, self.other):
+            nest.join(root, 'Sample group')
+
+    fetch = ReaderTest.fetch
+
+    def serve(self):
+        class Handler(board.Handler):
+            def do_POST(self):
+                if self.path == '/fixture/reorder':
+                    reg = board.registry(); reg['projects'].reverse(); board.save_registry(reg)
+                    return self._send(200, b'reordered')
+                return super().do_POST()
+
+            def log_message(self, *args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        self.base = f'http://127.0.0.1:{server.server_address[1]}'
+        return self.base
+
+    def test_reader_documents_get_independent_media_and_keep_document_audio(self):
+        self.serve()
+        status, _, page = self.fetch('/open?p=0&f=docs/inventory.md&s=' + self.entry['id'], Referer=self.base + '/?p=0&view=showcase')
+        self.assertEqual(status, 200)
+        self.assertEqual(page.count("data-media='table'"), 2)
+        self.assertEqual(page.count("data-media='image'"), 1)
+        self.assertEqual(page.count("data-media='pdf'"), 1)
+        self.assertIn('Play document', page)
+        self.assertIn("<h1 id='sample-inventory'>", page)
+        self.assertIn("<h2 id='finish'>", page)
+        self.assertIn("action='/showcase/comment'", page)
+        self.assertIn('Back to Showcase', page)
+        status, _, audio = self.fetch('/open?p=0&f=docs/inventory.md&audio=1')
+        self.assertEqual(status, 200)
+        self.assertIn('End of the sample document.', audio)
+
+    def test_showcase_media_uses_explicit_viewer_without_changing_raw_file_routes(self):
+        from colony import opener
+        self.serve()
+        for entry, kind, content_type in ((self.picture_entry, 'image', 'image/svg+xml'), (self.pdf_entry, 'pdf', 'application/pdf')):
+            view, new_tab = opener.entry_link(0, self.root, entry)
+            self.assertIn('&viewer=1', view)
+            self.assertFalse(new_tab)
+            status, headers, page = self.fetch(view)
+            self.assertEqual(status, 200)
+            self.assertIn('text/html', headers['Content-Type'])
+            self.assertIn(f"data-media='{kind}'", page)
+            self.assertIn("action='/showcase/comment'", page)
+            raw = html.unescape(re.search(r"data-src='([^']+)'", page)[1])
+            self.assertNotIn('viewer=', raw)
+            response = urllib.request.urlopen(self.base + raw)
+            self.assertEqual(response.headers['Content-Type'], content_type)
+            download = urllib.request.urlopen(self.base + view + '&download=1')
+            self.assertTrue(download.headers['Content-Disposition'].startswith('attachment;'))
+        self.assertIn('&viewer=1', opener.pin_link(0, self.root, self.pin)[0])
+        for file in ('../outside.pdf', '/etc/hostname', 'missing.pdf'):
+            self.assertEqual(self.fetch('/open?p=0&f=' + urllib.parse.quote(file) + '&viewer=1')[0], 404)
+        (self.root / 'page.html').write_text('<script>example()</script>')
+        _, headers, page = self.fetch('/open?p=0&f=page.html&viewer=1')
+        self.assertEqual(headers['Content-Security-Policy'], board.SANDBOX)
+
+    def test_reader_exit_returns_to_its_project_after_registered_order_changes(self):
+        self.another_project(); self.serve()
+        _, _, document = self.fetch('/open?p=0&f=docs/inventory.md&s=' + self.entry['id'], Referer=self.base + '/?p=0&view=showcase')
+        back = html.unescape(re.search(r"class='back' href='([^']+)'", document)[1])
+        reg = board.registry(); reg['projects'].reverse(); board.save_registry(reg)
+        _, _, returned = self.fetch(back.split('#')[0])
+        self.assertIn("<body data-project='plants'>", returned)
+        self.assertIn('Inventory guide', returned)
+        self.assertIn('Back to Showcase', document)
+        self.assertIn('Project: plants', document)
+        _, _, from_foreign = self.fetch('/open?p=1&f=docs/inventory.md', Referer='https://foreign.invalid/?p=1&view=chat')
+        back = html.unescape(re.search(r"class='back' href='([^']+)'", from_foreign)[1])
+        self.assertIn('view=overview', back)
+        self.assertNotIn('foreign.invalid', back)
+        self.assertEqual(self.fetch('/reader/return?project=/etc&view=showcase')[0], 404)
+        self.assertEqual(self.fetch('/reader/return?project=' + urllib.parse.quote(str(self.root), safe='') + '&view=foreign')[0], 400)
+        _, _, pinned = self.fetch('/open?p=1&f=docs/packing.pdf&pin=' + self.pin['id'] + '&viewer=1')
+        back = html.unescape(re.search(r"class='back' href='([^']+)'", pinned)[1])
+        _, _, returned = self.fetch(back)
+        self.assertIn("<body data-project='plants'>", returned)
+        self.assertIn('<h2>Library</h2>', returned)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_phone_showcase_reader_media_and_inline_table_scroll(self):
+        self.another_project()
+        result = subprocess.run(['node', str(ROOT / 'tests/reader_media.js'), self.serve(), self.entry['id'], self.picture_entry['id'], self.pdf_entry['id']],
+                                capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS Showcase reader media and independent table scrolling', result.stdout)
 
 
 class MailDeliveryStatusTest(BoardBase):

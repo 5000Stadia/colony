@@ -7208,7 +7208,8 @@ def showcase_html(pid, root):
             return f"<p class='muted'>{e(x['link'])} is no longer in the project.</p>"
         tab = opener.NEW_TAB if got[1] else ""
         if button and not showcase.is_url(x) and showcase.mime(x).startswith("image/"):
-            return f"<a class='shotlink' href='{e(got[0])}'{tab}><img class='shot' src='{e(got[0])}' alt='{e(x['title'])}' loading='lazy'></a>"
+            raw = got[0].removesuffix('&viewer=1')
+            return f"<a class='shotlink' href='{e(got[0])}'{tab}><img class='shot' src='{e(raw)}' alt='{e(x['title'])}' loading='lazy'></a>"
         return f"<a class='{'open' if button else 'opensmall'}' href='{e(got[0])}'{tab}>{e(opener.open_label(x))}</a>"
 
     def said(x):
@@ -8796,9 +8797,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return self.wfile.write(body)
         if opener.kind(path) == "raw":
+            if one('viewer') == '1' and one('download') != '1' and path.suffix.lower() in (*IMAGES, '.pdf'):
+                return self._send(200, opener.page(reg, key, root, path, pin_id=one('pin'), entry_id=one('s'), viewer=True,
+                                                   referer=self.headers.get('Referer', ''), sent=bool(one('sent')), host=self.headers.get('Host', '')).encode())
             return self._file(key, root, path, download=one('download') == '1')
         return self._send(200, opener.page(reg, key, root, path, pin_id=one("pin"), entry_id=one("s"), whole=bool(one("whole")),
-                                           referer=self.headers.get("Referer", ""), sent=bool(one("sent"))).encode())
+                                           referer=self.headers.get("Referer", ""), sent=bool(one("sent")), host=self.headers.get('Host', '')).encode())
 
     def _the_persons(self):
         """Whether this request is the person's own look, kept as theirs (their active hours, their last look at each
@@ -8853,6 +8857,16 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/":
             view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
             return self._send(200, render(reg, pid, view, (q.get("all") or [""])[0]).encode())
+        if url.path == '/reader/return':
+            from . import opener
+            view = (q.get('view') or ['overview'])[0]
+            if view not in opener.AWAY:
+                return self._send(400, b'no such project view')
+            project = (q.get('project') or [''])[0]
+            current = next((i for i, root in enumerate(plist) if str(root.resolve()) == project), None)
+            if current is None:
+                return self._send(404, b"Project no longer on the board. <a href='/projects'>All projects</a>")
+            return self._send(200, render(reg, current, view).encode())
         if url.path == "/add":
             if (q.get("for") or ["project"])[0] == "project":
                 return self._send(200, add_project_page(reg, (q.get("tab") or ["new"])[0], (q.get("error") or [""])[0]).encode())

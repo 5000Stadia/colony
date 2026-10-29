@@ -1,8 +1,9 @@
 """The opener: the one address every file the person taps on the board goes through (a Library row, a Showcase entry,
 Chat's file links, "Since you were last here", a link inside a document opened here), so what an agent made is read,
 never its source. It formats only what a phone shows badly: a markdown document becomes a reading page, its links and
-pictures found from its own folder; a text file shows as written; a folder lists what is in it. PDFs, pictures and web
-pages go to the browser's own viewer, which handles them best (a page sandboxed, as Chat gives it). An address on this
+pictures found from its own folder; a text file shows as written; a folder lists what is in it. Pictures, PDFs and
+tables inside a document use the same expandable viewer as Chat. Showcase and Library media links ask for a viewer
+page explicitly; the underlying file addresses still return raw bytes (web pages sandboxed, as Chat gives them). An address on this
 machine goes through the localhost rewrite, so a phone reaches it. At the foot of a reading page: Comment, and Edit for
 a pinned text file. Nothing outside the project is opened (pins.inside); a path refused there is not found.
 
@@ -12,13 +13,14 @@ for either user qol and usage or agent qol and usage", "Ive been full mobile but
 experience", then "Lets go B".
 """
 import codecs
+import html
 import mimetypes
 import re
 import time
 import urllib.parse
 from pathlib import Path
 
-from . import board, pins, showcase
+from . import board, media, pins, showcase
 
 DOC = (".md", ".markdown")                 # rendered as a document
 TEXTUAL = {"application/json", "application/xml", "application/javascript", "application/x-sh", "application/toml",
@@ -50,11 +52,11 @@ def kind(path):
     return "raw" if b"\0" in head else "text"
 
 
-def ref(key, rel, pin="", entry="", whole=False):
+def ref(key, rel, pin="", entry="", whole=False, viewer=False):
     """The opener's address for a path of a project (key: its place on the board, or "steward"), from its folder."""
     q = lambda v: urllib.parse.quote(str(v), safe="")
     return (f"/open?p={q(key)}&f={urllib.parse.quote(str(rel), safe='/')}" + (f"&pin={q(pin)}" if pin else "")
-            + (f"&s={q(entry)}" if entry else "") + ("&whole=1" if whole else ""))
+            + (f"&s={q(entry)}" if entry else "") + ("&whole=1" if whole else "") + ("&viewer=1" if viewer else ""))
 
 
 def link(key, root, target, pin="", entry="", here=None):
@@ -98,14 +100,19 @@ def entry_link(key, root, x):
         return f"/?p={key}&view=showcase#s-{x['id']}", False
     if showcase.is_url(x):
         return address(key, x["link"]), True
-    return link(key, root, x["link"], entry=x["id"])
+    return _viewer(link(key, root, x["link"], entry=x["id"]), x['link'])
 
 
 def pin_link(key, root, p):
     """Where a Library pin opens: (address, in a tab of its own); None when its file is no longer in the project."""
     if p["kind"] == "url":
         return address(key, p["target"]), True
-    return link(key, root, p["target"], pin=p["id"])
+    return _viewer(link(key, root, p["target"], pin=p["id"]), p['target'])
+
+
+def _viewer(got, target):
+    """Navigation may use a Colony viewer; embedded file bytes always keep the ordinary opener URL."""
+    return (got[0] + '&viewer=1', False) if got and got[1] and str(target).lower().endswith((*board.IMAGES, '.pdf')) else got
 
 
 def open_label(x):
@@ -144,6 +151,10 @@ def doc_html(text, key, root, here):
         got = link(key, root, urllib.parse.unquote(rel.split("?")[0]), here=here) if rel else None
         if not got:
             return label
+        if rel.lower().endswith('.pdf'):
+            return media.pdf(got[0], html.unescape(re.sub(r'<[^>]*>', '', label)))
+        if rel.lower().endswith(board.IMAGES):
+            return media.picture(got[0], html.unescape(re.sub(r'<[^>]*>', '', label)))
         return f"<a href='{e(got[0] + ('#' + frag if frag else ''))}'{NEW_TAB if got[1] else ''}>{label}</a>"
 
     def token(m):
@@ -153,7 +164,7 @@ def doc_html(text, key, root, here):
                 return f"<a href='{e(src)}'{NEW_TAB}>🖼 {e(alt or src)}</a>"
             got = link(key, root, urllib.parse.unquote(src.split("#")[0]), here=here)
             if got and src.lower().split("#")[0].endswith(board.IMAGES):
-                return f"<a class='pic' href='{e(got[0])}'{NEW_TAB}><img src='{e(got[0])}' alt='{e(alt)}' loading='lazy'></a>"
+                return media.picture(got[0], alt)
             return anchor(src, e(alt or src)) if got else e(alt)
         if m.group("label") is not None:
             return anchor(m.group("to").strip("<>"), board._inline(m.group("label")))
@@ -174,7 +185,9 @@ def doc_html(text, key, root, here):
         back = lambda s: re.sub(r"\x00(\d+)\x00", lambda m: back(made[int(m.group(1))]), s)   # a link's words may hold code
         return back(board._inline(text))
 
-    return board.prose(text, inline=words, doc=True)
+    return re.sub(r"<div class='mdtable'><table>.*?</table></div>",
+                  lambda m: media.table(m[0].replace("<div class='mdtable'>", "<div class='mdtable' tabindex='0' role='region' aria-label='Scrollable table'>", 1)),
+                  board.prose(text, inline=words, doc=True), flags=re.S)
 
 
 # ---------------------------------------------------------------- the reading page
@@ -183,31 +196,32 @@ AWAY = {"overview": "Overview", "roadmap": "Roadmap", "library": "Library", "sho
         "console": "Console"}
 
 
-def came_from(referer, key, root, pin=None, entry=None):
-    """Where the reading page's ‹ goes back to, and its name: the board page the person opened it from (going back
-    keeps where they were on it), or else where the file lives on the board. (href, label, went back by history.) Only
-    the page's path is taken from where they came: the way back is always a page of this board, whatever name a proxy
-    (Tailscale Serve) gave it on the way."""
-    u = urllib.parse.urlsplit(referer or "")
-    if u.path in ("/", "/steward", "/sweep", "/nest", "/item", "/open", "/needs-you", "/projects"):
-        q = urllib.parse.parse_qs(u.query)
-        if u.path == "/":
-            label = AWAY.get((q.get("view") or ["overview"])[0], "Overview") if q.get("p") else "Projects"
-        elif u.path == "/steward":
-            label = board.steward_name() + (" · Chat" if (q.get("view") or [""])[0] == "chat" else "")
-        elif u.path == "/open":
-            label = Path((q.get("f") or [""])[0]).name or "Back"
-        else:
-            label = {"/sweep": "Every pin and entry", "/needs-you": "Needs you", "/projects": "All projects",
-                     "/item": (q.get("id") or ["Item"])[0], "/nest": (q.get("n") or ["Nest"])[0]}[u.path]
-        return u.path + (f"?{u.query}" if u.query else ""), label, True
+def return_ref(root, view='overview', fragment=''):
+    """A reader exit names its registered project, never its temporary place in a list."""
+    return ('/reader/return?' + urllib.parse.urlencode({'project': str(Path(root).resolve()), 'view': view})
+            + ('#' + urllib.parse.quote(fragment, safe='-') if fragment else ''))
+
+
+def came_from(referer, key, root, pin=None, entry=None, host=''):
+    """Return to this project's showing, Library or original view, using a registered-project resolver.
+
+    Only a same-board referrer for this project may choose a view. Its origin and numeric index are never reused.
+    """
     if key == "steward":
         return "/steward?view=chat", f"{board.steward_name()} · Chat", False
     if entry:
-        return f"/?p={key}&view=showcase#s-{entry['id']}", "Showcase", False
+        return return_ref(root, 'showcase', 's-' + entry['id']), "Showcase", False
     if pin:
-        return f"/?p={key}&view=library", "Library", False
-    return f"/?p={key}", Path(root).name, False
+        return return_ref(root, 'library'), "Library", False
+    try:
+        u = urllib.parse.urlsplit(referer or '')
+        q = urllib.parse.parse_qs(u.query)
+        view = (q.get('view') or ['overview'])[0]
+        if host and u.netloc.lower() == host.lower() and u.scheme in ('http', 'https') and u.path == '/' and (q.get('p') or [''])[0] == str(key) and view in AWAY:
+            return return_ref(root, view), AWAY[view], False
+    except ValueError:
+        pass
+    return return_ref(root), board.name_of(root), False
 
 
 def pinned(root, rel, pin_id=""):
@@ -228,8 +242,7 @@ def changed(path):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(path.stat().st_mtime))
 
 
-# The reading page's own: its ‹ goes back in the browser's history when the person came from a board page, so the
-# page they left is where they left it; and a comment is sent in place, so going back never passes the page again.
+# The reading page's audio controls and comments. Exits use the registered-project resolver rather than stale history.
 READER = """
 (() => {
   const controls = document.querySelector('.readaudio');
@@ -243,11 +256,6 @@ READER = """
     play.disabled = false; status.textContent = ok ? 'Sections are in the player below.' : 'Could not read this document. Try again.';
   });
 })();
-function readBack(a, steps) {
-  if (steps && history.length > 1) { history.back(); return false; }
-  if (history.length === 1) window.close();
-  return true;
-}
 function readSend(f) {
   fetch(f.action, {method: 'POST', body: new URLSearchParams(new FormData(f)), redirect: 'manual', credentials: 'same-origin'})
     .then((r) => { if (r.type !== 'opaqueredirect' && !r.ok) return f.submit();
@@ -282,8 +290,8 @@ def folder_html(key, root, path):
             + (more or ("" if kids else "<p class='muted'>Nothing in it.</p>")))
 
 
-def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="", sent=False):
-    """A document, a text file or a folder of a project as the reading page shows it: a way back to where the person
+def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="", sent=False, viewer=False, host=''):
+    """A document, text file, folder or explicit media viewer: a way back to where the person
     was, what it is, the thing itself (a long file's first part, with the rest a tap away), and at its foot Comment,
     and Edit for a pinned text file. A cut-off preview is never editable."""
     base = Path(root).resolve()
@@ -291,7 +299,7 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     steward = key == "steward"
     entry = None if steward or not entry_id else showcase.get(root, entry_id)
     pin = None if steward else pinned(root, rel, pin_id)
-    back, label, by_history = came_from(referer, key, root, pin, entry)
+    back, label, _ = came_from(referer, key, root, pin, entry, host)
     how = kind(path)
     name = Path(root).name if rel == "." else rel
     about = [f"<b>{e(name)}{'/' if how == 'folder' else ''}</b>", f"changed {e(board.on_day(changed(path)))}"]
@@ -300,7 +308,10 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     if entry:
         about.append(f"shown {e(board.on_day(entry['at']))}: {e(entry['title'])}")
     cut = False
-    if how == "folder":
+    if viewer and how == 'raw':
+        raw = ref(key, rel)
+        body = media.pdf(raw, path.name) if path.suffix.lower() == '.pdf' else media.picture(raw, path.name)
+    elif how == "folder":
         body = folder_html(key, root, path)
     else:
         text = path.read_text(errors="replace")
@@ -317,7 +328,7 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
         action, ident, hint = "/pin/comment", pin["id"], f"A comment on {Path(rel).name}: it reaches the agent"
     else:
         action, ident, hint = "/open/comment", "", f"A comment on {Path(name).name}: it reaches {to}"
-    here = ref(key, rel, pin["id"] if pin else "", entry["id"] if entry else "", whole)
+    here = ref(key, rel, pin["id"] if pin else "", entry["id"] if entry else "", whole, viewer=viewer)
     comment = (f"<details class='readcomment'><summary>Comment</summary><form class='add' method='post' action='{action}' "
                f"data-sent='Sent: it reaches {e(to)} as a message.' onsubmit='return readSend(this)'>"
                f"<input type='hidden' name='p' value='{e(key)}'><input type='hidden' name='f' value='{e(rel)}'>"
@@ -329,11 +340,14 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     edit = f"<a class='readedit' href='/pin/edit?p={e(key)}&id={e(pin['id'])}'>Edit</a>" if editable else ""
     audio = (f"<div class='readaudio' data-url='{e(ref(key, rel) + '&audio=1')}'><button type='button' class='readplay'>Play document</button>"
              "<span class='readaudiostatus' role='status'></span></div>") if how in ('doc', 'text') else ""
-    out = (f"<div class='readtop'><a class='back' href='{e(back)}' onclick='return readBack(this, {int(by_history)})'>‹ {e(label)}</a></div>"
+    project = '/steward?view=chat' if steward else return_ref(root)
+    exits = (f"<a class='back' href='{e(back)}'>‹ Back to {e(label)}</a>"
+             f"<a class='readproject' href='{e(project)}'>Project: {e(board.steward_name() if steward else board.name_of(root))}</a>")
+    out = (f"<div class='readtop readnav' role='navigation' aria-label='Document navigation'>{exits}</div>"
            f"<p class='who readabout'>{' · '.join(about)}</p>"
            f"{audio}<article class='reader{' plain' if how == 'text' else ''}'>{body}</article>"
            + (f"<p class='sent'>Sent: it reaches {e(to)} as a message.</p>" if sent else "")
-           + f"<div class='readfoot'>{comment}{edit}</div><script>{READER}</script>")
+           + f"<div class='readfoot'>{comment}{edit}<div class='readnav' role='navigation' aria-label='Document navigation'>{exits}</div></div><script>{READER}</script>")
     return board.shell(reg, -1 if steward else int(key), out)
 
 
