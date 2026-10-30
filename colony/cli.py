@@ -1124,6 +1124,9 @@ def cmd_notes(a):
         if seen:                                                                      # the board's console, no other here
             console.remember(root, *seen)
         prompt = str(payload.get("prompt") or "")
+        if payload.get('hook_event_name') == 'UserPromptSubmit' and prompt and \
+                context.scoped(root, a.console or providers.key(context.program(root)), payload):
+            console.confirm_input(context.seat(root), prompt)
         if _persons(prompt):
             from . import hours
             hours.seen()                                     # they're around, whatever the clock says

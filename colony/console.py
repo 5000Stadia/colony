@@ -569,22 +569,41 @@ def _sent(name, text, tries=3):
     A missing box may be a redraw. A different draft, a choice or a dead console
     cannot acknowledge delivery and must never receive a retry intended for us.
     """
+    owned = _pending_input(name, live=False)
+    def same_dispatch():
+        current = _input_json(_input_paths(name)[0])
+        return (owned.get('incarnation') and owned['incarnation'] == _input_identity(name)
+                and isinstance(current, dict) and current.get('id') == owned['id'])
     for attempt in range(tries + 1):
         if attempt:
             time.sleep(0.5 * attempt)
-        if not running(name) or asking(name):
+        if (owned and not same_dispatch()) or not running(name) or asking(name):
             return False
         left = draft(name)
+        if owned and not same_dispatch():
+            return False
         if left == "":
+            _accept_input(name, text)
             return True
         if left is None:
             continue
-        if not provider(name).pending_input(text, left):
+        record = _pending_input(name)
+        if record and record.get('state') == 'accepted' and _input_normal(record['text']) == _input_normal(text):
+            return False                                  # an accepted queued prompt must never receive another Enter
+        owned_suffix = bool(record and record.get('state') == 'unsent' and
+                            _input_normal(record['text']) == _input_normal(text) and _input_matches(record, left))
+        if not provider(name).pending_input(text, left) and not owned_suffix:
+            return False
+        if owned and not same_dispatch():
             return False
         subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
     # Give the final Enter one bounded redraw interval before reading its result.
     time.sleep(0.1)
-    return running(name) and not asking(name) and draft(name) == ""
+    accepted = (not owned or same_dispatch()) and running(name) and not asking(name) and draft(name) == ""
+    accepted = accepted and (not owned or same_dispatch())
+    if accepted:
+        _accept_input(name, text)
+    return accepted
 
 
 STARTING = 60                   # seconds after a console starts in which a screen without its box is still coming up
@@ -647,6 +666,217 @@ def _typing(name, wait=10):
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+INPUT_TTL = 180
+INPUT_BYTES = 64 * 1024
+
+
+def _input_paths(name):
+    from . import board
+    base = board.home() / 'consoles' / ('input-' + hashlib.sha256(name.encode()).hexdigest()[:20])
+    return base.with_suffix('.json'), base.with_suffix('.receipt'), base.with_suffix('.events')
+
+
+def _input_json(path):
+    try:
+        return json.loads(path.read_text()) if path.stat().st_size <= INPUT_BYTES * 8 else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _private_input(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.' + secrets.token_hex(6))
+    try:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'w') as handle:
+            json.dump(value, handle)
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _input_normal(text):
+    import unicodedata
+    return ''.join(unicodedata.normalize('NFC', text).split())
+
+
+def _input_identity(name):
+    """A portable tmux incarnation, including its server start time, never just a recyclable PID."""
+    result = subprocess.run(['tmux', 'display', '-p', '-t', name,
+                             '#{pid}|#{start_time}|#{session_id}|#{pane_id}|#{session_created}'], capture_output=True, text=True)
+    parts = (result.stdout or '').strip().split('|')
+    if result.returncode or len(parts) != 5 or not all(parts) or not all(parts[i].isdigit() for i in (0, 1, 4)):
+        return None
+    began = (_input_json(_started_path()).get(name) or {}).get('at')
+    return hashlib.sha256(json.dumps([parts, began]).encode()).hexdigest()
+
+
+def _input_root(name):
+    from . import board, monitor
+    return next((str(p) for p in board.projects() if session_name(p) == name),
+                str(monitor.home()) if monitor.name() == name else None)
+
+
+def _input_event(name, record, event):
+    path = _input_paths(name)[2]
+    rows = _input_json(path)
+    rows = rows if isinstance(rows, list) else []
+    rows.append(dict(at=time.time(), event=event, id=record.get('id'), hash=record.get('hash'),
+                     purpose=record.get('purpose'), carry=record.get('carry')))
+    _private_input(path, rows[-32:])          # metadata only: never copy prompts into a log
+
+
+def _pending_input(name, live=True):
+    path, receipt, _ = _input_paths(name)
+    record = _input_json(path)
+    if not isinstance(record, dict) or not isinstance(record.get('text'), str):
+        return None
+    proof = _input_json(receipt)
+    if isinstance(proof, dict) and proof.get('id') == record.get('id') and record.get('state') == 'accepted':
+        path.unlink(missing_ok=True); receipt.unlink(missing_ok=True)
+        _input_event(name, record, 'confirmed')
+        return None
+    if live and (not record.get('incarnation') or record['incarnation'] != _input_identity(name)):
+        return None
+    return record
+
+
+def _record_input(name, text, purpose='system'):
+    """Called under _typing, before the first byte is sent. Only one pending payload is retained."""
+    if len(text.encode()) > INPUT_BYTES:
+        raise ValueError('Input exceeds the bounded ownership record')
+    incarnation = _input_identity(name)
+    if not incarnation:
+        raise ValueError('The console incarnation could not be established')
+    normal = _input_normal(text)
+    carry = re.search(r'\[colony\] Context carry-over \(([a-f0-9]{16})\)', text)
+    record = dict(id=secrets.token_hex(12), name=name, incarnation=incarnation, text=text,
+                  hash=hashlib.sha256(normal.encode()).hexdigest(), at=time.time(), purpose=purpose,
+                  carry=carry[1] if carry and purpose == 'system' else None, root=_input_root(name), state='unsent')
+    _private_input(_input_paths(name)[0], record)
+    _input_event(name, record, 'typed')
+    return record
+
+
+def _input_matches(record, left):
+    if not left:
+        return False
+    wanted, visible = _input_normal(record['text']), _input_normal(left)
+    return bool(visible and (visible == wanted or
+                len(visible) >= max(64, (len(wanted) * 7 + 9) // 10) and wanted.endswith(visible)))
+
+
+def _accept_input(name, text):
+    record = _pending_input(name, live=False)
+    if record and record.get('state') == 'unsent' and _input_normal(record['text']) == _input_normal(text):
+        record['state'] = 'accepted'
+        try:
+            _private_input(_input_paths(name)[0], record)
+        except OSError:
+            # An acknowledged native write must never become a retry because bookkeeping failed. Without a
+            # persistent acknowledgement, discard its ownership proof so it cannot authorize a later resubmit.
+            try:
+                _input_paths(name)[0].unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            _input_event(name, record, 'accepted')
+        except OSError:
+            pass
+
+
+def confirm_input(name, prompt):
+    """A scoped UserPromptSubmit confirms accepted input without waiting for the typing lock.
+
+    Receipts name a record, not just its text: an old identical prompt cannot confirm a newer unsent write.
+    A hook racing the initial CLI acknowledgement leaves that record conservatively accepted.
+    """
+    record = _input_json(_input_paths(name)[0])
+    if not isinstance(record, dict) or record.get('state') != 'accepted' or not record.get('incarnation') or \
+            record['incarnation'] != _input_identity(name) or _input_normal(prompt) != _input_normal(record.get('text', '')):
+        return False
+    _private_input(_input_paths(name)[1], {'id': record['id']})
+    with _typing(name, wait=0) as mine:
+        if mine:
+            _pending_input(name)
+    return True
+
+
+def _carry_input(record, defer=False):
+    if not record.get('carry') or not record.get('root'):
+        return False
+    from . import context
+    root = Path(record['root'])
+    job = context.read(context.file(root)).get('job') or {}
+    if job.get('id') != record['carry']:
+        return False
+    if defer:
+        context.defer(root, job, 'Unsent carry-over input expired; refresh postponed.')
+    return job.get('phase') in ('deferred', 'unknown')
+
+
+def _retract_input(name, record):
+    """Clear only a proven unsent system write, verifying each deletion and the final empty box."""
+    keys = provider(name).queue_keys
+    left = draft(name)
+    if record.get('purpose') != 'system' or record.get('state') != 'unsent' or not keys or not _input_matches(record, left):
+        return False
+    wanted, bound = _input_normal(record['text']), len(_input_normal(record['text']))
+    for _ in range(128):
+        if asking(name) or _input_identity(name) != record['incarnation'] or draft(name) != left:
+            return False
+        subprocess.run(['tmux', 'send-keys', '-t', name, 'C-e', keys['clear']], check=True)
+        time.sleep(.03)
+        after = draft(name)
+        if after == '':
+            if _input_identity(name) != record['incarnation']:
+                return False
+            _input_paths(name)[0].unlink(missing_ok=True)
+            _input_event(name, record, 'retracted')
+            _carry_input(record, defer=True)
+            return True
+        if not after or after == left:
+            return False
+        # Ownership was established before this deletion. Each resulting native suffix must end earlier in that
+        # same known payload; an unrelated edit stops this transaction rather than licensing another clear.
+        visible = _input_normal(after)
+        start = wanted.rfind(visible, 0, bound - 1)
+        if start < 0:
+            return False
+        bound, left = start + len(visible), after
+    return False
+
+
+def expire_inputs(now=None):
+    """Cheap watcher upkeep: only expired unsent system writes; never busy, attached or unmatched input."""
+    from . import board
+    now = time.time() if now is None else now
+    for path in (board.home() / 'consoles').glob('input-*.json'):
+        record = _input_json(path)
+        if not isinstance(record, dict):
+            continue
+        if record.get('state') == 'accepted' and record.get('name') and _input_paths(record['name'])[1].exists():
+            with _typing(record['name'], wait=0) as mine:
+                if mine:
+                    _pending_input(record['name'], live=False)
+            continue
+        if record.get('purpose') != 'system' or record.get('state') != 'unsent':
+            continue
+        if now - record.get('at', now) < INPUT_TTL:
+            continue
+        name, root = record.get('name'), record.get('root')
+        if not name or not running(name) or attached(name) or provider(name).classify(screen(name)) != 'idle':
+            continue
+        if root and busy(Path(root), name):
+            continue
+        with _typing(name, wait=0) as mine:
+            current = _pending_input(name) if mine else None
+            if current and current['id'] == record.get('id'):
+                try:
+                    _retract_input(name, current)
+                except (OSError, subprocess.CalledProcessError):
+                    continue
+
+
 def _make_way(name):
     """The session's box cleared for a message: "" once it is on screen and empty; colony's own line if one was left
     there unsent (an Enter swallowed) and has now been sent; None if nothing may be typed: no box on screen, the
@@ -654,13 +884,16 @@ def _make_way(name):
     left = draft(name)
     if not left:
         return left
-    if not left.startswith("[colony]"):
+    record = _pending_input(name)
+    if not record or record.get('purpose') != 'system' or record.get('state') != 'unsent' or not _input_matches(record, left):
         return None
+    if time.time() - record['at'] >= INPUT_TTL or _carry_input(record):
+        return '' if _retract_input(name, record) else None
     unscroll(name)
-    return left if _sent(name, left) else None
+    return record['text'] if _sent(name, record['text']) else None
 
 
-def type_into(name, text, wait=0):
+def type_into(name, text, wait=0, *, _purpose='system'):
     """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
     is theirs to send, or its box isn't on screen (looked for up to `wait` seconds while it comes up): then nothing
     is typed, and False says so. Colony's own unsent line left there earlier is sent first, rather than mistaken for
@@ -672,17 +905,18 @@ def type_into(name, text, wait=0):
         before = _make_way(name) if mine else None
         if before is None:
             return False
-        if before and " ".join(before.split()) == " ".join(text.split()):
+        if before and _purpose == 'system' and " ".join(before.split()) == " ".join(text.split()):
             return True                                  # it was this very line, left unsent earlier: now it is sent
         unscroll(name)
         # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
         # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
         # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
         try:
+            _record_input(name, text, _purpose)
             subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
             time.sleep(provider(name).enter_after)   # typing that arrives at once can read as a paste
             return _sent(name, text)
-        except subprocess.CalledProcessError:              # its program ended as the keys went in
+        except (subprocess.CalledProcessError, OSError, ValueError):
             return False
 
 
@@ -699,7 +933,7 @@ def paste_into(name, text, answer=False, wait=0):
     if asking(name) and not (answer and not _start_up(name) and dismissed(name)):
         return False
     if "\n" not in text:
-        return type_into(name, text)
+        return type_into(name, text, _purpose='person')
     if ready(name) is None:
         return False
     with _typing(name) as mine:
@@ -708,11 +942,12 @@ def paste_into(name, text, answer=False, wait=0):
         unscroll(name)
         buf = f"colony-{secrets.token_hex(4)}"
         try:
+            _record_input(name, text, 'person')
             subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
             subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
             time.sleep(max(0.3, provider(name).enter_after))    # the paste lands before its Enter
             return _sent(name, text)
-        except subprocess.CalledProcessError:              # its program ended as it was pasted
+        except (subprocess.CalledProcessError, OSError, ValueError):
             return False
 
 

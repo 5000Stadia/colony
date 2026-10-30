@@ -41,7 +41,7 @@ A tool for my plants.
 def hearing(into):
     """A stand-in console that records what is typed; the monitor's inbox line brings its inbox over, as its hook
     does, recorded as one message the way it once was typed."""
-    def type_into(name, text):
+    def type_into(name, text, *, _purpose='system'):
         if text == monitor.INBOX_LINE:
             rows = monitor.inbox()
             monitor.taken(rows)
@@ -339,6 +339,7 @@ class BoardTest(BoardBase):
         run = lambda args, **k: keys.append(args[-1])
         with patch.object(console, 'running', return_value=True), patch.object(console, 'provider'), \
                 patch.object(console, 'asking', return_value=False), \
+                patch.object(console, '_input_identity', return_value='fixture-console'), \
                 patch.object(console.time, 'sleep'), patch.object(console.subprocess, 'run', side_effect=run):
             # The box is checked before the first Enter and again after each Enter.
             with patch.object(console, 'draft', side_effect=['', '', '[colony] You have mail.', '[colony] You have mail.', '']):
@@ -1725,8 +1726,10 @@ class ChatTest(BoardBase):
                 urllib.request.urlopen(urllib.request.Request(f"http://{host}/chat/send", data=b"p=0&text=x",
                                                               headers={"Host": host, "Origin": f"http://{host}"}))
             self.assertEqual(held.exception.code, 409, "a draft in the console: nothing typed over it")
-            # colony-codex's probe left /subagents typed in its box and every message bounced: what is in the way shows
-            self.assertEqual(held.exception.read().decode(), "/subagents")
+            reason = held.exception.read().decode()
+            self.assertIn('unsent draft', reason)
+            self.assertIn('Console', reason)
+            self.assertNotIn('/subagents', reason, 'the reason must not echo a private draft')
             self.assertIn("'“' + left + '” is'", board.CHAT)
 
     def test_an_agent_that_dies_as_it_starts_says_why_and_a_message_to_it_says_so(self):
@@ -4349,7 +4352,7 @@ class MessagingTest(BoardBase):
         board.track(other)
         typed = []
         saved = (console.type_into, console.ensure)
-        console.type_into = lambda name, text: typed.append((name, text)) or True
+        console.type_into = lambda name, text, *, _purpose='system': typed.append((name, text)) or True
         console.ensure = lambda root, name=None, label=None, settle=0: console.session_name(root)
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -4820,6 +4823,7 @@ class MenuTest(BoardBase):
                 patch.object(console, "press", side_effect=lambda name, keys: menu.__setitem__(0, keys != ["Escape"])) as pressed, \
                 patch.object(console, "draft", return_value=""), \
                 patch.object(console, "provider", return_value=providers.get("claude")), \
+                patch.object(console, '_input_identity', return_value='fixture-console'), \
                 patch.object(console.subprocess, "run") as run:
             self.assertFalse(console.type_into("s", "[colony] You have mail."), "colony's own word waits its turn")
             self.assertFalse(console.paste_into("s", "a message"), "nothing lands in it")
@@ -8959,6 +8963,7 @@ class Boxes:
                                    (console, "draft", lambda n: self.box(n)["text"] if self.box(n)["up"] else None),
                                    (console, "screen", lambda n: "" if self.box(n)["up"] else self.box(n)["shown"]),
                                    (console, "age", lambda n: self.box(n)["age"]),
+                                   (console, "_input_identity", lambda n: 'fixture-console:' + n),
                                    (console, "provider", lambda n: claude),
                                    (console.subprocess, "run", self.run),
                                    (console.time, "sleep", lambda s: REAL_SLEEP(min(s, 0.01)))):
@@ -9017,13 +9022,17 @@ class FirstRunTest(BoardBase):
     def test_colonys_line_left_unsent_is_sent_and_then_the_persons_message(self):
         boxes = Boxes()
         boxes.box("s", text=monitor.INBOX_LINE)                   # typed at a program still starting, its Enter lost
-        with boxes.on():
+        with boxes.on(), patch.object(console, '_input_identity', return_value='fixture-console'):
+            with console._typing('s'):
+                console._record_input('s', monitor.INBOX_LINE)
             self.assertTrue(console.paste_into("s", "Hi! I'm new to colony. What should I do first?", answer=True))
             self.assertTrue(console.type_into("s", "[colony] You have mail."))
         self.assertEqual(boxes.box("s")["sent"], [monitor.INBOX_LINE, "Hi! I'm new to colony. What should I do first?",
                                                   "[colony] You have mail."])
         boxes.box("u", text="[colony] You have mail.")
-        with boxes.on():
+        with boxes.on(), patch.object(console, '_input_identity', return_value='fixture-console'):
+            with console._typing('u'):
+                console._record_input('u', '[colony] You have mail.')
             self.assertTrue(console.type_into("u", "[colony] You have mail."))
         self.assertEqual(boxes.box("u")["sent"], ["[colony] You have mail."], "the same line is never sent twice")
 

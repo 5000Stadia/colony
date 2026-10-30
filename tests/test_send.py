@@ -104,6 +104,7 @@ class InputBox:
                 (console, 'running', lambda _: self.alive),
                 (console, 'screen', self.screen),
                 (console, 'unscroll', lambda _: None),
+                (console, '_input_identity', lambda name: 'fixture-console:' + name),
                 (console.subprocess, 'run', self.run),
                 (console.time, 'sleep', lambda seconds: _REAL_SLEEP(min(seconds, .001)))]:
             stack.enter_context(patch.object(target, name, side_effect=value))
