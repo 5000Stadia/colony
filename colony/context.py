@@ -20,6 +20,7 @@ OUTPUT_BUDGET = 9_000
 TIMEOUT = 15 * 60
 COOLDOWN = 3600
 LIVE = ('due', 'requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown')
+TRANSCRIPT_VERSION = 1
 _cache = {}
 
 
@@ -134,6 +135,8 @@ def _transcript(s, cache_file):
     stat = path.stat()
     key = (str(path), s['provider'])
     cached = read(cache_file) or _cache.get(key)
+    if cached and cached.get('version') != TRANSCRIPT_VERSION:
+        cached = None  # Older cursors discarded the native turn/phase evidence; read it once from the source.
     if cached:
         cached['markers'] = set(cached['markers'])
         cached.pop('summary_carries', None)
@@ -141,8 +144,9 @@ def _transcript(s, cache_file):
         cached.setdefault('carries', {}); cached.setdefault('preserved', [])
         cached['current'] = cached['exchanges'][-1] if cached['current'] and cached['exchanges'] else None
     if not cached or cached['inode'] != stat.st_ino or cached['offset'] > stat.st_size:
-        cached = dict(inode=stat.st_ino, offset=0, exchanges=[], current=None, tokens=None,
-                      window=None, usage_at=0, markers=set(), summary='', compact=0, carries={}, preserved=[])
+        cached = dict(version=TRANSCRIPT_VERSION, inode=stat.st_ino, offset=0, exchanges=[], current=None, tokens=None,
+                      window=None, usage_at=0, markers=set(), summary='', compact=0, carries={}, preserved=[],
+                      turn=None, pending=False)
         _cache[key] = cached
     if cached['offset'] == stat.st_size:
         return cached
@@ -176,6 +180,8 @@ def _transcript(s, cache_file):
                 if event.get('type') == 'assistant' and (usage := message.get('usage')):
                     cached['tokens'] = sum(usage.get(k, 0) or 0 for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens', 'output_tokens'))
                     cached['usage_at'] = cached['offset']
+                if event.get('type') == 'assistant' and message.get('stop_reason') is not None:
+                    cached['pending'] = message['stop_reason'] not in ('end_turn', 'stop_sequence')
                 if event.get('type') in ('user', 'assistant') and not event.get('isMeta') and not event.get('isCompactSummary'):
                     role, text = event['type'], _text(message.get('content'))
             elif s['provider'] == 'codex':
@@ -193,9 +199,16 @@ def _transcript(s, cache_file):
                     kind = payload.get('type')
                     if kind == 'task_started':
                         cached['current'] = None
+                        cached.update(turn=payload.get('turn_id') or True, pending=False)
+                    if kind == 'task_complete' and (not cached['turn'] or cached['turn'] is True
+                                                    or payload.get('turn_id') == cached['turn']):
+                        cached.update(turn=None, pending=False)
                     if kind == 'item_completed' and (payload.get('item') or {}).get('type') == 'AgentMessage':
                         role = 'assistant'
                         text = '\n'.join(c.get('text', '') for c in payload['item'].get('content', []) if c.get('type') in ('Text', 'text'))
+                        phase = payload['item'].get('phase')
+                        if phase in ('commentary', 'final_answer'):
+                            cached['pending'] = phase == 'commentary'
                     if kind == 'token_count' and (info := payload.get('info')):
                         usage = info.get('last_token_usage') or {}
                         cached['tokens'] = usage.get('total_tokens')
@@ -225,6 +238,8 @@ def retained(carry, summary):
 
 
 def tail(snapshot, budget=TAIL_BUDGET, skip_pending=False, source="the conversation's transcript"):
+    if not skip_pending and (snapshot.get('turn') or snapshot.get('pending')):
+        raise ValueError('The latest provider turn has not completed.')
     chosen, size = [], 0
     for exchange in reversed(snapshot['exchanges']):
         if not any(m['role'] == 'assistant' for m in exchange):
@@ -338,7 +353,10 @@ def carry_reply(root, key, payload):
             st['retry_after'] = time.time() + COOLDOWN
             log(root, job, 'deferred', job['reason'])
         else:
-            job.update(phase='ready', carry=carry, written=board.now())
+            carry_turn = payload.get('turn_id')
+            if key == 'codex' and not carry_turn:
+                carry_turn = transcript(session(root)).get('turn')
+            job.update(phase='ready', carry=carry, written=board.now(), carry_turn=carry_turn)
             kept = {sid: c for sid, c in carries(st).items() if sid != job['session']}
             st['carries'] = dict(list(kept.items())[-3:] + [(job['session'], dict(text=carry, at=job['written']))])
             st.pop('carry', None)
@@ -470,6 +488,11 @@ def due(root, st, tokens, window, now):
     return 'context threshold' if window and tokens is not None and tokens >= window * SOFT else None
 
 
+def carry_finishing(job, snapshot):
+    """Stop can deliver the carry just before its native turn-complete event reaches the transcript."""
+    return bool(job.get('carry_turn') and snapshot.get('turn') == job['carry_turn'])
+
+
 def tick(root):
     if is_monitor(root):
         return  # the steward compacts natively, at its cap: nothing typed into the conversation the person reads
@@ -478,6 +501,12 @@ def tick(root):
         return
     snap = transcript(s)
     tokens, window = occupancy(root, s, snap)
+    budget = min(TAIL_BUDGET, int((window or 200_000) * .08))
+    try:
+        tail(snap, budget, source=s['path'])
+        unfinished = ''
+    except ValueError as err:
+        unfinished = str(err)
     now = time.time()
     with locked(root):
         st = read(file(root)) or dict(last=now)
@@ -503,18 +532,30 @@ def tick(root):
         if window and tokens is not None and tokens < window * SOFT:
             st.pop('ineffective', None)
         reason = due(root, st, tokens, window, now)
-        if phase == 'requested' and now - job['asked'] > TIMEOUT:
+        if unfinished and phase in ('due', 'ready') and not (phase == 'ready' and carry_finishing(job, snap)):
+            job.update(phase='deferred', reason=unfinished)
+            log(root, job, 'deferred', unfinished)
+        elif phase == 'requested' and now - job['asked'] > TIMEOUT:
             job.update(phase='deferred', reason='No fresh carry-over arrived; conversation left intact.')
             st['retry_after'] = now + COOLDOWN
             log(root, job, 'deferred', job['reason'])
         elif phase == 'due' and not reason:
             st.pop('job')
             job = {}
-        elif phase not in LIVE and reason:
+        elif phase not in LIVE and reason and not unfinished:
             # Recorded before anything is sent, so continuation stays held while the input becomes idle.
             job = st['job'] = dict(id=secrets.token_hex(8), session=s['id'], phase='due', before=tokens, reason=reason)
         atomic_json(file(root), st)
     if job.get('phase') not in ('due', 'ready'):
+        return
+    if unfinished:
+        return
+    snap = transcript(s)
+    try:
+        tail(snap, budget, source=s['path'])
+    except ValueError as err:
+        if job.get('phase') != 'ready' or not carry_finishing(job, snap):
+            defer(root, job, str(err))
         return
     from . import continuation
     if not continuation.hold(root, reason='context refresh'):
@@ -529,7 +570,7 @@ def tick(root):
         if job.get('id') != ident or job.get('phase') not in ('due', 'ready'):
             return
         try:
-            recent = tail(snap, min(TAIL_BUDGET, int((window or 200_000) * .08)), source=s['path'])
+            recent = tail(transcript(s), budget, source=s['path'])
         except ValueError as err:
             job.update(phase='deferred', reason=str(err))
             st['retry_after'] = now + COOLDOWN
@@ -541,6 +582,12 @@ def tick(root):
     if action and not safe(root):
         defer(root, job, 'Input became busy before dispatch; refresh postponed.')
         return
+    if action:
+        try:
+            tail(transcript(s), budget, source=s['path'])
+        except ValueError as err:
+            defer(root, job, str(err))
+            return
     if action == 'carry':
         prompt = (f'[colony] Context carry-over ({job["id"]}). Write a short carry-over of what the current Vision, '
                   'roadmap, notes and gates do not hold: unfinished intent, constraints/preferences, what remains '

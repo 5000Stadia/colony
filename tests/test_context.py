@@ -31,10 +31,23 @@ class ContextTest(unittest.TestCase):
         with self.path.open('a') as f:
             f.write(json.dumps(dict(type=kind, payload=payload)) + '\n')
 
-    def message(self, role, text):
+    def message(self, role, text, phase='final_answer'):
         self.event('response_item', dict(type='message', role=role, content=[dict(type='input_text', text=text)]))
         if role == 'assistant':
-            self.event('event_msg', dict(type='item_completed', item=dict(type='AgentMessage', content=[dict(type='Text', text=text)])))
+            self.event('event_msg', dict(type='item_completed', item=dict(type='AgentMessage', phase=phase,
+                       content=[dict(type='Text', text=text)])))
+
+    def task(self, kind, ident='personal-turn'):
+        self.event('event_msg', dict(type=kind, turn_id=ident))
+
+    def assert_refresh_waits(self):
+        from colony import continuation
+        with patch.object(context, 'safe', return_value=True), patch.object(continuation, 'hold') as held, \
+                patch.object(console, 'type_into') as typed:
+            context.tick(self.root)
+        held.assert_not_called()
+        typed.assert_not_called()
+        self.assertFalse(context.refreshing(self.root), 'unfinished work must not acquire a refresh hold')
 
     def usage(self, tokens=125_000, total=900_000):
         self.event('event_msg', dict(type='token_count', info=dict(last_token_usage=dict(total_tokens=tokens),
@@ -72,6 +85,131 @@ class ContextTest(unittest.TestCase):
         self.message('user', 'pending')
         with self.assertRaisesRegex(ValueError, 'not completed'):
             context.tail(context.transcript(self.s))
+
+    def test_codex_commentary_and_tools_cannot_start_refresh_even_if_screen_looks_idle(self):
+        self.task('task_started')
+        self.message('user', 'Explain whether this project can delegate its survey.')
+        self.message('assistant', 'I will inspect the survey setup.', phase='commentary')
+        self.event('response_item', dict(type='function_call', name='exec_command', arguments='{}'))
+        self.message('assistant', 'The survey has several outstanding items.', phase='commentary')
+        self.usage()
+        self.assert_refresh_waits()
+        self.message('assistant', 'Yes, it can delegate those items, for these reasons.')
+        self.assert_refresh_waits()  # An emitted final message can precede the native turn's completion.
+        self.task('task_complete', 'stale-turn')
+        self.assert_refresh_waits()
+        self.task('task_complete')
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+        self.assertIn('Context carry-over', typed.call_args.args[1])
+
+    def test_maintenance_answer_cannot_end_an_active_native_turn_before_task_complete(self):
+        self.message('user', 'Earlier request.'); self.message('assistant', 'Earlier answer.')
+        self.task('task_started')
+        self.message('user', 'Can the survey delegate this work?')
+        self.message('assistant', 'I am checking.', phase='commentary')
+        self.message('user', '[colony] Context carry-over (fedcba0987654321).')
+        self.message('assistant', '<colony-carry id="fedcba0987654321">Answer the latest question directly.</colony-carry>')
+        self.usage()
+        self.assert_refresh_waits()
+        with self.assertRaisesRegex(ValueError, 'not completed'):
+            context.tail(context.transcript(self.s))
+        context.before_compact(self.root, 'codex', self.payload)
+        job = context.read(context.file(self.root))['job']
+        self.assertTrue(job['automatic'], 'native emergency compaction remains allowed')
+        self.assertEqual(job['phase'], 'prepared')
+
+    def test_answer_resumed_under_maintenance_mail_does_not_leave_a_permanent_refresh_hold(self):
+        self.task('task_started'); self.message('user', 'Answer the survey question.')
+        self.message('assistant', 'I am checking.', phase='commentary'); self.task('task_complete')
+        self.task('task_started', 'resumed-turn')
+        self.message('user', '[colony] Mail: finish the original answer.')
+        self.message('assistant', 'Here is the original answer, with its evidence.')
+        self.task('task_complete', 'resumed-turn'); self.usage()
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+        self.assertIn('Context carry-over', typed.call_args.args[1])
+
+    def test_codex_completion_survives_incremental_cache_reload_and_old_cache_is_rebuilt(self):
+        self.task('task_started'); self.message('user', 'Give a complete answer.')
+        self.message('assistant', 'Still investigating.', phase='commentary'); self.usage()
+        snapshot = context.transcript(self.s)
+        cache_file = next((board.home() / 'context-cache').glob('*.json'))
+        # The old cursor already consumed the phase and turn events, but its prose alone cannot prove completion.
+        legacy = {k: snapshot[k] for k in ('inode', 'offset', 'exchanges', 'current', 'tokens', 'window', 'usage_at',
+                                         'markers', 'summary', 'compact', 'carries', 'preserved')}
+        legacy['markers'] = list(legacy['markers'])
+        atomic_json(cache_file, legacy); context._cache.clear()
+        self.assert_refresh_waits()
+        self.message('assistant', 'Here is the complete answer.')
+        context._cache.clear()
+        self.assert_refresh_waits()
+        self.task('task_complete'); context._cache.clear()
+        self.assertEqual(context.tail(context.transcript(self.s))[-1]['text'], 'Here is the complete answer.')
+
+    def test_ready_refresh_rechecks_new_personal_input_before_compact_dispatch(self):
+        self.message('user', 'First request.'); self.message('assistant', 'First answer.')
+        self.state(carry_turn='earlier-carry-turn')
+        calls = 0
+        def looks_idle(root):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                self.task('task_started', 'new-turn')
+                self.message('user', 'Wait, first answer this follow-up.')
+                self.message('assistant', 'I will check that too.', phase='commentary')
+            return True
+        with patch.object(context, 'safe', side_effect=looks_idle), patch.object(console, 'type_into') as typed:
+            context.tick(self.root)
+        typed.assert_not_called()
+        self.assertFalse(context.refreshing(self.root))
+
+    def test_carry_stop_waits_for_its_native_completion_without_requesting_another_carry(self):
+        self.carry_stop_waits(turn_id='carry-turn')
+
+    def test_carry_stop_without_turn_id_waits_for_the_active_native_turn(self):
+        self.carry_stop_waits()
+
+    def carry_stop_waits(self, **stop):
+        from colony import continuation
+        self.message('user', 'Answer this first.'); self.message('assistant', 'Here is the answer.'); self.usage()
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+            job = context.read(context.file(self.root))['job']
+            self.task('task_started', 'carry-turn')
+            self.message('user', f'[colony] Context carry-over ({job["id"]}).')
+            carry = f'<colony-carry id="{job["id"]}">Nothing needs repeating.</colony-carry>'
+            self.message('assistant', carry)
+            self.assertTrue(context.carry_reply(self.root, 'codex', dict(self.payload, hook_event_name='Stop',
+                            last_assistant_message=carry, **stop)))
+            with patch.object(continuation, 'hold') as held:
+                context.tick(self.root); context.tick(self.root)
+            held.assert_not_called()
+            self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'ready')
+            self.assertEqual(len(typed.call_args_list), 1, 'no second carry while its native turn finishes')
+            self.task('task_complete', 'carry-turn')
+            context.tick(self.root)
+        self.assertEqual([call.args[1] for call in typed.call_args_list][1:], ['/compact'])
+
+    def test_claude_tool_use_prose_waits_for_an_end_turn_reply(self):
+        self.s['provider'] = 'claude'
+        atomic_json(context.file(self.root, 'context-session.json'), self.s)
+        board.save_registry({'projects': [], 'settings': {'provider': 'claude', 'messaging': False}})
+        def append(event):
+            with self.path.open('a') as stream:
+                stream.write(json.dumps(event) + '\n')
+        append(dict(type='user', message=dict(content='Answer the survey question.')))
+        append(dict(type='assistant', message=dict(content=[dict(type='text', text='I will inspect the files.'),
+                    dict(type='tool_use', id='tool-1', name='Read', input={})], stop_reason='tool_use',
+                    usage=dict(input_tokens=125000))))
+        context.usage(self.root, dict(session_id='exact-id', context_window=dict(context_window_size=200000,
+                      current_usage=dict(input_tokens=125000))))
+        self.assert_refresh_waits()
+        append(dict(type='assistant', message=dict(content=[dict(type='text', text='Here is the answer.')],
+                    stop_reason='end_turn')))
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+        self.assertIn('Context carry-over', typed.call_args.args[1])
 
     def test_trimming_keeps_whole_messages_where_they_fit_and_never_splits_a_character(self):
         exchange = [dict(role='user', text='Fix the export, then tell me.'),
