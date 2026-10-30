@@ -25,33 +25,34 @@ const assert = require('node:assert/strict'), fs = require('node:fs');
   await page.route('**/chat/feed?**',r=>r.fulfill({status:304,body:''}));
   await page.route('**/chat/heard',r=>r.fulfill({contentType:'application/json',body:'{}'}));
   const pause=page.getByRole('button',{name:'Pause Auto',exact:true}),resume=page.getByRole('button',{name:'Resume Auto',exact:true});
+  const openMenu=async()=>{
+    if(await page.locator('.cpsheet').isVisible())return;
+    await page.locator('.cppill').click();
+    if(!await page.locator('.cpsheet').isVisible())await page.locator('.cppill').click(); // The first phone tap may unlock audio.
+    await page.locator('.cpsheet').waitFor();
+  };
+  const closeMenu=async()=>{if(await page.locator('.cpsheet').isVisible())await page.locator('.cpgrab').click();};
+  const menuButton=async(button,label)=>{
+    const target=await button.boundingBox(),menu=await page.locator('.cpmain').boundingBox();
+    assert(target.height>=48&&target.width>=menu.width-2,'Auto pause/resume is a large full-width menu action');
+    assert.equal((await button.textContent()).trim(),label,'the menu action has a visible text label');
+    assert.equal(await button.locator('svg').count(),1,'the menu action also has a transport icon');
+  };
   const queued=()=>page.evaluate(()=>({auto:colonyPlayer.auto(),held:colonyPlayer.autoPaused(),mode:colonyPlayer.mode(),
     waiting:colonyPlayer.state().waiting,reading:colonyPlayer.state().reading,sounds:fixtureSaid.length}));
   const layout=async()=>{
-    const pill=await page.locator('.cppill').boundingBox(),button=await resume.boundingBox(),ret=await page.locator('.cpreturn').boundingBox();
-    assert(button.width>=44&&button.height>=44,'Resume Auto has a 44px touch target');
-    assert(button.x>=pill.x+pill.width-2&&button.x-(pill.x+pill.width)<=8,'Resume sits immediately right of the pill');
+    const pill=await page.locator('.cppill').boundingBox(),ret=await page.locator('.cpreturn').boundingBox();
     assert(ret&&ret.x+ret.width<=pill.x+2&&pill.x-(ret.x+ret.width)<=8,'Return stays immediately left of the pill');
   };
   try{
-    await page.goto(base+'/fixture/reading-chat');await pause.waitFor();
-    const target=await pause.boundingBox();assert(target.width>=44&&target.height>=44,'Pause Auto has a 44px touch target');
+    await page.goto(base+'/fixture/reading-chat');await page.locator('.cppill').waitFor();await openMenu();await menuButton(pause,'Pause Auto');
     await pause.click();assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('autopaused'))),true);
+    await closeMenu();
     const armed=await page.evaluate(()=>localStorage.getItem('armed')),at=await page.evaluate(()=>new Date(Date.now()).toISOString());
     line=['alpha','beta'].map(t=>({p:'0',t,at,w:`Queued ${t}.`,b:[[t,at]]}));
     await page.clock.fastForward(4100);await page.waitForFunction(()=>colonyPlayer.state().waiting===2);
     assert.deepEqual(await queued(),{auto:true,held:true,mode:'audio',waiting:2,reading:null,sounds:0});
     assert.equal(await page.locator('.cpsay').textContent(),'Auto paused · 2');
-    const needs=await page.evaluate(()=>{
-      const control=document.createElement('details');control.className='needs';control.innerHTML='<summary>Needs you</summary>';
-      document.querySelector('.chat').appendChild(control);colonyPlayer.placed();
-      const summary=control.querySelector('summary').getBoundingClientRect(),box=control.getBoundingClientRect(),row=document.querySelector('.cpminirow').getBoundingClientRect();
-      const result={summaryRight:summary.right,summaryWidth:summary.width,rowLeft:row.left,rowWidth:row.width,gap:row.left-box.right};
-      control.remove();colonyPlayer.placed();return result;
-    });
-    assert(needs.summaryWidth>0&&needs.rowWidth>0,'Needs you and compact controls have visible geometry');
-    assert(needs.summaryRight<=needs.rowLeft-8&&needs.gap>=6&&needs.gap<=10,
-      'Needs you clears the whole compact row, including Resume Auto: '+JSON.stringify(needs));
     await page.touchscreen.tap(200,180);await page.goto(base+'/fixture/reading-manual');
     await page.getByRole('heading',{name:'Manual page'}).click();await page.clock.fastForward(4100);
     await page.waitForFunction(()=>colonyPlayer.state().waiting===2);
@@ -60,29 +61,28 @@ const assert = require('node:assert/strict'), fs = require('node:fs');
     await page.evaluate(()=>colonyPlayer.read({key:'0',name:'plants',href:'/fixture/reading-chat',kokoro:false},[
       {t:'manual',k:'part1',text:'First part. Another sentence.'}
     ]));
-    await page.waitForFunction(()=>colonyPlayer.state().playing);assert.equal(await page.locator('.cpautohold').isVisible(),false,'expanded playback keeps its ordinary controls');
+    await page.waitForFunction(()=>colonyPlayer.state().playing);assert.equal(await page.locator('.cpautohold').isVisible(),false,'the active bar keeps its ordinary controls');
     await page.getByRole('button',{name:'Pause',exact:true}).click();assert.equal(await page.evaluate(()=>colonyPlayer.state().paused),true);
     await page.getByRole('button',{name:'Play',exact:true}).click();assert.equal(await page.evaluate(()=>colonyPlayer.autoPaused()),true);
     await page.evaluate(()=>fixtureSaid.findLast(u=>u.text.includes('First part')).onend());
-    await page.waitForFunction(()=>!colonyPlayer.state().reading);await resume.waitFor();await layout();
-    await page.reload();await resume.waitFor();await page.waitForFunction(()=>colonyPlayer.state().waiting===2);
+    await page.waitForFunction(()=>!colonyPlayer.state().reading);await page.locator('.cppill').waitFor();await layout();
+    await page.reload();await page.locator('.cppill').waitFor();await page.waitForFunction(()=>colonyPlayer.state().waiting===2);
     assert.deepEqual(await queued(),{auto:true,held:true,mode:'audio',waiting:2,reading:null,sounds:0},'pause and queue survive reload');
     await page.clock.fastForward(2*3600e3+1);await page.getByRole('heading',{name:'Manual page'}).click();
     assert.equal(await page.evaluate(()=>localStorage.getItem('armed')),armed,'a long manual Auto pause retains its original arrival cutoff');
     await layout();
-    if(process.env.COLONY_TEST_ARTIFACTS){fs.mkdirSync(process.env.COLONY_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.COLONY_TEST_ARTIFACTS+'/auto-paused-390.png'});}
-    await page.locator('.cppill').click();assert.equal(await page.locator('.cpsheet').isVisible(),true,'paused pill opens the queue');
+    await openMenu();assert.equal(await page.locator('.cpsheet').isVisible(),true,'paused pill opens the queue');await menuButton(resume,'Resume Auto');
     assert.equal(await page.locator('.cpmain .cprows li').count(),2);assert.equal(await page.evaluate(()=>colonyPlayer.autoPaused()),true);
-    await page.locator('.cpgrab').click();await resume.click();
+    if(process.env.COLONY_TEST_ARTIFACTS){fs.mkdirSync(process.env.COLONY_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.COLONY_TEST_ARTIFACTS+'/auto-paused-390.png'});}
+    await resume.click();await closeMenu();
     await page.waitForFunction(()=>colonyPlayer.state().reading?.k==='alpha');
     assert.equal(await page.evaluate(()=>colonyPlayer.autoPaused()),false);assert.equal(await page.evaluate(()=>colonyPlayer.auto()),true);
     assert.equal(await page.evaluate(()=>localStorage.getItem('armed')),armed);
     await page.evaluate(()=>fixtureSaid.findLast(u=>u.text.includes('Queued alpha')).onend());
     await page.waitForFunction(()=>colonyPlayer.state().reading?.k==='beta');
     await page.evaluate(()=>fixtureSaid.findLast(u=>u.text.includes('Queued beta')).onend());
-    await page.waitForFunction(()=>!colonyPlayer.state().reading);await pause.waitFor();
-    await page.locator('.cppill').click();await page.locator('.cpsw').click();await page.locator('.cpgrab').click();
-    assert.equal(await page.locator('.cpautohold').isVisible(),false,'Auto Off hides the collapsed pause control');
+    await page.waitForFunction(()=>!colonyPlayer.state().reading);await openMenu();
+    await page.locator('.cpsw').click();assert.equal(await page.locator('.cpautohold').isVisible(),false,'Auto Off hides the menu pause control');await closeMenu();
     assert.deepEqual(errors,[]);console.log('PASS collapsed Auto pause and persistent queue');
   }catch(e){console.error('Page errors:',errors);throw e;}finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

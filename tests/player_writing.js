@@ -212,6 +212,23 @@ const cases = {
     b.api.arrivals(); await flush(); assert.equal(b.sounds.length, afterHistory);
     b.api.setAutoPaused(false); await flush(); assert.equal(b.api.state().t, 'queued');
   },
+  async 'menu Auto pause leaves a manual document playing and holds its suspended Auto reply'(b) {
+    const xs = await b.line(['A']); b.api.autoLine(); await b.api.start(xs[0]);
+    if (b.kokoro) b.offset(17.25);
+    const doc = b.document(), reading = doc.play(); doc.resolve(); await reading;
+    const beforePause = b.sounds.length; b.api.setAutoPaused(true); await flush();
+    assert.equal(b.api.state().document, true); assert.equal(b.api.state().playing, true);
+    assert.equal(b.api.state().paused, false); assert.equal(b.sounds.length, beforePause, 'future Auto pause does not interrupt manual listening');
+    b.api.hold(true); b.api.setAutoPaused(false); await flush();
+    assert.equal(b.api.state().paused, true); assert.equal(b.sounds.length, beforePause, 'Resume Auto does not resume an independently paused document');
+    b.api.setAutoPaused(true); assert.equal(b.api.state().paused, true); b.api.hold(false); await flush();
+    b.api.section(1); await flush(); const beforeFinish = b.sounds.length; await b.end();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, false); assert.equal(b.api.state().paused, true);
+    assert.equal(b.sounds.length, beforeFinish, 'finishing the document leaves its suspended Auto reply silent');
+    b.api.setAutoPaused(false); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, true); assert(b.sounds.length > beforeFinish);
+    if (b.kokoro) assert.equal(b.offset(), 17.25, 'explicit Resume Auto preserves the interrupted clip position');
+  },
   async 'writing continues pending buffer then resumes from cached audio'(b) {
     if (!b.kokoro) return;
     const xs = await b.line(['A']), navigation = b.navigation();
