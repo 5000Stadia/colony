@@ -474,12 +474,17 @@ def stop_host(root, timeout=15):
     return not alive(home)
 
 
-def start(root, home, source, config):
+def start(root, home, source, config, *, cwd=None, project=True):
     from . import board
     command = ['codex', 'app-server', '--listen', 'unix://' + str(socket_for(home)), '--remote-control', *flags(config)]
     log = os.open(home / 'colony-daemon.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    env = environment(root, home, source)
+    if not project:
+        # An installation repair host is not a registered project console.
+        env.pop('COLONY_PROJECT', None)
+        env.pop('COLONY_CONSOLE', None)
     try:
-        process = subprocess.Popen(command, cwd=board.workdir(root), env=environment(root, home, source),
+        process = subprocess.Popen(command, cwd=cwd if cwd is not None else board.workdir(root), env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
         _processes[process.pid] = process
     finally:

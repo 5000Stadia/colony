@@ -412,6 +412,27 @@ class Provider:
         named as left behind (lingering.left)."""
         return set()
 
+    # --- installation repair access, independent of registered projects
+    def repair_status(self, home):
+        """A live native repair host's connection state; unsupported programs provide no repair host."""
+        raise NotImplementedError
+
+    def repair_start(self, home, settings):
+        """Ensure one detached native host, without creating a conversation or submitting work."""
+        raise NotImplementedError
+
+    def repair_pair(self, home, manual_code=None):
+        """Explicitly generate/check a pairing code on the existing repair host; never persist the code."""
+        raise NotImplementedError
+
+    def repair_stop(self, home):
+        """Gracefully let an idle repair host go; False preserves busy or unreachable work."""
+        return True
+
+    def repair_keeps(self, home):
+        """Owned live host PIDs, checked against their recorded process start time, without native probes."""
+        return set()
+
     def helpers(self, root):
         """Its helpers at work, [{name, what, stats}], for a program that doesn't list them on its screen (None:
         its screen says them)."""
@@ -1290,6 +1311,129 @@ class Codex(Provider):
 
     def catalog(self):
         return self.discover()
+
+    # PROVIDER: Codex's detached app-server and native Remote Control repair connection.
+    def repair_keeps(self, home):
+        from . import codex_remote as r
+        if not r.alive(home):
+            return set()
+        return {int(r.read_json(home / 'colony-daemon.json')['pid'])}
+
+    def repair_status(self, home, timeout=3):
+        import time
+        from . import codex_remote as r
+        from .codex_rpc import Client
+        if not r.alive(home):
+            return dict(state='offline', paired=False)
+        deadline = time.monotonic() + timeout
+        with Client(r.socket_for(home), timeout=timeout) as client:
+            client.timeout = max(.01, deadline - time.monotonic())
+            status = client.call('remoteControl/status/read')
+            connected = status.get('status') == 'connected'
+            environment = status.get('environmentId')
+            client.timeout = max(.01, deadline - time.monotonic())
+            paired = bool(connected and environment and client.call(
+                'remoteControl/client/list', {'environmentId': environment}).get('data'))
+        return dict(state='ready' if paired else 'unpaired' if connected and environment else 'connecting',
+                    paired=paired, server=status.get('serverName') or '')
+
+    def repair_start(self, home, settings):
+        import time
+        from . import board, codex_remote as r
+        from .codex_rpc import Client
+        started = not r.alive(home)
+        if started:
+            if not r.supported_version(self.version()):
+                return dict(state='unavailable', paired=False)
+            source = self.config_home().resolve()
+            if not (source / 'auth.json').is_file():
+                return dict(state='needs-signin', paired=False)
+            r.prepare_home(SOURCE, home, source)
+            # Keep the canonical auth symlink, never clone rotating refresh credentials. Project hooks,
+            # instructions and goals must not turn an installation repair host into an engaged project.
+            for name in ('AGENTS.md', 'AGENTS.override.md', 'agents', 'rules'):
+                path = home / name
+                if path.is_symlink():
+                    path.unlink()
+            def clean(value):
+                if isinstance(value, dict):
+                    return {k: clean(v) for k, v in value.items()
+                            if k not in ('hooks', 'notify', 'developer_instructions', 'model_instructions_file')
+                            and 'goal' not in k.lower()}
+                if isinstance(value, list):
+                    return [clean(v) for v in value]
+                return value
+            inherited = clean(r.user_config(home))
+            text = '\n'.join(json.dumps(k) + '=' + r.toml(v) for k, v in inherited.items()) + '\n'
+            (home / 'config.toml').write_text(text)
+            permission = settings.get('permissions') or 'ask'
+            config = {'features.hooks': False, 'features.goals': False, 'project_doc_max_bytes': 0,
+                      'check_for_update_on_startup': False, 'sqlite_home': str(home), 'notify': [],
+                      'approval_policy': 'never' if permission in ('all', 'edits') else 'on-request',
+                      'sandbox_mode': {'all': 'danger-full-access', 'plan': 'read-only'}.get(permission, 'workspace-write'),
+                      'sandbox_workspace_write.writable_roots': [str(SOURCE), str(board.home())],
+                      'developer_instructions': (
+                          'You maintain this Colony installation when its owner asks. '
+                          f'Colony source: {SOURCE}. Board home: {board.home()}. '
+                          'Work on the repair the owner requests. Run the relevant tests before colony restart. '
+                          'Do not start project goals, hooks, continuation, or roadmap work automatically.')}
+            # start() owns the detached lifecycle; closing the RPC transport never stops its daemon.
+            with r.start(root=SOURCE, home=home, source=source, config=config, cwd=SOURCE, project=False):
+                pass
+        with Client(r.socket_for(home), timeout=3) as client:
+            remote = client.call('remoteControl/status/read')
+            if remote.get('status') not in ('connected', 'connecting'):
+                client.call('remoteControl/enable')
+        deadline = time.monotonic() + 8
+        status = self.repair_status(home)
+        while started and status.get('state') == 'connecting' and time.monotonic() < deadline:
+            time.sleep(.25)
+            status = self.repair_status(home, timeout=min(1, max(.1, deadline - time.monotonic())))
+        return status
+
+    def repair_pair(self, home, manual_code=None):
+        import time
+        from . import codex_remote as r
+        from .codex_rpc import Client
+        if not r.alive(home):
+            raise RuntimeError('The repair connection is not running. Enable it and try again.')
+        with Client(r.socket_for(home), timeout=10) as client:
+            if manual_code is not None:
+                if not isinstance(manual_code, str) or not manual_code or len(manual_code) > 256:
+                    raise ValueError('The pairing code is missing or invalid. Request a fresh code.')
+                result = client.call('remoteControl/pairing/status', {'manualPairingCode': manual_code})
+                return {'claimed': result.get('claimed') is True}
+            result = client.call('remoteControl/pairing/start', {'manualCode': True})
+            code, expiry = result.get('manualPairingCode'), result.get('expiresAt')
+            if not isinstance(code, str) or not code or type(expiry) is not int or expiry <= time.time():
+                raise RuntimeError('Codex did not return a usable pairing code. Try again.')
+            return {'manualPairingCode': code, 'expiresAt': expiry}
+
+    def repair_stop(self, home):
+        import signal
+        import time
+        from . import codex_remote as r
+        from .codex_rpc import Client
+        if not r.alive(home):
+            return True
+        # No TERM/KILL fallback. An unresponsive host may still be running the owner's repair.
+        record = r.read_json(home / 'colony-daemon.json')
+        deadline, cursor = time.monotonic() + 5, None
+        with Client(r.socket_for(home), timeout=2) as client:
+            while time.monotonic() < deadline:
+                result = client.call('thread/loaded/list', dict(cursor=cursor, limit=100))
+                for tid in result['data']:
+                    if time.monotonic() >= deadline:
+                        return False
+                    thread = client.call('thread/read', {'threadId': tid, 'includeTurns': False})['thread']
+                    if thread['status']['type'] not in ('idle', 'notLoaded'):
+                        return False
+                cursor = result.get('nextCursor')
+                if not cursor:
+                    if r.alive(home) and r.read_json(home / 'colony-daemon.json') == record:
+                        os.kill(record['pid'], signal.SIGHUP)
+                    return not r.alive(home)
+        return False
 
     def stale(self, root):
         """Why a running console would start differently now beyond its command: one that fell back to local on a
