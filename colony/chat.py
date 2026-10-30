@@ -2,6 +2,7 @@
 transcript the session's hooks recorded, so it costs nothing and the console itself is untouched; what the person sends
 goes into the console as Message does."""
 import json
+import hashlib
 import time
 import os
 import re
@@ -29,14 +30,15 @@ def _tail(path, keep, limit=TAIL):
         c, rest = _seen.get(str(path)), b""
         try:
             with open(path, "rb") as fh:
-                if c and c["keep"] is keep and size >= c["end"] and c["end"] >= len(c["mark"]):
-                    fh.seek(c["end"] - len(c["mark"]))
-                    if fh.read(len(c["mark"])) != c["mark"]:
+                if c and c["keep"] is keep and size >= c["end"]:
+                    fh.seek(c["end"] - c["mark_size"])
+                    if hashlib.sha256(fh.read(c["mark_size"])).digest() != c["mark"]:
                         c = None                      # not the file it was: read it afresh
                 else:
                     c = None
                 if not c:
-                    c = {"end": max(0, size - limit), "mark": b"", "entries": [], "keep": keep}
+                    c = {"end": max(0, size - limit), "mark": hashlib.sha256(b"").digest(),
+                         "mark_size": 0, "entries": [], "keep": keep}
                     fh.seek(c["end"])
                     if c["end"]:
                         c["discard"] = True           # the first is cut mid-line
@@ -51,7 +53,8 @@ def _tail(path, keep, limit=TAIL):
                         break
                     c["end"] = end = fh.tell()
                     fh.seek(max(0, end - 64))
-                    c["mark"] = fh.read(min(64, end))
+                    c["mark_size"] = min(64, end)
+                    c["mark"] = hashlib.sha256(fh.read(c["mark_size"])).digest()
                     fh.seek(end)
                     c["discard"] = not complete
                     if discard:
@@ -129,6 +132,44 @@ CODEX_READ = {"message", "custom_tool_call", "function_call", "custom_tool_call_
               "agent_message", "item_completed"}
 
 
+def _codex_results(out):
+    """Read native result envelopes once; retain session outcomes, never command stdout."""
+    blocks = [b.get("text", "") for b in out if isinstance(b, dict)] if isinstance(out, list) else [str(out or "")]
+    for block in blocks:
+        try:
+            result = json.loads(block)
+        except (ValueError, TypeError):
+            continue
+        for item in result if isinstance(result, list) else [result]:
+            if isinstance(item, dict) and "status" in item and "value" in item:
+                item = item["value"]                 # Promise.allSettled preserves result order
+            if isinstance(item, dict) and ("chunk_id" in item or "wall_time_seconds" in item):
+                yield {k: item[k] for k in ("session_id", "exit_code") if k in item}
+
+
+def _codex_call(p):
+    """The displayed step and ordered shell-call metadata, extracted before discarding large arguments."""
+    raw = p.get("input") or p.get("arguments") or ""
+    cmd = re.search(r'cmd:\s*"((?:[^"\\]|\\.)*)"', raw) or re.search(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+    step = None if cmd and NEEDS_YOU.match(cmd[1]) else _step(
+        p.get("name", "tool"), cmd[1].replace("\\n", " ") if cmd else raw)
+    said = "exec_command " + raw if p.get("name") == "exec_command" else raw
+    tools = ([("exec_command", raw)] if said.startswith("exec_command {") else
+             re.findall(r"\b(exec_command|write_stdin)\s*\(\s*(\{[^}]*\})?", said))
+    commands = []
+    for tool, args in tools:
+        match = re.search(r'''["']?\bcmd["']?\s*:\s*("(?:[^"\\]|\\.)*")''', args or "")
+        try:
+            what = json.loads(match[1]).strip()[:SHORT] if match else ""
+        except ValueError:
+            what = ""
+        commands.append((tool, what))
+    cell = re.search(r'"cell_id"\s*:\s*"?(\w+)', raw) if p.get("name") == "wait" else None
+    return dict(type=p["type"], call_id=p.get("call_id"), step=step, tools=commands,
+                polled=re.findall(r'''write_stdin\s*\(\s*\{[^}]*?["']?session_id["']?\s*:\s*(\d+)''', said),
+                cell_id=cell[1] if cell else None)
+
+
 def _codex_keep(e):
     """PROVIDER: what of a Codex rollout entry codex_events and codex_background read: a compaction, the messages,
     tool calls and their results, helpers' reports and finished commands (without their output). Not its reasoning,
@@ -138,10 +179,28 @@ def _codex_keep(e):
         return {"type": "compacted", "timestamp": e.get("timestamp", "")}
     if p.get("type") not in CODEX_READ:
         return None
-    if p["type"] == "item_completed":
+    if p["type"] in ("custom_tool_call", "function_call"):
+        p = _codex_call(p)
+    elif p["type"] in ("custom_tool_call_output", "function_call_output"):
+        output = p.get("output")
+        first = output if isinstance(output, str) else next(
+            (b.get("text", "") for b in output or [] if isinstance(b, dict)), "")
+        cell = re.match(r"Script running with cell ID (\w+)", first)
+        p = dict(type=p["type"], call_id=p.get("call_id"), results=list(_codex_results(output)),
+                 cell_id=cell[1] if cell else None)
+    elif p["type"] == "message":
+        p = {"type": p["type"], "role": p.get("role"), "content": [
+            {"type": c["type"], "text": c.get("text", "")} for c in p.get("content") or []
+            if isinstance(c, dict) and c.get("type") in ("input_text", "output_text")]}
+    elif p["type"] == "agent_message":
+        text = "\n".join(c.get("text", "") for c in p.get("content") or [] if isinstance(c, dict))
+        sender = re.search(r"Sender: (\S+)", text)
+        p = dict(type=p["type"], reported="FINAL_ANSWER" in text, sender=sender[1] if sender else "")
+    elif p["type"] == "item_completed":
         item = p.get("item") or {}
         p = {"type": p["type"], "started_at_ms": p.get("started_at_ms"), "item": {
-            k: item[k] for k in ("type", "process_id", "duration", "command", "status", "exit_code") if k in item}}
+            k: item[k] for k in ("type", "process_id", "duration", "status", "exit_code") if k in item}}
+        p["item"]["command"] = [(item.get("command") or [""])[-1][:SHORT]]
     return {"type": e.get("type"), "timestamp": e.get("timestamp", ""), "payload": p}
 
 
@@ -243,16 +302,10 @@ def codex_events(path):
             elif not text.startswith("<") and not text.startswith("# AGENTS.md"):
                 out.append((_who(text), text, at))
         elif kind in ("custom_tool_call", "function_call"):
-            raw = p.get("input") or p.get("arguments") or ""
-            cmd = re.search(r'cmd:\s*"((?:[^"\\]|\\.)*)"', raw) or re.search(r'"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
-            if cmd and NEEDS_YOU.match(cmd.group(1)):
-                continue
-            out.append(("step", _step(p.get("name", "tool"), cmd.group(1).replace("\\n", " ") if cmd else raw), at))
-        elif kind == "agent_message":
-            text = "\n".join(c.get("text", "") for c in p.get("content") or [] if isinstance(c, dict))
-            sender = re.search(r"Sender: (\S+)", text)
-            if "FINAL_ANSWER" in text:
-                out.append(("step", f"helper {sender.group(1) if sender else ''} reported", at))
+            if p["step"] is not None:
+                out.append(("step", p["step"], at))
+        elif kind == "agent_message" and p["reported"]:
+            out.append(("step", f"helper {p['sender']} reported", at))
     return out
 
 
@@ -377,57 +430,27 @@ def codex_background(path):
     gives no sign of which of its commands were left to run, and one that long was work worth seeing."""
     calls, cells, started, ended = {}, {}, {}, {}
 
-    def results(out):                                 # the tool results a call returned, never the commands' own output
-        blocks = [b.get("text", "") for b in out if isinstance(b, dict)] if isinstance(out, list) else [str(out or "")]
-        for b in blocks:
-            try:
-                r = json.loads(b)
-            except ValueError:
-                continue
-            for x in (r if isinstance(r, list) else [r]):
-                x = x.get("value", x) if isinstance(x, dict) and "status" in x and "value" in x else x   # Promise.allSettled
-                if isinstance(x, dict) and ("chunk_id" in x or "wall_time_seconds" in x):
-                    yield x
-
     for e in _tail(path, _codex_keep) if path and Path(path).exists() else []:
         at, pl = e.get("timestamp", ""), e.get("payload") or {}
         kind = pl.get("type")
         if kind in ("custom_tool_call", "function_call"):
-            said = pl.get("input") or pl.get("arguments") or ""
-            if pl.get("name") == "exec_command":          # a direct call: its name says it, its arguments don't
-                said = "exec_command " + said
-            if pl.get("name") == "wait":                  # waiting on a cell that went on running: that cell's call
-                m = re.search(r'"cell_id"\s*:\s*"?(\w+)', said)
-                said, at = cells.get(m.group(1), (at, ""))[::-1] if m else (said, at)
-            calls[pl.get("call_id")] = (at, said)
+            call = cells.get(pl["cell_id"], (at, pl)) if pl["cell_id"] else (at, pl)
+            calls[pl.get("call_id")] = call
         elif kind in ("custom_tool_call_output", "function_call_output") and pl.get("call_id") in calls:
-            when, said = calls[pl["call_id"]]
-            out = pl.get("output")
-            m = re.match(r"Script running with cell ID (\w+)", out if isinstance(out, str) else
-                         next((b.get("text", "") for b in out or [] if isinstance(b, dict)), ""))
-            if m:
-                cells[m.group(1)] = (when, said)
+            when, call = calls[pl["call_id"]]
+            if pl["cell_id"]:
+                cells[pl["cell_id"]] = (when, call)
             # the tools it called, in order, against the results it returned, in order: a session from an exec_command
             # is one it started, named by that call's own cmd; where the two don't pair up one for one, sessions it
             # didn't poll are still started, unnamed (colony-codex's review: a guess would name one by another's command)
-            tools = ([("exec_command", said[len("exec_command "):])] if said.startswith("exec_command {") else
-                     re.findall(r"\b(exec_command|write_stdin)\s*\(\s*(\{[^}]*\})?", said))
-            res = [r for r in results(out)]
-            polled = set(re.findall(r"""write_stdin\s*\(\s*\{[^}]*?["']?session_id["']?\s*:\s*(\d+)""", said))
+            tools, res, polled = call["tools"], pl["results"], set(call["polled"])
             live = lambda r: r.get("session_id") is not None and r.get("exit_code") is None and str(r["session_id"]) not in started
-
-            def named(args):
-                m = re.search(r"""["']?\bcmd["']?\s*:\s*("(?:[^"\\]|\\.)*")""", args or "")
-                try:
-                    return json.loads(m.group(1)).strip() if m else ""
-                except ValueError:
-                    return ""
             if tools and len(tools) == len(res):
-                pairs = [(named(a), r) for (t, a), r in zip(tools, res) if t == "exec_command" and live(r)]
+                pairs = [(a, r) for (t, a), r in zip(tools, res) if t == "exec_command" and live(r)]
             else:
                 execs = [a for t, a in tools if t == "exec_command"]
                 fresh = [r for r in res if live(r) and str(r["session_id"]) not in polled][:len(execs)]
-                pairs = [(named(execs[0]) if len(execs) == len(fresh) == 1 else "", r) for r in fresh]
+                pairs = [(execs[0] if len(execs) == len(fresh) == 1 else "", r) for r in fresh]
             for what, r in pairs:
                 sid = str(r["session_id"])
                 started[sid] = {"id": "codex-" + sid, "kind": "Shell", "what": what, "at": when, "bg": True}
