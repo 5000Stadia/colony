@@ -252,7 +252,7 @@ class BoardTest(BoardBase):
     def test_the_update_reaches_the_monitor_only_while_it_is_not_muted(self):
         watcher = monitor.Watcher.__new__(monitor.Watcher)
         watcher.enabled, watcher.pending = True, []
-        for step in ('freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
+        for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
             setattr(watcher, step, lambda *a: [])
         watcher.updates = lambda: called.append(1)
         called = []
@@ -280,7 +280,7 @@ class BoardTest(BoardBase):
         self.assertTrue(monitor.muted())
         watcher = monitor.Watcher.__new__(monitor.Watcher)
         watcher.enabled, watcher.pending = True, ['something']
-        for step in ('freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
+        for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
             def stub(*a, step=step):
                 if step in ('tell', 'scout', 'events'):
                     raise AssertionError(step + ' ran while muted')
