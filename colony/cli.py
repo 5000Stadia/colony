@@ -420,6 +420,13 @@ def cmd_doctor(a):
     else:
         problems.append(f"the board does not answer on port {port}: colony board, or colony restart"
                         + ("" if _free(int(port), False) else " (another program holds that port: colony stop, then colony board)"))
+    from . import repair
+    access = repair.state()
+    if access['enabled']:
+        if access['state'] == 'ready':
+            print('ok    native Colony repair access: paired (cached status; Settings → Colony repair access)')
+        else:
+            problems.append('Colony repair access: ' + access['message'] + ' Settings → Colony repair access')
     if "--no-monitor" not in args:
         (print("ok    steward session running") if monitor.snapshot()["state"] != "off"
          else problems.append("the steward session is not running: colony restart starts it"))

@@ -97,6 +97,13 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
   the project and handle folder names and references where practical, keeping access and history working.
   Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
+- **Repair access:** Settings → Agent programs → Colony repair access can keep one native Codex connection
+  for the installation, independently of project cards, the steward and ordinary project consoles. Enable it,
+  then pair once in ChatGPT using the fresh code shown on that page. Its detached host survives board stops
+  and restarts, so you can ask Codex to repair Colony through the app if the board breaks. It starts no AI work
+  while idle. The machine must remain online and Codex signed in; other agents can keep running locally.
+  This uses Colony's tested Linux native Codex integration, subject to the account's Remote Control availability.
+  It is off until enabled; disabling it lets active repair work finish before stopping the host.
 - **Document audio:** readable text and Markdown files have Play document at the top, beside Edit for pinned
   text. Playback uses that project's assigned voice, with a section queue, section jumps and replay.
   Large documents are read in small chunks. Auto waits during document playback and
@@ -110,6 +117,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   **Needs you**, the glowing count first in the top bar beside the steward, opens onto all of it at once.
 - **Message**, at the top of every project: type or paste into its console as if you were there,
   or have its agent write to another project. Attach a file from your device or the project.
+  Wrapped Claude input is recognized as a draft, while actual menus retain their send guard.
 - **The roadmap**, kept by the agent in `ROADMAP.md`, drawn as a journey: finished milestones as medals, each open
   one a stop with a ring of its progress, a dot per item and what's being worked on now, and the vision at the end.
   A milestone can name its kind (menu, lanes, findings, sections) and is drawn as one; only a sequence implies an
@@ -292,6 +300,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_send tests.test_polling tests.test_chat_cache` (they start no real agent).
+Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_send tests.test_polling tests.test_chat_cache tests.test_repair tests.test_repair_board` (they start no real agent).
 
 MIT licensed: see [LICENSE](LICENSE).
