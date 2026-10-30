@@ -340,8 +340,8 @@ class BoardTest(BoardBase):
         with patch.object(console, 'running', return_value=True), patch.object(console, 'provider'), \
                 patch.object(console, 'asking', return_value=False), \
                 patch.object(console.time, 'sleep'), patch.object(console.subprocess, 'run', side_effect=run):
-            # the box read as it is looked for, again under the typing lock, then after each Enter
-            with patch.object(console, 'draft', side_effect=['', '', '[colony] You have mail.', '']):
+            # The box is checked before the first Enter and again after each Enter.
+            with patch.object(console, 'draft', side_effect=['', '', '[colony] You have mail.', '[colony] You have mail.', '']):
                 self.assertTrue(console.type_into('s', '[colony] You have mail.'))
             self.assertEqual(keys.count('Enter'), 2, 'the first Enter was swallowed, so it is pressed again')
             keys.clear()

@@ -563,19 +563,28 @@ def dismissed(name, wait=4.0):
     return False
 
 
-def _sent(name, text, tries=3, ours=None):
-    """Press Enter until colony's own line has left the box: a program still starting, or one that read the typing
-    as a paste, can swallow the first Enter and leave the message sitting there unsent. ours: whether what is in the
-    box is still the message (by default, the box starts as the message does)."""
-    ours = ours or (lambda left: text.startswith(left[:20]))
-    for attempt in range(tries):
-        time.sleep(0.5 * (attempt + 1))
+def _sent(name, text, tries=3):
+    """Confirm an empty input box; retry Enter only for our own pending input.
+
+    A missing box may be a redraw. A different draft, a choice or a dead console
+    cannot acknowledge delivery and must never receive a retry intended for us.
+    """
+    for attempt in range(tries + 1):
+        if attempt:
+            time.sleep(0.5 * attempt)
+        if not running(name) or asking(name):
+            return False
         left = draft(name)
-        if not left or not ours(left):
+        if left == "":
             return True
+        if left is None:
+            continue
+        if not provider(name).pending_input(text, left):
+            return False
         subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-    left = draft(name)
-    return not left or not ours(left)
+    # Give the final Enter one bounded redraw interval before reading its result.
+    time.sleep(0.1)
+    return running(name) and not asking(name) and draft(name) == ""
 
 
 STARTING = 60                   # seconds after a console starts in which a screen without its box is still coming up
@@ -672,7 +681,6 @@ def type_into(name, text, wait=0):
         try:
             subprocess.run(["tmux", "send-keys", "-t", name, "-l", text], check=True)
             time.sleep(provider(name).enter_after)   # typing that arrives at once can read as a paste
-            subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
             return _sent(name, text)
         except subprocess.CalledProcessError:              # its program ended as the keys went in
             return False
@@ -703,9 +711,7 @@ def paste_into(name, text, answer=False, wait=0):
             subprocess.run(["tmux", "load-buffer", "-b", buf, "-"], input=text, text=True, check=True)
             subprocess.run(["tmux", "paste-buffer", "-p", "-d", "-b", buf, "-t", name], check=True)
             time.sleep(max(0.3, provider(name).enter_after))    # the paste lands before its Enter
-            subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
-            # the box was empty before the paste: whatever is in it now is the paste (or the program's marker for it)
-            return _sent(name, text, ours=lambda left: True)
+            return _sent(name, text)
         except subprocess.CalledProcessError:              # its program ended as it was pasted
             return False
 

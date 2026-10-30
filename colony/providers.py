@@ -357,6 +357,14 @@ class Provider:
         nothing, None if it can't tell. Nothing is typed into a session while there is one."""
         return ""
 
+    def pending_input(self, text, left):
+        """Whether a visible nonempty draft is a prefix of the input we just wrote.
+
+        Providers that compress pastes may recognize their own preview as well.
+        An unrelated changed draft is never an acknowledgement of delivery.
+        """
+        return bool(left) and text.startswith(left)
+
     def choice(self, screen):
         """The choice on screen (a trust question, a permission prompt): (question lines, options, highlighted), or
         None; the board shows it as buttons."""
@@ -1162,6 +1170,33 @@ class ClaudeCode(Provider):
             out.append(plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", l)))
         return "\n".join(out).strip().lstrip("❯").strip()
 
+    def pending_input(self, text, left):
+        # PROVIDER: Claude normalizes pasted text; physical wraps can split a
+        # word or omit boundary whitespace and add continuation padding.
+        import unicodedata
+        if not left:
+            return False
+        actual = unicodedata.normalize('NFC', text.replace('\r\n', '\n').replace('\r', '\n').replace('\t', '    '))
+        offset = len(actual) - len(actual.lstrip())
+        for index, row in enumerate(left.splitlines()):
+            if index:
+                row = row.lstrip()
+                while offset < len(actual) and actual[offset].isspace():
+                    offset += 1
+            if not actual.startswith(row, offset):
+                break
+            offset += len(row)
+        else:
+            return True
+        # A pill gives only a newline count. Recognize a whole expected pill,
+        # never infer ownership from arbitrary mixed or multiple hidden pastes.
+        rows = [row.strip() for row in left.splitlines()]
+        for visible in (''.join(rows), ' '.join(rows)):
+            pill = re.fullmatch(r'\[Pasted text #[1-9][0-9]*(?: \+([1-9][0-9]*) lines)?\]', visible)
+            if pill and int(pill[1] or 0) == actual.count('\n'):
+                return True
+        return False
+
     def activity(self, screen):
         """What the session is doing, as Claude Code shows it: its spinner line ("✻ Waiting for 4 background
         agents to finish", "✻ Worked for 3s"), its background agents with their time and tokens, and its footer
@@ -1832,6 +1867,26 @@ class Codex(Provider):
         if at is None:
             return None
         return plain(re.sub(r"\x1b\[2m.*?(\x1b\[(0|22)?m|$)", "", lines[at])).strip().lstrip("›").strip()
+
+    def pending_input(self, text, left):
+        # PROVIDER: Codex collapses a rapid paste to this marker, sometimes only
+        # for its first chunk, followed by ordinary typed text or another marker.
+        # The visible remainder must match the corresponding sent-text suffix.
+        if super().pending_input(text, left):
+            return True
+        if not left:
+            return False
+        marker = re.compile(r'\[Pasted Content ([1-9][0-9]*) chars\](?: #[1-9][0-9]*)?')
+        offset, at, found = 0, 0, False
+        for match in marker.finditer(left):
+            literal = left[at:match.start()]
+            if not text.startswith(literal, offset):
+                return False
+            offset += len(literal) + int(match[1])
+            if offset > len(text):
+                return False
+            at, found = match.end(), True
+        return found and text.startswith(left[at:], offset)
 
     _helping = {}
 
