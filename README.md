@@ -189,6 +189,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   agents see it each time they take that action (`colony lesson`). Research one project did is kept for all in a
   shared library with a date to look again (`colony research "words"`, `--add FILE`). Your standing orders to a
   project are kept by colony and handed back at every session start, after a compaction too (`colony rule`).
+  Scheduled context refreshes wait for the current reply to finish before asking the agent for a carry-over.
 - **Usage limits:** an agent the limit stopped mid-work is woken when it lifts, from the limit's own message on
   its console, and told to carry on where it stopped.
 - **Today:** each project's page for your day, made from colony's records at no token cost: what landed since
