@@ -8230,7 +8230,7 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 168, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 176, result.stdout)
 
 
 class DocumentAudioTest(BoardBase):
@@ -8787,9 +8787,9 @@ class LineTest(BoardBase):
         for gone in ("class='auto'", "class='cont'", "class='hold'", "class='skip'"):
             self.assertNotIn(gone, feed, "▷ alone under a reply")
         # the pill: the count, a ring and "Auto · 5" while Auto is on and able to play, "tap to resume" where it can't
-        self.assertIn("const say = aloud() ? (held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);", js)
+        self.assertIn("const say = aloud() ? (autoPaused() ? 'Auto paused · ' + n : held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);", js)
         self.assertIn(".cppill.on { border-color:var(--accent)", css)
-        self.assertIn("on(pill, 'click', () => { if (aloud() && !able()) return resume('the pill'); openSheet(); });", js)
+        self.assertIn("on(pill, 'click', () => { if (aloud() && !able() && !autoPaused()) return resume('the pill'); openSheet(); });", js)
         # Auto is one switch, every project's: a chip filters the rows and Play, and arrivals are judged by their own time
         self.assertIn("const shownLine = () => { const xs = visible(), p = chipOf(xs); return p ? xs.filter((x) => x.p === p) : xs; };", js)
         self.assertIn("const fresh = visible().filter((x) => x.b.some(([, at]) => Date.parse(at) >= armed));", js)
@@ -8807,7 +8807,7 @@ class LineTest(BoardBase):
         # a refused play() says tap to resume, never a silent pause; and the resume window is two hours
         self.assertIn("const refused = (what, cause) => { if (!N) return; paused = true; why = 'phone'; letGo = {why: 'refused'", js)
         self.assertIn("const LONG = 2 * 3600e3;", js)
-        self.assertIn("if (stopAt && Date.now() - stopAt >= LONG) {", js)
+        self.assertIn("if (!autoPaused() && stopAt && Date.now() - stopAt >= LONG) {", js)
         # a locked phone: the silence between replies lets go only after two quiet hours; the lock screen's stop pauses
         self.assertIn("O.si.call(window, () => { if (resting && Date.now() - resting > LONG) {", js)
         self.assertIn("['stop', () => hold(true, 'lock screen')]", js)
@@ -10927,3 +10927,11 @@ class ReadingFollowTest(BoardBase):
                                 capture_output=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS current-sentence refocus and Return', result.stdout)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
+    def test_phone_collapsed_auto_pause_keeps_arrivals_until_explicit_resume(self):
+        base = self.serve_reading()
+        result = subprocess.run(['node', str(ROOT / 'tests/auto_pause_browser.js'), base], text=True,
+                                capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS collapsed Auto pause and persistent queue', result.stdout)

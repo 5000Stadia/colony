@@ -31,6 +31,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
   window.testPlayer = {
     returning: returnToReading, target: textTarget, showHere, view(v) {view=v;}, of(key, name) {return observer.of(name,key);},
     arrivals, start, begin, done, hold, skip, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
+    autoPaused: () => autoPaused(), setAutoPaused: yes => setAutoPaused(yes),
     replay(x) { return again(x, L.projects[x.p] || {}); },
     read(t) { direct.read({key: '0', name: 'Plants', href: '/plants', kokoro: L.ready}, [{t, k: t, text: t + ' reply. All done.'}]); },
     voice(v) { N.kvoice = v; anew(true); },
@@ -47,7 +48,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
       S = session(); xs.forEach(x => { S.want.add(id(x)); S.play.add(id(x)); });
       if (cache) xs.forEach(x => words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))));
     },
-    state: () => ({document: N && N.document, pending: N && N.pending, voice: N && N.kvoice, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, letGo: letGo && letGo.why}),
+    state: () => ({document: N && N.document, pending: N && N.pending, voice: N && N.kvoice, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, armed, waiting: visible().length, letGo: letGo && letGo.why}),
   };
 })();`;
 
@@ -167,6 +168,50 @@ function browser(kokoro, restore = '') {
 }
 
 const cases = {
+  async 'paused Auto queues arrivals without selecting or sounding after unrelated interactions'(b) {
+    await b.line([]); b.api.setAutoPaused(true);
+    b.api.append(b.row('A')); b.api.append(b.row('B')); b.api.arrivals(); await flush();
+    assert.equal(b.storage.get('aloud'), '1'); assert.equal(JSON.parse(b.storage.get('autopaused')), true);
+    assert.equal(b.api.state().waiting, 2); assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0);
+    await b.event('pointerdown', {target: {matches: () => false, closest: () => null}});
+    await b.focus(); await b.blur(); await b.advance(2200); await b.event('visibilitychange');
+    b.api.arrivals(); await flush();
+    assert.equal(b.api.autoPaused(), true); assert.equal(b.api.state().waiting, 2);
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0);
+  },
+  async 'explicit Auto resume after two hours retains queued arrivals and original backlog cutoff'(b) {
+    await b.line([]); const armed = b.api.state().armed, old = b.row('old');
+    old.b[0][1] = new Date(armed - 60000).toISOString(); b.api.append(old);
+    b.api.setAutoPaused(true); b.api.append(b.row('A')); b.api.arrivals(); await flush();
+    await b.advance(2 * 3600e3 + 1); b.api.append(b.row('B')); b.api.arrivals(); await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0);
+    b.api.setAutoPaused(false); await flush();
+    assert.equal(b.api.autoPaused(), false); assert.equal(b.api.state().armed, armed);
+    assert.equal(b.api.state().t, 'A'); b.api.done(0); await flush();
+    assert.equal(b.api.state().t, 'B'); b.api.done(0); await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.api.state().waiting, 1, 'older backlog still waits for manual Play');
+    assert.equal(b.marks.length, 2);
+  },
+  async 'pausing Auto invalidates a pending automatic text selection until explicit resume'(b) {
+    await b.line(['A'], false); b.api.autoLine(); const pending = b.text('A');
+    b.api.arrivals(); await flush(); assert.equal(b.api.state().opened, '0|A');
+    b.api.setAutoPaused(true); pending.resolve(); await flush();
+    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, 0); assert.equal(b.marks.length, 0);
+    b.api.setAutoPaused(false); await flush();
+    assert.equal(b.api.state().t, 'A'); assert(b.sounds.length > 0);
+  },
+  async 'manual direct Play and History finish without releasing paused future Auto'(b) {
+    await b.line([]); b.api.setAutoPaused(true); b.api.append(b.row('queued')); b.api.arrivals(); await flush();
+    b.api.read('manual'); await flush(); assert.equal(b.api.state().t, 'manual'); assert(b.sounds.length > 0);
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, null); const afterManual = b.sounds.length;
+    b.api.arrivals(); await flush(); assert.equal(b.sounds.length, afterManual);
+    await b.api.replay(b.row('history')); await flush(); assert.equal(b.api.state().t, 'history');
+    b.api.done(0); await flush(); const afterHistory = b.sounds.length;
+    assert.equal(b.api.autoPaused(), true); assert.equal(b.api.state().t, null); assert.equal(b.api.state().waiting, 1);
+    await b.event('pointerdown', {target: {matches: () => false, closest: () => null}});
+    b.api.arrivals(); await flush(); assert.equal(b.sounds.length, afterHistory);
+    b.api.setAutoPaused(false); await flush(); assert.equal(b.api.state().t, 'queued');
+  },
   async 'writing continues pending buffer then resumes from cached audio'(b) {
     if (!b.kokoro) return;
     const xs = await b.line(['A']), navigation = b.navigation();
