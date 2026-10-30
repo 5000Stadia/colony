@@ -42,6 +42,16 @@ const assert = require('node:assert/strict'), fs = require('node:fs');
     await page.clock.fastForward(4100);await page.waitForFunction(()=>colonyPlayer.state().waiting===2);
     assert.deepEqual(await queued(),{auto:true,held:true,mode:'audio',waiting:2,reading:null,sounds:0});
     assert.equal(await page.locator('.cpsay').textContent(),'Auto paused · 2');
+    const needs=await page.evaluate(()=>{
+      const control=document.createElement('details');control.className='needs';control.innerHTML='<summary>Needs you</summary>';
+      document.querySelector('.chat').appendChild(control);colonyPlayer.placed();
+      const summary=control.querySelector('summary').getBoundingClientRect(),box=control.getBoundingClientRect(),row=document.querySelector('.cpminirow').getBoundingClientRect();
+      const result={summaryRight:summary.right,summaryWidth:summary.width,rowLeft:row.left,rowWidth:row.width,gap:row.left-box.right};
+      control.remove();colonyPlayer.placed();return result;
+    });
+    assert(needs.summaryWidth>0&&needs.rowWidth>0,'Needs you and compact controls have visible geometry');
+    assert(needs.summaryRight<=needs.rowLeft-8&&needs.gap>=6&&needs.gap<=10,
+      'Needs you clears the whole compact row, including Resume Auto: '+JSON.stringify(needs));
     await page.touchscreen.tap(200,180);await page.goto(base+'/fixture/reading-manual');
     await page.getByRole('heading',{name:'Manual page'}).click();await page.clock.fastForward(4100);
     await page.waitForFunction(()=>colonyPlayer.state().waiting===2);
