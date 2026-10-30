@@ -74,6 +74,11 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
   without it, the phone's own voice reads.
   The attachment **+** opens photos or files on the first tap while typing, keeping the draft and selection.
+  Sending checks that the native input cleared before reporting success. Long pasted-message previews on
+  Codex and Claude are recognized and retried safely; unrelated drafts, choices and unreadable input are held.
+  Each refresh loop keeps one request in flight, and status requests share a short-lived snapshot so slow
+  responses cannot pile up work. Codex chat history keeps the metadata needed to show tools and background jobs,
+  rather than retaining and reparsing their full output on every refresh.
 - **Pictures, PDFs and tables in Chat and document readers:** a corner button opens a fullscreen viewer that stays open through
   phone rotation. Start fitted to the width, zoom to 1.5×, 2×, 2.5× or 3×, and scroll within the viewer.
   Pictures and PDFs have Download; closing returns to the same reading position. Files opened from Showcase
@@ -287,6 +292,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration` (they start no real agent).
+Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_send tests.test_polling tests.test_chat_cache` (they start no real agent).
 
 MIT licensed: see [LICENSE](LICENSE).
