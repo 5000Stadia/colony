@@ -1083,7 +1083,8 @@ class Watcher:
         context.tick_all()
 
     def tick(self):
-        from . import vision, continuation, recovery
+        from . import vision, continuation, recovery, repair
+        repair.tick()                               # optional native repair host, independent of the steward agent
         self.signin()
         vision.observe_all()
         continuation.tick_all()

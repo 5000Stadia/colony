@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import textwrap
 import threading
 import time
 import unittest
@@ -120,6 +121,13 @@ class ClaudeInputBox(InputBox):
             lines = text.count('\n')
             text = '[Pasted text #3' + (f' +{lines} lines' if lines else '') + ']'
         return '──────────\n❯ ' + text + '\n──────────\n'
+
+
+class WrappedClaudeInputBox(ClaudeInputBox):
+    def screen(self, name):
+        rows = textwrap.wrap(self.text, width=44) if self.text else ['']
+        return ('Previous reply.\n' + '─' * 48 + '\n❯ ' + '\n  '.join(rows) + '\n' + '─' * 48
+                + '\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n')
 
 
 class SendTest(unittest.TestCase):
@@ -282,3 +290,38 @@ class SendTest(unittest.TestCase):
                     self.assertTrue(console.paste_into('box', text))
                 self.assertEqual(box.accepted, [text])
                 self.assertEqual(box.enters, 2)
+
+    def test_claude_wrapped_carry_and_human_input_are_not_choices_and_send_once(self):
+        carry = ('(90bf5b9fb7b24adf) [colony] Continue the agreed checkpoint. '
+                 'Keep the current conversation and verify the remaining work before reporting it complete. ')
+        carry = (carry * 4)[:472]
+        human = ('Please review the change and explain what happens when the board is restarted. '
+                 'Keep the active conversation available and check the result on a phone. ' * 2)
+        for text in (carry, human):
+            with self.subTest(kind='carry' if text == carry else 'human'):
+                box = WrappedClaudeInputBox()
+                box.text = text
+                screen = box.screen('box')
+                self.assertIsNone(box.provider.choice(screen), 'physical input wraps are not menu options')
+                self.assertIsNone(box.provider.choice('Old question\n❯ 1. Yes\n  2. No\n' + screen),
+                                  'an older numbered choice cannot override the current typing box')
+                self.assertTrue(box.provider.pending_input(text, box.provider.draft(screen)))
+                with box.on():
+                    self.assertTrue(console._sent('box', text))
+                self.assertEqual(box.enters, 1)
+                self.assertEqual(box.accepted, [text])
+                self.assertEqual(box.provider.draft(box.screen('box')), '', 'acknowledge only the empty native box')
+
+    def test_claude_unnumbered_menus_below_rules_still_block_owned_sends(self):
+        rule = '─' * 48
+        for suffix in ('', '\n' + rule):
+            screen = (rule + '\n❯ No, exit\n  Yes, I trust this folder' + suffix
+                      + '\n\nEnter to confirm · ↑/↓ to navigate · Esc to cancel')
+            with self.subTest(closing_rule=bool(suffix)):
+                provider = providers.ClaudeCode()
+                self.assertEqual(provider.choice(screen)[1:], (['No, exit', 'Yes, I trust this folder'], 0))
+                box = WrappedClaudeInputBox()
+                box.text = 'No, exit'
+                with box.on(), patch.object(console, 'screen', return_value=screen):
+                    self.assertFalse(console._sent('box', box.text))
+                self.assertEqual(box.enters, 0)

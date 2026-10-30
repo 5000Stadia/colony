@@ -176,7 +176,9 @@ def remote_problem(root, settings):
                 f'until it is; colony checks it by itself (python3 -m colony.codex_remote check runs it now)')
     from . import console
     status = read_json(home_for(root) / 'colony-status.json') if console.running(console.session_name(root)) else {}
-    if status.get('mode') == 'local' and status.get('reason'):              # an old record of a console now closed is moot
+    # A previous fallback may have drained its daemon after recording pending.
+    local_fallback = status.get('mode') == 'local' or status.get('mode') == 'pending' and not alive(home_for(root))
+    if local_fallback and status.get('reason'):
         return f'its console runs local ({status["reason"]}): it reaches the app again at its next start'
     return None
 
@@ -474,12 +476,17 @@ def stop_host(root, timeout=15):
     return not alive(home)
 
 
-def start(root, home, source, config):
+def start(root, home, source, config, *, cwd=None, project=True):
     from . import board
     command = ['codex', 'app-server', '--listen', 'unix://' + str(socket_for(home)), '--remote-control', *flags(config)]
     log = os.open(home / 'colony-daemon.log', os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    env = environment(root, home, source)
+    if not project:
+        # An installation repair host is not a registered project console.
+        env.pop('COLONY_PROJECT', None)
+        env.pop('COLONY_CONSOLE', None)
     try:
-        process = subprocess.Popen(command, cwd=board.workdir(root), env=environment(root, home, source),
+        process = subprocess.Popen(command, cwd=cwd if cwd is not None else board.workdir(root), env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
         _processes[process.pid] = process
     finally:
@@ -617,6 +624,7 @@ def launch(root, settings, resume=None):
             if not stopped:
                 print('The app conversation is still running. Reopen this console when it finishes.', file=sys.stderr)
                 return 1
+        report(home, root, 'local', reason, thread=resume)
         owned = owned or read_json(home / 'colony-transfer.json').get('state') == 'published'
         return local(root, settings, resume, home if owned else source)
 

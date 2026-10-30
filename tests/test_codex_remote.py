@@ -424,10 +424,38 @@ class ConsoleConfigTest(unittest.TestCase):
                 with patch.object(console, 'running', return_value=True):
                     self.assertIn('runs local', remote.remote_problem(root, {'remote': True}),
                                   'a console started on an untested Codex stays local until its next start')
+                remote.report(remote.home_for(root), root, 'pending', 'enrollment unavailable')
+                with patch.object(console, 'running', return_value=True), patch.object(remote, 'alive', return_value=False):
+                    self.assertIn('runs local', remote.remote_problem(root, {'remote': True}),
+                                  'an older pending record whose daemon drained must show the local fallback')
+                with patch.object(console, 'running', return_value=True), patch.object(remote, 'alive', return_value=True):
+                    self.assertIsNone(remote.remote_problem(root, {'remote': True}),
+                                      'a pending live host may still own an active turn')
+                remote.report(remote.home_for(root), root, 'local', remote.UNTESTED + '0.159.3')
                 board.save_registry({'roots': [], 'settings': {}})
                 self.assertIn('available again', codex.stale(root), 'so the watcher reloads it at its next idle moment')
             with patch.object(codex, 'version', return_value='codex-cli 9.9.9'):
                 self.assertIsNone(codex.stale(root), 'still untested: a reload would come back local')
+
+
+    def test_enrollment_fallback_reports_local_after_successful_drain(self):
+        from colony import providers
+        codex = providers.get('codex')
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder), \
+                patch.object(codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]), \
+                patch.object(codex, 'config_home', return_value=Path(folder) / 'source'), \
+                patch.object(remote, 'overrides', side_effect=remote.RemoteError('enrollment unavailable')), \
+                patch.object(remote, 'alive', return_value=True), \
+                patch.object(remote, 'drain', return_value=True) as drain, \
+                patch.object(remote, 'local', return_value=0) as local, patch('builtins.print'):
+            root = Path(folder) / 'project'
+            self.assertEqual(remote.launch(root, {'remote': True}, resume='existing-thread'), 0)
+            status = remote.read_json(remote.home_for(root) / 'colony-status.json')
+            self.assertEqual(status['mode'], 'local')
+            self.assertEqual(status['reason'], 'enrollment unavailable')
+            self.assertEqual(status['thread'], 'existing-thread')
+            drain.assert_called_once_with(remote.home_for(root))
+            local.assert_called_once()
 
 
 class PairingTest(unittest.TestCase):

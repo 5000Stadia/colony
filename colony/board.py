@@ -257,7 +257,7 @@ DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "mo
                     "permissions": "all", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60,
-                    "tailscale": "", "tailscale_lan_before": None, "steward_name": ""}
+                    "tailscale": "", "tailscale_lan_before": None, "steward_name": "", "repair_provider": ""}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -269,6 +269,7 @@ SETTING_HELP = {
     # PROVIDER: Claude uses Remote Control; Codex uses an isolated app-server host.
     "remote": "new consoles are reachable in their provider's app: Claude or ChatGPT",
     "remote_by": "each program's default for new projects, as claude=on,codex=on (a project can turn its own off)",
+    "repair_provider": "one optional native repair connection for this Colony installation, independent of project cards (codex, or off)",
     "safe_pause_session": "% of a 5-hour session window at which projects wind down until it resets; never later than safe_pause (off: as safe_pause)",
     "turbo_by": "turbo for each program, as claude=on,codex=on (on unless turned off): when its weekly use runs behind pace, its projects with queued work are turned up as each one ticks",
     "lan": "the board answers every device on your home network, not only this machine (off: your phone reaches it through Tailscale or the Claude app)",
@@ -410,6 +411,12 @@ def set_setting(key, value):
         before = steward_named()
         reg["settings"][key] = steward_name_of(value)       # ValueError, saying what reads, for anything else
         renamed = (before, reg["settings"][key]) if reg["settings"][key] != before else None
+    elif key == "repair_provider":
+        from . import providers
+        chosen = '' if value in ('', 'off') else value
+        if chosen and (chosen not in providers.PROVIDERS or not providers.supplies(providers.get(chosen), 'repair_start')):
+            raise KeyError(key)
+        reg["settings"][key] = chosen
     elif key == "active_hours":
         reg["settings"][key] = hours.normal(value)          # ValueError, saying what reads, for anything else
     elif key == "monitor_model":
@@ -8358,6 +8365,119 @@ def signin_page(reg):
                  + f"<script>{SIGNIN_JS}</script>")
 
 
+REPAIR_JS = r"""
+(() => {
+  const area = document.getElementById('repair-access'); if (!area) return;
+  let current = JSON.parse(area.querySelector('script[type="application/json"]').textContent);
+  let timer = 0, reading = false, sending = false, pairing = null, departed = false, revision = 0;
+  const live = () => !departed && document.contains(area);
+  const status = area.querySelector('.repair-status'), message = area.querySelector('.repair-message');
+  const error = area.querySelector('.repair-error'), code = area.querySelector('.repair-code');
+  const draw = () => {
+    const labels = {off:'Off', starting:'Starting repair access…', connecting:'Connecting…',
+      unpaired:'Ready to pair', ready:'Connected for repairs', offline:'Repair access is offline',
+      'needs-signin':'Provider sign-in needed', unavailable:'Repair access unavailable', stopping:'Turning off…'};
+    status.textContent = labels[current.state] || 'Status unconfirmed'; message.textContent = current.message || '';
+    area.querySelector('.repair-enable').hidden = !!current.enabled;
+    area.querySelector('[data-repair-action=disable]').hidden = !current.enabled && current.state !== 'stopping';
+    const pair = area.querySelector('[data-repair-action=pair]');
+    pair.hidden = !current.enabled || !['unpaired','ready'].includes(current.state);
+    pair.textContent = current.paired ? 'Pair another device' : 'Pair with ChatGPT';
+    area.querySelector('.repair-signin').hidden = current.state !== 'needs-signin';
+    const host = area.querySelector('.repair-host');
+    host.textContent = current.server ? 'Host in ChatGPT: ' + current.server : '';
+    if (!current.enabled || current.paired) pairing = null;
+    if (pairing && pairing.expiresAt * 1000 <= Date.now()) {
+      pairing = null; error.textContent = 'The pairing code expired. Tap Pair with ChatGPT for a fresh code.';
+    }
+    area.querySelector('.repair-pairing').hidden = !pairing;
+    code.textContent = pairing ? pairing.manualPairingCode : '';
+    area.querySelector('.repair-expiry').textContent = pairing ? 'Expires ' +
+      new Date(pairing.expiresAt * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : '';
+    area.querySelectorAll('button').forEach(button => { button.disabled = sending; });
+  };
+  const request = async (action, fields = {}) => {
+    const response = await fetch('/repair/' + action, {method:'POST', credentials:'same-origin',
+      cache:'no-store', body:new URLSearchParams(fields)});
+    let data = {}; try { data = await response.json(); } catch (_) {}
+    if (!response.ok) throw new Error(data.error || 'Repair access could not be updated. Try again.');
+    return data;
+  };
+  const pull = async () => {
+    if (reading || sending || !live()) return;
+    reading = true;
+    const version = revision;
+    try {
+      const response = await fetch('/repair/status', {credentials:'same-origin', cache:'no-store'});
+      if (!response.ok) throw new Error();
+      const state = await response.json(); if (!live() || version !== revision) return;
+      current = state; draw();
+      if (pairing) {
+        const checked = await request('pair/status', {code:pairing.manualPairingCode});
+        if (!live() || version !== revision) return;
+        if (checked.claimed) { pairing = null; error.textContent = ''; }
+        if (checked.state) current = checked.state;
+        draw();
+      }
+      area.querySelector('.repair-connection').textContent = '';
+    } catch (_) {
+      if (live() && version === revision) area.querySelector('.repair-connection').textContent = 'The board could not be reached. This page will retry; an existing repair host keeps running.';
+    } finally {
+      reading = false; clearTimeout(timer);
+      if (live()) timer = setTimeout(pull, document.hidden ? 10000 : 2000);
+    }
+  };
+  area.querySelectorAll('[data-repair-action]').forEach(button => button.addEventListener('click', async () => {
+    if (sending) return;
+    sending = true; revision += 1; error.textContent = ''; draw();
+    const action = button.dataset.repairAction;
+    try {
+      const fields = action === 'enable' ? {provider:area.querySelector('[name=provider]').value} : {};
+      const data = await request(action, fields); if (!live()) return;
+      if (data.state) current = data.state;
+      pairing = action === 'pair' ? data.pairing || null : null; draw();
+    } catch (err) { if (live()) error.textContent = err.message; }
+    finally { sending = false; if (live()) { draw(); pull(); } }
+  }));
+  const fresh = () => { if (!document.hidden) pull(); };
+  document.addEventListener('visibilitychange', fresh); window.addEventListener('focus', fresh);
+  document.addEventListener('colony-leave', () => {
+    departed = true; revision += 1; clearTimeout(timer); pairing = null; code.textContent = '';
+    document.removeEventListener('visibilitychange', fresh); window.removeEventListener('focus', fresh);
+  }, {once:true});
+  draw(); pull();
+})();
+"""
+
+
+def repair_page(reg):
+    """Installation-level native access, independent of project cards and the board's lifetime."""
+    from . import repair
+    state = repair.state()
+    choices = ''.join(f"<option value='{e(k)}'>{e(providers.get(k).label)}</option>" for k in repair.available())
+    encoded = json.dumps(state).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    enable = ("<div class='repair-enable options'><label>Agent program <select name='provider'>" + choices +
+              "</select></label><button type='button' data-repair-action='enable'>Enable repair access</button></div>"
+              if choices else "<p class='repair-enable muted'>Enable and sign in to a compatible agent program in Settings to use repair access.</p>")
+    return shell(reg, -1, "<meta name='referrer' content='no-referrer'><h1>Colony repair access</h1>"
+                 "<p>Connect once in ChatGPT to repair this Colony installation even when its board stops working. "
+                 "One native host keeps running separately from the board and project consoles. "
+                 "It starts no AI work until you send a request.</p>"
+                 "<p class='muted'>The host machine must stay online and the agent program must remain signed in.</p>"
+                 "<section id='repair-access' class='card'><p><b class='repair-status' role='status'></b></p>"
+                 "<p class='repair-message'></p><p class='repair-host muted'></p>" + enable +
+                 "<div class='repair-actions'><button type='button' data-repair-action='pair' hidden>Pair with ChatGPT</button>"
+                 "<button type='button' data-repair-action='check' class='quiet'>Check status</button>"
+                 "<button type='button' data-repair-action='disable' class='quiet' hidden>Disable repair access</button></div>"
+                 "<p class='repair-signin' hidden><a href='/signin'>Reconnect the agent program</a></p>"
+                 "<div class='repair-pairing' hidden><p>In the ChatGPT app, signed in to the same account, open "
+                 "<b>Codex → Add manually</b> and enter:</p><code class='repair-code' data-private='true'></code>"
+                 "<p class='repair-expiry muted'></p></div><p class='repair-error' role='alert'></p>"
+                 "<p class='repair-connection' role='status'></p>"
+                 f"<script type='application/json'>{encoded}</script></section>"
+                 "<p><a href='/settings'>Back to Settings</a></p>" + f"<script>{REPAIR_JS}</script>")
+
+
 def signin_result(why=False):
     """The last token check's failure, kept for the Settings page to show; why=None clears it, a string sets it."""
     path = home() / "claude-token-check"
@@ -8876,7 +8996,7 @@ def settings_page(reg):
         section("programs", "Agent programs", e(", ".join(on) or "none on") + (
             " · <b class='warn'>ChatGPT pairing waits</b>" if "id='codex-pairing' open" in pairing else "") + (
             f" · <b class='warn'>{e(', '.join(pv.get(k).label for k in out))} signed out</b>" if out else ""),
-            card(programs + pairing, signin)),
+            card(programs + pairing + "<p><a href='/repair'>Colony repair access</a> · one optional connection for repairing the board from ChatGPT</p>", signin)),
         section("sessions", "New sessions", e(f"{pv.get(s['provider']).label} · {dict(PERMISSION_LABELS).get(s['permissions'], s['permissions'])}"),
                 card(session_fields)),
         section("models", "Models", e(f"{'New models switch in automatically' if s.get('model_adoption', 'automatic') == 'automatic' else 'New models: ask me'} "
@@ -9196,6 +9316,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._signin_response(signin_page(reg), html=True)
         if url.path == '/signin/status':
             return self._signin_response(signin_snapshots())
+        if url.path == '/repair':
+            return self._signin_response(repair_page(reg), html=True)
+        if url.path == '/repair/status':
+            from . import repair
+            return self._signin_response(repair.state())
         plist = projects(reg)
         try:                                           # the steward's chat asks as p=steward: its routes read it themselves
             pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
@@ -9461,7 +9586,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._page_send()
         if not self._from_this_page():
             return self._send(403, b"not from this page")
-        if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status", "/chat/measure", "/chat/heard"):
+        if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status", "/repair/pair/status", "/chat/measure", "/chat/heard"):
             hours.seen()                               # the person tapped, typed or sent something
         if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:
             return self._send(413, b"that file is too large (25 MB at most)")
@@ -9488,6 +9613,32 @@ class Handler(BaseHTTPRequestHandler):
             form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/repair/'):
+            from . import repair
+            if path not in ('/repair/enable', '/repair/disable', '/repair/check', '/repair/pair', '/repair/pair/status'):
+                return self._signin_response({'error': 'No such repair access action.'}, 404)
+            if path == '/repair/enable' and (len(values.get('provider', [])) != 1 or form.get('provider') not in repair.available()):
+                return self._signin_response({'error': 'Choose an installed, enabled agent program that supports repair access.'}, 400)
+            if path == '/repair/pair/status' and (len(values.get('code', [])) != 1 or
+                    not re.fullmatch(r'[A-Za-z0-9-]{1,128}', form.get('code', ''))):
+                return self._signin_response({'error': 'Use the current pairing code.'}, 400)
+            try:
+                result = {}
+                if path == '/repair/enable':
+                    repair.enable(form['provider'])
+                elif path == '/repair/disable':
+                    repair.disable()
+                elif path == '/repair/check':
+                    repair.tick(force=True)
+                elif path == '/repair/pair':
+                    result['pairing'] = repair.pair()
+                else:
+                    result['claimed'] = bool(repair.pair(form['code']).get('claimed'))
+                return self._signin_response(dict(result, state=repair.state()))
+            except ValueError:
+                return self._signin_response({'error': 'Repair access is not ready. Check its status and try again.'}, 409)
+            except Exception:
+                return self._signin_response({'error': 'The native repair host could not be reached. Check its status and try again.'}, 503)
         if path.startswith('/signin/'):
             from . import signin
             if path not in ('/signin/start', '/signin/code', '/signin/cancel', '/signin/check'):
@@ -10565,6 +10716,12 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
 .signin-submit input { display:block; width:100%; min-height:44px; box-sizing:border-box; font-size:16px }
 .signin-error, .signin-connection { color:var(--flag) }
 .signin-error:empty, .signin-message:empty, .signin-connection:empty { display:none }
+#repair-access [hidden] { display:none !important }
+.repair-actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center }
+#repair-access button, #repair-access select { min-height:44px }
+.repair-code { font-size:1.6em; letter-spacing:.08em; overflow-wrap:anywhere }
+.repair-error, .repair-connection { color:var(--flag) }
+.repair-error:empty, .repair-connection:empty, .repair-host:empty { display:none }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
 /* a chat's Needs you floats on the player (on the message box, where the player isn't shown), its own to that chat:
