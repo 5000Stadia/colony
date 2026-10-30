@@ -4159,9 +4159,17 @@ document.addEventListener('toggle', async (ev) => {
 
 # Every few seconds: each project's status dot, line and waiting count in the sidebar.
 POLL = """
+let pollReading = false, pollLeft = false, pollAbort = null, pollTimer = 0;
+const pollBody = document.body;
+document.addEventListener('colony-leave', () => {
+  pollLeft = true; clearInterval(pollTimer); if (pollAbort) pollAbort.abort();
+}, {once: true});
 async function poll() {
+  if (pollReading || pollLeft || document.body !== pollBody) return;
+  pollReading = true; pollAbort = new AbortController();
   try {
-    const r = await fetch('/status', {cache: 'no-store'}); const st = await r.json();
+    const r = await fetch('/status', {cache: 'no-store', signal: pollAbort.signal}); if (!r.ok) return;
+    const st = await r.json(); if (pollLeft || document.body !== pollBody) return;
     const notice = document.getElementById('signin-notice');
     if (notice && st.reconnect) { notice.hidden = !st.reconnect.length;
       notice.querySelector('b').textContent = st.reconnect.join(', '); }
@@ -4200,8 +4208,9 @@ async function poll() {
     });
     reorder(st.nav);
   } catch (e) {}
+  finally { pollReading = false; pollAbort = null; }
 }
-setInterval(poll, 2500);
+pollTimer = setInterval(poll, 2500);
 // A project that stirs comes forward in the top menu then and there, as a reload would put it; where the menu has
 // changed shape (a project added, a nest formed), it waits for the next page.
 function reorder(nav) {
@@ -5236,19 +5245,27 @@ CHAT = """
   file.addEventListener('change', chosen);
   // While a finger is on the page, or it still glides from a flick, nothing is redrawn or moved: a phone stops a
   // gliding page at any change. The next look catches up.
+  let refreshing = false, refreshAgain = false, refreshLeft = false, refreshAbort = null;
+  document.addEventListener('colony-leave', () => {
+    refreshLeft = true; clearInterval(refreshTimer); if (refreshAbort) refreshAbort.abort();
+  }, {once: true});
   let moving = 0, shown = 0, tag = '';             // shown: the earlier turns asked for; tag: the feed as last fetched
   // caught on the way down: a scroll inside a part (the floating Needs you scrolls in itself) never reaches the window
   ['touchstart', 'touchmove', 'scroll', 'wheel'].forEach((t) => window.addEventListener(t, () => { moving = Date.now(); }, {passive: true, capture: true}));
   async function refresh() {
-    if (!box.isConnected || document.documentElement.classList.contains('media-open') || Date.now() - moving < 1200) return;
+    if (refreshLeft || !box.isConnected || document.documentElement.classList.contains('media-open') || Date.now() - moving < 1200) return;
+    if (refreshing) { refreshAgain = true; return; }
     // an answer being written in the conversation (to what it needs of the person) is never redrawn away
     if ([...box.querySelectorAll('textarea')].some((t) => t.value.trim()) || box.contains(document.activeElement) &&
         document.activeElement.matches('textarea, select, input')) return;
+    refreshing = true; refreshAbort = new AbortController();
     try {
-      const r = await fetch('/chat/feed?p=' + key + (shown ? '&n=' + shown : ''), {cache: 'no-store',
+      const r = await fetch('/chat/feed?p=' + key + (shown ? '&n=' + shown : ''), {cache: 'no-store', signal: refreshAbort.signal,
         headers: tag ? {'If-None-Match': tag} : {}});
-      if (r.status === 304 || !r.ok) return;
-      const html = await r.text(); if (document.documentElement.classList.contains('media-open')) return;
+      if (r.status === 304 || !r.ok || refreshLeft || !box.isConnected) return;
+      const html = await r.text(); if (refreshLeft || !box.isConnected || document.documentElement.classList.contains('media-open')) return;
+      if (Date.now() - moving < 1200 || [...box.querySelectorAll('textarea')].some((t) => t.value.trim()) ||
+          box.contains(document.activeElement) && document.activeElement.matches('textarea, select, input')) return;
       tag = r.headers.get('ETag') || ''; if (html === last) return;
       // a part being read stays in view as replies land under it: the page keeps its place rather than following them
       const open = [...box.querySelectorAll('details[open]')].map((d) => d.dataset.k), end = stick && !box.querySelector('.say.reading'), was = lastBottom();
@@ -5279,9 +5296,13 @@ CHAT = """
       if (Math.abs(moved) >= 1) window.scrollBy(0, moved);
       if (end && (!typingNow() || lastBottom() !== was)) toEnd();       // typing, it moves only when the conversation grew
     } catch (e) {}
+    finally {
+      refreshing = false; refreshAbort = null;
+      if (refreshAgain) { refreshAgain = false; if (!refreshLeft && box.isConnected) refresh(); }
+    }
   }
   let tick = 0;                                  // every 3 s; reading aloud, twice as often, so the voice starts sooner
-  setInterval(() => { if (window.colonyPlayer.auto() || ++tick % 2 === 0) refresh(); lost(); }, 1500);
+  const refreshTimer = setInterval(() => { if (window.colonyPlayer.auto() || ++tick % 2 === 0) refresh(); lost(); }, 1500);
   const sendBtn = form.querySelector('button.send');
   let armed = 0;                                  // ■ tapped once: a second tap within 3 s stops the agent
   const busy = () => { const b = !!box.querySelector('.chatlive.busy'), empty = !ta.value.trim() && !file.files.length;
@@ -7948,22 +7969,30 @@ def lessons_kept():
 KEEP_CURRENT = """
 function keepCurrent(el, url, after) {
   if (!el) return;
-  let last = el.innerHTML, touched = 0;
+  let last = el.innerHTML, touched = 0, reading = false, left = false, controller = null;
+  document.addEventListener('colony-leave', () => {
+    left = true; clearInterval(timer); if (controller) controller.abort();
+  }, {once: true});
   const busy = () => { touched = Date.now(); };
   ['scroll', 'touchstart', 'touchmove', 'wheel', 'pointerdown'].forEach((t) => el.addEventListener(t, busy, {capture: true, passive: true}));
-  setInterval(async () => {
-    if (el.contains(document.activeElement) || Date.now() - touched < 5000) return;
-    const r = await fetch(url, {cache: 'no-store'}); if (!r.ok) return;
-    const html = await r.text(); if (html === last) return;
-    const kept = [...el.querySelectorAll('*')].filter((x) => x.scrollTop).map((x) => [x.className, x.textContent.slice(0, 80), x.scrollTop]);
-    const opened = new Set([...el.querySelectorAll('details[open][data-k]')].map((d) => d.dataset.k));   // what they unfolded stays so
-    el.innerHTML = last = html;
-    el.querySelectorAll('details[data-k]').forEach((d) => { if (opened.has(d.dataset.k)) d.open = true; });
-    for (const [cls, text, top] of kept) {
-      const x = [...el.querySelectorAll('*')].find((y) => y.className === cls && y.textContent.slice(0, 80) === text);
-      if (x) x.scrollTop = top;
-    }
-    if (after) after(el);
+  const timer = setInterval(async () => {
+    if (reading || left || !el.isConnected || el.contains(document.activeElement) || Date.now() - touched < 5000) return;
+    reading = true; controller = new AbortController();
+    try {
+      const r = await fetch(url, {cache: 'no-store', signal: controller.signal}); if (!r.ok) return;
+      const html = await r.text();
+      if (left || !el.isConnected || el.contains(document.activeElement) || Date.now() - touched < 5000 || html === last) return;
+      const kept = [...el.querySelectorAll('*')].filter((x) => x.scrollTop).map((x) => [x.className, x.textContent.slice(0, 80), x.scrollTop]);
+      const opened = new Set([...el.querySelectorAll('details[open][data-k]')].map((d) => d.dataset.k));   // what they unfolded stays so
+      el.innerHTML = last = html;
+      el.querySelectorAll('details[data-k]').forEach((d) => { if (opened.has(d.dataset.k)) d.open = true; });
+      for (const [cls, text, top] of kept) {
+        const x = [...el.querySelectorAll('*')].find((y) => y.className === cls && y.textContent.slice(0, 80) === text);
+        if (x) x.scrollTop = top;
+      }
+      if (after) after(el);
+    } catch (e) {}
+    finally { reading = false; controller = null; }
   }, 4000);
 }
 """
@@ -8922,6 +8951,34 @@ def own_host(header):
     return name.rstrip(".") in _names["names"]
 
 
+_STATUS_LOCK = threading.Lock()
+_STATUS = {}                 # one board/registry at a time; never retain another home's health snapshot
+STATUS_SECONDS = 1.0
+
+
+def status_payload(reg, plist):
+    """Coalesce devices' status polls, with one fresh console snapshot per project and no model calls."""
+    from . import monitor, signin
+    key = (str(home()), json.dumps(reg, sort_keys=True), tuple((str(p), p.exists()) for p in plist))
+    with _STATUS_LOCK:        # only /status waits here; sending, pages and the player use no status lock
+        if _STATUS.get('key') == key and time.monotonic() - _STATUS['at'] < STATUS_SECONDS:
+            return _STATUS['body']
+        rows = []
+        for p in plist:
+            if p.exists():
+                snap = console.snapshot(p)
+                rows.append(dict(seen(snap), name=name_of(p), project=str(p), waiting=len(moments(p, snap)),
+                                 work=at_work(p), followed=monitor.involved(p)))
+            else:
+                rows.append(dict(name=name_of(p), project=str(p), state='off', lines=[], waiting=0, work='', followed=False))
+        body = json.dumps(dict(board=str(home()), projects=rows, monitor=monitor.snapshot(), nav=nav_order(plist),
+                               reconnect=[providers.get(k).label for k, s in signin.states().items()
+                                          if s['state'] == 'reconnect'])).encode()
+        _STATUS.clear()
+        _STATUS.update(key=key, at=time.monotonic(), body=body)
+        return body
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -9383,13 +9440,7 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/steward":
             return self._send(200, monitor_page(reg, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/status":
-            from . import monitor
-            from . import signin
-            body = json.dumps({"board": str(home()), "projects": [
-                dict(seen(console.snapshot(p)), name=name_of(p), project=str(p), waiting=len(moments(p)), work=at_work(p), followed=monitor.involved(p)) if p.exists()
-                else {"name": name_of(p), "project": str(p), "state": "off", "lines": [], "waiting": 0, "work": "", "followed": False} for p in plist], "monitor": monitor.snapshot(),
-                "nav": nav_order(plist), "reconnect": [providers.get(k).label for k, s in signin.states().items()
-                                                         if s['state'] == 'reconnect']}).encode()
+            body = status_payload(reg, plist)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
