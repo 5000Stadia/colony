@@ -9906,7 +9906,7 @@ class Handler(BaseHTTPRequestHandler):
             if form.get("p") == "monitor":
                 from . import monitor
                 dst = projects(reg)[int(form.get("to", "0"))]
-                if text and not console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}"):
+                if text and not console.type_into(monitor.ensure(), f"Tell {dst.name} this for me, in full, with colony tell: {text}", _purpose='person'):
                     return self._send(409, held(the_steward(), "/steward").encode())
                 where = "/steward?view=console"
             else:
@@ -9919,7 +9919,7 @@ class Handler(BaseHTTPRequestHandler):
                 if files:
                     text = "\n".join(f"Attached: {f}" for f in files) + (f"\n\n{text}" if text else "")
                 sent = not text or (console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True) if dst == src
-                                    else console.type_into(console.ensure(src, settle=SETTLE), mail.instruction(mail.address(dst), text)))
+                                    else console.type_into(console.ensure(src, settle=SETTLE), mail.instruction(mail.address(dst), text), _purpose='person'))
                 if not sent:
                     return self._send(409, held(src.name, f"/?p={form.get('p', '0')}", src).encode())
                 if text and dst == src:
@@ -10199,7 +10199,7 @@ class Handler(BaseHTTPRequestHandler):
                 left = console.draft(where)
                 if left is None:                          # no box to type into yet: its program is still starting
                     return self._send(503, NOT_READY.encode())
-                return self._send(409, short(" ".join(left.split()), 80).encode())
+                return self._send(409, b"Not sent: an unsent draft is waiting in Console. Review or send it there, then send this message again.")
             self.send_response(204 if sent else 409)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -10510,7 +10510,7 @@ class Handler(BaseHTTPRequestHandler):
                          author='person' if text else 'colony')
             append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
-            if not console.type_into(console.session_name(root), text):
+            if not console.type_into(console.session_name(root), text, _purpose='person'):
                 return self._send(409, held(root.name, form.get("back", "/")).encode())
             answer_asks(root, "from the board")
         elif path == "/console/stop":

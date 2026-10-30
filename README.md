@@ -20,8 +20,9 @@ Then **+ Add project**: start a new one, pick a folder you already have, or clon
 agent starts working in its own console right away (it spends tokens from then on), and the project joins
 the board.
 
-`colony stop` ends everything. `~/colony/start` brings the board back, and each console returns to its
-conversation when you open it.
+`colony stop` ends the board, steward and project consoles. Optional repair access stays available;
+turn it off separately in Settings. `~/colony/start` brings the board back, and each console returns
+to its conversation when you open it.
 
 ### Moving to a fresh machine
 
@@ -118,6 +119,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Message**, at the top of every project: type or paste into its console as if you were there,
   or have its agent write to another project. Attach a file from your device or the project.
   Wrapped Claude input is recognized as a draft, while actual menus retain their send guard.
+  Colony records its own inserted prompts so a failed background message can be recovered before your next send.
 - **The roadmap**, kept by the agent in `ROADMAP.md`, drawn as a journey: finished milestones as medals, each open
   one a stop with a ring of its progress, a dot per item and what's being worked on now, and the vision at the end.
   A milestone can name its kind (menu, lanes, findings, sections) and is drawn as one; only a sequence implies an
@@ -300,6 +302,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_send tests.test_polling tests.test_chat_cache tests.test_repair tests.test_repair_board` (they start no real agent).
+Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_send tests.test_polling tests.test_chat_cache tests.test_repair tests.test_repair_board tests.test_input_ledger` (they start no real agent).
 
 MIT licensed: see [LICENSE](LICENSE).

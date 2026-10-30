@@ -9460,7 +9460,8 @@ class MigrateTest(BoardBase):
                "colony/page-secret": "SECRET-pages", "colony/bench/aa-key": "SECRET-aa-key",
                "colony/connections/gmail.env": "TOKEN=SECRET-gmail",
                "colony/connections/ebay/0123456789abcdef.env": "TOKEN=SECRET-ebay",
-               "colony/codex-remote/def456/auth.json": "SECRET-a-copied-codex-sign-in"}
+               "colony/codex-remote/def456/auth.json": "SECRET-a-copied-codex-sign-in",
+               "colony/repair/codex/auth.json": "SECRET-a-copied-repair-sign-in"}
 
     def setUp(self):
         super().setUp()
@@ -9601,7 +9602,7 @@ class MigrateTest(BoardBase):
         never = {r["path"]: r for r in note["left_out"]["sign_ins_and_keys"]}
         for rel in (".claude/.credentials.json", ".codex/auth.json", "colony/claude-token",
                     "colony/connections", "colony/bench/aa-key", "colony/console-token",
-                    "colony/page-secret", "colony/codex-remote/def456/auth.json"):
+                    "colony/page-secret", "colony/codex-remote/def456/auth.json", "colony/repair/codex/auth.json"):
             self.assertIn(str(self.k / rel), never, rel)
         remade = {r["path"]: r["why"] for r in note["left_out"]["remade"]}
         for path, why in ((home / "voice" / "env", "the voice's own Python"), (home / "voice" / "kokoro-v1.0.onnx", "model"),

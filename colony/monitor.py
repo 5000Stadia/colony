@@ -1084,6 +1084,7 @@ class Watcher:
 
     def tick(self):
         from . import vision, continuation, recovery, repair
+        console.expire_inputs()                     # retract only proven stale system input, never the person's draft
         repair.tick()                               # optional native repair host, independent of the steward agent
         self.signin()
         vision.observe_all()

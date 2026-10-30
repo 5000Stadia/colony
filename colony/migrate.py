@@ -221,6 +221,7 @@ class Plan:
         self.parts = parts
         self.never, self.remade = _never(), _remade()
         self.codex = board.home() / "codex-remote"
+        self.repair = board.home() / "repair"
         self.left = []           # [{path, why, bytes}]: what the new machine makes again
         self.kept_out = []       # [{path, what, how}]: sign-ins and keys met inside what's packed
         self.keylike, self.unreadable, self.special = [], [], 0
@@ -233,7 +234,7 @@ class Plan:
             return ("never",) + self.never[path]
         if path in self.remade:
             return ("remade", self.remade[path])
-        if path.parent.parent == self.codex:
+        if path.parent.parent in (self.codex, self.repair):
             if is_dir and path.name in CODEX_CACHES:
                 return ("remade", "Codex's own caches, made again as it runs")
             if path.name == "auth.json" and not is_link:            # its home links the person's; a copy is a sign-in
