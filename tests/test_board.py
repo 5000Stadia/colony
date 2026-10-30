@@ -3176,6 +3176,70 @@ class MonitorTest(BoardBase):
         w.tick()
         self.assertEqual(said(), 2, "undone and done again is news again")
 
+    def test_a_completion_claimed_concurrently_by_an_update_and_a_wake_is_said_once(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+        monitor.helm(True)
+        board.set_setting("updates", "off")
+        watcher = monitor.Watcher()
+        watcher.tick()
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [x] R3 reminders"))
+        monitor.completed(self.root)                               # both readers see the same completion key
+        board.set_setting("updates", "60")
+        (board.home() / "updates.json").write_text(json.dumps({"at": time.time() - 4000}))
+        watcher.updating = True                                    # this test starts the update thread itself
+        reading, release, waking = threading.Event(), threading.Event(), threading.Event()
+        original_completed, original_queue, original_lock = monitor.completed, monitor.queue, board.board_lock
+        errors = []
+
+        def completed(root, since=None):
+            if since is not None:
+                reading.set()                                     # the update has already read its mentioned keys
+                if not release.wait(5):
+                    raise AssertionError("the concurrent wake never reached its completion claim")
+            return original_completed(root, since)
+
+        @contextmanager
+        def locked(name):
+            if name == "updates" and threading.current_thread() is wake:
+                waking.set()                                      # a serialized wake waits behind the update
+            with original_lock(name):
+                yield
+
+        def queue(text, relay=False):
+            original_queue(text, relay)
+            if threading.current_thread() is wake and "plants R3: reminders" in text:
+                waking.set()                                      # without serialization, the wake claims it first
+
+        def run(work):
+            try:
+                work()
+            except BaseException as err:
+                errors.append(err)
+
+        def update():
+            text = monitor.update()
+            if text:
+                monitor.queue(text, relay=True)
+
+        updating = threading.Thread(target=lambda: run(update))
+        wake = threading.Thread(target=lambda: run(watcher.tick))
+        with patch.object(monitor, "completed", side_effect=completed), patch.object(monitor, "queue", side_effect=queue), \
+                patch.object(board, "board_lock", side_effect=locked):
+            updating.start()
+            try:
+                self.assertTrue(reading.wait(5), "the update reached its completion scan")
+                wake.start()
+                self.assertTrue(waking.wait(5), "the wake reached its completion claim")
+            finally:
+                release.set()
+                updating.join(5)
+                if wake.ident is not None:
+                    wake.join(5)
+        self.assertFalse(updating.is_alive() or wake.is_alive(), "both completion claims finished")
+        self.assertEqual(errors, [])
+        self.assertEqual(" ".join(r["text"] for r in monitor.inbox()).count("plants R3: reminders"), 1)
+
     def test_a_project_closes_safely_only_once_it_has_landed_its_work_and_reopens_where_it_stopped(self):
         transcript = self.root / "conversation.jsonl"
         transcript.write_text("{}\n")

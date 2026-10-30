@@ -1091,11 +1091,12 @@ class Watcher:
         # Completions are only for passing on: each goes to the inbox as soon as it is seen, which outlives a board
         # restart and, outside the person's hours, holds it for them; once there it counts as said, and the person's
         # update, which records what it said too, leaves it out.
-        said = mentioned()
-        news = [(key[5:], text) for p, key, text in events if key and key.startswith("done:") and key[5:] not in said]
-        if news:
-            queue(" | ".join(text for _, text in news), relay=True)
-            mentioned([key for key, _ in news])
+        with board.board_lock("updates"):
+            said = mentioned()
+            news = [(key[5:], text) for p, key, text in events if key and key.startswith("done:") and key[5:] not in said]
+            if news:
+                queue(" | ".join(text for _, text in news), relay=True)
+                mentioned([key for key, _ in news])
         self.pending += [e for e in events if not (e[1] and e[1].startswith("done:"))]
         if self.pending and snapshot()["state"] in ("idle", "needs you"):
             # What waited while the steward was busy may have been answered meanwhile: only what still waits goes.
@@ -1206,6 +1207,11 @@ def update(now=None, digests=None):
     else its first sentence). Asked: everything waiting on the person, split by whether the last update had it.
     Digests: {project: a few lines on what its agent told the person since the last update} (colony/digests.py), which
     the steward weighs against what the person intends, with its own commentary."""
+    with board.board_lock("updates"):
+        return _update(now, digests)
+
+
+def _update(now=None, digests=None):
     now = time.time() if now is None else now
     every = (board.registry()["settings"].get("updates") or 0) * 60
     path = board.home() / "updates.json"
