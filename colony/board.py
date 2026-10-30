@@ -3169,6 +3169,12 @@ PLAYER = """
   // of the clip's letters of what is left, read off the element's own time, so the speed doesn't matter.
   const LEAD = 0.2;
   const follow = (k, text) => { if (view && view.follow) view.follow(k, text); };
+  // The voice keeps its place even off Chat; a returning view can recover it without restarting playback.
+  const currentSentence = (p, k) => {
+    if (!N || N.document || !now || now.s !== N.blocks[N.j] || String(N.p) !== String(p) || now.s.k !== k || sent < 0) return '';
+    const text = now.parts[now.at];
+    return text && !text.startsWith(NAME) ? sentences(text)[sent] || '' : '';
+  };
   const heedTime = () => {
     if (!N || !playing || paused || !now || player.loop || N.silent || !N.kokoro) return;
     const p = now.parts[now.at]; if (!p || p.startsWith(NAME)) return;
@@ -3824,7 +3830,7 @@ PLAYER = """
   const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: {...current, explicitFollow: false}, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
     sounding: N && N.document ? !!(back && back.sounding) : playing && !paused, saved: Date.now()} : null); };
   const P = window.colonyPlayer = {
-    document: readDocument, documentSection, canFollow, returnToReading,
+    document: readDocument, documentSection, canFollow, returnToReading, sentence: currentSentence,
     busy: () => !!N || resting > 0, placed, rate, following, mode, auto: aloud, unlock: prime, poke, hold, skip, preview,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} anew(false); },
     setVoice(name, v, key) {
@@ -5404,8 +5410,11 @@ CHAT = """
     if (!go || typingNow()) return;
     // a finger on the page just now: it looks again once they have let it be, while that part is still the one read
     if (!explicit && !mayFollow()) { refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); }, readingFollow.remaining()); return; }
+    const said = P.sentence ? P.sentence(view.key, k) : '', r = said ? find(k, said, true)[1] : null;
+    if (r && P.following()) { followed = {k, said}; shine(r); }
+    const target = r || el;
     const nav = document.querySelector('nav'), under = nav && getComputedStyle(nav).position === 'sticky' ? nav.getBoundingClientRect().bottom : 0;
-    stick = false; scrollReading(() => window.scrollBy({top: el.getBoundingClientRect().top - under - 12, behavior: 'smooth'})); };
+    stick = false; scrollReading(() => window.scrollBy({top: target.getBoundingClientRect().top - under - 12, behavior: 'smooth'})); };
   // The sentence about to be heard, in Audio + text (the person, 2026-10-28: "if the sentence that is about to be read,
   // continues off the visible page then the page should adjust such that the first visible sentence in the viewer window
   // becomes that sentence"): where any of it is below what shows (above the box and the player), the page turns to put

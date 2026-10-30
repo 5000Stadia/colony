@@ -81,7 +81,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   keep the reader with the project it came from.
 - **Auto follows your place:** text follows playback only while Chat is open, with five seconds to browse
   after a touch or scroll by default; change that delay in the playback settings. Audio may continue elsewhere
-  without bringing you back to Chat. Crossed-out headphones indicate Text only mode.
+  without bringing you back to Chat. Refocusing returns to the current highlighted sentence within a reply.
+  Crossed-out headphones indicate Text only mode.
   A small status icon shows when text following is held, and a separate
   Return button stays visible away from Chat and takes you to the current or last played message without
   changing the audio mode. Selecting a History
