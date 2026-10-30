@@ -113,12 +113,28 @@ class RepairTest(unittest.TestCase):
         self.assertFalse(repair._cache().exists())
         self.assertFalse(repair.state()['paired'])
 
+    def test_native_pair_rejects_invalid_codes_and_expiries(self):
+        client = MagicMock()
+        client.__enter__.return_value = client
+        future = int(time.time()) + 60
+        invalid = [('with spaces', future), ('https://private', future), ('A' * 129, future),
+                   ('CODE', True), ('CODE', float(future)), ('CODE', int(time.time()) - 1)]
+        with patch.object(remote, 'alive', return_value=True), patch('colony.codex_rpc.Client', return_value=client):
+            for code, expiry in invalid:
+                with self.subTest(code=code[:20], expiry=expiry):
+                    client.call.return_value = {'manualPairingCode': code, 'expiresAt': expiry}
+                    with self.assertRaises(RuntimeError):
+                        self.codex.repair_pair(self.base)
+            client.call.return_value = {'manualPairingCode': 'Ab-12', 'expiresAt': future, 'secret': 'hidden'}
+            self.assertEqual(self.codex.repair_pair(self.base), {'manualPairingCode': 'Ab-12', 'expiresAt': future})
+
     def test_live_status_requires_connected_and_native_clients(self):
         client = MagicMock()
         client.__enter__.return_value = client
         with patch.object(remote, 'alive', return_value=True), patch('colony.codex_rpc.Client', return_value=client):
             for status, clients, expected in [('connected', [], 'unpaired'), ('connected', [{}], 'ready'),
-                                               ('connecting', [{}], 'connecting')]:
+                                               ('connecting', [{}], 'connecting'), ('errored', [{}], 'offline'),
+                                               ('disabled', [{}], 'offline')]:
                 client.call.side_effect = [{'status': status, 'environmentId': 'PRIVATE'}, {'data': clients}]
                 self.assertEqual(self.codex.repair_status(self.base)['state'], expected)
         self.assertNotIn('PRIVATE', repr(repair.state()))

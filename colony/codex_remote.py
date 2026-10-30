@@ -176,7 +176,9 @@ def remote_problem(root, settings):
                 f'until it is; colony checks it by itself (python3 -m colony.codex_remote check runs it now)')
     from . import console
     status = read_json(home_for(root) / 'colony-status.json') if console.running(console.session_name(root)) else {}
-    if status.get('mode') == 'local' and status.get('reason'):              # an old record of a console now closed is moot
+    # A previous fallback may have drained its daemon after recording pending.
+    local_fallback = status.get('mode') == 'local' or status.get('mode') == 'pending' and not alive(home_for(root))
+    if local_fallback and status.get('reason'):
         return f'its console runs local ({status["reason"]}): it reaches the app again at its next start'
     return None
 
@@ -622,6 +624,7 @@ def launch(root, settings, resume=None):
             if not stopped:
                 print('The app conversation is still running. Reopen this console when it finishes.', file=sys.stderr)
                 return 1
+        report(home, root, 'local', reason, thread=resume)
         owned = owned or read_json(home / 'colony-transfer.json').get('state') == 'published'
         return local(root, settings, resume, home if owned else source)
 

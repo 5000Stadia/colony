@@ -1334,8 +1334,9 @@ class Codex(Provider):
             client.timeout = max(.01, deadline - time.monotonic())
             paired = bool(connected and environment and client.call(
                 'remoteControl/client/list', {'environmentId': environment}).get('data'))
-        return dict(state='ready' if paired else 'unpaired' if connected and environment else 'connecting',
-                    paired=paired, server=status.get('serverName') or '')
+        state = ('ready' if paired else 'unpaired' if connected and environment else
+                 'connecting' if status.get('status') == 'connecting' else 'offline')
+        return dict(state=state, paired=paired, server=status.get('serverName') or '')
 
     def repair_start(self, home, settings):
         import time
@@ -1405,7 +1406,8 @@ class Codex(Provider):
                 return {'claimed': result.get('claimed') is True}
             result = client.call('remoteControl/pairing/start', {'manualCode': True})
             code, expiry = result.get('manualPairingCode'), result.get('expiresAt')
-            if not isinstance(code, str) or not code or type(expiry) is not int or expiry <= time.time():
+            if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,128}', code) or \
+                    type(expiry) is not int or expiry <= time.time():
                 raise RuntimeError('Codex did not return a usable pairing code. Try again.')
             return {'manualPairingCode': code, 'expiresAt': expiry}
 
