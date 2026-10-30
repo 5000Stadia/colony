@@ -10863,9 +10863,9 @@ class ReadingFollowTest(BoardBase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS production reading-follow clock', result.stdout)
 
-    def serve_reading(self):
+    def serve_reading(self, feed=None):
         board.track(self.root)
-        feed = ("<div class='msg'><section class='say' data-k='part1' data-t='A'><p>First part. Another sentence.</p></section>"
+        feed = feed or ("<div class='msg'><section class='say' data-k='part1' data-t='A'><p>First part. Another sentence.</p></section>"
                 "<div style='height:1600px'></div><section class='say' data-k='part2' data-t='A'><p>Second part. More sentences.</p></section>"
                 "<section class='say' data-k='explicit' data-t='E'><p>Opening sentence.</p>"
                 "<div style='height:1600px'></div><p>Last sentence.</p></section></div>")
@@ -10914,3 +10914,16 @@ class ReadingFollowTest(BoardBase):
                                 capture_output=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('PASS text-follow settings, status and persistent Return', result.stdout)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
+    def test_phone_refocus_and_return_restore_current_sentence_in_long_reply(self):
+        paragraphs = ''.join(
+            f'<p>Paragraph {i} opens with a quiet walk beside the river and a patient look at the hills. '
+            f'Current sentence number {i} follows the winding trail toward the distant lighthouse and its sheltered garden.</p>'
+            for i in range(1, 25))
+        base = self.serve_reading("<div class='msg'><section class='say' data-k='long' data-t='A'>"
+                                  + paragraphs + "</section></div><div style='height:1200px'></div>")
+        result = subprocess.run(['node', str(ROOT / 'tests/reading_refocus_browser.js'), base], text=True,
+                                capture_output=True, timeout=45)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS current-sentence refocus and Return', result.stdout)
