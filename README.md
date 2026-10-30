@@ -85,7 +85,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   Crossed-out headphones indicate Text only mode.
   A small status icon shows when text following is held, and a separate
   Return button stays visible away from Chat and takes you to the current or last played message without
-  changing the audio mode. Selecting a History
+  changing the audio mode. History opens at the bottom, with the newest entries last. Selecting a History
   item returns to that entry when text is enabled; audio-only playback leaves the view alone. Typing holds
   playback while its bounded audio buffer keeps preparing, ready to resume from cached or in-flight clips.
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through

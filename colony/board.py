@@ -3640,12 +3640,13 @@ PLAYER = """
     if (r && r.ok) u.keys.forEach((k) => marked.delete(k));
     tag = ''; drawnSheet = ''; look();
   }
-  // History: the last twenty heard, seen or skipped replies, to play one again; playing it writes nothing
+  // History: the last twenty heard, seen or skipped replies, oldest at the top, opening at the newest below.
   async function heardList() {
     const got = await fetched('/chat/line?heard=20', 'json'), list = $('.cpheardrows');
-    const items = (got && got.heard) || [];
+    const items = ((got && got.heard) || []).slice().reverse();
     list.replaceChildren(...items.map((x) => { const info = got.projects[x.p] || {}, li = row(x, info); on(li, 'click', () => again(x, info)); return li; }));
     if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'No replies in history yet.'; list.append(li); }
+    if (!sheet.hidden && !$('.cpheard').hidden) { list.scrollTop = list.scrollHeight; sheet.scrollTop = sheet.scrollHeight; }
   }
   // a ▷ under a reply, or one played again, steps in front of the line's reading, which goes on after it
   const stepIn = (document = false) => { cancelDocument(); cancelClips(); opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null;
