@@ -1243,6 +1243,14 @@ class ClaudeCode(Provider):
         cur = next((i for i in reversed(marked) if re.match(rf"^\s*{mark} \d+\.", lines[i])), marked[-1] if marked else None)
         if cur is None:
             return None
+        # Physical wraps in the ruled typing box align like unnumbered options.
+        # A real menu can also open below a rule, but keeps its navigation footer.
+        box = self._box(lines) if mark == "❯" else None
+        end = next((i for i in range(box + 1, len(lines)) if re.match(r"^\s*[─━]{4,}", lines[i])), None) \
+            if box is not None else None
+        if end is not None and cur < end and not re.search(
+                r"Enter to (?:confirm|select)|↑/↓|Esc to cancel", "\n".join(lines[end + 1:]), re.I):
+            return None
         col = lines[cur].index(mark) + 2
         if re.match(rf"^\s*{mark}\s+Submit\s*$", lines[cur]):          # a multi-select's Submit, highlighted once ticked:
             cur = next((k for k in range(cur - 1, max(-1, cur - 30), -1) if re.match(r"^\s*\d+\.", lines[k])), cur)
