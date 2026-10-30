@@ -2907,6 +2907,7 @@ PLAYER = """
   const rate = () => { let r = 1; try { r = +localStorage.getItem('pace') || 1; } catch (e) {} return [1, 1.25, 1.5, 1.75].includes(r) ? r : 1; };
   const pace = () => rate() + 0.25;               // the voices read slowly: each speed plays a quarter faster than it says
   const aloud = () => { try { return localStorage.getItem('aloud') === '1'; } catch (e) { return false; } };
+  const autoPaused = () => get('autopaused') === true;
   // How it reads, set behind the line's settings row: both (aloud, the page following what is read, into each project's
   // Chat), audio (aloud alone, the page left as it is), text (no sound: each reply shown in its chat, ⏭ goes on). A reply
   // tapped is always heard.
@@ -2919,7 +2920,7 @@ PLAYER = """
   let armed = +(get('armed') || 0);
   const arm = () => { armed = clock(); put('armed', armed); };
   // able: Auto on and the phone letting this page play (a sound played since it opened, and none refused or let go)
-  const able = () => aloud() && unlocked && !letGo;
+  const able = () => aloud() && !autoPaused() && unlocked && !letGo;
   const listening = () => able() && !paused && !writing();
   // The pauses and takings-up, each with its cause and how it went, and each let-go with how long the page had been
   // hidden, for the player-state report: the live trial says from the phone's own record what still cuts it off
@@ -2987,7 +2988,8 @@ PLAYER = """
   // the reply to read next: the first in the line the session asked for (Play, a row, Auto as it landed), by its keys;
   // the one being read comes again only for parts that landed in it since it began
   const nextUp = () => { if (!S) return null;
-    return visible().find((x) => S.want.has(id(x)) && !(N && id(x) === N.id && x.b.every(([k]) => N.blocks.some((b) => b.k === k)))) || null; };
+    return visible().find((x) => S.want.has(id(x)) && (!autoPaused() || S.play.has(id(x)))
+      && !(N && id(x) === N.id && x.b.every(([k]) => N.blocks.some((b) => b.k === k)))) || null; };
   const nextAfter = () => (S && visible().find((x) => S.want.has(id(x)) && !(N && id(x) === N.id))) || null;
   // a reply's words, fetched as it is about to be read (and the next one's, ahead)
   const words = new Map(), wording = new Map();
@@ -3101,7 +3103,7 @@ PLAYER = """
   const restStop = (why) => { lastStop = {why, at: new Date().toISOString().slice(11, 19), hidden: hidden()}; log('let go', why);
     if (stops++ < 4) measure({when: 'rest-stop', why, hidden: hidden(), aloud: aloud(), path: location.pathname + location.search}); };
   const rest = (cause, then) => {
-    if (writing() || (letGo && letGo.why === 'paused') || !aloud() || N || !L.ready) { if (then) then(false); return; }
+    if (writing() || autoPaused() || (letGo && letGo.why === 'paused') || !aloud() || N || !L.ready) { if (then) then(false); return; }
     const stopped = letGo, current = () => resting && !N && letGo === stopped;
     player.onended = player.onerror = null; player.loop = true;
     if (player.src !== SILENT) player.src = SILENT;
@@ -3202,7 +3204,8 @@ PLAYER = """
     follow(null); bridge(); playing = false; paused = false; why = null; now = null; N = null;
     if (waiting) { save(); return changed(); }
     if (back) { const b = back; back = null; N = b.N; via = b.via || '';
-      if (b.sounding && !heldDocument && (!b.auto || aloud())) { N.resuming = true; N.resumeTime = b.offset || 0; return begin(N.j, N.piece); }
+      N.resumeTime = b.offset || 0;
+      if (b.sounding && !heldDocument && (!b.auto || (aloud() && !autoPaused()))) { N.resuming = true; return begin(N.j, N.piece); }
       hush(); paused = true; why = b.why || 'person'; save(); return changed(); }
     if (wasDocument && (heldDocument || !aloud())) { hush(); save(); return changed(); }
     const x = nextUp();
@@ -3221,6 +3224,7 @@ PLAYER = """
     const blocks = await texts(x.p, i, ks);
     if (mine !== opening) return;
     opened = ''; loading = false;
+    if (autoPaused() && !(S && S.play.has(i))) return changed();
     if (!blocks.length) { if (S) S.want.delete(i); return replyDone(); }      // its words couldn't be had: on to the next
     N = {id: i, p: x.p, t: x.t, name: info.name || '', href: info.href || '', kvoice: info.voice || 'am_echo', kokoro: !!L.ready,
       blocks, j: 0, piece: 0, explicitFollow: explicit, explicitAt, seat: S && S.auto.has(i) && !S.play.has(i) ? 'auto' : 'line'};
@@ -3268,6 +3272,13 @@ PLAYER = """
     return sound();
   }
   // ❚❚ holds the reading where it is, ▶ takes it up from there; held in the silence between replies, Auto lets go at once
+  function setAutoPaused(yes) {
+    const automatic = !N || (!N.tapped && N.seat === 'auto');
+    put('autopaused', yes ? true : null);
+    if (yes) { if (automatic) hold(true); }
+    else { stopAt = 0; takeUp(); if (automatic) hold(false); }
+    changed(); look();
+  }
   function hold(want, cause = 'person') {
     if (N && N.document && N.pending) { paused = want; why = want ? cause : null; return changed(); }
     if (replaying && replaying.opening === opening && cause !== 'dictation') replaying.pause = want ? cause : null;
@@ -3295,7 +3306,7 @@ PLAYER = """
   // the tap that resumes: the reading it held goes on, then what landed meanwhile, if the stop began under two hours ago;
   // past that Auto is armed from now, and what came waits in the line for Play
   function takeUp() {
-    if (stopAt && Date.now() - stopAt >= LONG) {
+    if (!autoPaused() && stopAt && Date.now() - stopAt >= LONG) {
       if (S) [...S.auto].forEach(([i, t]) => { if (t >= stopAt && !S.play.has(i) && !(N && N.id === i)) { S.want.delete(i); S.auto.delete(i); } });
       if (aloud()) arm();
       log('armed again', Math.round((Date.now() - stopAt) / 60e3) + ' min stopped');
@@ -3383,6 +3394,7 @@ PLAYER = """
   // A phone plays a page's audio only after a tap on it: a tap anywhere (Send included) plays a moment of silence, and
   // from then on new replies may be read by themselves; where Auto was let go, it is the tap that resumes
   on(document, 'pointerdown', (ev) => { if (!aloud() || (ev.target.closest && ev.target.closest('#cplayer'))) return;
+    if (autoPaused()) return;
     if (writing()) return;                        // a Send tap belongs to the box, never a request to resume
     if (letGo && !isBox(ev.target)) { if (!N) return resume('a tap'); if (playing && paused && why !== 'person') return hold(false, 'a tap'); }
     prime(); }, true);
@@ -3482,6 +3494,7 @@ PLAYER = """
     + "<div class='cpundo' hidden><span></span><button type='button' class='cpundobtn'>Undo</button></div>"
     + "<label class='cpsw'><span class='cptxt'><b>Auto</b><span>Reads new replies as they land, from every project</span></span>"
     + "<input type='checkbox' class='cpauto' role='switch'><span class='cptoggle' aria-hidden='true'></span></label>"
+    + "<button type='button' class='cpautohold' aria-label='Pause Auto' hidden></button>"
     + "<button type='button' class='cplink cpsetopen'>Voice, speed, mode<span>›</span></button>"
     + "<button type='button' class='cplink cpheardopen'>History<span>›</span></button></div>"
     + "<div class='cpset' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>Reads as</div>"
@@ -3551,11 +3564,12 @@ PLAYER = """
     return ' · ' + S.begun.size + ' of ' + (S.begun.size + left); };
   function drawTextFollow() {
     const inChat = readingFollow.inChat(), target = textTarget();
-    const message = !aloud() ? 'Auto text follow is off' : !following() ? 'Audio only: text follow is off'
+    const message = !aloud() ? 'Auto text follow is off' : autoPaused() ? 'Auto is paused; new replies queue'
+      : !following() ? 'Audio only: text follow is off'
       : !inChat ? 'Text follow waits while you browse outside Chat' : N && N.document ? 'Document playback: Chat text follow is off'
       : writing() ? 'Text follow waits while you write' : !readingFollow.canFollow() ? 'Text follow waits after your interaction'
       : 'Auto text follow is ready';
-    const enabled = aloud() && following() && inChat && !(N && N.document) && !writing() && readingFollow.canFollow();
+    const enabled = aloud() && !autoPaused() && following() && inChat && !(N && N.document) && !writing() && readingFollow.canFollow();
     bar.querySelectorAll('.cptextstatus').forEach((el) => { el.classList.toggle('held', !enabled); el.setAttribute('aria-label', message); el.title = message; });
     const button = $('.cpreturn'); button.hidden = inChat || !target; button.disabled = !target;
     button.title = button.getAttribute('aria-label') || 'Return to reading';
@@ -3568,9 +3582,13 @@ PLAYER = """
     bar.classList.toggle('cpidle', !N); document.body.classList.toggle('cpon', !!N);
     pill.classList.toggle('on', live); pill.classList.toggle('held', held2); pill.classList.toggle('none', !aloud() && !n);
     pill.classList.toggle('textonly', mode() === 'text');
-    const say = aloud() ? (held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);
+    const say = aloud() ? (autoPaused() ? 'Auto paused · ' + n : held2 ? 'Auto · tap to resume' : 'Auto · ' + n) : String(n);
     if ($('.cpsay').textContent !== say) $('.cpsay').textContent = say;
-    pill.setAttribute('aria-label', (held2 ? 'Auto is on, but the phone let the sound go: tap to resume'
+    const pausing = $('.cpautohold'), action = autoPaused() ? 'Resume Auto' : 'Pause Auto', icon = autoPaused() ? 'play' : 'pause';
+    pausing.hidden = !aloud(); pausing.setAttribute('aria-label', action); pausing.title = action;
+    if (pausing.dataset.on !== icon) { pausing.dataset.on = icon; pausing.innerHTML = PICON[icon] + '<span>' + action + '</span>'; }
+    pill.setAttribute('aria-label', (autoPaused() ? n + ' replies waiting, Auto paused: open the line'
+      : held2 ? 'Auto is on, but the phone let the sound go: tap to resume'
       : n + (n === 1 ? ' reply' : ' replies') + ' waiting' + (live ? ', Auto on' : '') + ': open the line')
       + (mode() === 'text' ? ', Text only: no sound' : ''));
     if (N) {
@@ -3587,7 +3605,8 @@ PLAYER = """
   const openSheet = () => { sheet.hidden = shade.hidden = false; $('.cpmain').hidden = false; $('.cpset').hidden = $('.cpheard').hidden = true;
     drawnSheet = ''; draw(); look(); };
   const shutSheet = () => { sheet.hidden = shade.hidden = true; };
-  on(pill, 'click', () => { if (aloud() && !able()) return resume('the pill'); openSheet(); });
+  on(pill, 'click', () => { if (aloud() && !able() && !autoPaused()) return resume('the pill'); openSheet(); });
+  on($('.cpautohold'), 'click', () => setAutoPaused(!autoPaused()));
   on($('.cpwhat'), 'click', openSheet);
   on(shade, 'click', shutSheet); on($('.cpgrab'), 'click', shutSheet);
   on(document, 'keydown', (ev) => { if (ev.key === 'Escape' && !sheet.hidden) shutSheet(); });
@@ -3690,6 +3709,7 @@ PLAYER = """
   }
   // Auto: one switch, every project's; on, what lands from now is read as it lands, and the phone is kept able to
   function setAloud(yes) { try { localStorage.setItem('aloud', yes ? '1' : '0'); } catch (e) {}
+    put('autopaused', null);
     if (yes) { arm(); letGo = null; stopAt = 0; if (L.ready && !N) rest('Auto on'); else prime(); log('Auto on', ''); }
     else { if (S) { [...S.auto].forEach(([i]) => { if (!S.play.has(i) && !(N && N.id === i)) S.want.delete(i); }); S.auto.clear(); }
       if (!N) { ours = Date.now(); player.pause(); player.loop = false; resting = 0; } letGo = null; log('Auto off', ''); }
@@ -3831,7 +3851,7 @@ PLAYER = """
   const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: {...current, explicitFollow: false}, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
     sounding: N && N.document ? !!(back && back.sounding) : playing && !paused, saved: Date.now()} : null); };
   const P = window.colonyPlayer = {
-    document: readDocument, documentSection, canFollow, returnToReading, sentence: currentSentence,
+    document: readDocument, documentSection, canFollow, returnToReading, sentence: currentSentence, autoPaused, setAutoPaused,
     busy: () => !!N || resting > 0, placed, rate, following, mode, auto: aloud, unlock: prime, poke, hold, skip, preview,
     setRate(r) { try { localStorage.setItem('pace', r); } catch (e) {} anew(false); },
     setVoice(name, v, key) {
@@ -3861,7 +3881,7 @@ PLAYER = """
     willRead(p, k, at, t) { p = String(p);
       if (N && N.p === p && N.blocks.some((b) => b.k === k)) return true;               // being read
       if (S && S.want.has(p + '|' + t)) return true;                                      // waiting to be, in this session
-      if (aloud() && armed && Date.parse(at) >= armed && !(stopAt && Date.now() - stopAt >= LONG)) return true;   // Auto's, as it landed
+      if (aloud() && armed && Date.parse(at) >= armed && (autoPaused() || !(stopAt && Date.now() - stopAt >= LONG))) return true;   // Auto's, as it landed
       return (held.get(mk(p, k)) || 0) > Date.now(); },                                            // another device's Auto's
     async seen(p, ks) { p = String(p); const name = (L.projects[p] || {}).name, ats = P.unheard(p);
       ks.forEach((k) => marked.add(mk(p, k))); changed();
@@ -3990,7 +4010,7 @@ PLAYER = """
     } else put('linenow', null); } catch (e) {}
   // Auto on as the page opens: armed again where this device was last able to play two hours ago or more, so a night's
   // replies wait for Play; its silence started where the phone lets it, and where it doesn't the pill says tap to resume
-  if (aloud() && (!armed || Date.now() - (+(get('alive') || 0)) >= LONG)) arm();
+  if (aloud() && !autoPaused() && (!armed || Date.now() - (+(get('alive') || 0)) >= LONG)) arm();
   draw();
   Promise.resolve(look()).then(() => { if (aloud() && !N && !resting) rest('the page opened'); });
 })();
@@ -10414,6 +10434,8 @@ main:not(:has(.composer))::after { content:''; display:block; height:calc(var(--
 /* At rest, the pill (R123): headphones and how many replies wait; Auto on and able to play, a ring and "Auto · 5"; Auto
    on but the sound let go, "Auto · tap to resume" in the colour of what waits on the person */
 .cpminirow { display:none; justify-content:flex-end; pointer-events:none } .cpminirow .cppill { pointer-events:auto } .cplayer.cpidle .cpminirow { display:flex }
+.cpautohold { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; min-height:52px; margin:12px 0 0; padding:10px 16px; border:0; border-radius:14px; background:var(--accent); color:var(--card); font-size:16px; font-weight:700; cursor:pointer }
+.cpautohold[hidden] { display:none }.cpautohold svg { width:18px; height:18px }
 .cplayer.cpidle .cpbar { display:none }
 .cpminirow { transition:opacity .15s } .cplayer.cpaside .cpminirow { opacity:0 } .cplayer.cpaside .cppill { pointer-events:none }
 .cppill { display:inline-flex; align-items:center; gap:8px; width:auto; height:40px; min-height:40px; padding:0 14px; border-radius:999px;

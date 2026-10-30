@@ -88,6 +88,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   changing the audio mode. History opens at the bottom, with the newest entries last. Selecting a History
   item returns to that entry when text is enabled; audio-only playback leaves the view alone. Typing holds
   playback while its bounded audio buffer keeps preparing, ready to resume from cached or in-flight clips.
+  The Auto menu has a large Pause/Resume button: new replies keep queuing during a pause, ready when you resume.
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
   the project and handle folder names and references where practical, keeping access and history working.
   Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
