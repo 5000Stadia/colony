@@ -150,6 +150,15 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.
+- **Reconnect from your phone:** Settings → Agent programs → Sign-in status and reconnect works over
+  Tailscale for Claude Code and Codex. A sign-out or known authentication rejection shows a reconnect notice
+  directly on the board. Open the provider's own sign-in page; Claude returns a code to paste back here,
+  while Codex uses a device code and confirms automatically. Cancelled or expired attempts can be retried.
+  Cached native status checks run every five minutes, with current console failures noticed sooner; they use
+  no model tokens, and do not claim that stored credentials have been validated remotely. Passwords stay with
+  the provider; native programs keep their credentials, and short-lived login links and codes are never saved
+  to chats or board logs. Existing consoles pick up a successful login when safely idle, one per watcher pass,
+  preserving conversations and usage pauses. A successful Claude browser login replaces a saved Colony token.
 - **Work keeps going without you:** an agent idle a while with roadmap work it can start, and nothing of its own
   waiting on you, is told so once, by rule, at any hour (outside yours, to take what doesn't need you); a project
   can turn it off. When a network drop stops an agent or its helpers, colony tells it to
@@ -278,6 +287,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment` (they start no real agent).
+Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration` (they start no real agent).
 
 MIT licensed: see [LICENSE](LICENSE).

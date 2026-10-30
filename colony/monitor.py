@@ -111,7 +111,8 @@ You were once called the monitor: older records, files and settings still say `m
   never into the conversation.
   1. Agent programs: `colony doctor` says which are installed; ask which to use (`colony settings providers
      claude,codex`). To install: Claude Code from https://claude.com/claude-code, then `claude` and `/login`;
-     Codex from https://developers.openai.com/codex, then `codex login`. Signing in is theirs, in a terminal.
+     Codex from https://developers.openai.com/codex. Then Settings → Agent programs → Sign-in status and reconnect:
+     the native sign-in opens on their own device, including their phone, and is theirs to complete.
   2. Claude Code's lasting sign-in: they run `claude setup-token` and paste the token in Settings, under
      Claude Code sign-in.
   3. Benchmark data: a free Artificial Analysis key (an account at https://artificialanalysis.ai/login, a key
@@ -579,6 +580,7 @@ class Watcher:
         self.usage_checked = self.current_checked = self.discovered
         self.idle_since = {}
         self.updating = False                # an update being made: its digests come from a small model
+        self.signin_observed = self.discovered
         self.worked = set()                  # projects seen working since the last supports check
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
@@ -920,25 +922,48 @@ class Watcher:
         threading.Thread(target=self.models_daily, daemon=True).start()
 
     def signin(self):
-        """Daily, with no tokens: each program's own sign-in status. One found signed out is shown in Settings and
-        the person hears it once, rather than finding a console that stopped working."""
-        path = board.home() / "signed-out.json"
-        try:
-            was = json.loads(path.read_text())
-        except (OSError, ValueError):
-            was = {}
-        now = {}
-        for k, p in providers.PROVIDERS.items():
-            if providers.usable(p) and p.signed_in() is False:
-                now[k] = was.get(k) or board.now()[:16].replace("T", " ")
-                if k not in was:
-                    hint = (" A long-lived sign-in stops this: Settings → Claude Code sign-in." if k == "claude"
-                            and not p.token() else "")
-                    queue(f"{p.label} is signed out on this machine: its consoles can't work until the person signs in "
-                          f"again in a terminal ({p.program}, then its login).{hint}", relay=True)
-        if now != was:
-            board.home().mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(now))
+        """Cached token-free native status plus current console failures, independent of the steward's sign-in."""
+        from . import signin
+        import hashlib
+        import math
+        from datetime import datetime
+        signin.tick()
+        if time.time() - self.signin_observed < 30:
+            return
+        self.signin_observed = time.time()
+        connected = {}
+        for key, row in signin.states().items():
+            try:
+                connected[key] = datetime.fromisoformat(row.get('connected_at') or '').timestamp()
+            except (ValueError, TypeError):
+                pass
+        seats = [(root, console.session_name(root)) for root in board.projects() if root.exists()]
+        seats.append((home(), name()))
+        for root, nm in seats:
+            if console.running(nm):
+                provider = providers.PROVIDERS.get(console.running_program(nm)) or providers.of(None if root == home() else root)
+                age = console.age(nm)
+                began = round(time.time() - age) if math.isfinite(age) else 0
+                # An older process still holds the old login until its safe reload. Its stale failure must not
+                # reject the new sign-in, including when no watcher saw that screen before the reconnect.
+                if began < connected.get(providers.key(provider), 0):
+                    continue
+                text, stopped = console.screen(nm), False
+                if provider.classify(text) == 'working':
+                    continue
+            else:
+                end = console.died(nm)
+                if not end:
+                    continue
+                provider = providers.PROVIDERS.get(console.running_program(nm)) or providers.of(None if root == home() else root)
+                began = end.get('at', 0)
+                if began < connected.get(providers.key(provider), 0):
+                    continue
+                text, stopped = '\n'.join(end['lines']), True
+            problem = provider.mail_problem(text, stopped=stopped)
+            if problem and problem['code'] == 'authentication':
+                marker = hashlib.sha256((nm + '\0' + str(began) + '\0' + text).encode()).hexdigest()
+                signin.observe(providers.key(provider), problem, marker)
 
     def models_daily(self):
         from . import bench, intelligence
@@ -949,7 +974,6 @@ class Watcher:
         from . import codex_remote
         if providers.usable(providers.get("codex")):
             codex_remote.check_version()                # a new Codex, checked for app access with no tokens
-        self.signin()
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
         if bench.aa_key() and bench.days_since_fetch() >= 0.9:
@@ -999,6 +1023,15 @@ class Watcher:
         One console a pass, and only with memory to spare: each reads its whole conversation back as it starts, and all
         of them at once ran the machine out (2026-10-28). Each pass also lets go of what a program left running that
         no project needs any more (Provider.let_go)."""
+        from . import signin, usage
+        import math
+        from datetime import datetime
+        reconnected = {}
+        for k, s in signin.states().items():
+            try:
+                reconnected[k] = datetime.fromisoformat(s.get('connected_at') or '').timestamp()
+            except (ValueError, TypeError):
+                pass
         due = time.time() - self.current_checked >= 120
         if due:
             self.current_checked = time.time()
@@ -1008,6 +1041,7 @@ class Watcher:
                 except Exception:
                     pass                        # tidying is extra: its trouble stops nothing else
         full = due and board.registry()["settings"]["auto_update"]
+        paused = usage.paused()
         seats = [(p, console.session_name(p), None) for p in board.projects() if p.exists()] + [(home(), name(), "monitor")]
         reloaded = False
         for root, nm, label in seats:
@@ -1015,17 +1049,26 @@ class Watcher:
                 self.idle_since.pop(nm, None)
                 continue
             switch = console.switching(root, nm, label)
-            if not (switch or full):
+            provider = console.providers_of(root, label)
+            connected = reconnected.get(providers.key(provider))
+            age = console.age(nm) if connected else float('inf')
+            refresh_signin = bool(connected and math.isfinite(age) and time.time() - age < connected)
+            if refresh_signin and str(root) in paused:
+                continue                                  # reconnecting never releases their configured work pause
+            if not (switch or full or refresh_signin):
                 continue
             state = console.snapshot(root, lines=1, name=nm)["state"]
             if state != "idle" or console.drafting(nm) or console.attached(nm):
                 self.idle_since.pop(nm, None)
                 continue
             first = self.idle_since.setdefault(nm, time.time())
-            if not switch and time.time() - first < RELOAD_AFTER:
+            if not switch and not refresh_signin and time.time() - first < RELOAD_AFTER:
                 continue
-            why = f"switching from {switch[1]} to {switch[0]}" if switch else console.stale(root, nm, label)
+            why = (f"switching from {switch[1]} to {switch[0]}" if switch else
+                   "provider sign-in reconnected" if refresh_signin else console.stale(root, nm, label))
             if not why or reloaded or not console.room() or console.busy(root, nm, label):
+                continue
+            if refresh_signin and not provider.signin_refresh(root):
                 continue
             console.reload(root, nm, label)
             reloaded = True
@@ -1041,6 +1084,7 @@ class Watcher:
 
     def tick(self):
         from . import vision, continuation, recovery
+        self.signin()
         vision.observe_all()
         continuation.tick_all()
         self.freshen()

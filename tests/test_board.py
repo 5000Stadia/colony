@@ -6533,7 +6533,7 @@ class StayCurrentTest(BoardBase):
 
 class SignInTest(BoardBase):
     """Claude Code's long-lived sign-in, kept by colony and given to each console; each program's sign-in
-    checked daily without tokens."""
+    checked without model tokens and reported directly on the board."""
 
     def test_a_checked_token_is_kept_private_and_each_claude_console_starts_with_it(self):
         claude = providers.get("claude")
@@ -6557,19 +6557,21 @@ class SignInTest(BoardBase):
         self.assertIn("claude setup-token", monitor.ROLE, "a step of first-time setup")
 
     def test_a_program_found_signed_out_is_shown_and_told_once(self):
+        from colony import signin
         from unittest.mock import patch
         claude = providers.get("claude")
         with patch.object(type(claude), "signed_in", lambda self, run=None: False), \
                 patch.object(type(providers.get("codex")), "signed_in", lambda self, run=None: True):
-            monitor.Watcher().signin()
-            monitor.Watcher().signin()
-        told = " ".join(json.loads(l)["text"] for l in (board.home() / "to_monitor.jsonl").read_text().splitlines())
-        self.assertEqual(told.count("Claude Code is signed out"), 1, "told once")
-        self.assertIn("Settings → Claude Code sign-in", told)
+            signin.check(force=True)
+            signin.check(force=True)
+        self.assertFalse((board.home() / 'to_monitor.jsonl').exists(), 'no agent turn just to report a sign-in')
+        notice = board.signin_notice()
+        self.assertIn('Claude Code', notice)
+        self.assertIn("href='/signin'", notice)
         self.assertIn("signed out since", board.settings_page(board.registry()))
         with patch.object(type(claude), "signed_in", lambda self, run=None: True), \
                 patch.object(type(providers.get("codex")), "signed_in", lambda self, run=None: True):
-            monitor.Watcher().signin()
+            signin.check(force=True)
         self.assertNotIn("signed out since", board.settings_page(board.registry()))
 
 

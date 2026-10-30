@@ -22,6 +22,42 @@ from .jsonl import read_line
 SOURCE = Path(__file__).resolve().parent.parent     # colony's own source folder, wherever it is now
 
 
+def _signin_environment():
+    """A browser login chooses native account credentials, rather than an inherited API/token override."""
+    env = dict(os.environ)
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY",
+                 "CLAUDE_CODE_OAUTH_REFRESH_TOKEN", "CLAUDE_CODE_OAUTH_SCOPES",
+                 "OPENAI_API_KEY", "OPENAI_ACCESS_TOKEN", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
+                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"):
+        env.pop(name, None)
+    return env
+
+
+def _signin_url(text, endpoints):
+    """Only the native provider's authorization endpoint can become a link; never terminal escape codes or userinfo."""
+    from urllib.parse import urlsplit
+    plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    for value in re.findall(r"(?<![A-Za-z0-9_:/.-])https://[^\s<>\"']+", plain):
+        try:
+            url = urlsplit(value)
+            if (url.hostname, url.path) in endpoints and url.scheme == "https" and not url.username and \
+                    not url.password and url.port in (None, 443) and not url.fragment and "\\" not in value:
+                return value
+        except ValueError:
+            pass
+    return None
+
+
+def signin_eligible(key_, provider):
+    """Only an installed program that is enabled or still serves a project needs account checks."""
+    if not installed(provider):
+        return False
+    if enabled(provider):
+        return True
+    from . import board
+    return any(root.exists() and of(root) is provider for root in board.projects())
+
+
 def _newest_first(path, most=1 << 22, block=1 << 16):
     """A file's lines from its end backwards, at most `most` bytes back: a look back that stops early reads little
     of a transcript that has grown large."""
@@ -112,7 +148,9 @@ def _mail_reason(provider, diagnostic):
         code, why = 'usage-limit', 'request rate limit reached (HTTP 429)'
     elif status and 500 <= status <= 599:
         code, why = 'server-error', f'provider request failed (HTTP {status})'
-    elif re.match(r"(?:Invalid (?:authentication |API )?(?:token|key|credentials)|authentication failed|not logged in)\b", body, re.I):
+    elif re.match(r"(?:Invalid (?:authentication |API )?(?:token|key|credentials)|authentication failed|not logged in|"
+                  r"Login expired|(?:Your )?OAuth (?:token|credentials?) (?:has |have )?(?:expired|been revoked)|"
+                  r"(?:Your )?refresh token (?:has |was )?(?:expired|revoked|already been used))\b", body, re.I):
         code, why = 'authentication', 'authentication failed'
     elif hit := re.match(r"You've hit your (?:(session|usage|weekly|monthly spend|rate) )?limit\b", body):
         code, why = 'usage-limit', (hit[1] + ' ' if hit[1] else 'usage ') + 'limit reached'
@@ -254,6 +292,35 @@ class Provider:
     def signed_in(self, run=None):
         """False when it is signed out here, so its consoles can't work (None: can't tell)."""
         return None
+
+    def signin_command(self):
+        """Its native, non-model browser login argv, or None when this program has no board login yet."""
+        return None
+
+    def signin_environment(self):
+        """The native login's environment; credential exchange and storage stay with the program."""
+        return dict(os.environ)
+
+    def signin_prompt(self, text):
+        """Only a validated authorization URL, device code and whether stdin takes a browser code. Never raw output."""
+        return {}
+
+    def signin_input(self, code):
+        """One browser authorization code for its waiting login, never a command."""
+        raise ValueError("This sign-in does not accept a code on the board.")
+
+    def signin_verified(self):
+        """Whether the just-completed native login stored a sign-in, before retiring a previous source."""
+        return self.signed_in()
+
+    def signin_complete(self):
+        """After verified native login, retire an old Colony override if it would shadow the new sign-in."""
+
+    def signin_refresh(self, root):
+        """Let an idle console reload the new credentials; False when background work still needs its process."""
+        return True
+
+    signin_help = "Sign in in your provider's browser, then return here."
 
     def sandbox_problem(self, run=None):
         """Why its sandbox can't run here, in a line (None: it can, or it has none)."""
@@ -602,11 +669,50 @@ class ClaudeCode(Provider):
 
     def signed_in(self, run=None):
         """Whether Claude Code is signed in here, by its own status (no tokens spent)."""
-        out = (run or _run)([self.program, "auth", "status", "--json"])
+        env = dict(os.environ)
+        if token := self.token():
+            env[self.TOKEN_ENV] = token
+        return self._signin_status(env, run)
+
+    def _signin_status(self, env, run=None):
+        import subprocess
         try:
-            return bool(json.loads(out or "{}").get("loggedIn"))
-        except ValueError:
+            result = (run or subprocess.run)([self.program, "auth", "status", "--json"],
+                                            env=env, capture_output=True, text=True, timeout=15)
+            data = json.loads(result.stdout or "{}")
+            value = data.get("loggedIn") if isinstance(data, dict) else None
+            return value if isinstance(value, bool) else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
             return None
+
+    # PROVIDER: Claude's own login supports a remote browser and an authorization code pasted into stdin.
+    def signin_command(self):
+        return [self.program, "auth", "login", "--claudeai"]
+
+    def signin_environment(self):
+        env = _signin_environment()
+        env["CLAUDE_CONFIG_DIR"] = str(self.config_home())
+        env["BROWSER"] = "true"                 # the board shows the URL; never open a browser on the server
+        return env
+
+    signin_help = "Open the Claude sign-in link on this phone. Copy the code the provider shows, return here and paste it below."
+
+    def signin_prompt(self, text):
+        url = _signin_url(text, {("claude.com", "/cai/oauth/authorize"),
+                                 ("platform.claude.com", "/oauth/authorize")})
+        return {"url": url, "accept_code": True} if url else {}
+
+    def signin_input(self, code):
+        code = code.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.~+/=-]{8,2048}#[A-Za-z0-9_.~+/=-]{8,2048}", code):
+            raise ValueError("Paste the one-time code from the Claude sign-in page.")
+        return code + "\n"
+
+    def signin_verified(self):
+        return self._signin_status(self.signin_environment())
+
+    def signin_complete(self):
+        self.set_token("")                       # only after the native login has succeeded and been verified
 
     def latest_conversation(self, folder):
         """The conversation last active in a folder, from Claude Code's own records: for a console whose hooks
@@ -947,9 +1053,18 @@ class ClaudeCode(Provider):
         if stopped:
             marker = r"(?:\s*⎿\s*)?"
         diagnostic = _mail_diagnostic(text, r"^\s*❯(?!\s*\d+\.)|^>\s*$",
-                                      marker + r"(?P<error>API Error: .+|You've hit your .+)",
+                                      marker + r"(?P<error>API Error: .+|You've hit your .+|Login expired.*|Not logged in.*)",
                                       r"^\s*●\s", stopped)
-        return _mail_reason(self, diagnostic)
+        problem = _mail_reason(self, diagnostic)
+        if problem:
+            return problem
+        # PROVIDER: the signed-out footer is below the actual input box, never assistant prose above it.
+        lines = text.splitlines()
+        box = self._box(lines)
+        if box is not None and any(re.fullmatch(r"\s*Not logged in\s*[·•]\s*Please run /login\s*", line, re.I)
+                                   for line in lines[box + 1:]):
+            return {'code': 'authentication', 'reason': 'Claude Code is signed out.'}
+        return None
 
     def classify(self, screen):
         """Claude Code shows "esc to interrupt" while it works and a numbered choice when it asks permission;
@@ -1335,11 +1450,37 @@ class Codex(Provider):
         """Whether Codex is signed in here, by its own status (no tokens spent)."""
         import subprocess
         try:
-            r = (run or subprocess.run)([self.program, "login", "status"], capture_output=True, text=True, timeout=60)
+            env = dict(os.environ, CODEX_HOME=str(self.config_home()))
+            r = (run or subprocess.run)([self.program, "login", "status"], capture_output=True, text=True,
+                                       timeout=15, env=env)
         except (OSError, subprocess.TimeoutExpired):
             return None
         out = (r.stdout + r.stderr).strip().lower()       # it reports on stderr
-        return None if not out else out.startswith("logged in")
+        if out.startswith("logged in"):
+            return True
+        return False if out.startswith("not logged in") else None
+
+    # PROVIDER: Codex's device-code login avoids a localhost callback on the person's phone.
+    def signin_command(self):
+        return [self.program, "login", "--device-auth"]
+
+    def signin_environment(self):
+        return dict(_signin_environment(), CODEX_HOME=str(self.config_home()), BROWSER="true")
+
+    signin_help = ("Open the OpenAI sign-in link and enter the device code shown here. Then return here; "
+                   "the board confirms it automatically. Device-code login must be enabled in your ChatGPT security settings.")
+
+    def signin_prompt(self, text):
+        url = _signin_url(text, {("auth.openai.com", "/codex/device")})
+        # Native Codex presents the device code on its own line, including when ANSI colour surrounds it.
+        plain = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+        code = re.search(r"(?m)^\s*([A-Z0-9]{4}-[A-Z0-9]{4,5})\s*$", plain)
+        return {"url": url, "code": code[1], "accept_code": False} if url and code else {}
+
+    def signin_refresh(self, root):
+        # PROVIDER: a remote app host outlives its console and caches authentication. Drain only while idle.
+        from . import codex_remote
+        return codex_remote.drain(codex_remote.home_for(root))
 
     def update(self):
         """Install the newest Codex beside the running one (its own updater)."""

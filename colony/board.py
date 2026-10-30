@@ -2591,6 +2591,14 @@ def trouble_bar():
             f"<span class='muted'>{e(t['error'])}</span> Its agent can see why in watcher-errors.log.</div>")
 
 
+def signin_notice():
+    """A sign-in failure goes straight to the person, even when their steward is signed out too."""
+    from . import signin
+    names = [providers.get(k).label for k, s in signin.states().items() if s['state'] == 'reconnect']
+    return (f"<div id='signin-notice' class='card signin-notice'{' hidden' if not names else ''} role='status'>"
+            f"<b>{e(', '.join(names))}</b> needs reconnecting. <a href='/signin'>Reconnect on this device</a></div>")
+
+
 def shell(reg, pid, body, wide=False):
     from . import media
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
@@ -2598,7 +2606,7 @@ def shell(reg, pid, body, wide=False):
             f"<meta name='apple-mobile-web-app-title' content='Colony'><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<link rel='stylesheet' href='/static/media.css?v={media.version()}'><script type='module' src='/static/media.js?v={media.version()}'></script>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{trouble_bar()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{trouble_bar()}{signin_notice()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
@@ -4154,6 +4162,9 @@ POLL = """
 async function poll() {
   try {
     const r = await fetch('/status', {cache: 'no-store'}); const st = await r.json();
+    const notice = document.getElementById('signin-notice');
+    if (notice && st.reconnect) { notice.hidden = !st.reconnect.length;
+      notice.querySelector('b').textContent = st.reconnect.join(', '); }
     const md = document.getElementById('dot-m'); if (md) md.className = 'sdot ' + st.monitor.state.replace(' ', '-');
     const all = document.getElementById('badge-all');
     if (all) { const n = st.projects.reduce((k, s) => k + (s.followed ? s.waiting || 0 : 0), 0); all.textContent = n;
@@ -8203,6 +8214,121 @@ def per(benchmark):
     return bench.per(benchmark)
 
 
+SIGNIN_JS = r"""
+(() => {
+  const area = document.getElementById('provider-signins'); if (!area) return;
+  let timer = 0, reading = false;
+  const active = new Set(['starting', 'waiting', 'verifying']);
+  const draw = (data) => {
+    for (const card of area.querySelectorAll('.provider-signin')) {
+      const row = (data.providers || {})[card.dataset.provider]; if (!row) continue;
+      const session = row.session, pending = !!(session && active.has(session.state));
+      const phase = session ? session.state : '';
+      card.dataset.state = row.state; card.dataset.session = session ? session.id : '';
+      card.querySelector('.signin-status').textContent = {'signed-in': 'Signed in', reconnect: 'Reconnect needed', unknown: 'Status unconfirmed'}[row.state] || 'Status unconfirmed';
+      card.querySelector('.signin-reason').textContent = row.reason || '';
+      card.querySelector('.signin-message').textContent = session ? session.message || '' : '';
+      const checked = card.querySelector('.signin-checked');
+      const when = row.checked_at && new Date(row.checked_at);
+      checked.textContent = when && !isNaN(when) ? 'Last checked ' + when.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}) : 'Not checked yet';
+      const start = card.querySelector('[data-signin-action=start]'); start.hidden = pending;
+      start.textContent = row.state === 'signed-in' ? 'Sign in again' : row.state === 'reconnect' ? 'Reconnect' : 'Sign in';
+      card.querySelector('[data-signin-action=cancel]').hidden = !pending;
+      const link = card.querySelector('.signin-open'); let url = null;
+      try { const u = new URL(session && session.url || ''); if (u.protocol === 'https:' && !u.username && !u.password) url = u.href; } catch (_) {}
+      const show = pending && phase === 'waiting' && url;
+      link.hidden = !show;
+      if (show) link.href = url; else link.removeAttribute('href');
+      const code = card.querySelector('.signin-code');
+      code.textContent = show && session.code || ''; code.hidden = !code.textContent;
+      const form = card.querySelector('.signin-submit');
+      const wants = !!(show && session.accept_code);
+      if (!wants || form.dataset.session !== session.id) form.replaceChildren();
+      form.hidden = !wants;
+      if (wants && !form.querySelector('input')) {
+        form.dataset.session = session.id;
+        const label = document.createElement('label'); label.textContent = 'Code from the provider';
+        const input = document.createElement('input'); input.type = 'password'; input.name = 'code';
+        input.autocomplete = 'off'; input.spellcheck = false; input.required = true; input.maxLength = 4096;
+        input.setAttribute('autocapitalize', 'none'); input.setAttribute('data-private', 'true');
+        label.append(input); const send = document.createElement('button'); send.type = 'submit'; send.textContent = 'Finish sign-in';
+        form.append(label, send);
+      }
+    }
+  };
+  const pull = async () => {
+    if (reading || !document.contains(area)) return;
+    reading = true;
+    try { const r = await fetch('/signin/status', {cache:'no-store', credentials:'same-origin'});
+      if (!r.ok) throw new Error(); draw(await r.json()); area.querySelector('.signin-connection').textContent = '';
+    } catch (_) { area.querySelector('.signin-connection').textContent = 'The board could not be reached. Your sign-in can continue; this page will retry.'; }
+    finally { reading = false; clearTimeout(timer); if (document.contains(area)) timer = setTimeout(pull, document.hidden ? 10000 : 2000); }
+  };
+  const act = async (card, action, form = null) => {
+    if (card.dataset.sending) return; card.dataset.sending = '1';
+    const body = new URLSearchParams({provider:card.dataset.provider});
+    if (action === 'code' || action === 'cancel') body.set('session', card.dataset.session || '');
+    if (form) body.set('code', form.querySelector('[name=code]').value);
+    card.querySelectorAll('button').forEach(x => { x.disabled = true; });
+    card.querySelector('.signin-error').textContent = '';
+    try {
+      const r = await fetch('/signin/' + action, {method:'POST', body, credentials:'same-origin', cache:'no-store'});
+      if (!r.ok) { let message = 'The action could not be completed. Please try again.';
+        try { message = (await r.json()).error || message; } catch (_) {} throw new Error(message); }
+      if (form) form.reset(); draw(await r.json());
+    } catch (err) { card.querySelector('.signin-error').textContent = err.message === 'Failed to fetch' ? 'The board could not be reached. Try again.' : err.message; }
+    finally { delete card.dataset.sending; card.querySelectorAll('button').forEach(x => { x.disabled = false; }); pull(); }
+  };
+  area.querySelectorAll('.provider-signin').forEach(card => {
+    card.querySelectorAll('[data-signin-action]').forEach(button => button.addEventListener('click', () => act(card, button.dataset.signinAction)));
+    card.querySelector('.signin-submit').addEventListener('submit', ev => { ev.preventDefault(); ev.stopPropagation(); act(card, 'code', ev.currentTarget); });
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) pull(); });
+  window.addEventListener('pageshow', pull); window.addEventListener('focus', pull);
+  document.addEventListener('colony-leave', () => { clearTimeout(timer); area.querySelectorAll('[name=code]').forEach(x => { x.value = ''; }); }, {once:true});
+  draw(JSON.parse(area.querySelector('script[type="application/json"]').textContent)); pull();
+})();
+"""
+
+
+def signin_snapshots():
+    from . import signin
+    return {'providers': {k: signin.state(k) for k in signin.states()}}
+
+
+def signin_page(reg):
+    """Account reconnect on the person's own board; native CLIs keep OAuth exchange and credentials."""
+    states = signin_snapshots()
+    cards = []
+    for k, row in states['providers'].items():
+        provider = providers.get(k)
+        label = {'signed-in': 'Signed in', 'reconnect': 'Reconnect needed', 'unknown': 'Status unconfirmed'}.get(row['state'], 'Status unconfirmed')
+        cards.append(f"<section class='card provider-signin' data-provider='{e(k)}'><h2>{e(provider.label)}</h2>"
+                     f"<p><b class='signin-status'>{label}</b></p><p class='signin-reason'>{e(row.get('reason') or '')}</p>"
+                     f"<p class='muted signin-help'>{e(provider.signin_help)}</p>"
+                     "<p class='signin-message' role='status' aria-live='polite'></p>"
+                     "<div class='signin-handoff'><a class='signin-open' target='_blank' rel='noopener noreferrer' hidden>Open provider sign-in</a>"
+                     "<code class='signin-code' hidden></code></div>"
+                     "<form class='signin-submit options' method='post' action='/signin/code' autocomplete='off' hidden></form>"
+                     "<p class='signin-error' role='alert'></p><div class='signin-actions'>"
+                     "<button type='button' data-signin-action='start'>Reconnect</button>"
+                     "<button type='button' data-signin-action='cancel' class='quiet' hidden>Cancel sign-in</button>"
+                     "<button type='button' data-signin-action='check' class='quiet'>Check status</button></div>"
+                     "<p class='muted signin-checked'></p></section>")
+    claude = providers.get('claude')
+    previous = ("<p>A successful Claude login replaces Colony's saved Claude token. Consoles pick up the new sign-in when idle.</p>"
+                if 'claude' in states['providers'] and claude.token() else '')
+    encoded = json.dumps(states).replace('<', '\\u003c').replace('>', '\\u003e').replace('&', '\\u0026')
+    return shell(reg, -1, "<meta name='referrer' content='no-referrer'><h1>Provider sign-in</h1>"
+                 "<p>Reconnect from this device. Your password stays on the provider's own sign-in page.</p>"
+                 "<p class='muted'>Status checks use no model tokens. A stored sign-in can still be rejected by the provider; "
+                 "known authentication failures stay visible until you reconnect. Usage limits and network failures are shown separately.</p>"
+                 + previous + "<div id='provider-signins'><p class='signin-connection' role='status'></p>" + ''.join(cards)
+                 + ("<p>No enabled or active agent programs are installed.</p>" if not cards else '')
+                 + f"<script type='application/json'>{encoded}</script></div><p><a href='/settings'>Back to Settings</a></p>"
+                 + f"<script>{SIGNIN_JS}</script>")
+
+
 def signin_result(why=False):
     """The last token check's failure, kept for the Settings page to show; why=None clears it, a string sets it."""
     path = home() / "claude-token-check"
@@ -8562,7 +8688,7 @@ def settings_page(reg):
         used = usage.line(k) if pv.installed(p) else ""
         used = f"Usage: {used}" if used else ""
         out = signed_out().get(k)
-        used = (f"signed out since {out}: sign in again in a terminal" + (f" · {used}" if used else "")) if out else used
+        used = (f"signed out since {out}: reconnect on this device" + (f" · {used}" if used else "")) if out else used
         pace = f"<p class='muted' style='margin:0 0 8px 26px'>Pace: {e(turbo.line(k, named=False))}</p>" if pv.installed(p) else ""
         from . import catalog_freshness
         freshness = catalog_freshness.info(p)
@@ -8583,6 +8709,7 @@ def settings_page(reg):
         return (f"<label><input type='checkbox' name='on' value='{k}'{' checked' if pv.enabled(p) else ''}> {e(p.label)} "
                 f"<span class='muted'>({state}{also})</span></label>"
                 + (f"<p class='muted' style='margin:0 0 8px 26px'>{e(used)}</p>" if used else "") + pace
+                + (f"<p style='margin:0 0 8px 26px'><a href='/signin'>Sign-in status and reconnect</a></p>" if pv.installed(p) else '')
                 + f"<details class='more' style='margin:0 0 8px 26px'><summary class='muted'>Details{' · <b>model list stale</b>' if freshness['warnings'] else ''}</summary>"
                   f"{fresh}{remote_info}</details>")
     programs = (f"<form method='post' action='/providers' class='options'>"
@@ -8691,12 +8818,15 @@ def settings_page(reg):
     if pv.installed(claude) and pv.enabled(claude):
         tok, failed = claude.token(), signin_result()
         steps_ = "".join(f"<li>{e(t)}</li>" for t, _ in claude.TOKEN_STEPS)
-        signin = (f"<h3>Claude Code sign-in</h3><p>{'Long-lived sign-in connected: Claude Code consoles use it, so they are not signed out every week or so.' if tok else 'Using the regular sign-in, which expires every week or so. A long-lived one keeps every console signed in.'}</p>"
+        signin = ("<h3>Claude Code sign-in</h3><p><a href='/signin'>Reconnect from this device</a>. "
+                  "Browser sign-in refreshes itself while the provider allows it.</p>"
+                  "<details class='more'><summary>Use a long-lived token instead</summary>"
+                  + ("<p>Long-lived sign-in connected: Claude Code consoles use this saved token.</p>" if tok else '')
                   + (f"<p class='muted'>That token didn't work: {e(failed)}</p>" if failed else "")
                   + f"<ol class='steps'>{steps_}</ol><form method='post' action='/claude-token' class='options'>"
                   f"<label>Token <input type='password' name='token' autocomplete='off' placeholder='{'Paste a new token to replace it' if tok else 'Paste the token'}'></label>"
                   f"<div class='dangers'><button name='do' value='save'>Save and check</button>"
-                  + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form>")
+                  + ("<button name='do' value='remove' class='quiet'>Remove</button>" if tok else "") + "</div></form></details>")
     from . import selection
     pending = model_changes(pending_only=True)
     on = [p.label for k, p in pv.PROVIDERS.items() if pv.usable(p) and pv.enabled(p)]
@@ -8906,6 +9036,18 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _signin_response(self, data, code=200, html=False):
+        """Short-lived native login URLs and codes are neither cached nor sent as referrers."""
+        body = data.encode() if html else json.dumps(data).encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/html; charset=utf-8' if html else 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.end_headers()
+        self.wfile.write(body)
+
     def _redirect(self, to):
         self.send_response(303)
         self.send_header("Location", to)
@@ -8993,6 +9135,10 @@ class Handler(BaseHTTPRequestHandler):
             url = url._replace(path="/steward")
         q = urllib.parse.parse_qs(url.query)
         reg = registry()
+        if url.path == '/signin':
+            return self._signin_response(signin_page(reg), html=True)
+        if url.path == '/signin/status':
+            return self._signin_response(signin_snapshots())
         plist = projects(reg)
         try:                                           # the steward's chat asks as p=steward: its routes read it themselves
             pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
@@ -9238,10 +9384,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, monitor_page(reg, (q.get("view") or ["overview"])[0]).encode())
         if url.path == "/status":
             from . import monitor
+            from . import signin
             body = json.dumps({"board": str(home()), "projects": [
                 dict(seen(console.snapshot(p)), name=name_of(p), project=str(p), waiting=len(moments(p)), work=at_work(p), followed=monitor.involved(p)) if p.exists()
                 else {"name": name_of(p), "project": str(p), "state": "off", "lines": [], "waiting": 0, "work": "", "followed": False} for p in plist], "monitor": monitor.snapshot(),
-                "nav": nav_order(plist)}).encode()
+                "nav": nav_order(plist), "reconnect": [providers.get(k).label for k, s in signin.states().items()
+                                                         if s['state'] == 'reconnect']}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -9289,6 +9437,31 @@ class Handler(BaseHTTPRequestHandler):
             form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path.startswith('/signin/'):
+            from . import signin
+            if path not in ('/signin/start', '/signin/code', '/signin/cancel', '/signin/check'):
+                return self._signin_response({'error': 'No such sign-in action.'}, 404)
+            key = form.get('provider', '')
+            if len(values.get('provider', [])) != 1 or key not in signin.states():
+                return self._signin_response({'error': 'Choose an installed, enabled or active agent program.'}, 400)
+            if path in ('/signin/code', '/signin/cancel') and len(values.get('session', [])) != 1:
+                return self._signin_response({'error': 'This sign-in session is no longer current. Start again.'}, 409)
+            if path == '/signin/code' and (len(values.get('code', [])) != 1 or len(form.get('code', '')) > 4096):
+                return self._signin_response({'error': 'Paste one authorization code from the provider.'}, 400)
+            try:
+                if path == '/signin/start':
+                    signin.start(key)
+                elif path == '/signin/code':
+                    signin.submit(key, form.get('session', ''), form.get('code', ''))
+                elif path == '/signin/cancel':
+                    signin.cancel(key, form.get('session', ''))
+                else:
+                    signin.request_check(key)
+            except ValueError:
+                return self._signin_response({'error': 'This sign-in could not be completed. Check the code or start again.'}, 409)
+            except Exception:
+                return self._signin_response({'error': 'The native sign-in could not run. You can try again.'}, 503)
+            return self._signin_response(signin_snapshots())
         if path == '/project/rename':
             from .project_names import rename
             # An already-open page may outlive a reordering: the physical record, never its index, identifies it.
@@ -10329,6 +10502,18 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
 .chat details.needs.blocking { border-width:2px }
 .chat .earlier { text-align:center; margin:4px 0 10px }
 .troublebar { border:2px solid var(--flag); background:var(--flag-bg); margin-bottom:12px }
+.signin-notice { border:1px solid var(--flag); background:var(--flag-bg); margin-bottom:12px }
+.signin-notice[hidden], .provider-signin [hidden] { display:none !important }
+#provider-signins { max-width:42em }
+.provider-signin { min-width:0 }
+.provider-signin[data-state=reconnect] { border-color:var(--flag) }
+.signin-actions, .signin-handoff { display:flex; gap:10px; align-items:center; flex-wrap:wrap }
+.signin-actions button, .signin-submit button, .signin-open { min-height:44px; box-sizing:border-box }
+.signin-open { display:inline-flex; align-items:center; padding:10px 14px; border:1px solid var(--line); border-radius:8px }
+.signin-code { font-size:1.4em; letter-spacing:.08em; padding:8px; overflow-wrap:anywhere }
+.signin-submit input { display:block; width:100%; min-height:44px; box-sizing:border-box; font-size:16px }
+.signin-error, .signin-connection { color:var(--flag) }
+.signin-error:empty, .signin-message:empty, .signin-connection:empty { display:none }
 .chat details.needs > summary { display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:600; color:var(--flag); list-style:none }
 .chat details.needs > summary::-webkit-details-marker { display:none }
 /* a chat's Needs you floats on the player (on the message box, where the player isn't shown), its own to that chat:
