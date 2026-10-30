@@ -52,7 +52,7 @@ class SigninIntegrationTest(unittest.TestCase):
     def test_claude_code_input_is_one_line_and_validation_never_echoes_it(self):
         code = 'fixture-authorization#fixture-state'
         self.assertEqual(self.claude.signin_input('  ' + code + '  '), code + '\n')
-        for bad in ('fixture-code\nsecond-line', 'fixture-code\rsecond-line', 'fixture-code\x00',
+        for bad in ('fixture-authorization', 'fixture-code\nsecond-line', 'fixture-code\rsecond-line', 'fixture-code\x00',
                     'fixture-code;command', 'short', 'x' * 4097):
             with self.subTest(length=len(bad)):
                 with self.assertRaises(ValueError) as error:
@@ -66,6 +66,7 @@ class SigninIntegrationTest(unittest.TestCase):
         inherited = self.folder / 'inherited-host-home'
         credentials = {key: 'fixture-private-override' for key in (
             'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_API_KEY',
+            'CLAUDE_CODE_OAUTH_REFRESH_TOKEN', 'CLAUDE_CODE_OAUTH_SCOPES',
             'OPENAI_API_KEY', 'OPENAI_ACCESS_TOKEN', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN',
             'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY')}
         with patch.dict(os.environ, dict(credentials, COLONY_CODEX_SOURCE_HOME=str(canonical), CODEX_HOME=str(inherited))):
