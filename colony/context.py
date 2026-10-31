@@ -20,7 +20,7 @@ OUTPUT_BUDGET = 9_000
 TIMEOUT = 15 * 60
 COOLDOWN = 3600
 LIVE = ('due', 'requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown')
-TRANSCRIPT_VERSION = 1
+TRANSCRIPT_VERSION = 2
 _cache = {}
 
 
@@ -136,7 +136,7 @@ def _transcript(s, cache_file):
     key = (str(path), s['provider'])
     cached = read(cache_file) or _cache.get(key)
     if cached and cached.get('version') != TRANSCRIPT_VERSION:
-        cached = None  # Older cursors discarded the native turn/phase evidence; read it once from the source.
+        cached = None  # Older cursors lack native turn/input/phase evidence; read it once from the source.
     if cached:
         cached['markers'] = set(cached['markers'])
         cached.pop('summary_carries', None)
@@ -146,7 +146,7 @@ def _transcript(s, cache_file):
     if not cached or cached['inode'] != stat.st_ino or cached['offset'] > stat.st_size:
         cached = dict(version=TRANSCRIPT_VERSION, inode=stat.st_ino, offset=0, exchanges=[], current=None, tokens=None,
                       window=None, usage_at=0, markers=set(), summary='', compact=0, carries={}, preserved=[],
-                      turn=None, pending=False)
+                      turn=None, turn_input=False, pending=False)
         _cache[key] = cached
     if cached['offset'] == stat.st_size:
         return cached
@@ -188,6 +188,8 @@ def _transcript(s, cache_file):
                 payload = event.get('payload') or {}
                 if event.get('type') == 'response_item' and payload.get('type') == 'message':
                     role, text = payload.get('role'), _text(payload.get('content'))
+                    if role == 'user':
+                        cached['turn_input'] = True
                     if role == 'assistant':
                         role, text = None, ''  # Compaction's own model reply is also a response item.
                     if role == 'developer':
@@ -199,7 +201,7 @@ def _transcript(s, cache_file):
                     kind = payload.get('type')
                     if kind == 'task_started':
                         cached['current'] = None
-                        cached.update(turn=payload.get('turn_id') or True, pending=False)
+                        cached.update(turn=payload.get('turn_id') or True, turn_input=False, pending=False)
                     if kind == 'task_complete' and (not cached['turn'] or cached['turn'] is True
                                                     or payload.get('turn_id') == cached['turn']):
                         cached.update(turn=None, pending=False)
@@ -380,7 +382,14 @@ def before_compact(root, key, payload):
             job = dict(id=secrets.token_hex(8), session=s['id'], carry=own.get('text', ''), written=own.get('at'),
                        automatic=True)
         try:
-            recent = tail(snap, skip_pending=job.get('automatic', False), source=s['path'])
+            tail_snap = snap
+            # PROVIDER: Codex opens an empty turn for manual compaction before PreCompact.
+            # This hook is already inside native compaction; scheduled dispatch stays strict.
+            # Clear only that turn in a copy, retaining pending/exchange completion checks.
+            if (key == 'codex' and snap.get('turn') and snap.get('current') is None
+                    and not snap.get('turn_input', True)):
+                tail_snap = dict(snap, turn=None)
+            recent = tail(tail_snap, skip_pending=job.get('automatic', False), source=s['path'])
         except ValueError as err:
             # Never interrupt a native emergency compaction. Keep the source recoverable.
             recent = []

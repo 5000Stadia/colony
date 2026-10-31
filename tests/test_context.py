@@ -147,6 +147,62 @@ class ContextTest(unittest.TestCase):
         self.task('task_complete'); context._cache.clear()
         self.assertEqual(context.tail(context.transcript(self.s))[-1]['text'], 'Here is the complete answer.')
 
+    def test_native_manual_compaction_turn_keeps_the_completed_scheduled_tail(self):
+        words = 'Keep  exact\n\nΩ spacing. ' + ' x' * 2250
+        self.task('task_started')
+        self.message('user', words)
+        self.message('assistant', 'Finished; do not repeat.')
+        self.task('task_complete')
+        self.state(phase='compacting')
+        # Native thread/compact/start owns a new turn before it runs PreCompact.
+        self.task('task_started', 'native-compaction-turn')
+        snap = context.transcript(self.s)
+        self.assertIsNone(snap['current'], 'the compaction turn contains no new personal input')
+        self.assertFalse(snap['turn_input'])
+        with self.assertRaisesRegex(ValueError, 'provider turn has not completed'):
+            context.tail(snap)  # Scheduled dispatch must still wait while any native turn runs.
+        cache_file = next((board.home() / 'context-cache').glob('*.json'))
+        old = context.read(cache_file)
+        old.update(version=context.TRANSCRIPT_VERSION - 1)
+        old.pop('turn_input')
+        atomic_json(cache_file, old)
+        context._cache.clear()  # A new hook process must rebuild a cursor without input evidence.
+        context.before_compact(self.root, 'codex', self.payload)
+        job = context.read(context.file(self.root))['job']
+        self.assertEqual(job['phase'], 'prepared')
+        self.assertFalse(job.get('automatic'))
+        self.assertNotIn('tail_deferred', job)
+        self.assertEqual(job['tail'], [dict(role='user', text=words),
+                                       dict(role='assistant', text='Finished; do not repeat.')])
+        self.assertEqual(context.transcript(self.s)['turn'], 'native-compaction-turn',
+                         'preparation must not clear the real cached turn or let tick dispatch')
+
+    def test_scheduled_precompact_keeps_unfinished_personal_exchange_guards(self):
+        for state in ('commentary', 'final', 'maintenance', 'maintenance-final', 'unanswered'):
+            with self.subTest(state=state):
+                self.task('task_started', state)
+                self.message('user', 'Answer this before refreshing: ' + state)
+                if state != 'unanswered':
+                    self.message('assistant', 'Still investigating.',
+                                 phase='final_answer' if state == 'final' else 'commentary')
+                if state.startswith('maintenance'):
+                    self.message('user', '[colony] Maintenance clears only the prose cursor.')
+                if state == 'maintenance-final':
+                    self.message('assistant', 'Maintenance finished; the personal reply is still pending.')
+                    snap = context.transcript(self.s)
+                    self.assertIsNone(snap['current'])
+                    self.assertFalse(snap['pending'])
+                    self.assertTrue(snap['turn_input'], 'maintenance does not make this an empty native turn')
+                if state == 'unanswered':
+                    # Even an empty compaction turn cannot make a user-only exchange complete.
+                    self.task('task_complete', state)
+                    self.task('task_started', 'native-compaction-turn')
+                self.state(phase='compacting')
+                context.before_compact(self.root, 'codex', self.payload)
+                job = context.read(context.file(self.root))['job']
+                self.assertEqual(job['tail'], [])
+                self.assertIn('not completed', job['tail_deferred'])
+
     def test_ready_refresh_rechecks_new_personal_input_before_compact_dispatch(self):
         self.message('user', 'First request.'); self.message('assistant', 'First answer.')
         self.state(carry_turn='earlier-carry-turn')
