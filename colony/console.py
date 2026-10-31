@@ -155,6 +155,26 @@ def remember(root, conversation, transcript):
             board.save_json(path, rows)
 
 
+def forget_conversation(root, provider):
+    """Stop offering an unavailable bookmark for resume; keep the history files and other providers."""
+    from . import board
+    path = _conversations()
+    with board.board_lock('conversations'):
+        if not path.exists():
+            return
+        rows = json.loads(path.read_text())
+        row = conversation_row(rows, root)
+        if not row:
+            return
+        history = dict(row.get('by_provider') or {})
+        history.pop(provider, None)
+        if transcript_provider(row.get('transcript') or '', row.get('provider') or provider) == provider:
+            for field in ('conversation', 'transcript', 'provider'):
+                row.pop(field, None)
+        row['by_provider'] = history
+        board.save_json(path, rows)
+
+
 def last_conversation(root):
     saved = saved_conversation(root)
     return saved['conversation'] if saved else None
