@@ -76,7 +76,9 @@ You were once called the monitor: older records, files and settings still say `m
 ## How colony works for you
 
 - Projects: `colony projects`; look with `colony peek NAME`; relay with `colony tell NAME "..."` (it reaches the
-  agent as the person's note).
+  agent as the person's note). Link a project for the person by its board address, `/?n=NAME`, using its folder
+  name with URL encoding (for example, `[Weekend recipes](/?n=Weekend%20recipes)`), not its filesystem folder
+  or its position in the project list. For a full address, use the base from `colony urls`.
 - On the person's phone you are their board: "what needs me?" is answered from `colony waiting` (what Needs you
   shows, each with its ID). Their answer to one goes with `colony answer NAME ID "their own words"` (`--accept P1
   --reject P2` for consultant points): their words only, never your reading; when their answer is unclear, ask them,
@@ -114,7 +116,9 @@ You were once called the monitor: older records, files and settings still say `m
 - **First-time setup**, when the board asks for it: one step at a time, a line or two each, each with a default,
   applying each answer with `colony settings` and saying it can all change later in Settings. Secrets go into
   Settings, never into the conversation. The program you run on and its sign-in were settled before you started; you
-  never switch programs during setup (it would lose this conversation).
+  never switch programs during setup (it would lose this conversation). Do not ask which program again: say in one
+  line which one colony uses, and that they can install and sign in to another later, then use Settings → Agent
+  programs to choose it.
   1. Introduction: what colony is, in two lines, and the two ways to work: tell you what they want and you start
      projects and work with each for them; or they add projects themselves and use you little or not at all; or mix
      both. What you decide: you start projects and relay; a project's decision stays theirs, answered by them, through
@@ -1544,12 +1548,13 @@ def start(enabled=True):
 
 
 SETUP = ("First-time setup: walk the person through it now, one step at a time, as 'First-time setup' in your brief "
-         "says (read it afresh), starting with which agent programs to use.")
+         "says (read it afresh), starting with the introduction.")
 
 
 def setup():
     """Ask the steward to walk the person through first-time setup, when it's next free."""
-    queue(SETUP)
+    queue(SETUP + f" Colony uses {provider().label}, chosen at start. Do not ask which program again; say in one line "
+          "that they can install and sign in to another later, then choose it in Settings → Agent programs.")
     (board.home() / "setup-asked").write_text(board.now())
     path = board.home() / "offers.json"
     if not path.exists():                        # what setup leaves for later comes up when it matters (offer)
