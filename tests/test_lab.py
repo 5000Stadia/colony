@@ -2,6 +2,7 @@
 from http.server import ThreadingHTTPServer
 import http.client
 import json
+import os
 import re
 import threading
 import time
@@ -44,6 +45,13 @@ class LockPlayTest(BoardBase):
         self.addCleanup(self.httpd.server_close)
         self.addCleanup(self.httpd.shutdown)
         self.port = self.httpd.server_address[1]
+
+    def tearDown(self):
+        # the base's tearDown points the board back at the real home before the stand-in voice is taken away: a maker
+        # still running then once wrote this file's stand-in clips into the person's real lab (Oct 31)
+        if lab._making["thread"]:
+            lab._making["thread"].join(30)
+        super().tearDown()
 
     def ask(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -157,6 +165,24 @@ class LockPlayTest(BoardBase):
                                                            "playing": 2}, "its cost: the most each measure reached")
         self.assertEqual((a["bytes"], a["held"]), (0, None))
         self.assertEqual([r["run"] for r in json.loads(body)], ["G-1", "B-1", "A-1"], "newest first")
+
+    def test_the_maker_keeps_to_the_home_it_started_in(self):
+        first, elsewhere, gate = board.home(), self.root.parent / "elsewhere", threading.Event()
+        standin = voice.speak
+
+        def slow(text, voice_name=None):
+            gate.wait(5)
+            return standin(text, voice_name)
+        with patch.object(voice, "speak", side_effect=slow):
+            lab.make()
+            os.environ["COLONY_BOARD_HOME"] = str(elsewhere)     # the home changes while it is making
+            try:
+                gate.set()
+                lab._making["thread"].join(10)
+            finally:
+                os.environ["COLONY_BOARD_HOME"] = str(first)
+        self.assertEqual(len(list((first / "lab" / "lockplay" / "clips").glob("*.mp3"))), 12 * len(KEYS))
+        self.assertFalse((elsewhere / "lab").exists(), "nothing made where the home pointed later")
 
     def test_the_lab_needs_only_the_boards_usual_access(self):
         self.assertEqual(self.ask("GET", "/lab/lockplay")[0], 200, "no token, no sign-in: the board's own page access")

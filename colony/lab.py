@@ -71,9 +71,9 @@ def text(key, n):
                f"If you can hear this with the screen off, this way is still going, and clip {n + 1} comes next."))
 
 
-def clip(key, n):
+def clip(key, n, base=None):
     words = text(key, n)
-    return folder() / "clips" / f"{key}-{n:02d}-{hashlib.sha1(words.encode()).hexdigest()[:8]}.mp3"
+    return (base or folder()) / "clips" / f"{key}-{n:02d}-{hashlib.sha1(words.encode()).hexdigest()[:8]}.mp3"
 
 
 def ready(key):
@@ -98,9 +98,10 @@ def _make():
     if not voice.ready():
         _making["error"] = "Colony's voice isn't set up on this machine (colony voice --setup), so no clips can be made."
         return
+    base = folder()                                # the home it started in, kept to the end of the run
     for key in NAMES:
         for n in range(1, COUNT + 1):
-            out = clip(key, n)
+            out = clip(key, n, base)
             if out.exists():
                 continue
             got = voice.speak(text(key, n))
