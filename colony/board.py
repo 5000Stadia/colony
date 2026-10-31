@@ -817,7 +817,8 @@ def keep_ids(plist=None):
             raw = json.loads((home() / "board.json").read_text()) if (home() / "board.json").exists() else {}
             raw["ids"] = ids
             save_registry(raw)
-        return ids
+    console.rekey_conversations(ids)               # records kept under a folder move under its identity
+    return ids
 
 
 def exclude(root):

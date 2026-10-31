@@ -6723,6 +6723,33 @@ class IdentityTest(BoardBase):
         self.assertEqual(board.ident(moved, make=False), value, "moved, it is the same project")
 
 
+class MovedConsoleTest(BoardBase):
+    """R127, finding 1: a moved project keeps its console's name and its conversation, by its identity."""
+
+    def test_a_moved_project_keeps_its_console_and_its_conversation(self):
+        board.track(self.root)
+        name = console.session_name(self.root)
+        transcript = Path(self.tmp.name) / "talk.jsonl"
+        transcript.write_text(json.dumps({"type": "user", "sessionId": "s1", "message": {"content": "hi"}}) + "\n")
+        rows = {str(self.root): {"conversation": "s1", "transcript": str(transcript), "provider": "claude"}}
+        board.save_json(board.home() / "conversations.json", rows)          # as recorded before identities
+        board.keep_ids()
+        value = board.ident(self.root)
+        kept = json.loads((board.home() / "conversations.json").read_text())
+        self.assertIn(value, kept, "moved under its identity")
+        self.assertNotIn(str(self.root), kept)
+        moved = Path(self.tmp.name) / "elsewhere" / "plants"
+        moved.parent.mkdir()
+        self.root.rename(moved)
+        self.assertEqual(console.session_name(moved), name, "the same console, so its hooks still know it")
+        with patch.object(console, "transcript_provider", lambda path, provider=None: "claude"):
+            self.assertEqual((console.saved_conversation(moved, "claude") or {}).get("conversation"), "s1",
+                             "its conversation resumes from the new folder")
+        console.remember(moved, "s2", str(transcript))
+        self.assertEqual(json.loads((board.home() / "conversations.json").read_text())[value]["conversation"], "s2")
+        self.root = moved                                            # for teardown
+
+
 class StartHereTest(BoardBase):
     """R125: a new board's front page says where to begin, and goes once a project is on the board."""
 

@@ -90,12 +90,37 @@ def transcript_provider(transcript, fallback=None):
     return fallback
 
 
+def rekey_conversations(ids):
+    """Rows still kept under a project's folder move under its identity ({id: path}, board.keep_ids), so a move
+    after this keeps them (R127's change-over, one family)."""
+    from . import board
+    path = _conversations()
+    if not path.exists():
+        return
+    with board.board_lock('conversations'):
+        try:
+            rows = json.loads(path.read_text())
+        except ValueError:
+            return
+        moved = {value: rows.pop(folder) for value, folder in ids.items() if folder in rows and value not in rows}
+        if moved:
+            rows.update(moved)
+            board.save_json(path, rows)
+
+
+def conversation_row(rows, root):
+    """A project's conversations in conversations.json: under its identity (R127), else under its folder as before."""
+    from . import board
+    value = board.ident(root, make=False)
+    return (rows.get(value) if value else None) or rows.get(str(Path(root))) or {}
+
+
 def saved_conversation(root, provider=None):
     """Resume only this provider's own bookmark; a switch never passes another program's session ID."""
     from . import providers
     provider = provider or providers.key(providers.of(root))
     path = _conversations()
-    row = (json.loads(path.read_text()) if path.exists() else {}).get(str(Path(root))) or {}
+    row = conversation_row(json.loads(path.read_text()) if path.exists() else {}, root)
     for saved in ((row.get('by_provider') or {}).get(provider), row):
         if saved and saved.get('transcript') and Path(saved['transcript']).is_file() \
                 and transcript_provider(saved['transcript'], saved.get('provider') or provider) == provider:
@@ -110,7 +135,7 @@ def remember(root, conversation, transcript):
         path = _conversations()
         with board.board_lock('conversations'):
             rows = json.loads(path.read_text()) if path.exists() else {}
-            old = rows.get(str(Path(root))) or {}
+            old = conversation_row(rows, root)
             history = dict(old.get('by_provider') or {})
             if old.get('transcript'):
                 family = transcript_provider(old['transcript'], old.get('provider'))
@@ -120,7 +145,10 @@ def remember(root, conversation, transcript):
             family = transcript_provider(transcript, providers.key(providers.of(root)))
             saved = dict(conversation=conversation, transcript=transcript, provider=family)
             history[family] = saved
-            rows[str(Path(root))] = dict(saved, by_provider=history)
+            value = board.ident(root, make=False)
+            if value:
+                rows.pop(str(Path(root)), None)    # kept under its identity from now on
+            rows[value or str(Path(root))] = dict(saved, by_provider=history)
             board.save_json(path, rows)
 
 
@@ -160,10 +188,46 @@ def contained(cmd, name=None):
 _SCOPE = None
 
 
+_NAMES = {}                      # the console names colony recorded, as last read: {"mtime", "rows"}
+
+
+def _names():
+    from . import board
+    path = board.home() / "console-names.json"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    if _NAMES.get("mtime") != mtime or _NAMES.get("path") != path:
+        try:
+            _NAMES.update(mtime=mtime, path=path, rows=json.loads(path.read_text()))
+        except (OSError, ValueError):
+            return {}
+    return _NAMES["rows"]
+
+
 def session_name(root):
+    """A project's console: named once from its folder, then kept with its identity (R127), so a project moved to
+    another folder keeps its console, its hooks recognise it, and no second console starts on the same conversation."""
+    from . import board
     root = Path(root)
+    value = board.ident(root, make=False)
+    if value and value in (rows := _names()):
+        return rows[value]
     slug = re.sub(r"[^A-Za-z0-9_-]", "-", root.name)[:24]
-    return f"board-{slug}-{hashlib.sha1(str(root).encode()).hexdigest()[:4]}"
+    name = f"board-{slug}-{hashlib.sha1(str(root).encode()).hexdigest()[:4]}"
+    if value:
+        with board.board_lock("console-names"):
+            path = board.home() / "console-names.json"
+            try:
+                rows = json.loads(path.read_text())
+            except (OSError, ValueError):
+                rows = {}
+            if value not in rows:
+                rows[value] = name
+                board.save_json(path, rows)
+            name = rows[value]
+    return name
 
 
 def live(root):
@@ -374,7 +438,7 @@ def catch_up(root):
     from . import board, hours, providers
     want = providers.key(providers.of(root))
     path = _conversations()
-    by = ((json.loads(path.read_text()) if path.exists() else {}).get(str(Path(root))) or {}).get("by_provider") or {}
+    by = conversation_row(json.loads(path.read_text()) if path.exists() else {}, root).get("by_provider") or {}
 
     def last(saved):
         try:

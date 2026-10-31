@@ -95,8 +95,9 @@ def _recorded(roots):
         rows = json.loads((board.home() / "conversations.json").read_text())
     except (OSError, ValueError):
         rows = {}
+    from . import console
     for root in roots:
-        row = rows.get(str(root)) or {}
+        row = console.conversation_row(rows, root)
         for saved in [row, *(row.get("by_provider") or {}).values()]:
             if saved.get("transcript"):
                 yield root, Path(saved["transcript"])
