@@ -9278,7 +9278,8 @@ def settings_page(reg):
         signin = ("<h3>Claude Code sign-in</h3><p><a href='/signin'>Reconnect from this device</a>. "
                   "Browser sign-in refreshes itself while the provider allows it.</p>"
                   "<details class='more'><summary>Use a long-lived token instead</summary>"
-                  + ("<p>Long-lived sign-in connected: Claude Code consoles use this saved token.</p>" if tok else '')
+                  + ("<p>Long-lived sign-in connected: Claude Code consoles use this saved token, except those with Remote Control "
+                       "on, which Claude Code allows only with the browser sign-in.</p>" if tok else '')
                   + (f"<p class='muted'>That token didn't work: {e(failed)}</p>" if failed else "")
                   + f"<ol class='steps'>{steps_}</ol><form method='post' action='/claude-token' class='options'>"
                   f"<label>Token <input type='password' name='token' autocomplete='off' placeholder='{'Paste a new token to replace it' if tok else 'Paste the token'}'></label>"

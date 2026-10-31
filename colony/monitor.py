@@ -113,8 +113,10 @@ You were once called the monitor: older records, files and settings still say `m
      claude,codex`). To install: Claude Code from https://claude.com/claude-code, then `claude` and `/login`;
      Codex from https://developers.openai.com/codex. Then Settings → Agent programs → Sign-in status and reconnect:
      the native sign-in opens on their own device, including their phone, and is theirs to complete.
-  2. Claude Code's lasting sign-in: they run `claude setup-token` and paste the token in Settings, under
-     Claude Code sign-in.
+  2. Claude Code's lasting sign-in, only if they want consoles that keep working when the browser sign-in lapses:
+     they run `claude setup-token` and paste the token in Settings, under Claude Code sign-in. Claude Code allows
+     Remote Control (reaching consoles from the Claude app) only with the browser sign-in, so the token serves only
+     consoles with Remote Control off; say so, and skip this step if they want the app.
   3. Benchmark data: a free Artificial Analysis key (an account at https://artificialanalysis.ai/login, a key
      from its Insights Platform), pasted in Settings under Benchmark data; then `colony bench fetch`.
   4. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and

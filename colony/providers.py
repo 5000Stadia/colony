@@ -560,8 +560,10 @@ class ClaudeCode(Provider):
                 parts += ['--add-dir', shlex.quote(str(lead.plan_root(root)))]
             for workspace in lead.workspaces(root):
                 parts += ['--add-dir', shlex.quote(str(workspace))]
-        if self.token():
-            # the long-lived sign-in, read from its file as the console starts: never written into the command
+        if self.token() and not s.get("remote"):
+            # the long-lived sign-in, read from its file as the console starts: never written into the command. Not
+            # where Remote Control is on: Claude Code refuses it there ("Remote Control requires a full-scope login
+            # token. Long-lived tokens ... are limited to inference-only"), so those consoles keep the browser sign-in
             parts.insert(0, f'{self.TOKEN_ENV}="$(cat {shlex.quote(str(self.token_path()))})"')
         if PERMISSIONS.get(s.get("permissions") or "ask"):
             parts += ["--permission-mode", PERMISSIONS[s["permissions"]]]
