@@ -6750,6 +6750,84 @@ class MovedConsoleTest(BoardBase):
         self.root = moved                                            # for teardown
 
 
+class RepointTest(BoardBase):
+    """R127: a project moved to another folder, every record colony keeps about it re-pointed, nothing left naming
+    the old folder, and what can't move by itself yet refused before anything changes."""
+
+    def setUp(self):
+        super().setUp()
+        self.claude_home = Path(self.tmp.name) / "claude-home"           # never the person's own ~/.claude
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.claude_home)
+        self.addCleanup(os.environ.pop, "CLAUDE_CONFIG_DIR", None)
+
+    def lived_in(self):
+        """A project with records across colony, as a working one has."""
+        from colony import measures, migrate, turbo
+        board.track(self.root)
+        board.keep_ids()
+        board.add_gate(self.root, "Which pot?")
+        board.add_note(self.root, None, "water on Tuesdays", author="person")
+        board.item_times(self.root)
+        board.pause_project(self.root)
+        board.save_json(board.home() / "turbo.json", {"projects": {str(self.root): {"on": True}}})
+        board.save_json(board.home() / "woke.json", {str(self.root.resolve()): "2026-10-31T10:00:00Z"})
+        measures.folder(self.root).mkdir(parents=True)
+        (measures.folder(self.root) / "words.json").write_text("[]")
+        history = self.claude_home / "projects" / migrate.claude_key(self.root)
+        history.mkdir(parents=True)
+        (history / "s1.jsonl").write_text("{}\n")
+        board.save_json(board.home() / "conversations.json",
+                        {board.ident(self.root): {"conversation": "s1", "transcript": str(history / "s1.jsonl")}})
+        return history
+
+    def test_a_moved_project_has_every_record_re_pointed(self):
+        from colony import measures, migrate, repoint
+        history = self.lived_in()
+        old = self.root
+        new = Path(self.tmp.name) / "Colony" / "projects" / "plants"
+        new.parent.mkdir(parents=True)
+        old.rename(new)
+        self.root = new                                              # for teardown
+        said = repoint.repoint(old, new)
+        self.assertTrue(any("record file" in s for s in said), said)
+        left = [str(f) for f in repoint.records([new]) if str(old) in f.read_text()]
+        self.assertEqual(left, [], "no record still names the old folder")
+        self.assertIn(str(new), board.registry()["projects"])
+        self.assertIsNotNone(board.paused(new), "its pause went with it")
+        self.assertTrue(measures.folder(new).is_dir(), "its measures, renamed with it")
+        moved = self.claude_home / "projects" / migrate.claude_key(new)
+        self.assertTrue((moved / "s1.jsonl").exists(), "Claude Code's history at the new folder's name")
+        self.assertTrue(history.is_symlink(), "a link at the old name, for a console still writing there")
+        convo = json.loads((board.home() / "conversations.json").read_text())[board.ident(new)]
+        self.assertEqual(convo["transcript"], str(moved / "s1.jsonl"))
+
+    def test_a_project_moved_by_hand_is_found_by_its_identity_and_followed(self):
+        from colony import repoint
+        self.lived_in()
+        old, new = self.root, Path(self.tmp.name) / "plants-renamed"
+        old.rename(new)
+        self.root = new
+        [(was, found, line)] = repoint.refind()
+        self.assertEqual((was, found), (str(old), new))
+        self.assertIn("colony followed it there", line)
+        self.assertIn(str(new), board.registry()["projects"])
+        self.assertNotIn(str(old), board.registry()["projects"])
+        self.assertIn("followed it there", (board.home() / "to_monitor.jsonl").read_text(), "said to the steward, once")
+        self.assertEqual(repoint.refind(), [], "once")
+
+    def test_what_cant_move_by_itself_yet_is_refused_before_anything_changes(self):
+        from colony import repoint
+        self.lived_in()
+        old, new = self.root, Path(self.tmp.name) / "plants-moved"
+        board.save_json(board.home() / "leads.json", {"abc": {"canonical": str(old), "members": [str(old)]}})
+        old.rename(new)
+        self.root = new
+        before = (board.home() / "board.json").read_text()
+        with self.assertRaisesRegex(ValueError, "lead group"):
+            repoint.repoint(old, new)
+        self.assertEqual((board.home() / "board.json").read_text(), before, "nothing changed")
+
+
 class StartHereTest(BoardBase):
     """R125: a new board's front page says where to begin, and goes once a project is on the board."""
 

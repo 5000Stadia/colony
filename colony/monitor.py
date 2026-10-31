@@ -1111,6 +1111,8 @@ class Watcher:
         continuation.tick_all()
         if time.time() - getattr(self, "ids_kept", 0) > 300:
             self.ids_kept = time.time()
+            from . import repoint
+            repoint.refind()                        # a project whose folder moved, found by its identity and followed
             board.keep_ids()                        # each project known by its identity, copies told apart (R127)
         self.freshen()
         self.close()                                # a project being closed comes off once it has landed its work
