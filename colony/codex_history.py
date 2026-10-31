@@ -104,8 +104,73 @@ def restore_on_error(home, paths):
             raise
 
 
+def _rewrite(home, pairs, backup=None, then=None):
+    """Every path recorded in one stopped home under an old prefix says the new one; True when any did.
+
+    `then` runs last under the same restore, so its failure (repoint's rename) puts every record back.
+    With `backup`, the first version of each record that may change is also kept there, as a change-over keeps
+    everything it rewrites.
+    """
+    from .repoint import swap, rewrite, _write, backup_file
+    changed = False
+    rollouts = []
+    offsets = {}
+    for folder in ('sessions', 'archived_sessions'):
+        for path in sorted((home / folder).rglob('*.jsonl')):
+            data, offset = _rollout(path, pairs)
+            if data != path.read_bytes():
+                first = json.loads(data.splitlines()[0])
+                tid = first.get('payload', {}).get('id')
+                if tid:
+                    offsets[tid] = offset
+                rollouts.append((path, data))
+    config = home / 'config.toml'
+    config_value = codex_remote.user_config(home) if config.exists() else None
+    records = [path for path in home.glob('colony-*.json') if not path.is_symlink()]
+    originals = [path for path, _ in rollouts] + records + [config, home / 'state_5.sqlite', home / 'thread_history_1.sqlite']
+    with restore_on_error(home, originals):
+        for path in originals:
+            backup_file(path, backup)
+        state = home / 'state_5.sqlite'
+        if state.exists():
+            with closing(sqlite3.connect(state)) as db, db:
+                # Do not rewrite titles, messages, timestamps, IDs, or unrelated tables.
+                for table, names in (('threads', ('cwd', 'rollout_path', 'sandbox_policy')),
+                                     ('project_roots', ('path',)),
+                                     ('rollout_migration_skipped_rollouts', ('rollout_path',))):
+                    columns = [name for name in names if name in _columns(db, table)]
+                    if not columns:
+                        continue
+                    for row in db.execute(f'SELECT rowid,{",".join(columns)} FROM {table}').fetchall():
+                        values = []
+                        for column, value in zip(columns, row[1:]):
+                            if column == 'sandbox_policy':
+                                policy = json.loads(value)
+                                moved = swap(policy, pairs)
+                                values.append(json.dumps(moved) if moved != policy else value)
+                            else:
+                                values.append(swap(value, pairs))
+                        if values != list(row[1:]):
+                            db.execute(f'UPDATE {table} SET ' + ','.join(f'{c}=?' for c in columns) + ' WHERE rowid=?',
+                                       [*values, row[0]])
+                            changed = True
+        for path, data in rollouts:
+            _write(path.resolve(), data.decode())  # preserve a gathered history's symlink
+        _offsets(home, offsets)
+        changed = changed or bool(rollouts)
+        if config.exists():
+            moved = swap(config_value, pairs)
+            if moved != config_value:
+                _write(config, '\n'.join(json.dumps(k) + '=' + codex_remote.toml(v) for k, v in moved.items()) + '\n')
+                changed = True
+        for path in records:
+            changed = rewrite(path, pairs) or changed
+        if then is not None:
+            changed = then() or changed
+    return changed
+
+
 def repoint(old, new):
-    from .repoint import swap, rewrite, _write
     was, now = codex_remote.home_for(old), codex_remote.home_for(new)
     pairs = [(str(old), str(new)), (str(was), str(now))]
     home = was if was.exists() else now
@@ -115,63 +180,29 @@ def repoint(old, new):
         raise ValueError('the destination already has a Codex home')
     if codex_remote.alive(now):
         raise ValueError('its Codex host is still running; stop it before moving history')
-    changed = False
+
+    def rename():
+        if home == was and was != now:
+            now.parent.mkdir(parents=True, exist_ok=True)
+            was.rename(now)
+            return True
+        return False
     with stopped(home):
-        rollouts = []
-        offsets = {}
-        for folder in ('sessions', 'archived_sessions'):
-            for path in sorted((home / folder).rglob('*.jsonl')):
-                data, offset = _rollout(path, pairs)
-                if data != path.read_bytes():
-                    first = json.loads(data.splitlines()[0])
-                    tid = first.get('payload', {}).get('id')
-                    if tid:
-                        offsets[tid] = offset
-                    rollouts.append((path, data))
-        config = home / 'config.toml'
-        config_value = codex_remote.user_config(home) if config.exists() else None
-        records = [path for path in home.glob('colony-*.json') if not path.is_symlink()]
-        originals = [path for path, _ in rollouts] + records + [config, home / 'state_5.sqlite', home / 'thread_history_1.sqlite']
-        with restore_on_error(home, originals):
-            state = home / 'state_5.sqlite'
-            if state.exists():
-                with closing(sqlite3.connect(state)) as db, db:
-                    # Do not rewrite titles, messages, timestamps, IDs, or unrelated tables.
-                    for table, names in (('threads', ('cwd', 'rollout_path', 'sandbox_policy')),
-                                         ('project_roots', ('path',)),
-                                         ('rollout_migration_skipped_rollouts', ('rollout_path',))):
-                        columns = [name for name in names if name in _columns(db, table)]
-                        if not columns:
-                            continue
-                        for row in db.execute(f'SELECT rowid,{",".join(columns)} FROM {table}').fetchall():
-                            values = []
-                            for column, value in zip(columns, row[1:]):
-                                if column == 'sandbox_policy':
-                                    policy = json.loads(value)
-                                    moved = swap(policy, pairs)
-                                    values.append(json.dumps(moved) if moved != policy else value)
-                                else:
-                                    values.append(swap(value, pairs))
-                            if values != list(row[1:]):
-                                db.execute(f'UPDATE {table} SET ' + ','.join(f'{c}=?' for c in columns) + ' WHERE rowid=?',
-                                           [*values, row[0]])
-                                changed = True
-            for path, data in rollouts:
-                _write(path.resolve(), data.decode())  # preserve a gathered history's symlink
-            _offsets(home, offsets)
-            changed = changed or bool(rollouts)
-            if config.exists():
-                moved = swap(config_value, pairs)
-                if moved != config_value:
-                    _write(config, '\n'.join(json.dumps(k) + '=' + codex_remote.toml(v) for k, v in moved.items()) + '\n')
-                    changed = True
-            for path in records:
-                changed = rewrite(path, pairs) or changed
-            if home == was and was != now:
-                now.parent.mkdir(parents=True, exist_ok=True)
-                was.rename(now)
-                changed = True
+        changed = _rewrite(home, pairs, then=rename)
     return [(str(was), str(now))], ["its Codex history re-pointed"] if changed else []
+
+
+def rehome(home, old_home, backup=None):
+    """The stopped home now at `home`, formerly at `old_home`, finds its own files again.
+
+    Only paths under the old home change: the project's folder and the conversation's prose stay as they are, so
+    a home already done is left as it is. True when anything changed.
+    """
+    home, old_home = Path(home), Path(old_home)
+    if home == old_home or not home.is_dir():
+        return False
+    with stopped(home):
+        return _rewrite(home, [(str(old_home), str(home))], backup)
 
 
 def gather(root, dest):

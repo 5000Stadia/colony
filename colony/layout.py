@@ -155,8 +155,12 @@ def _plan(old, folder, state, secrets, mark):
             moved.append([str(root), str(target)])
     pairs = [[str(source), str(dest)] for source, dest in special.items()]
     pairs.append([str(old), str(new)])
+    # Each Codex home records its own place inside its files; after the move it is told where it is now.
+    homes = old / "codex-remote"
+    rehome = [[str(home), str(special[homes] / home.name)] for home in sorted(homes.iterdir())
+              if home.is_dir() and not home.is_symlink()] if homes.is_dir() else []
     return {"format": 1, "old": str(old), "folder": str(folder), "secrets": str(secrets), "moves": moves,
-            "projects": [str(p) for p in projects], "repoint": moved, "pairs": pairs, "done": [],
+            "projects": [str(p) for p in projects], "repoint": moved, "pairs": pairs, "rehome": rehome, "done": [],
             "marker": {"format": 1, "written_by": {"machine": socket.gethostname(), "user": getpass.getuser()},
                        "generation": mark["generation"], "still": True, "at": mark.get("at")}}
 
@@ -178,6 +182,10 @@ def _finish(journal, note):
             _step(journal, note, f"keys:{i}", lambda old=old: migrate.keep_project_keys(old, say=lambda s: None))
     for i, (old, new) in enumerate(note["moves"]):
         _step(journal, note, f"move:{i}", lambda old=old, new=new: _transfer(Path(old), Path(new)))
+    from . import providers
+    for i, (old, new) in enumerate(note.get("rehome", [])):
+        _step(journal, note, f"rehome:{i}",
+              lambda old=old, new=new: providers.get("codex").rehome_history(Path(new), Path(old), backups))
     with _home(folder / "home", note["secrets"]):
         def records():
             roots = [Path(repoint.swap(p, note["pairs"])) for p in note["projects"]]
