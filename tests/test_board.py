@@ -4358,6 +4358,98 @@ class ReachTest(BoardBase):
 
 
 class ProjectSettingsTest(BoardBase):
+    def test_codex_launch_keeps_global_permissions_and_project_overrides(self):
+        from colony import selection
+        board.save_registry({"roots": [], "settings": {"provider": "codex", "messaging": False}})
+        with patch.object(console, "COMMAND", None), patch.object(selection, "main", return_value=None), \
+                patch.object(selection, "pair", return_value={}), \
+                patch.object(providers.get("codex"), "config_home", return_value=Path(self.tmp.name) / "codex"), \
+                patch.object(console, "last_conversation", return_value=None):
+            for global_permission in ("ask", "edits", "all", "plan"):
+                board.set_setting("permissions", global_permission)
+                for own_permission in (None, "ask", "edits", "all", "plan"):
+                    board.project_settings(self.root, {"permissions": own_permission})
+                    expected = own_permission or global_permission
+                    with self.subTest(global_permission=global_permission, own_permission=own_permission):
+                        args = shlex.split(console.command("plants", self.root))
+                        self.assertIn("colony.codex_remote", args)
+                        self.assertEqual(args[args.index("--project") + 1], str(self.root))
+                        settings = json.loads(args[args.index("--settings") + 1])
+                        self.assertEqual(settings["permissions"], expected)
+
+    def test_codex_local_permissions_are_explicit_for_new_and_resumed_consoles(self):
+        from colony import connections
+        codex = providers.get("codex")
+        expected = {"ask": ["-a", "on-request", "-s", "workspace-write"],
+                    "edits": ["-a", "never", "-s", "workspace-write"],
+                    "all": ["--dangerously-bypass-approvals-and-sandbox"],
+                    "plan": ["-a", "on-request", "-s", "read-only"]}
+        with patch.object(connections, "codex_args", return_value=[]):
+            for permission, flags in expected.items():
+                for resume in (None, "saved-thread"):
+                    with self.subTest(permission=permission, resume=resume):
+                        args = shlex.split(codex.local_command("plants", {"permissions": permission},
+                                                             resume=resume, root=self.root))
+                        actual = []
+                        for i, arg in enumerate(args):
+                            if arg in ("-a", "-s"):
+                                actual += args[i:i + 2]
+                            elif arg == "--dangerously-bypass-approvals-and-sandbox":
+                                actual.append(arg)
+                        self.assertEqual(actual, flags)
+                        if permission in ("ask", "edits"):
+                            self.assertEqual(args[args.index("--add-dir") + 1], str(board.home()))
+                        else:
+                            self.assertNotIn("--add-dir", args)
+                        if resume:
+                            self.assertEqual(args[-2:], ["resume", resume])
+                        else:
+                            self.assertNotIn("resume", args)
+
+    def test_codex_local_launch_keeps_permissions_in_source_and_owned_homes(self):
+        import tomllib
+        from colony import bench, codex_remote, connections
+        source = Path(self.tmp.name) / "codex-source"
+        source.mkdir()
+        source.joinpath("config.toml").write_text('sandbox_mode = "read-only"\n')
+        expected = {"ask": ("on-request", "workspace-write"), "edits": ("never", "workspace-write"),
+                    "all": ("never", "danger-full-access"), "plan": ("on-request", "read-only")}
+        with patch.dict(os.environ, CODEX_HOME=str(source), COLONY_CODEX_SOURCE_HOME=str(source)), \
+                patch.object(bench, "effective", return_value={}), \
+                patch.object(connections, "codex_args", return_value=[]), \
+                patch.object(codex_remote.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    ["codex", "--help"], 0, "--no-daemon", "")) as help_run, \
+                patch.object(codex_remote.os, "execvpe") as execute:
+            for permission, (approval, sandbox) in expected.items():
+                for owned in (False, True):
+                    for resume in (None, "saved-thread"):
+                        with self.subTest(permission=permission, owned=owned, resume=resume):
+                            home = codex_remote.home_for(self.root) if owned else source
+                            codex_remote.local(self.root, {"permissions": permission}, resume, home)
+                            program, args, env = execute.call_args.args
+                            self.assertEqual(program, "codex")
+                            self.assertEqual(args[:2], ["codex", "--no-daemon"])
+                            self.assertEqual(env["CODEX_HOME"], str(home))
+                            self.assertEqual(env["COLONY_CODEX_SOURCE_HOME"], str(source))
+                            self.assertEqual(env["COLONY_BOARD_HOME"], str(board.home()))
+                            if permission == "all":
+                                self.assertIn("--dangerously-bypass-approvals-and-sandbox", args)
+                                self.assertNotIn("-s", args)
+                                self.assertNotIn("-a", args)
+                            else:
+                                self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
+                                self.assertEqual(args[args.index("-a") + 1], approval)
+                                self.assertEqual(args[args.index("-s") + 1], sandbox)
+                            config = {}
+                            for i, arg in enumerate(args):
+                                if arg == "-c" and args[i + 1].startswith(("sandbox_mode=", "approval_policy=")):
+                                    config.update(tomllib.loads(args[i + 1]))
+                            self.assertEqual(config, {"approval_policy": approval, "sandbox_mode": sandbox} if owned else {})
+                            if resume:
+                                self.assertEqual(args[-2:], ["resume", resume], "config precedes the resume subcommand")
+                            help_run.assert_called_with(["codex", "--help"], capture_output=True, text=True)
+        self.assertEqual(source.joinpath("config.toml").read_text(), 'sandbox_mode = "read-only"\n')
+
     def test_codex_suggestions_follow_catalog_without_changing_defaults(self):
         from unittest.mock import patch
         codex = providers.get("codex")

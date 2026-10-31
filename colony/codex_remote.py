@@ -392,12 +392,13 @@ def overrides(root, home, settings):
 SERVER_ONLY = ('sandbox_workspace_write.', 'sandbox_mode', 'approval_policy')
 
 
-def console_config(config):
+def console_config(config, *, resume=False):
     """What the console attached with --remote may be given. Codex 0.159.3 refuses workspace roots there
-    ("configure additional workspace roots on the server") and permissions when it resumes ("permission
-    overrides are not supported when resuming a remote task"); the server already has both from the same
-    config, and attach() checks the thread reports them."""
-    return {k: v for k, v in config.items() if not k.startswith(SERVER_ONLY)}
+    ("configure additional workspace roots on the server"). A fresh console must receive permissions: it
+    supplies its own defaults to thread/start, overriding the server's. A resumed console rejects permission
+    overrides; attach() has already applied and checked them on that thread."""
+    excluded = SERVER_ONLY if resume else ('sandbox_workspace_write.',)
+    return {k: v for k, v in config.items() if not k.startswith(excluded)}
 
 
 def flags(config):
@@ -628,7 +629,7 @@ def launch(root, settings, resume=None):
         report(home, root, mode, server=remote_state.get('serverName'), thread=resume)
         offer_pairing(root)
         args = ['codex', '--remote', 'unix://' + str(socket_for(home)), '--no-alt-screen',
-                *flags(console_config(config)), *(['resume', resume] if resume else [])]
+                *flags(console_config(config, resume=bool(resume))), *(['resume', resume] if resume else [])]
         os.execvpe(args[0], args, environment(root, home, source))
     except (RemoteError, RPCError, TransferError, OSError, ValueError, KeyError, sqlite3.Error, ImportError) as error:
         reason = str(error)
