@@ -435,7 +435,8 @@ def cmd_stop(a):
 
     def sessions():
         names = [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
-        ended = [n for n in names if subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True).returncode == 0]
+        ended = [n for n in names if (monitor.stop() if n == monitor.name() else
+                 subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True)).returncode == 0]
         print(f"stopped {len(ended)} session(s): {', '.join(ended) or 'none were running'}")
     if getattr(a, "still", False):
         from . import handover
@@ -1204,7 +1205,7 @@ def cmd_notes(a):
         if a.session and payload.get('source') != 'compact':
             providers.discover(calls=False, only=a.console or providers.key(context.program(root)))
         vision.observe(root)
-        seen = os.environ.get("COLONY_CONSOLE") == console.session_name(root) and providers.of(root).conversation(payload)
+        seen = os.environ.get("COLONY_CONSOLE") == context.seat(root) and context.program(root).conversation(payload)
         if seen:                                                                      # the board's console, no other here
             console.remember(root, *seen)
         prompt = str(payload.get("prompt") or "")

@@ -239,6 +239,14 @@ class Provider:
         the CLI's own flags; one it has no equivalent for is ignored. Required."""
         raise NotImplementedError
 
+    def steward_command(self, label, settings, resume=None):
+        """The steward's console, which uses the installation's settings."""
+        return self.command(label, settings, resume=resume)
+
+    def stop_console_host(self, root):
+        """End a detached host when the person explicitly stops its console."""
+        pass
+
     def wire(self, root, protocol, private=False):
         """Put the colony protocol where the CLI reads project instructions, and arrange for `colony notes --deliver`
         output to reach the agent at session start (`--session`) and before each turn typed to it. Rewritten when it
@@ -1762,6 +1770,14 @@ class Codex(Provider):
                 f"model = {json.dumps(t['model'])}\n" + (f"model_reasoning_effort = {json.dumps(t['effort'])}\n" if t.get("effort") else "")
                 + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n'))
         return changed
+
+    def steward_command(self, label, settings, resume=None):
+        from . import monitor
+        return self.command(label, settings, resume=resume, root=monitor.home())
+
+    def stop_console_host(self, root):
+        from . import codex_remote
+        return codex_remote.stop_host(root)
 
     def command(self, label, s, resume=None, root=None):
         if root:
