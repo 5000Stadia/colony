@@ -46,6 +46,51 @@ ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"     # how a zstd stream begins, whatever its fi
 PROGRESS = 30                        # seconds between the lines a long pack says how far it has got
 
 
+def into_colony(say=print):
+    """Change the still colony to ~/Colony, resuming any interrupted change-over."""
+    from . import layout
+    return layout.into_colony(say)
+
+
+def project_keys(root):
+    """Key-like files and secrets folders, without following a project's links or opening git history."""
+    root = Path(root)
+    for folder, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__")]
+        for name in list(dirs):
+            if name == "secrets":
+                yield Path(folder) / name
+                dirs.remove(name)
+        for name in files:
+            if KEYLIKE.match(name):
+                yield Path(folder) / name
+
+
+def keep_project_keys(root, say=print):
+    """A moved-in project keeps links to its machine's keys; only link names travel with the project."""
+    from . import layout
+    root = Path(root)
+    storage = board.secrets() / "project-keys" / board.ident(root)
+    paths = list(project_keys(root))
+    # A previous move may have stopped after moving a key but before installing its link.
+    if storage.exists():
+        paths += [root / p.relative_to(storage) for p in project_keys(storage)]
+    for path in sorted(set(paths)):
+        dest = storage / path.relative_to(root)
+        if path.is_symlink():
+            # Existing external links already keep keys out of a portable copy.
+            if not path.resolve().is_relative_to(root.resolve()):
+                continue
+        if path.exists() and path.is_symlink():
+            raise ValueError(f"{path} links to a key inside the project; move that key outside before retrying")
+        if path.exists():
+            layout._transfer(path, dest)
+        if not path.is_symlink():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.symlink_to(dest, target_is_directory=dest.is_dir())
+        say(f"Key kept on this machine: {path.relative_to(root)} ({dest})")
+
+
 def program():
     """The colony program's own checkout (with its git history), or None where colony was installed another way."""
     here = Path(__file__).resolve().parent.parent
@@ -122,7 +167,9 @@ def parts(reg=None):
             seen.add(str(path))
             out.append({"kind": kind, "name": name, "path": path, "inside": None})
 
-    add("home", "colony's home", board.home())
+    add("home", "colony's folder" if board.colony_folder() else "colony's home", board.colony_folder() or board.home())
+    if board.colony_folder():
+        add("conversation", "Codex's project homes", board.codex_homes())
     if program():
         add("program", "the colony program", program())
     folders = _projects(reg)
@@ -172,8 +219,8 @@ def _remade():
     out = {voice.folder() / "env": "the voice's own Python (colony voice --setup)",
            voice.folder() / "cache": "the voice's clips, made as it reads aloud",
            voice.folder() / "samples": "the voice's samples, made as the board starts",
-           board.home() / "context-cache": "colony's reading of transcripts, made again as it reads",
-           board.home() / "line-scratch": "colony's scratch, made again as it reads"}
+           board.cache() / "context-cache": "colony's reading of transcripts, made again as it reads",
+           board.cache() / "line-scratch": "colony's scratch, made again as it reads"}
     out.update({voice.folder() / f: "the voice's model (colony voice --setup)" for f in voice.FILES})
     return out
 
@@ -220,7 +267,7 @@ class Plan:
     def __init__(self, parts):
         self.parts = parts
         self.never, self.remade = _never(), _remade()
-        self.codex = board.home() / "codex-remote"
+        self.codex = board.codex_homes()
         self.repair = board.home() / "repair"
         self.left = []           # [{path, why, bytes}]: what the new machine makes again
         self.kept_out = []       # [{path, what, how}]: sign-ins and keys met inside what's packed
@@ -455,6 +502,12 @@ def listing(say=print):
     """colony migrate --list."""
     plan = Plan(parts()).survey()
     report(plan, say)
+    keys = board.secrets(create=False) / "project-keys"
+    if keys.is_dir():
+        say("Project keys kept on this machine, entered again after moving to another machine:")
+        for path in sorted(keys.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                say(f"    {path.relative_to(keys)} ({path})")
     settings = machine()
     lines = _cron(settings)
     if lines:

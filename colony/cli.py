@@ -347,6 +347,8 @@ def cmd_migrate(a):
     """Carry colony to a fresh install under the same username (colony/migrate.py): --list what a pack takes, --pack it
     into one archive, --unpack it on the new machine."""
     from . import migrate
+    if a.into_colony:
+        return migrate.into_colony()
     if a.list:
         migrate.listing()
     elif a.pack:
@@ -2279,6 +2281,7 @@ def main(argv=None):
     p = sub.add_parser("migrate", help="carry colony to a fresh install: what it takes, packed in one archive, and back "
                        "in place there as if it had just restarted")
     g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--into-colony", action="store_true", help="change a still colony to the ~/Colony layout")
     g.add_argument("--list", action="store_true", help="what a pack takes, with sizes, and what it leaves out")
     g.add_argument("--pack", metavar="DIR", help="pack it all into one archive in DIR (another disk)")
     g.add_argument("--unpack", metavar="ARCHIVE", help="on the new machine: everything back in place, then what "

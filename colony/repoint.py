@@ -10,6 +10,8 @@ yet (a project in a lead group, a Codex host still running) is refused with why,
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 from . import board
@@ -36,14 +38,36 @@ def swap(value, pairs):
     return value
 
 
-def _write(path, text):
+def backup_file(path, folder):
+    """Keep the first version before a change-over rewrites it, outside the portable folder."""
+    if folder is None or not path.exists():
+        return
+    target = Path(folder) / str(path.absolute()).lstrip("/")
+    if not target.exists():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp = target.with_name(target.name + ".copying")
+        shutil.copy2(path, temp)
+        with open(temp, "rb") as stream:
+            os.fsync(stream.fileno())
+        temp.replace(target)
+        from . import layout
+        layout._sync_dir(target.parent)
+
+
+def _write(path, text, backup=None):
+    backup_file(path, backup)
     tmp = path.with_name(path.name + ".repoint")
     tmp.write_text(text)
+    with open(tmp, "rb") as stream:
+        os.fsync(stream.fileno())
     os.chmod(tmp, path.stat().st_mode & 0o7777)
     tmp.replace(path)
+    if backup is not None:
+        from . import layout
+        layout._sync_dir(path.parent)
 
 
-def rewrite(path, pairs):
+def rewrite(path, pairs, backup=None):
     """One record file re-pointed in place; True when it changed. A file that doesn't mention an old folder isn't
     parsed, and a line that isn't JSON is kept as it is."""
     try:
@@ -67,7 +91,7 @@ def rewrite(path, pairs):
             return False
     if new == text:
         return False
-    _write(path, new)
+    _write(path, new, backup)
     return True
 
 
@@ -102,7 +126,7 @@ def refusal(old, new):
     return None
 
 
-def repoint(old, new):
+def repoint(old, new, backup=None):
     """Everything colony keeps about the project at `old` now says `new`. Returns what changed, as lines; raises
     ValueError, changing nothing, when it can't yet (refusal)."""
     from . import codex_remote, connections, measures, migrate, providers
@@ -123,7 +147,10 @@ def repoint(old, new):
     # the folders and keys colony names by a hash of the folder
     for before, after, what in ((codex_remote.home_for(old), codex_remote.home_for(new), "its Codex home"),
                                 (measures.folder(old), measures.folder(new), "its measures")):
+        if before != after:
+            pairs.append((str(before), str(after)))
         if before.exists() and not after.exists():
+            after.parent.mkdir(parents=True, exist_ok=True)
             before.rename(after)
             said.append(f"{what} renamed")
     for folder in (connections.keys_dir().iterdir() if connections.keys_dir().is_dir() else ()):
@@ -137,17 +164,31 @@ def repoint(old, new):
         text = choices.read_text()
         hashed = "@" + _h(str(Path(old).resolve()))
         if hashed in text:
-            _write(choices, text.replace(hashed, "@" + _h(str(Path(new).resolve()))))
+            _write(choices, text.replace(hashed, "@" + _h(str(Path(new).resolve()))), backup)
             said.append("its model choices re-keyed")
     # every record that names the folder
     plist = [p for p in board.projects(board.registry())]
-    changed = [p for p in records(plist + [Path(new)]) if rewrite(p, pairs)]
+    changed = [p for p in records(plist + [Path(new)]) if rewrite(p, pairs, backup)]
     if changed:
         said.append(f"{len(changed)} record file(s) re-pointed")
-    # its git worktrees (a lead's item worktrees in colony's home, its own elsewhere) find the moved repository again
-    if (Path(new) / ".git").is_dir():
-        import subprocess
-        fixed = subprocess.run(["git", "-C", new, "worktree", "repair"], capture_output=True, text=True)
+    # Repair moved linked worktrees from their source repository, without pruning the old registration first.
+    gitfile = Path(new) / ".git"
+    if gitfile.exists():
+        command = ["git", "-C", new, "worktree", "repair"]
+        if gitfile.is_file():
+            gitdir = Path(gitfile.read_text().strip().removeprefix("gitdir: "))
+            if not gitdir.is_absolute():
+                gitdir = Path(new) / gitdir
+            common = (gitdir / (gitdir / "commondir").read_text().strip()).resolve()
+            command = ["git", "--git-dir=" + str(common), "worktree", "repair", new]
+            backup_file(gitfile, backup)
+            backup_file(gitdir / "gitdir", backup)
+        else:
+            for link in gitfile.glob("worktrees/*/gitdir"):
+                backup_file(link, backup)
+        fixed = subprocess.run(command, capture_output=True, text=True)
+        if fixed.returncode:
+            raise ValueError(f"git worktree repair failed for {new}: {fixed.stderr.strip()}")
         if fixed.stdout.strip() or fixed.stderr.strip():
             said.append("its git worktrees repaired")
     return said
@@ -160,7 +201,11 @@ def _places(old):
     parts = old.parts
     if len(parts) > 3 and parts[1] in ("home", "Users") and Path.home() != Path(*parts[:3]):
         yield Path.home().joinpath(*parts[3:])
-    roots = [Path.home() / "Colony" / "projects", old.parent] + [Path(r) for r in board.registry()["roots"]]
+    roots = [Path.home() / "Colony" / "projects",
+             Path.home() / "Colony" / "projects" / ".agents", old.parent] + [Path(r) for r in board.registry()["roots"]]
+    items = Path.home() / "Colony" / "projects" / ".items"
+    if items.is_dir():
+        yield from (p.parent.parent for p in items.rglob(".board/id"))
     for root in roots:
         if root.is_dir():
             yield from (d for d in sorted(root.iterdir()) if d.is_dir())

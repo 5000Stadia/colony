@@ -302,6 +302,110 @@ class LayoutTest(unittest.TestCase):
         for name in values:
             self.assertIn(name, "\n".join(said))
 
+    def test_agent_history_item_keys_and_retained_secret_paths_survive(self):
+        agent, trees, _, _ = self.fixture()
+        remote = codex_remote.home_for(agent)
+        transcript = remote / "sessions" / "one.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text('{"message": "remembered"}\n')
+        board.save_json(board.home() / "conversations.json", {
+            board.ident(agent): {"transcript": str(transcript), "conversation": "one"}})
+        key = self.old_home / "connections" / "fixture.env"
+        board.save_json(board.home() / "references.json", {"key": str(key)})
+        (trees[0] / ".env").write_text("item-key-distinctive")
+        tree_id = board.ident(trees[0])
+        self.migrate()
+        moved_agent = board.agents_home() / agent.name
+        saved = json.loads((board.home() / "conversations.json").read_text())[board.ident(moved_agent)]
+        self.assertEqual(Path(saved["transcript"]), codex_remote.home_for(moved_agent) / "sessions" / "one.jsonl")
+        self.assertIn("remembered", Path(saved["transcript"]).read_text())
+        self.assertEqual(json.loads((board.home() / "references.json").read_text())["key"], str(key))
+        moved_tree = board.items_home() / "group" / "R1-1"
+        self.assertTrue((moved_tree / ".env").is_symlink())
+        self.assertEqual((moved_tree / ".env").resolve(), self.old_home / "project-keys" / tree_id / ".env")
+        self.assert_no_keys(["item-key-distinctive"])
+
+    def test_conversion_refuses_an_overridden_board_without_moving_it(self):
+        with patch.dict(os.environ, COLONY_BOARD_HOME=str(self.person / "other-board")):
+            self.registry([self.project])
+            self.stop_still()
+            said = []
+            self.assertEqual(migrate.into_colony(say=said.append), 1)
+            self.assertIn("COLONY_BOARD_HOME", " ".join(said))
+            self.assertTrue((board.home() / "board.json").exists())
+            self.assertFalse(self.colony.exists())
+
+    def test_an_interrupted_cross_disk_link_copy_resumes(self):
+        from colony import layout
+        old, new = self.person / "old-link", self.person / "new-link"
+        old.symlink_to("missing-target")
+        new.symlink_to("missing-target")
+        layout._transfer(old, new)
+        self.assertFalse(old.is_symlink())
+        self.assertEqual(os.readlink(new), "missing-target")
+
+    def test_the_folder_generation_tracks_stops_and_detects_an_older_copy(self):
+        self.stop_still()
+        self.migrate()
+        marker_path = self.colony / "COLONY.json"
+        marker = json.loads(marker_path.read_text())
+        self.assertFalse(handover.started())
+        self.assertFalse(json.loads(marker_path.read_text())["still"])
+        self.stop_still()
+        self.assertEqual(json.loads(marker_path.read_text())["generation"], marker["generation"] + 1)
+        board.save_json(marker_path, marker)
+        self.assertTrue(handover.started(), "an older portable marker triggers the restore hold")
+
+    def test_cross_disk_transfer_preserves_permissions_and_recovers_between_copy_and_remove(self):
+        import errno
+        from colony import layout
+        old, new = self.person / "old-tree", self.person / "new-tree"
+        old.mkdir(mode=0o700)
+        (old / "file").write_text("whole payload")
+        (old / "link").symlink_to("file")
+        rename, unlink = Path.rename, Path.unlink
+        interrupted = []
+
+        def across(path, target):
+            if path == old or old in path.parents:
+                raise OSError(errno.EXDEV, "fixture: different disks")
+            return rename(path, target)
+
+        def remove(path, *args, **kwargs):
+            if path == old / "file" and not interrupted:
+                interrupted.append(True)
+                raise OSError("fixture: stopped after copying")
+            return unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "rename", across), patch.object(Path, "unlink", remove):
+            with self.assertRaisesRegex(OSError, "stopped after copying"):
+                layout._transfer(old, new)
+            layout._transfer(old, new)
+        self.assertFalse(old.exists())
+        self.assertEqual((new / "file").read_text(), "whole payload")
+        self.assertEqual((new / "link").read_text(), "whole payload")
+        self.assertEqual(new.stat().st_mode & 0o777, 0o700)
+
+    def test_start_finishes_an_interrupted_change_over_before_resuming(self):
+        from colony import layout
+        self.fixture()
+        save = layout._save
+
+        def interrupted(path, value):
+            save(path, value)
+            if path.name == "COLONY.json":
+                raise KeyboardInterrupt("fixture: stopped after marker")
+
+        with patch.object(layout, "_save", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                migrate.into_colony(say=lambda s: None)
+        with patch("builtins.print"):
+            self.assertFalse(handover.started())
+        self.assertFalse(layout.journal_path().exists())
+        self.assertFalse((self.old_home / "board.json").exists())
+        self.assertFalse(json.loads((self.colony / "COLONY.json").read_text())["still"])
+        self.assertEqual(len(board.registry()["projects"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

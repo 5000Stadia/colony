@@ -1374,6 +1374,11 @@ class Codex(Provider):
         return self.discover()
 
     # PROVIDER: Codex's detached app-server and native Remote Control repair connection.
+    @staticmethod
+    def copied_repair_sign_ins(home):
+        """PROVIDER: real Codex sign-ins in repair homes must stay on the machine during a layout change."""
+        return [p for p in (Path(home) / "repair").glob("*/auth.json") if not p.is_symlink()]
+
     def repair_keeps(self, home):
         from . import codex_remote as r
         if not r.alive(home):

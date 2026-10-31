@@ -61,7 +61,8 @@ def mark_path():
 
 def _mark():
     try:
-        mark = json.loads(mark_path().read_text())
+        path = board.colony_folder() / "COLONY.json" if board.colony_folder() else mark_path()
+        mark = json.loads(path.read_text())
         return mark if isinstance(mark, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -100,15 +101,25 @@ def stop_still(stop_sessions, wait=WAIT, say=print):
         return 1
     stop_sessions()
     generation = (_generation(_mark().get("generation")) or 0) + 1
-    board.save_json(mark_path(), {"at": board.now(), "still": True, "generation": generation})
+    _save_mark({"at": board.now(), "still": True, "generation": generation})
     board.save_json(board.machine_state() / "generation", generation)
     say("colony is still: every project landed its work, and nothing of colony's is running. `~/colony/start` brings "
         "it back, each project resuming where it stopped.")
     return 0
 
 
+def _save_mark(mark):
+    board.save_json(mark_path(), mark)
+    if folder := board.colony_folder():
+        current = json.loads((folder / "COLONY.json").read_text())
+        board.save_json(folder / "COLONY.json", dict(current, **mark))
+
+
 def started():
     """Before launch, tell a restored copy from a crash. Return whether it must wait for the person."""
+    from . import layout
+    if layout.journal_path().exists() and layout.into_colony() != 0:
+        raise RuntimeError("The layout change-over must finish before colony can start")
     with board.board_lock("restore"):
         if board.restore_held():
             return True
@@ -144,7 +155,7 @@ def _resume_still(mark):
     for root, row in list(board.paused_projects().items()):
         if row.get("by") == "still" and Path(root).exists():
             board.resume_project(root)
-    board.save_json(mark_path(), dict(mark, still=False, started=board.now()))
+    _save_mark(dict(mark, still=False, started=board.now()))
 
 
 def outside(root):
@@ -191,7 +202,7 @@ def _carry(old, new):
 
 def move(root, dest, sure=False, wait=WAIT, say=print):
     """colony move. Returns 0 when moved and resumed; 1 when it stopped short (and says why), nothing lost."""
-    from . import codex_remote, repoint
+    from . import codex_remote, migrate, repoint
     root, dest = Path(root), Path(dest).expanduser()
     if dest.exists():
         say(f"{dest} already exists; pick a new place")
@@ -217,11 +228,14 @@ def move(root, dest, sure=False, wait=WAIT, say=print):
             board.resume_project(root)
         say(f"not moved: {board.name_of(root)}'s Codex app host didn't stop")
         return 1
-    _carry(root, dest)
     try:
-        said = repoint.repoint(root, dest)
+        if dest.resolve().is_relative_to((Path.home() / "Colony" / "projects").resolve()):
+            migrate.keep_project_keys(root, say)
+        _carry(root, dest)
+        said = repoint.repoint(root, dest, backup=board.machine_state() / "backups" / "moves")
     except Exception as err:
-        _carry(dest, root)                      # put back as it was
+        if dest.exists() and not root.exists():
+            _carry(dest, root)                      # put back as it was
         if not was_paused:
             board.resume_project(root)
         say(f"not moved: re-pointing failed ({err}); the folder is back where it was")
