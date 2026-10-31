@@ -7,6 +7,7 @@ before it can. Each way below plays the same twelve short clips; the person taps
 reports to the board every clip start, end, error, stall and change of visibility, so the results table shows how far
 each way got with the screen off, without the person having to describe it."""
 import base64
+import datetime
 import hashlib
 import io
 import json
@@ -21,6 +22,8 @@ from . import board
 COUNT = 12                # clips per way
 LEAD = 20                 # seconds the server stream keeps ahead of playback, as internet radio does
 GAP = 2                   # the ramp: seconds the board holds back clip 2, and how much longer each next one waits
+UNLOCK = 1.0              # a "hidden" start this close before the page shows again was the unlock starting it
+LATE = 3.0                # a clip starting this long after its gap ended was held up by the phone, not the board
 LOG_MOST = 256 * 1024     # one batch of report rows, at most
 WAYS = (
     ("A", "Today's way", "One audio element; when a clip ends, the next is set on it and played (as colony's player does now)."),
@@ -225,6 +228,14 @@ def rows():
     return out
 
 
+def _seconds(when):
+    """A report row's time as seconds, or None when it can't be read."""
+    try:
+        return datetime.datetime.fromisoformat(str(when).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def summary():
     """Each run, newest first: how far it got, how much of that with the screen off, and when it stopped."""
     runs = {}
@@ -236,7 +247,8 @@ def summary():
                                   "hidden": 0, "last": "", "finished": False, "sent": 0, "errors": 0, "stalls": 0,
                                   "silent_paused": False, "server_bytes": 0, "server_requests": 0, "held": None,
                                   "ramp": "-ramp-" in run, "longest_gap_hidden": None,
-                                  **{k: 0 for k in MEASURES}, "_hidden": set(), "_order": len(runs)})
+                                  **{k: 0 for k in MEASURES}, "_starts": [], "_ends": {}, "_shown": [],
+                                  "_order": len(runs)})
         when = r.get("t") or r.get("at", "")
         if r.get("source") == "server":
             if r.get("event") == "sent":
@@ -255,13 +267,13 @@ def summary():
             s["silent_paused"] = True
         if event == "start":
             s["reached"] = max(s["reached"], r.get("clip", 0))
-            if r.get("vis") == "hidden":
-                s["_hidden"].add(r.get("clip", 0))
-                if s["ramp"] and r.get("clip", 0) > 1:   # a clip that still started, hidden, after its gap
-                    s["longest_gap_hidden"] = max(s["longest_gap_hidden"] or 0, r.get("gap") or 0)
+            s["_starts"].append((r.get("clip", 0), _seconds(when), r.get("vis"), r.get("gap") or 0))
             s["last"] = max(s["last"], when)
         elif event == "end":
+            s["_ends"][r.get("clip", 0)] = _seconds(when)
             s["last"] = max(s["last"], when)
+        elif event == "visibility" and r.get("vis") == "visible":
+            s["_shown"].append(_seconds(when))
         elif event == "finished":
             s["finished"], s["last"] = True, max(s["last"], when)
         elif event == "error":
@@ -270,7 +282,15 @@ def summary():
             s["stalls"] += 1
     out = sorted(runs.values(), key=lambda s: s["_order"], reverse=True)
     for s in out:
-        s["hidden"] = len(s.pop("_hidden"))
+        hidden, ends, shown = set(), s.pop("_ends"), [t for t in s.pop("_shown") if t is not None]
+        for n, t, vis, wait in s.pop("_starts"):
+            if vis != "hidden" or (t is not None and any(0 <= v - t <= UNLOCK for v in shown)):
+                continue                    # with the screen on, or started by the unlock itself
+            hidden.add(n)
+            before = ends.get(n - 1)
+            if s["ramp"] and n > 1 and (t is None or before is None or t - before <= wait + LATE):
+                s["longest_gap_hidden"] = max(s["longest_gap_hidden"] or 0, wait)   # it started, hidden, after its gap
+        s["hidden"] = len(hidden)
         s.pop("_order")
         s["name"] = NAMES.get(s["approach"], s["approach"])
     return out[:40]

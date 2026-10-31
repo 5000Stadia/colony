@@ -130,7 +130,7 @@ class LockPlayTest(BoardBase):
             return dict(approach=way, run=run, clip=clip, event=event, t=f"2026-10-31T10:00:{clip:02d}Z", vis=vis, **more)
         rows = [row("A-1", "A", 0, "run start")]
         rows += [row("A-1", "A", n, "start", "hidden" if n > 1 else "visible") for n in (1, 2)]
-        rows += [row("A-1", "A", 1, "end"), row("A-1", "A", 2, "stall", "hidden"), row("A-1", "A", 2, "visibility")]
+        rows += [row("A-1", "A", 1, "end"), row("A-1", "A", 2, "stall", "hidden"), row("A-1", "A", 5, "visibility")]
         rows += [row("B-1", "B", n, "start", "hidden" if n > 1 else "visible") for n in range(1, 13)]
         rows += [row("B-1", "B", 12, "end", "hidden"), row("B-1", "B", 12, "finished", "hidden")]
         rows += [row("G-1", "G", 1, "start", main="playing", silent="playing", bytes=1000, requests=2, calls=5,
@@ -208,3 +208,23 @@ class LockPlayTest(BoardBase):
                          "clip 3 started hidden after 4 s; clip 4's 6 s came with the screen on")
         self.assertEqual((runs["F-1"]["ramp"], runs["F-1"]["longest_gap_hidden"]), (False, None), "no ramp, no gaps")
         self.assertIn("Longest gap survived while hidden", lab.SCRIPT)
+
+    def test_a_clip_the_phone_held_until_unlock_did_not_survive_its_gap(self):
+        # Kabe's A run with the ramp (Oct 31): clip 4 was sent on time after its 6 s gap but started only when the
+        # phone was unlocked, 44 ms before the page showed again, while still reported hidden
+        def row(n, event, at, vis="hidden"):
+            return dict(approach="A", run="A-ramp-2", clip=n, event=event, t=f"2026-10-31T22:08:{at}Z", vis=vis,
+                        gap=2 * (n - 1) if event == "start" else 0)
+        rows = [row(1, "start", "00.000", "visible"), row(1, "end", "10.000"), row(2, "start", "12.400"),
+                row(2, "end", "25.000"), row(3, "start", "29.650"), row(3, "end", "42.000"),
+                row(4, "start", "58.293"), row(4, "visibility", "58.337", "visible")]
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(rows))[0], 200)
+        run = {r["run"]: r for r in lab.summary()}["A-ramp-2"]
+        self.assertEqual((run["reached"], run["hidden"], run["longest_gap_hidden"]), (4, 2, 4),
+                         "clip 4 started with the unlock: not hidden, and its 6 s gap not survived")
+        late = [dict(r) for r in rows[:6]] + [row(4, "start", "56.000")]     # started hidden, but 8 s past its gap
+        for r in late:
+            r["run"] = "A-ramp-3"
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(late))[0], 200)
+        run = {r["run"]: r for r in lab.summary()}["A-ramp-3"]
+        self.assertEqual((run["hidden"], run["longest_gap_hidden"]), (3, 4), "held up past its gap: not survived")
