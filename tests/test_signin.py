@@ -106,7 +106,7 @@ class SigninTest(unittest.TestCase):
         signin._sessions.pop((str(self.folder), 'fake'), None)
 
     def wait_for(self, predicate):
-        until = time.monotonic() + 5
+        until = time.monotonic() + 20                  # a loaded machine (other suites, builds) was slower than 5 s
         while time.monotonic() < until:
             value = signin.state('fake')
             if predicate(value):
