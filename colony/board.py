@@ -2569,16 +2569,22 @@ def _at_work(root, n=70):
     return f"next {nxt['id']} {short(plain(nxt['text']), n)}" if nxt else ""
 
 
+def by_activity(plist):
+    """Every project on its own by activity, [(index, project)]: those at work now first, then the one that last stirred
+    (went from idle to working, or took up a roadmap item). A nest never moves as one here."""
+    rec, busy = stirred(), at_work_now()
+    return sorted(enumerate(plist), reverse=True,
+                  key=lambda ip: (str(ip[1].resolve()) in busy, rec.get(str(ip[1].resolve()), ""), -ip[0]))
+
+
 def nav_groups(plist):
-    """The top menu's order, [(group, [(index, project)])]: it follows activity, a nest coming forward whole, led by
-    the project that moved it."""
-    groups = []
-    for i, p, here in arranged(plist, theirs=False):
-        if here and groups and groups[-1][0] == here:
-            groups[-1][1].append((i, p))
-        else:
-            groups.append((here, [(i, p)]))
-    return groups
+    """The band's order, [(group, [(index, project)])]: what the person pinned first (group PINNED), then every project
+    on its own by activity, the last to stir at the left. The band shows no nests (R135, the person: "In this
+    visualization though the nest isn't shown and there isn't a slide out for groups"); its list sorts by them."""
+    pins = set(pinned_projects())
+    ranked = by_activity(plist)
+    return [(g, m) for g, m in ((PINNED, [(i, p) for i, p in ranked if str(p.resolve()) in pins]),
+                                ("", [(i, p) for i, p in ranked if str(p.resolve()) not in pins])) if m]
 
 
 def nav_order(plist):
@@ -2621,16 +2627,15 @@ def sidebar(reg, pid):
     from . import monitor
     plist = projects(reg)
     ms = monitor.snapshot()
-    side, total = [], 0
+    side, total, listed = [], 0, {}
     for here, members in nav_groups(plist):
-        chips, states, waits = [], [], 0
+        chips = []
         for i, p in members:
             # its screen read once: its dot, and what waits on the person
             snap = seen(console.snapshot(p, lines=4)) if p.exists() else {"state": "off", "lines": []}
             waiting = len(moments(p, snap)) if p.exists() else 0
-            total, waits = total + (waiting if p.exists() and monitor.involved(p) else 0), waits + waiting
+            total += waiting if p.exists() and monitor.involved(p) else 0
             badge = f"<span class='badge gate' id='badge-{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
-            states.append(snap["state"])
             # its line says what it is at, from its roadmap: never its console's footer or spinner words
             work = at_work(p) if p.exists() else ""
             tint = PALETTE.get(colour(p)) if p.exists() else None
@@ -2639,20 +2644,9 @@ def sidebar(reg, pid):
                          f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{project_label(p)}{rename_pencil(p)}{badge}</span>"
                          f"<span class='sline' id='sline-{i}'>{e(snap.get('behind') or snap['state'] if snap['state'] != 'off' else '')}"
                          f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
-        if not here or here == PINNED or len(members) == 1:     # a nest down to one live project: the project itself
-            side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here == PINNED else chips
-            continue
-        # a nest: one chip that opens to its projects (remembered on this device); open while one of them is shown
-        state = next((s for s in ("needs you", "working", "idle") if s in states), "off")
-        mine = any(i == pid for i, _ in members)
-        q = urllib.parse.quote(here)
-        side.append(f"<span class='nestgroup' data-fold='nav:{e(here)}' data-open='{1 if mine else 0}'{' data-pin=1' if mine else ''}>"
-                    f"<a class='proj nestchip' href='/nest?n={q}' onclick='return toggleFold(this.parentNode)'>"
-                    f"<span class='pname'><span class='sdot {state.replace(' ', '-')}'></span>{e(here)} <span class='nestcount'>"
-                    f"{len(members)}</span><span class='badge gate'{'' if waits else ' hidden'}>{waits}</span></span>"
-                    f"<span class='sline'>nest <span class='nestopen' onclick=\"event.stopPropagation(); colonyNav.go('/nest?n={q}')\">"
-                    f"→</span></span></a><span class='members'>{''.join(chips)}<a class='proj nestset' href='/nest?n={q}' "
-                    f"title='{e(here)}: its page' aria-label='{e(here)}: its page'>⚙&#xFE0E;</a></span></span>")
+            listed[i] = (p, snap["state"], waiting, work, tint)
+        # each project a box of its own, the pinned first: no nest chip, nothing that slides out
+        side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here == PINNED else chips
     # the steward first: on a phone it stays in reach at the left
     side.insert(0, f"<a class='proj monitor{' on' if pid == -1 else ''}' href='/steward'><span class='pname'>"
                    f"<span class='sdot {ms['state'].replace(' ', '-')}' id='dot-m'></span>{e(steward_name())}</span>"
@@ -2668,15 +2662,47 @@ def sidebar(reg, pid):
     side.append(f"<div class='navfoot'><a class='needsbtn{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/needs-you' "
                 f"title='Needs you'{'' if total or pid == NEEDS_PAGE else ' hidden'}><span class='long'>Needs you </span>"
                 f"<span id='badge-all' class='badge gate' title='waiting on you, in the projects {e(the_steward())} follows'>{total}</span></a>"
-                "<a href='/projects' title='All projects'><span class='long'>All projects</span><span class='short'>☰</span></a>"
                 "<a href='/add' title='Add project'><span class='long'>+ Add project</span><span class='short'>+</span></a>"
                 "<a href='/connections' title='Connections'><span class='long'>Connections</span><span class='short'>⇄</span></a>"
                 "<a href='/models' title='Models'><span class='long'>Models</span><span class='short'>ⓘ</span></a>"
                 "<a href='/settings' title='Settings'><span class='long'>Settings</span><span class='short'>⚙&#xFE0E;</span></a></div>")
-    # on a phone the steward is a bar of its own above the projects' row, which scrolls alone
-    # scrolled past the pinned chips, a 📌 floats at the row's left: a tap brings them back
-    return (side[0] + "<div class='navrow'>" + "".join(side[1:]) + "</div>"
-            + "<button type='button' class='pinjump' hidden aria-label='Back to the pinned'>📌</button>")
+    # on a phone the steward is a bar of its own above the band: the list button at its left, then the projects' boxes,
+    # which scroll alone; scrolled past the pinned boxes, a 📌 floats beside the button and brings them back
+    return (side[0] + "<div class='band'><button type='button' class='bandlist' aria-haspopup='dialog' aria-expanded='false'"
+            " aria-label='All projects'>" + BAND_ICON + "<span class='long'>All projects</span></button>"
+            "<div class='navrow'>" + "".join(side[1:]) + "</div></div>"
+            + "<button type='button' class='pinjump' hidden aria-label='Back to the pinned'>📌</button>" + band_list(plist, pid, listed))
+
+
+BAND_ICON = ("<svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' stroke-width='2' "
+             "stroke-linecap='round' aria-hidden='true'><path d='M9 6h11M9 12h11M9 18h11'/><path d='M4 6h.01M4 12h.01M4 18h.01'/></svg>")
+
+
+def band_list(plist, pid, listed):
+    """The band's list of every project (R135, the person: "a button that pops up an organized list of all projects,
+    default sort on that list is most recently active on top but a sort by item in that menu where I can rearrange
+    alphabetical -> nest and alphabetical -> project"): each row its state, name, what it's at, what waits and its
+    nest; sorted on the device by Recent (the default), Nest A–Z or Project A–Z, the choice kept there. The poll keeps
+    each row's state and the Recent order current."""
+    from . import nest
+    homes = {m: n for n, v in nest.nests().items() for m in v.get("members", [])}
+    rows = []
+    for i, _ in by_activity(plist):
+        if i not in listed:
+            continue
+        p, st, waiting, work, tint = listed[i]
+        here = homes.get(str(p.resolve()), "") if p.exists() else ""
+        rows.append(f"<a class='prow bandrow{' on' if i == pid else ''}' href='/?p={i}' data-i='{i}' "
+                    f"data-name='{e(name_of(p).casefold())}' data-nest='{e(here)}'{tint}><span class='prowline'>"
+                    f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}'></span><b>{e(name_of(p))}</b>"
+                    f"<span class='pwork' data-p='{i}'>{e(work)}</span>"
+                    f"<span class='badge gate pbadge' data-p='{i}'{'' if waiting else ' hidden'}>{waiting}</span></span>"
+                    + (f"<span class='psub'>{e(here)}</span>" if here else "") + "</a>")
+    sorts = "".join(f"<button type='button' data-s='{k}' aria-pressed='false'>{label}</button>"
+                    for k, label in (("recent", "Recent"), ("nest", "Nest A–Z"), ("name", "Project A–Z")))
+    return (f"<div class='bandshade' hidden></div><div class='bandpop' role='dialog' aria-label='All projects' hidden>"
+            f"<div class='bandsort' role='group' aria-label='Sort the list'>{sorts}</div>"
+            f"<div class='bandrows'>{''.join(rows)}</div><a class='bandall' href='/projects'>All projects page ›</a></div>")
 
 
 def own_colour(reg, pid):
@@ -4167,6 +4193,40 @@ PLAYER = """
 # On a phone the projects are one row of chips: a page opens with its own chip in view, beside the steward's, which
 # stays at the left. Only the row scrolls, never the page; the order is the board's own.
 CHIPS = """
+(() => { const btn = document.querySelector('nav .bandlist'), pop = document.querySelector('nav .bandpop'),
+  shade = document.querySelector('nav .bandshade');
+  if (!btn || !pop || !shade) return;
+  document.body.append(shade, pop);          // above the page on a desk too, whose sticky sidebar would keep it beneath
+  const box = pop.querySelector('.bandrows');
+  const how = () => { let s = ''; try { s = localStorage.getItem('bandsort') || ''; } catch (e) {} return ['recent', 'nest', 'name'].includes(s) ? s : 'recent'; };
+  let recent = [...box.querySelectorAll('.bandrow')].map((r) => r.dataset.i);
+  const sort = () => {
+    const s = how(), rows = [...box.querySelectorAll('.bandrow')], name = (a, b) => a.dataset.name.localeCompare(b.dataset.name);
+    pop.querySelectorAll('.bandsort button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.s === s)));
+    box.querySelectorAll('.bandhead').forEach((h) => h.remove());
+    if (s === 'name') rows.sort(name);
+    else if (s === 'nest') rows.sort((a, b) => (!a.dataset.nest - !b.dataset.nest)
+      || a.dataset.nest.localeCompare(b.dataset.nest, undefined, {sensitivity: 'base'}) || name(a, b));
+    else rows.sort((a, b) => recent.indexOf(a.dataset.i) - recent.indexOf(b.dataset.i));
+    let last = null;
+    rows.forEach((r) => {
+      if (s === 'nest' && r.dataset.nest !== last) {       // each nest a heading, a tap to its page; those in none last
+        last = r.dataset.nest; const h = document.createElement(last ? 'a' : 'div'); h.className = 'bandhead';
+        h.textContent = last || 'In no nest'; if (last) h.href = '/nest?n=' + encodeURIComponent(last); box.append(h); }
+      box.append(r); });
+    pop.classList.toggle('bynest', s === 'nest');
+  };
+  // the poll's Recent order: a project that stirs moves up the list as its box moves left
+  window.bandRecent = (order) => { if (!Array.isArray(order)) return; const next = order.map(String);
+    if (next.join() === recent.join()) return; recent = next; if (how() === 'recent') sort(); };
+  const open = (yes) => { pop.hidden = shade.hidden = !yes; btn.setAttribute('aria-expanded', String(yes));
+    if (yes) { pop.style.setProperty('--bandtop', Math.round(btn.getBoundingClientRect().bottom) + 'px'); sort(); } };
+  btn.addEventListener('click', () => open(pop.hidden));
+  shade.addEventListener('click', () => open(false));
+  addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !pop.hidden) open(false); });
+  pop.querySelector('.bandsort').addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (!b) return;
+    try { localStorage.setItem('bandsort', b.dataset.s); } catch (e) {} sort(); });
+  sort(); })();
 (() => { const nav = document.querySelector('nav'), at = () => {     // what a jump to a place on the page lands below
   const sticky = nav && getComputedStyle(nav).position === 'sticky';
   document.documentElement.style.setProperty('--navh', (sticky ? nav.getBoundingClientRect().height : 0) + 'px'); };
@@ -4347,6 +4407,7 @@ async function poll() {
       if (badge) { badge.hidden = !s.waiting; badge.textContent = s.waiting; }
     });
     reorder(st.nav);
+    if (window.bandRecent) bandRecent(st.recent);
   } catch (e) {}
   finally { pollReading = false; pollAbort = null; }
 }
@@ -4375,8 +4436,13 @@ function reorder(nav) {
   const now = [...row.children].filter((x) => els.includes(x));
   if (now.every((x, j) => x === els[j])) return;
   const end = row.querySelector(':scope > div.sline, :scope > .navfoot');
+  // each box slides from where it was to its new place, the one that stirred snapping in at the left (R135)
+  const was = new Map(els.map((x) => [x, x.getBoundingClientRect()]));
   els.forEach((x) => row.insertBefore(x, end));
+  if (!x_still()) els.forEach((x) => { const a = was.get(x), b = x.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if ((dx || dy) && x.animate) x.animate([{transform: `translate(${dx}px, ${dy}px)`}, {transform: 'none'}], {duration: 280, easing: 'ease-out'}); });
 }
+const x_still = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 """
 
 
@@ -9247,6 +9313,7 @@ def status_payload(reg, plist):
             else:
                 rows.append(dict(name=name_of(p), project=str(p), state='off', lines=[], waiting=0, work='', followed=False))
         body = json.dumps(dict(board=str(home()), projects=rows, monitor=monitor.snapshot(), nav=nav_order(plist),
+                               recent=[i for i, _ in by_activity(plist)],
                                reconnect=[providers.get(k).label for k, s in signin.states().items()
                                           if s['state'] == 'reconnect'])).encode()
         _STATUS.clear()
@@ -10731,7 +10798,22 @@ nav { width:220px; flex:none; border-right:1px solid var(--line); padding:16px 1
    page and left an empty column */
 @media (min-width: 701px) { nav { position:sticky; top:0; align-self:flex-start; height:100vh; overflow-y:auto } }
 nav .pinjump { display:none }
-nav .proj { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:7px; color:var(--ink); text-decoration:none }
+nav .proj { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:4px; color:var(--ink); text-decoration:none }
+nav .band { display:contents } nav .bandlist { display:flex; align-items:center; gap:8px; width:100%; margin:0 0 6px; padding:7px 10px;
+  border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--ink); font:inherit; font-size:13px; cursor:pointer }
+nav .bandlist[aria-expanded='true'] { background:var(--accent); color:var(--card); border-color:var(--accent) }
+.bandshade { position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.2) }
+.bandpop { position:fixed; z-index:41; top:calc(var(--bandtop, 56px) + 6px); left:8px; width:min(440px, calc(100vw - 16px));
+  max-height:calc(100dvh - var(--bandtop, 56px) - 20px); overflow-y:auto; overscroll-behavior:contain; padding:10px;
+  border:1px solid var(--line); border-radius:6px; background:var(--card); box-shadow:0 10px 30px rgba(0,0,0,.22); white-space:normal }
+.bandsort { display:flex; margin:0 0 8px; border:1px solid var(--line); border-radius:4px; overflow:hidden }
+.bandsort button { flex:1; min-height:36px; margin:0; padding:6px 4px; border:0; border-right:1px solid var(--line); border-radius:0;
+  background:transparent; color:var(--muted); font:inherit; font-size:13px; cursor:pointer }
+.bandsort button:last-child { border-right:0 } .bandsort button[aria-pressed='true'] { background:var(--accent); color:var(--card); font-weight:600 }
+.bandrows a.prow { margin:4px 0 0; border-radius:4px } .bandrows a.prow.on { outline:2px solid var(--accent); outline-offset:-2px }
+.bandhead { display:block; margin:12px 2px 2px; color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.04em;
+  text-transform:uppercase; text-decoration:none } .bandhead:first-child { margin-top:2px }
+.bynest .bandrows .psub { display:none } .bandall { display:block; margin:10px 2px 2px; font-size:13px }
 nav .proj.on { background:var(--sunk); font-weight:600 } main { flex:1; min-width:0; max-width:1240px; padding:8px 24px 60px }
 header h1 { margin:14px 0 4px; font-size:21px } header p { margin:0 0 4px }
 h2 { font-size:14px; margin:26px 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em }
@@ -11406,16 +11488,20 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 /* A phone: the sidebar becomes one row of chips (dot, name, waiting count), then + and ⚙; it scrolls sideways. */
 @media (max-width: 700px) { body { display:block }
   nav { width:auto; border-right:0; border-bottom:1px solid var(--line); padding:0; white-space:nowrap }
-  nav .navrow { display:flex; align-items:center; gap:6px; padding:8px 10px; overflow-x:auto }
-  nav .pinjump:not([hidden]) { display:flex; position:absolute; left:6px; bottom:9px; z-index:2; width:34px; height:34px;
+  nav .band { display:flex; align-items:stretch; background:var(--line); border-bottom:1px solid var(--line) }
+  nav .bandlist { flex:none; width:46px; margin:0 1px 0 0; padding:0; justify-content:center; border:0; border-radius:0 }
+  nav .bandlist .long { display:none }
+  nav .navrow { flex:1; min-width:0; display:flex; align-items:stretch; gap:1px; padding:0; overflow-x:auto; scrollbar-width:none }
+  nav .navrow::-webkit-scrollbar { display:none } nav .navrow .rename-project { display:none }   /* renamed from its page's title */
+  nav .pinjump:not([hidden]) { display:flex; position:absolute; left:52px; bottom:4px; z-index:2; width:34px; height:34px;
     align-items:center; justify-content:center; border-radius:50%; border:1px solid var(--line); background:var(--card);
     box-shadow:0 2px 8px rgba(0,0,0,.18); font-size:15px; padding:0; cursor:pointer }
   nav span.nestgroup { display:inline-flex; flex:none; align-items:center; gap:4px; margin:0; padding:3px; border-radius:999px }
   nav span.nestgroup .nestchip { background:transparent; font-weight:600 }
   nav span.nestgroup .members .proj.nestset { display:inline-flex; background:transparent; padding:2px 10px; font-size:17px; color:var(--accent) }
   nav span.nestgroup .members .proj { min-height:32px; padding:2px 10px; font-size:14px }
-  nav .proj { flex:none; flex-direction:row; align-items:center; margin:0; padding:5px 11px; border:0;
-    border-radius:999px; background:var(--sunk) }
+  nav .proj { flex:none; flex-direction:row; align-items:center; margin:0; padding:0 13px; min-height:42px; border:0;
+    border-radius:0; background:var(--card) }
   nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working { border-top-color:transparent }
   nav .sline, nav .badge.new { display:none }
   /* the steward is no project: a slim bar of its own across the top, its state, the helm and what waits in every project */

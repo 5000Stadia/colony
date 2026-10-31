@@ -1442,20 +1442,49 @@ class ChatTest(BoardBase):
             nest.rename("Memory", "Other")
         self.assertFalse(nest.rename("Q Branch", "Q Branch"))
 
-    def test_a_nest_down_to_one_live_project_shows_the_project_in_the_menu(self):
-        # Bookflow's nest held trial projects, since archived: opening the nest to reach its one project was a tap too many
+    def test_the_band_is_each_project_alone_by_activity_with_a_list_sorted_three_ways(self):
+        # R135, the person: "a button that pops up an organized list of all projects ... a solid bar across the screen
+        # with clean corner boxes (not pills) ... In this visualization though the nest isn't shown"
         from colony import nest
-        other = Path(self.tmp.name) / "kiln"
-        other.mkdir()
-        board.track(self.root)
-        board.track(other)
+        kiln, glaze = Path(self.tmp.name) / "kiln", Path(self.tmp.name) / "glaze"
+        for p in (kiln, glaze):
+            p.mkdir()
+        for p in (self.root, kiln, glaze):
+            board.track(p)
         nest.join(self.root, "Pottery")
-        nest.join(other, "Pottery")
-        self.assertIn("nestchip", board.sidebar(board.registry(), -1), "two: the nest opens to them")
-        nest.leave(other)
+        nest.join(kiln, "Pottery")
+        plist = board.projects()
+        board.save_json(board.home() / "woke.json", {str(kiln.resolve()): "2026-10-30T10:00:00Z",
+                                                     str(glaze.resolve()): "2026-10-30T11:00:00Z",
+                                                     str(self.root.resolve()): "2026-10-30T09:00:00Z"})
         side = board.sidebar(board.registry(), -1)
-        self.assertNotIn("nestchip", side, "one: no nest to open")
-        self.assertRegex(side, r"<span class='project-label'[^>]*>" + re.escape(self.root.name) + r"</span>", "the project itself, in the menu")
+        band = side[side.index("class='navrow'"):side.index("class='bandpop'")]
+        names = re.findall(r"<span class='project-label'[^>]*>([\w-]+)</span>", band)
+        self.assertEqual(names, ["glaze", "kiln", "plants"], "the last to stir at the left, a nest never moved as one")
+        self.assertNotIn("nestchip", side)
+        self.assertNotIn("nestgroup", band)
+        self.assertEqual(board.nav_order(plist), [["p", plist.index(p)] for p in (glaze, kiln, self.root)])
+        board.save_json(board.home() / "woke.json", {str(self.root.resolve()): "2026-10-31T09:00:00Z"})
+        self.assertEqual(board.nav_order(plist)[0], ["p", plist.index(self.root)], "a project that stirs snaps in at the left")
+        # the list: every project, its nest named, Recent first and the three sorts, the choice kept on the device
+        listing = side[side.index("class='bandpop'"):]
+        self.assertEqual(re.findall(r"data-name='([\w-]+)' data-nest='([^']*)'", listing),
+                         [("glaze", ""), ("kiln", "Pottery"), ("plants", "Pottery")])
+        for sort in ("data-s='recent' aria-pressed='false'>Recent", "data-s='nest' aria-pressed='false'>Nest A–Z",
+                     "data-s='name' aria-pressed='false'>Project A–Z"):
+            self.assertIn(sort, listing)
+        self.assertIn("href='/projects'>All projects page ›", listing)
+        self.assertIn("localStorage.setItem('bandsort'", board.CHIPS)
+        self.assertIn("h.textContent = last || 'In no nest'", board.CHIPS)
+        self.assertIn("bandRecent(st.recent)", board.POLL)
+        self.assertEqual(json.loads(board.status_payload(board.registry(), plist))["recent"][0], plist.index(self.root),
+                         "each poll brings the list's Recent order")
+        self.assertNotIn("title='All projects'", side, "the list replaces the ☰ link")
+        reg = board.registry()                                # pinned: still first, the person's own choice
+        reg["settings"]["pinned_projects"] = [str(glaze.resolve())]
+        board.save_registry(reg)
+        self.assertEqual(board.nav_order(plist)[0], ["p", plist.index(glaze)])
+        self.assertIn("class='proj pinchip", board.sidebar(board.registry(), -1))
 
     def test_a_project_has_a_colour_of_its_own_chosen_where_its_settings_are(self):
         board.track(self.root)
@@ -7956,7 +7985,7 @@ class PhonePageTest(HoursBase):
         self.assertIn("{passive: true, capture: true}", board.CHAT, "a scroll inside the floating Needs you holds off the chat's redraw")
         self.assertIn("if (d && !d.scrollTop) d.scrollTop = top;", board.CHAT, "and, redrawn, it stays where it was read to")
         self.assertIn(f"<link rel='stylesheet' href='/static/board.css?v={board.css_version()}'>", page, "styling, fetched once")
-        self.assertIn("nav .navrow { display:flex", board.CSS)
+        self.assertIn("nav .navrow { flex:1; min-width:0; display:flex", board.CSS, "the boxes scroll beside the list button (R135)")
 
     def test_a_chats_needs_you_floats_on_top_of_the_player_and_box(self):
         # the keyboard up, the cursor of the box being typed in is re-seated: a phone draws it a line off until a letter

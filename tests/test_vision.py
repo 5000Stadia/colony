@@ -429,13 +429,13 @@ class NestTest(BoardBase):
             self.assertIn(shown, page)
         self.assertNotIn("Session zero map", page)
         self.assertIn("No nest named", board.nest_page(board.registry(), "nowhere"))
-        side = board.sidebar(board.registry(), 0)                     # the board groups its projects by nest
-        self.assertIn("/nest?n=holodeck", side)
-        start = side.index("data-fold='nav:holodeck'")
-        group = side[start:side.index("</a></span></span>", side.index("<span class='members'>", start))]
-        self.assertIn(">photonic<", group, "its projects open from the nest's chip")
-        self.assertIn(">plants<", group)
-        self.assertNotIn(">dnd<", group, "a project in no nest stands on its own")
+        side = board.sidebar(board.registry(), 0)        # the band shows each project alone; its list names their nests
+        band, listing = side[:side.index("class='bandpop'")], side[side.index("class='bandpop'"):]
+        self.assertNotIn("nestgroup", band, "no nest in the band, and nothing slides out")
+        for name in ("photonic", "plants", "dnd"):
+            self.assertRegex(band, r"<a class='proj[^>]*>.*?>" + name + "<", "each project a box of its own")
+        self.assertRegex(listing, r"data-name='photonic' data-nest='holodeck'")
+        self.assertRegex(listing, r"data-name='dnd' data-nest=''", "a project in no nest is listed in none")
 
     def test_a_project_is_in_one_nest_and_keeps_it_when_closed_and_reopened(self):
         from colony import nest
@@ -673,7 +673,8 @@ class ArchiveAndListTest(BoardBase):
         nest.join(kiln, "holodeck")
         reg = board.registry()
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
-        self.assertIn("class='proj nestset' href='/nest?n=holodeck'", board.sidebar(reg, mine), "the chip's way to its page")
+        self.assertIn("data-nest='holodeck'", board.sidebar(reg, mine), "the list sorts by it, its heading a tap to its page")
+        self.assertIn("h.href = '/nest?n=' + encodeURIComponent(last)", board.CHIPS)
         nest.leave(kiln)
         page = board.nest_page(reg, "holodeck")
         self.assertIn("Add or take out projects", page)
@@ -747,8 +748,6 @@ class StewardPageTest(BoardBase):
         nest.join(kiln, "holodeck")
         reg = board.registry()
         mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
-        self.assertIn("data-fold='nav:holodeck' data-open='0'>", board.sidebar(reg, -1))
-        self.assertIn("data-fold='nav:holodeck' data-open='1' data-pin=1>", board.sidebar(reg, mine))
         self.assertIn("data-nest='holodeck' data-fold='list:holodeck' data-open='1'", board.all_projects_page(reg))
         self.assertIn("localStorage.setItem('fold:'", board.all_projects_page(reg))
 
@@ -852,7 +851,10 @@ class PinTest(BoardBase):
         self.assertEqual(menu[:2], [("dnd", "holodeck"), ("photonic", "holodeck")], "the nest comes forward, led by what moved it")
         self.assertEqual([h for _, _, h in board.arranged(board.projects())][0], "", "the steward's list keeps their order")
         nav = board.sidebar(board.registry(), -1)
-        self.assertLess(nav.index("nav:holodeck"), nav.index(f">{self.root.name}<"))
+        band = nav[nav.index("class='navrow'"):nav.index("class='bandpop'")]
+        self.assertNotIn("nav:holodeck", band, "the band shows no nests (R135)")
+        self.assertLess(band.index(">dnd<"), band.index(">photonic<"))
+        self.assertLess(band.index(">photonic<"), band.index(f">{self.root.name}<"), "each by its own activity, whatever was dragged")
 
     def test_a_project_page_says_whether_it_is_pinned_beside_message_and_a_tap_changes_it(self):
         board.track(self.root)
