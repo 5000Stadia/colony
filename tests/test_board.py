@@ -8942,6 +8942,22 @@ class TokensTest(BoardBase):
         self.assertEqual(rows[("project", "plants")]["4 h"], 1000 + 100 + 10, "the worktree's, the held session's and the kept hour")
         self.assertEqual(rows[("outside", "Outside colony")]["4 h"], 1, "a folder no project's console started stays outside")
 
+    def test_the_record_has_one_writer_across_processes(self):
+        """The board's reader and an ask noting its tokens from the command line each load, change and save the record:
+        without a lock across processes one overwrote the other (seen 2026-10-31, a correction lost within seconds)."""
+        import fcntl
+        from colony import tokens
+        empty = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty, True)
+        with patch.object(providers.get("claude"), "config_home", lambda: empty), \
+                patch.object(providers.get("codex"), "config_home", lambda: empty):
+            with open(board.home() / "tokens.lock", "a") as other:      # another process holds it
+                fcntl.flock(other, fcntl.LOCK_EX)
+                self.assertFalse(REAL_COUNT(), "the reader leaves it for its next look")
+            self.assertTrue(REAL_COUNT())
+        tokens.note("codex", {"input_tokens": 4})
+        self.assertEqual(tokens.windows()[0][("colony", "Steward's scouts")]["4 h"], 4)
+
 
 class RulesTest(BoardBase):
     """The person's standing rules, kept by colony and handed back at every session start, after a compaction too."""

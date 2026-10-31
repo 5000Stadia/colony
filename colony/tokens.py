@@ -215,6 +215,10 @@ def update(budget=BUDGET):
     """Read what the transcripts gained since the last look, within the budget; drop hours older than the week."""
     if not _lock.acquire(blocking=False):
         return False
+    held = _file_lock()
+    if held is None:                                    # another process is writing the record: the next look reads
+        _lock.release()
+        return False
     try:
         from . import monitor
         state, end = load(), time.time() + budget
@@ -249,14 +253,29 @@ def update(budget=BUDGET):
         _save(state)
         return done
     finally:
+        held.close()
         _lock.release()
+
+
+def _file_lock():
+    """The record's lock across processes (the board's reader, and the asks colony makes from its command line, which
+    note what they spent), taken without waiting: None when another holds it."""
+    import fcntl
+    board.home().mkdir(parents=True, exist_ok=True)
+    fh = open(board.home() / "tokens.lock", "a")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    except OSError:
+        fh.close()
+        return None
 
 
 def note(prog, usage, kind="scout"):
     """An ask that keeps no transcript (the steward's scouts) notes what it spent."""
     if not usage:
         return
-    with _lock:
+    with _lock, board.board_lock("tokens"):           # the board's reader, in another process, writes it too
         state = load()
         hour = int(time.time()) // 3600 * 3600
         if prog == "claude":

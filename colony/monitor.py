@@ -1131,6 +1131,10 @@ class Watcher:
             wakes.tick()                            # timed wakes due: a note each, handed over by mail() below
         except Exception:
             pass
+        from . import tokens
+        # the tokens spent, kept current for the Usage page, steward or not: a helper's session is filed under the
+        # project that started it while it still runs, so a look every few seconds catches even short ones
+        threading.Thread(target=tokens.update, daemon=True).start()
         if not self.enabled or muted():
             self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:
@@ -1151,8 +1155,6 @@ class Watcher:
         recovery.tick_all()                         # work a network drop stopped, once the network is back
         from . import audit
         audit.kick()                                # a connection an agent added is audited even when the steward is muted
-        from . import tokens
-        threading.Thread(target=tokens.update, daemon=True).start()   # the tokens spent, kept current for colony's Overview
         if muted():
             self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
             return
