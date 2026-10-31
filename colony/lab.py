@@ -20,6 +20,7 @@ from . import board
 
 COUNT = 12                # clips per way
 LEAD = 20                 # seconds the server stream keeps ahead of playback, as internet radio does
+GAP = 2                   # the ramp: seconds the board holds back clip 2, and how much longer each next one waits
 LOG_MOST = 256 * 1024     # one batch of report rows, at most
 WAYS = (
     ("A", "Today's way", "One audio element; when a clip ends, the next is set on it and played (as colony's player does now)."),
@@ -42,9 +43,16 @@ COST = {
     "G": "As A, plus a second element decoding a silent loop continuously for the whole run.",
 }
 MEASURES = ("bytes", "requests", "calls", "hidden_calls", "playing")
+
+
+def gap(n):
+    """How long the ramp holds clip n back: nothing before the first, then GAP, 2 GAP, ... as when colony's voice is
+    still making the next clip."""
+    return GAP * (n - 1) if n > 1 else 0
 _making = {"thread": None, "error": ""}
 _writing = threading.Lock()
 _frames = {}              # an MP3's sound without its tags, and how long it plays, by path and change time
+_held = set()             # each run's clips already held back once: Safari asks for one clip in several requests
 
 
 def folder():
@@ -193,7 +201,7 @@ def take(rows):
         if not isinstance(r, dict):
             continue
         row = {k: str(r.get(k, ""))[:200] for k in ("approach", "run", "event", "t", "vis", "why", "session", "main", "silent")}
-        for k in ("clip",) + MEASURES:
+        for k in ("clip", "gap") + MEASURES:
             try:
                 row[k] = int(r.get(k) or 0)
             except (TypeError, ValueError):
@@ -227,6 +235,7 @@ def summary():
         s = runs.setdefault(run, {"run": run, "approach": r.get("approach", ""), "began": "", "reached": 0,
                                   "hidden": 0, "last": "", "finished": False, "sent": 0, "errors": 0, "stalls": 0,
                                   "silent_paused": False, "server_bytes": 0, "server_requests": 0, "held": None,
+                                  "ramp": "-ramp-" in run, "longest_gap_hidden": None,
                                   **{k: 0 for k in MEASURES}, "_hidden": set(), "_order": len(runs)})
         when = r.get("t") or r.get("at", "")
         if r.get("source") == "server":
@@ -248,6 +257,8 @@ def summary():
             s["reached"] = max(s["reached"], r.get("clip", 0))
             if r.get("vis") == "hidden":
                 s["_hidden"].add(r.get("clip", 0))
+                if s["ramp"] and r.get("clip", 0) > 1:   # a clip that still started, hidden, after its gap
+                    s["longest_gap_hidden"] = max(s["longest_gap_hidden"] or 0, r.get("gap") or 0)
             s["last"] = max(s["last"], when)
         elif event == "end":
             s["last"] = max(s["last"], when)
@@ -265,9 +276,11 @@ def summary():
     return out[:40]
 
 
-def stream(handler, run):
+def stream(handler, run, ramp=False):
     """Every clip's sound back to back in one chunked response, paced to stay LEAD seconds ahead of playback as
-    internet radio is, so each clip sent (written to the log with its time) shows the phone still taking it."""
+    internet radio is, so each clip sent (written to the log with its time) shows the phone still taking it. With the
+    ramp, each clip is sent only once it would be ready, its gap after the last one's end: the stream goes quiet, as
+    it would for a clip still being made."""
     clips = [sound(clip("D", n)) for n in range(1, COUNT + 1)]
     if not all(c[0] for c in clips):
         return send(handler, 503, b"The clips aren't made yet.", "text/plain; charset=utf-8")
@@ -278,20 +291,23 @@ def stream(handler, run):
     handler.send_header("Transfer-Encoding", "chunked")
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
-    began, ahead, sent = time.monotonic(), 0.0, 0
+    began, ahead, sent, gaps = time.monotonic(), 0.0, 0, 0
     write({"source": "server", "approach": "D", "run": run, "event": "stream asked", "clip": 0,
            "why": handler.headers.get("Range", "")})
     n = 0
     try:
         for n, (body, seconds) in enumerate(clips, 1):
-            while time.monotonic() - began < ahead - LEAD:
-                time.sleep(min(0.5, ahead - LEAD - (time.monotonic() - began)))
+            gaps += gap(n) if ramp else 0
+            due = ahead + gaps if ramp else ahead - LEAD
+            while time.monotonic() - began < due:
+                time.sleep(min(0.5, due - (time.monotonic() - began)))
             for at in range(0, len(body), 16384):
                 part = body[at:at + 16384]
                 handler.wfile.write(b"%X\r\n%s\r\n" % (len(part), part))
                 sent += len(part)
             handler.wfile.flush()
-            write({"source": "server", "approach": "D", "run": run, "event": "sent", "clip": n})
+            write({"source": "server", "approach": "D", "run": run, "event": "sent", "clip": n,
+                   "gap": gap(n) if ramp else 0})
             ahead += seconds
         handler.wfile.write(b"0\r\n\r\n")
         handler.wfile.flush()
@@ -351,6 +367,14 @@ def get(handler, path, q):
             return send(handler, 404, b"no such clip", "text/plain; charset=utf-8")
         f = clip(key, int(n))
         body = sound(f)[0] if one("bare") else f.read_bytes()
+        wait = int(one("wait")) if one("wait").isdigit() else 0
+        if wait:                                   # the ramp: the clip is late, as when the voice is still making it
+            first = (one("run"), key, n)
+            with _writing:
+                late = first not in _held or not one("run")
+                _held.add(first)
+            if late:
+                time.sleep(min(wait, 60))
         sent = send_audio(handler, body)
         if re.fullmatch(r"[A-Za-z0-9-]{1,60}", one("run")):        # a run's clip requests, counted for its cost
             write({"source": "server", "approach": key, "run": one("run"), "event": "served", "clip": int(n), "bytes": sent})
@@ -359,7 +383,7 @@ def get(handler, path, q):
         run = one("run")
         if not re.fullmatch(r"[A-Za-z0-9-]{1,60}", run):
             return send(handler, 400, b"a run, please", "text/plain; charset=utf-8")
-        return stream(handler, run)
+        return stream(handler, run, ramp=bool(one("ramp")))
     return send(handler, 404, b"nothing here", "text/plain; charset=utf-8")
 
 
@@ -391,6 +415,9 @@ def page():
         "<p>Tap one way below, lock the phone, and wait two minutes.<br>"
         "Then unlock and read the table at the bottom: it shows how far each way got with the screen off.</p>"
         "<p id='making' class='muted'>Checking the clips…</p>"
+        "<p><label><input type='checkbox' id='ramp'> Wait before each next clip: 2 s, then 4 s, 6 s… (the board holds "
+        "the next clip back, as when colony is still making it)</label><br><span class='muted'>With the wait on, C still "
+        "fetches ahead, so its buffer may hide the gap; D's stream goes quiet for it.</span></p>"
         f"<div class='ways'>{ways}</div>"
         "<p><button id='stop' disabled>Stop</button> <span id='now' class='muted'>Nothing playing.</span></p>"
         "<p id='silentnote'></p>"
@@ -445,7 +472,9 @@ SCRIPT = r"""
     keep(); flush();
   };
   // each run's requests carry its ID: the board counts them, the page finds them among its resource timings
-  const url = (key, n, bare) => `/lab/lockplay/clip?a=${key}&n=${n}${bare ? '&bare=1' : ''}&run=${cur ? encodeURIComponent(cur.run) : ''}`;
+  const gap = (n) => (cur && cur.ramp && n > 1 ? 2 * (n - 1) : 0);   // the ramp: the board holds clip n back this long
+  const url = (key, n, bare) => `/lab/lockplay/clip?a=${key}&n=${n}${bare ? '&bare=1' : ''}` +
+    `${gap(n) ? '&wait=' + gap(n) : ''}&run=${cur ? encodeURIComponent(cur.run) : ''}`;
   // what a run costs, as far as a page can see: the bytes and requests it fetched, how often its own code ran (all and
   // while hidden), and how many of its elements are playing now
   const measures = (c) => {
@@ -470,7 +499,7 @@ SCRIPT = r"""
     set('play', counted(c, () => c.audio && c.audio.play())); set('pause', counted(c, () => c.audio && c.audio.pause()));
     if (skips) { set('seekbackward', null); set('seekforward', null); } };
   // where a clip starts, ends and the run finishes, as each way sees it
-  const reached = (c, n) => { if (c.stopped || c.heard === n) return; c.heard = n; c.clip = n; meta(c, n); log('start', c.both ? c.both() : {});
+  const reached = (c, n) => { if (c.stopped || c.heard === n) return; c.heard = n; c.clip = n; meta(c, n); log('start', Object.assign({gap: gap(n)}, c.both ? c.both() : {}));
     show(`Playing ${NAME[c.key]}, clip ${n} of ${COUNT}.`); };
   const ended = (c, n) => { if (c.stopped || c.ends.has(n)) return; c.ends.add(n); log('end', {clip: n}); if (n === COUNT) finish(c); };
   const finish = (c) => { if (c.done) return; c.done = true; if (c.silent) c.silent.pause(); c.clip = COUNT; log('finished'); show(`${NAME[c.key]} played all ${COUNT}.`); stopped(); };
@@ -549,7 +578,7 @@ SCRIPT = r"""
         for (let n = 1; n <= COUNT; n++) if (t < (ends[n] || Infinity)) { if (c.heard && n > c.heard) ended(c, c.heard); reached(c, n); break; } });
       a.addEventListener('playing', () => handlers(c, false));
       a.onended = () => ended(c, COUNT);
-      c.clip = 1; a.src = `/lab/lockplay/stream?run=${encodeURIComponent(c.run)}`; go(c, a); },
+      c.clip = 1; a.src = `/lab/lockplay/stream?run=${encodeURIComponent(c.run)}${c.ramp ? '&ramp=1' : ''}`; go(c, a); },
     // E: the loop trick, with Safari told this page plays media
     E(c) { ways.B(c); },
     // F: today's way, colony's looping silence playing while the next clip is fetched and set
@@ -584,11 +613,12 @@ SCRIPT = r"""
     const kind = key === 'E' ? 'playback' : 'auto';
     session(kind);
     try { performance.clearResourceTimings(); performance.setResourceTimingBufferSize(2000); } catch (e) {}
-    cur = {key, run: `${key}-${Date.now().toString(36)}`, clip: 0, heard: 0, ends: new Set(), stopped: false, done: false,
+    const ramp = $('ramp').checked;
+    cur = {key, ramp, run: `${key}-${ramp ? 'ramp-' : ''}${Date.now().toString(36)}`, clip: 0, heard: 0, ends: new Set(), stopped: false, done: false,
       calls: 0, callsHidden: 0};
     log('run start', {session: navigator.audioSession ? kind : 'none'});
     buttons.forEach((b) => b.classList.toggle('on', b.dataset.way === key)); $('stop').disabled = false;
-    show(`Starting ${NAME[key]}…`); meta(cur, 1); handlers(cur, false);
+    show(`Starting ${NAME[key]}${ramp ? ', with the ramp' : ''}…`); meta(cur, 1); handlers(cur, false);
     ways[key](cur);
   };
   buttons.forEach((b) => b.addEventListener('click', () => start(b.dataset.way)));
@@ -613,15 +643,16 @@ SCRIPT = r"""
     if (!runs.length) { $('results').textContent = 'No runs yet.'; return; }
     const kb = (n) => n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
     $('results').innerHTML = '<table><tr><th>Way</th><th>Started</th><th>Clips reached</th><th>While hidden</th><th>Stopped</th>' +
-      '<th>Bytes (page / board)</th><th>Requests (page / board)</th><th>Code ran (all / hidden)</th><th>Playing at once</th><th>Held open</th></tr>' +
-      runs.map((r) => `<tr><td>${esc(r.approach)}. ${esc(r.name)}</td><td>${clock(r.began)}</td><td>${r.reached} of ${COUNT}</td>` +
+      '<th>Bytes (page / board)</th><th>Requests (page / board)</th><th>Code ran (all / hidden)</th><th>Playing at once</th><th>Held open</th><th>Longest gap survived while hidden</th></tr>' +
+      runs.map((r) => `<tr><td>${esc(r.approach)}. ${esc(r.name)}${r.ramp ? ' <b>ramp</b>' : ''}</td><td>${clock(r.began)}</td><td>${r.reached} of ${COUNT}</td>` +
         `<td>${r.hidden}</td><td>${r.finished ? 'finished, ' + clock(r.last) : r.reached ? 'after clip ' + r.reached + ', ' + clock(r.last) : 'never started'}` +
         `${r.approach === 'D' ? ` <span class="muted">(board sent ${r.sent})</span>` : ''}` +
         `${r.errors ? ` <span class="muted">${r.errors} error${r.errors > 1 ? 's' : ''}</span>` : ''}` +
         `${r.stalls ? ` <span class="muted">${r.stalls} stall${r.stalls > 1 ? 's' : ''}</span>` : ''}` +
         `${r.approach === 'G' ? ` <span class="muted">(silent element ${r.silent_paused ? 'got paused' : 'kept playing'})</span>` : ''}</td>` +
         `<td>${kb(r.bytes)} / ${kb(r.server_bytes)}</td><td>${r.requests} / ${r.server_requests}</td>` +
-        `<td>${r.calls} / ${r.hidden_calls}</td><td>${r.playing}</td><td>${r.held === null ? '' : r.held + ' s'}</td></tr>`).join('') + '</table>';
+        `<td>${r.calls} / ${r.hidden_calls}</td><td>${r.playing}</td><td>${r.held === null ? '' : r.held + ' s'}</td>` +
+        `<td>${r.longest_gap_hidden === null ? '' : r.longest_gap_hidden + ' s'}</td></tr>`).join('') + '</table>';
   }).catch(() => {});
 
   const making = () => fetch('/lab/lockplay/status', {cache: 'no-store'}).then((r) => r.json()).then((s) => {
