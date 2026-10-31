@@ -60,8 +60,9 @@ def pace(reading, now, on=False):
     if exp is None:
         return dict(out, why="its week has just turned over" if now >= resets else "before day 2 of its week")
     on = used < exp - BEHIND or (bool(on) and used < exp)
-    return dict(out, on=on, expected=exp, why="behind pace" if on else "on pace" if used >= exp
-                else f"less than {BEHIND} points behind pace")
+    ahead = used - exp
+    return dict(out, on=on, expected=exp, why="behind pace" if on else f"{ahead:.0f} points ahead of pace" if ahead >= BEHIND
+                else "on pace" if used >= exp else f"less than {BEHIND} points behind pace")
 
 
 def due(last, now, resets_at):

@@ -47,6 +47,15 @@ class PaceTest(unittest.TestCase):
                                    (exp + 10, False, False, "ahead: off")):
             self.assertEqual(turbo.pace(reading(used, 4, self.now), self.now, on=was)["on"], on, why)
 
+    def test_far_ahead_says_ahead_of_pace_with_the_gap(self):
+        exp = turbo.expected(self.now + 3 * DAY, self.now)                    # day 4 of 7
+        why = lambda used: turbo.pace(reading(used, 4, self.now), self.now)["why"]
+        self.assertEqual(why(exp + 40), f"{40:.0f} points ahead of pace", "Codex at 99% with 46% expected read 'on pace'")
+        self.assertEqual(why(exp + 5), "5 points ahead of pace")
+        self.assertEqual(why(exp + 4.9), "on pace", "within 5 points either side is on pace")
+        self.assertEqual(why(exp), "on pace")
+        self.assertEqual(why(exp - 3), "less than 5 points behind pace")
+
     def test_the_target_is_99_percent_by_the_hour_before_the_reset(self):
         resets = self.now + 2 * DAY
         self.assertAlmostEqual(turbo.expected(resets, resets - HOUR), 99)
