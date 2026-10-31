@@ -946,6 +946,9 @@ def expire_inputs(now=None):
                 if mine:
                     _pending_input(record['name'], live=False)
             continue
+        if record.get('state') == 'accepted' and not record.get('resubmitted'):
+            _resubmit_returned(record, now)
+            continue
         if record.get('purpose') != 'system' or record.get('state') != 'unsent':
             continue
         if now - record.get('at', now) < INPUT_TTL:
@@ -962,6 +965,39 @@ def expire_inputs(now=None):
                     _retract_input(name, current)
                 except (OSError, subprocess.CalledProcessError):
                     continue
+
+
+RETURNED = 30           # seconds a message taken from its box may sit back in it, unconfirmed, before it goes again
+
+
+def _resubmit_returned(record, now):
+    """A message the program took from its box (queued while it was busy) and later put back unsent, as Claude Code
+    does with its queue when a turn ends early: no receipt ever comes, it never reaches the agent, and as the person's
+    draft it holds back every later message (seen 2026-10-31: the person's message to Bookflow sat there an hour,
+    recorded as accepted). Sent once more with Enter, only with the console idle, past RETURNED seconds, and the box
+    holding exactly that text; never a second time."""
+    name = record.get('name')
+    if not name or now - record.get('at', now) < RETURNED or not running(name):
+        return
+    if record.get('incarnation') != _input_identity(name) or provider(name).classify(screen(name)) != 'idle':
+        return
+    root = record.get('root')
+    if root and busy(Path(root), name):
+        return
+    if record.get('purpose') != 'person' and attached(name):
+        return                                            # colony's own line waits while someone is looking
+    with _typing(name, wait=0) as mine:
+        current = _pending_input(name) if mine else None
+        if not current or current.get('id') != record.get('id') or current.get('state') != 'accepted':
+            return
+        left = draft(name)
+        if not left or _input_normal(left) != _input_normal(current['text']):
+            return
+        current['resubmitted'] = time.time()
+        _private_input(_input_paths(name)[0], current)
+        _input_event(name, current, 'resubmitted')
+        unscroll(name)
+        subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], capture_output=True)
 
 
 def _make_way(name):

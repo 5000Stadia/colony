@@ -118,8 +118,8 @@ class InputLedgerTest(unittest.TestCase):
         self.assertEqual(self.box.accepted, [self.text])
         self.assertEqual(self.pending()['state'], 'accepted')
 
-    def test_accepted_unconfirmed_input_is_never_resubmitted_or_expired(self):
-        self.seed(age=console.INPUT_TTL + 1, accepted=True)
+    def test_accepted_unconfirmed_input_waits_while_it_may_still_be_taken(self):
+        self.seed(age=console.RETURNED - 5, accepted=True)
         console.expire_inputs()
         self.assertFalse(console.paste_into('box', 'New message.'))
         self.assertFalse(console._sent('box', self.text))
@@ -130,6 +130,28 @@ class InputLedgerTest(unittest.TestCase):
         self.assertEqual(self.box.enters, 0)
         self.assertTrue(console.confirm_input('box', self.text))
         self.assertFalse(console._input_paths('box')[0].exists())
+
+    def test_a_message_put_back_unsent_goes_once_more_and_only_once(self):
+        """Claude Code puts a queued message back in its box when a turn ends early: accepted, never confirmed, it
+        reached no one and held back every later message (the person's, to Bookflow, for an hour on 2026-10-31)."""
+        self.seed(text='Pause all future codex for a moment.', purpose='person', age=console.RETURNED + 1, accepted=True)
+        for obstacle in ('menu', 'busy', 'foreign'):
+            with self.subTest(obstacle=obstacle):
+                self.box.menu = obstacle == 'menu'
+                self.box.text = 'my own new draft' if obstacle == 'foreign' else 'Pause all future codex for a moment.'
+                with patch.object(console, 'busy', return_value='active work' if obstacle == 'busy' else None):
+                    console.expire_inputs()
+                self.assertEqual(self.box.enters, 0)
+                self.box.menu = False
+        self.box.text = 'Pause all future codex for a moment.'
+        console.expire_inputs()
+        self.assertEqual(self.box.enters, 1, "sent once more")
+        self.assertEqual(self.box.text, '')
+        self.assertTrue(self.pending().get('resubmitted'))
+        self.box.text = 'Pause all future codex for a moment.'           # back again: never a second time
+        console.expire_inputs()
+        self.assertEqual(self.box.enters, 1)
+        self.assertEqual(json.loads(console._input_paths('box')[2].read_text())[-1]['event'], 'resubmitted')
 
     def test_independent_identical_person_sends_and_system_notifications_both_arrive(self):
         for send in (console.paste_into, console.type_into):
