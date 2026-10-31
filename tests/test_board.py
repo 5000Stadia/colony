@@ -6956,6 +6956,48 @@ class HandoverTest(BoardBase):
         self.addCleanup(os.environ.pop, "CLAUDE_CONFIG_DIR", None)
         board.track(self.root)
         board.keep_ids()
+        from colony import handover
+        looking = patch.object(handover, "COMING_UP", 1)     # the stand-in console ("sleep 60") never shows a box
+        looking.start()
+        self.addCleanup(looking.stop)
+
+    def test_the_folders_trust_moves_with_it_and_nothing_else_in_claude_codes_file(self):
+        from colony import handover
+        claude = providers.get("claude")
+        self.assertEqual(claude.settings_file(), Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json")
+        mine = {"hasTrustDialogAccepted": True, "allowedTools": ["Bash"], "lastSessionId": "s1"}
+        before = {"numStartups": 7, "theme": "dark", "oauthAccount": {"emailAddress": "someone@example.com"},
+                  "projects": {str(self.root): mine, "/somewhere/else": {"hasTrustDialogAccepted": False}}}
+        claude.settings_file().parent.mkdir(parents=True, exist_ok=True)
+        claude.settings_file().write_text(json.dumps(before, indent=2))
+        dest = Path(self.tmp.name) / "elsewhere" / "plants"
+        said = []
+        with patch.object(handover, "still", lambda root: True), patch.object(handover, "outside", lambda root: []):
+            self.assertEqual(handover.move(self.root, dest, say=said.append), 0, said)
+        console.stop(dest)
+        self.root = dest
+        after = json.loads(claude.settings_file().read_text())
+        self.assertEqual(after["projects"].pop(str(dest.resolve())), {"hasTrustDialogAccepted": True},
+                         "its trust answer, nothing else of the old entry")
+        self.assertEqual(after, before, "the rest of the file as Claude Code wrote it")
+        self.assertIn("trust of the folder carried", said[-1])
+        self.assertFalse(claude.carry_trust("/never/trusted", dest / "x"), "an untrusted folder stays untrusted")
+        self.assertFalse(list(claude.settings_file().parent.glob("*.colony-part")))
+
+    def test_a_moved_console_asking_its_trust_question_is_reported_not_resumed(self):
+        from colony import handover
+        dest = Path(self.tmp.name) / "elsewhere" / "plants"
+        name, shown = console.session_name(self.root), console.screen
+        console.ensure(self.root)
+        said = []
+        with patch.object(handover, "still", lambda root: True), patch.object(handover, "outside", lambda root: []), \
+                patch.object(console, "screen", lambda n: TRUST if n == name else shown(n)):
+            self.assertEqual(handover.move(self.root, dest, say=said.append), 0, said)
+            self.assertTrue(console.asking(name), "left on screen for the person")
+        console.stop(dest)
+        self.root = dest
+        self.assertIn("asking you something in its Console tab; answer it once", said[-1])
+        self.assertNotIn("resumed", said[-1])
 
     def test_a_project_moves_lands_first_and_resumes_in_its_new_folder(self):
         from colony import handover
