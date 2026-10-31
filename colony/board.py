@@ -220,6 +220,19 @@ def home():
     return Path(os.environ.get("COLONY_BOARD_HOME", Path.home() / ".config" / "colony"))
 
 
+def machine_state():
+    """State that stays on this machine when colony's home is copied. Test boards keep theirs beside their home."""
+    if "COLONY_BOARD_HOME" in os.environ:
+        path = home().resolve()
+        return path.with_name(path.name + "-machine")
+    return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "colony"
+
+
+def restore_held():
+    """A restored copy waits for the person to check it before anything runs by itself."""
+    return (home() / "restore-hold.json").exists()
+
+
 def scoped(base):
     """A tmux session name for this board: plain for the person's own board, suffixed for any other home,
     so a second board (a test, a demo) never touches the first one's sessions."""
@@ -2857,6 +2870,17 @@ def signin_notice():
             f"<b>{e(', '.join(names))}</b> needs reconnecting. <a href='/signin'>Reconnect on this device</a></div>")
 
 
+def restore_bar():
+    from . import handover
+    if not restore_held():
+        return ""
+    key = page_sig(home(), home() / "restore-hold.json")
+    return (f"<div class='card gate' role='status'>{e(handover.RESTORE_NOTICE)}"
+            "<form method='post' action='/resume-restored'>"
+            f"<input type='hidden' name='key' value='{e(key)}'>"
+            "<button>Checked, resume</button></form></div>")
+
+
 def shell(reg, pid, body, wide=False):
     from . import media
     return (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1,viewport-fit=cover'>"
@@ -2864,7 +2888,7 @@ def shell(reg, pid, body, wide=False):
             f"<meta name='apple-mobile-web-app-title' content='Colony'><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<link rel='stylesheet' href='/static/media.css?v={media.version()}'><script type='module' src='/static/media.js?v={media.version()}'></script>"
             f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
-            f"<main{' class=wide' if wide else ''}>{trouble_bar()}{signin_notice()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
+            f"<main{' class=wide' if wide else ''}>{restore_bar()}{trouble_bar()}{signin_notice()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
 
 
 # Closed and opened again, the board comes back to the page the person was last on. A fresh open lands on the front
@@ -7572,7 +7596,7 @@ def monitor_page(reg, view="overview"):
     """The steward, like a project: Overview (what it said, the projects it follows, what it decided, and how much
     waits on the person), Helm (its stance toward each project), Chat, Console."""
     from . import monitor
-    if MONITOR:                          # a board started without its steward doesn't start one by being looked at
+    if MONITOR and not restore_held():   # looking at a restored board starts nothing
         monitor.ensure()
     tab = lambda v, label: f"<a class='{'on' if view == v else ''}' href='/steward?view={v}'>{label}</a>"
     on = monitor.helm()
@@ -10046,6 +10070,13 @@ class Handler(BaseHTTPRequestHandler):
             form['model'], _, form['effort'] = value.rpartition(':') if value != 'auto' else ('', '', '')
         reg = registry()
         path = urllib.parse.urlparse(self.path).path
+        if path == '/resume-restored':
+            if len(values.get('key', [])) != 1 or not secrets.compare_digest(
+                    form.get('key', ''), page_sig(home(), home() / 'restore-hold.json')):
+                return self._send(403, b"not this page's key")
+            from . import handover
+            handover.resume_restored()
+            return self._redirect('/')
         if path.startswith('/repair/'):
             from . import repair
             if path not in ('/repair/enable', '/repair/disable', '/repair/check', '/repair/pair', '/repair/pair/status'):

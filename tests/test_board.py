@@ -252,6 +252,7 @@ class BoardTest(BoardBase):
     def test_the_update_reaches_the_monitor_only_while_it_is_not_muted(self):
         watcher = monitor.Watcher.__new__(monitor.Watcher)
         watcher.enabled, watcher.pending = True, []
+        watcher.restore_waiting = False
         for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
             setattr(watcher, step, lambda *a: [])
         watcher.updates = lambda: called.append(1)
@@ -280,6 +281,7 @@ class BoardTest(BoardBase):
         self.assertTrue(monitor.muted())
         watcher = monitor.Watcher.__new__(monitor.Watcher)
         watcher.enabled, watcher.pending = True, ['something']
+        watcher.restore_waiting = False
         for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
             def stub(*a, step=step):
                 if step in ('tell', 'scout', 'events'):
@@ -6908,6 +6910,238 @@ class HandoverTest(BoardBase):
         self.assertFalse(json.loads(handover.mark_path().read_text())["still"], "running again: no longer a clean copy")
 
 
+class RestoreTest(BoardBase):
+    """A restored home serves the person, but waits for their check before any automatic work."""
+
+    def setUp(self):
+        super().setUp()
+        from colony import handover
+        self.handover = handover
+        self.machine = board.machine_state() / "generation"
+
+    def stop_still(self):
+        with patch.object(self.handover, "settle", return_value=[]), \
+                patch.object(self.handover, "_codex_stop", return_value=True):
+            self.assertEqual(self.handover.stop_still(lambda: None, say=lambda s: None), 0)
+
+    def test_machine_state_honours_xdg_and_test_boards_never_use_it(self):
+        personal = Path(self.tmp.name) / "personal"
+        with patch.dict(os.environ, HOME=str(personal), XDG_STATE_HOME=str(personal / "state")):
+            self.assertEqual(board.machine_state(), board.home().with_name("home-machine"))
+            self.handover.started()
+            self.assertTrue(self.machine.exists())
+            self.assertFalse(personal.exists(), "a test board ignores the person's state folder entirely")
+            with patch.dict(os.environ):
+                os.environ.pop("COLONY_BOARD_HOME")
+                self.assertEqual(board.machine_state(), personal / "state" / "colony")
+                os.environ.pop("XDG_STATE_HOME")
+                self.assertEqual(board.machine_state(), personal / ".local" / "state" / "colony")
+                os.environ["XDG_STATE_HOME"] = ""
+                self.assertEqual(board.machine_state(), personal / ".local" / "state" / "colony")
+
+    def test_a_fresh_or_legacy_home_starts_records_without_a_hold(self):
+        self.assertFalse(self.handover.started())
+        mark = json.loads(self.handover.mark_path().read_text())
+        self.assertEqual(mark["generation"], 0)
+        self.assertEqual(json.loads(self.machine.read_text()), 0)
+        self.assertFalse(board.restore_held())
+        self.assertFalse(mark["still"])
+
+    def test_a_crash_with_equal_generations_uses_ordinary_recovery(self):
+        self.stop_still()
+        self.assertEqual(json.loads(self.machine.read_text()), 1)
+        self.assertFalse(self.handover.started())
+        self.assertFalse(json.loads(self.handover.mark_path().read_text())["still"])
+        self.assertFalse(self.handover.started(), "no clean stop between starts: a crash, not a restore")
+        self.assertFalse(board.restore_held())
+
+    def test_same_path_folder_replacement_is_held_before_launch(self):
+        from colony import cli
+        import argparse
+        self.stop_still()
+        copy = Path(self.tmp.name) / "copy"
+        shutil.copytree(board.home(), copy)
+        self.handover.started()
+        self.stop_still()
+        self.assertEqual(json.loads(self.machine.read_text()), 2)
+        shutil.rmtree(board.home())
+        shutil.copytree(copy, board.home())
+
+        def launched(*args, **kw):
+            self.assertTrue(board.restore_held(), "the hold must exist before any watcher can start")
+            self.assertTrue(json.loads(self.handover.mark_path().read_text())["still"])
+            monitor.Watcher().tick()
+            return True
+
+        for foreground in (False, True):
+            args = argparse.Namespace(no_monitor=False, foreground=foreground, program=None, port=18890,
+                                      lan=False, local=True)
+            with patch.object(board, "settle_provider"), patch.object(board, "serve", side_effect=launched) as serve, \
+                    patch.object(cli, "_launch", side_effect=launched) as launch, \
+                    patch.object(cli, "_free", return_value=True), patch.object(board, "urls", return_value=[]), \
+                    patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)), \
+                    patch.object(monitor, "ensure") as ensure, patch.object(monitor, "setup") as setup, \
+                    patch.object(monitor.Watcher, "mail") as mail_job, redirect_stdout(io.StringIO()) as said:
+                self.assertEqual(cli.cmd_board(args), 0)
+                (serve if foreground else launch).assert_called_once()
+                ensure.assert_not_called()
+                setup.assert_not_called()
+                mail_job.assert_not_called()
+                self.assertIn("restored from a copy", said.getvalue())
+        hold = (board.home() / "restore-hold.json").read_text()
+        self.assertIn("behind", json.loads(hold)["why"])
+        self.assertTrue(json.loads(hold)["since"])
+        self.assertTrue(self.handover.started())
+        self.assertEqual((board.home() / "restore-hold.json").read_text(), hold)
+        self.assertEqual(json.loads(self.machine.read_text()), 2, "starting doesn't accept the old copy")
+
+    def test_a_generation_without_a_machine_record_is_held(self):
+        board.save_json(self.handover.mark_path(), {"generation": 3, "still": True})
+        self.assertTrue(self.handover.started())
+        self.assertFalse(self.machine.exists(), "only the person's check accepts this home")
+        self.assertIn("no record", json.loads((board.home() / "restore-hold.json").read_text())["why"])
+
+    def test_starting_an_already_running_board_leaves_a_still_stop_in_flight_alone(self):
+        from colony import cli
+        board.pause_project(self.root, by="still")
+        with patch.object(cli.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                patch.object(self.handover, "started") as started, redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["board"]), 0)
+        started.assert_not_called()
+        self.assertEqual(board.paused(self.root)["by"], "still")
+        self.assertFalse(self.machine.exists())
+
+    def test_a_stop_interrupted_between_writes_brings_the_machine_forward(self):
+        board.save_json(self.handover.mark_path(), {"generation": 3, "still": True})
+        board.save_json(self.machine, 2)
+        self.assertFalse(self.handover.started())
+        self.assertEqual(json.loads(self.machine.read_text()), 3)
+
+    def test_held_watcher_starts_and_wakes_nothing_including_usage_resets(self):
+        from contextlib import ExitStack
+        self.handover.hold_restore("test copy")
+        names = ("wakes.tick", "turbo.tick", "turbo.stand_down", "carryon.tick", "recovery.tick_all",
+                 "usage.check", "usage.cut_off", "monitor.ensure", "repair.tick", "continuation.tick_all",
+                 "monitor.Watcher.mail", "console.expire_inputs", "console.type_into")
+        with ExitStack() as stack:
+            jobs = [stack.enter_context(patch("colony." + name)) for name in names]
+            stack.enter_context(patch.object(monitor.threading, "Thread"))
+            for enabled in (False, True):
+                watcher = monitor.start(enabled=enabled)
+                watcher.usage_checked = 0
+                watcher.tick()
+                watcher.usage()
+                watcher.tell()
+            for job in jobs:
+                job.assert_not_called()
+
+    def test_jobs_called_directly_also_wait_for_the_check(self):
+        from colony import wakes, turbo, carryon, recovery
+        self.handover.hold_restore("test copy")
+        with patch.object(board, "projects") as projects, patch.object(turbo, "load") as load, \
+                patch.object(recovery, "stop") as stop, patch.object(recovery, "_boot") as boot:
+            wakes.tick()
+            self.assertEqual(turbo.tick(), [])
+            carryon.tick()
+            recovery.tick_all()
+            recovery.tick(self.root)
+            recovery.frozen(self.root)
+            recovery.rebooted()
+            for job in (projects, load, stop, boot):
+                job.assert_not_called()
+
+    def test_resume_command_accepts_the_copy_and_preserves_persons_pauses(self):
+        from colony import cli
+        board.save_json(self.handover.mark_path(), {"generation": 1, "still": True})
+        board.save_json(self.machine, 2)
+        board.pause_project(self.root, by="person")
+        self.assertTrue(self.handover.started())
+        with redirect_stdout(io.StringIO()) as said:
+            self.assertEqual(cli.main(["resume", "--restored"]), 0)
+        self.assertIn("automatic work can resume", said.getvalue())
+        self.assertFalse(board.restore_held())
+        self.assertEqual(json.loads(self.machine.read_text()), 1)
+        self.assertEqual(board.paused(self.root)["by"], "person")
+        self.assertFalse(self.handover.started(), "the accepted older generation is ordinary on the next start")
+
+    def test_resume_releases_still_pauses_and_starts_the_waiting_steward(self):
+        board.pause_project(self.root, by="still")
+        self.handover.hold_restore("test copy")
+        with patch.object(monitor.threading, "Thread"), patch.object(monitor, "ensure") as ensure:
+            watcher = monitor.start()
+            ensure.assert_not_called()
+            self.handover.resume_restored()
+            self.assertIsNone(board.paused(self.root))
+            # Stop at the first job: the deferred steward starts once, only after the check.
+            with patch.object(console, "expire_inputs", side_effect=RuntimeError("first job")):
+                for _ in range(2):
+                    with self.assertRaisesRegex(RuntimeError, "first job"):
+                        watcher.tick()
+            ensure.assert_called_once()
+
+    def test_resume_with_steward_disabled_keeps_it_off_and_stands_turbo_down(self):
+        from colony import turbo
+        self.handover.hold_restore("test copy")
+        with patch.object(monitor.threading, "Thread"), patch.object(monitor, "ensure") as ensure, \
+                patch.object(turbo, "stand_down") as stand_down:
+            watcher = monitor.start(enabled=False)
+            stand_down.assert_not_called()
+            self.handover.resume_restored()
+            with patch.object(console, "expire_inputs", side_effect=RuntimeError("first job")):
+                with self.assertRaisesRegex(RuntimeError, "first job"):
+                    watcher.tick()
+            ensure.assert_not_called()
+            stand_down.assert_called_once()
+
+    def test_banner_and_checked_button_and_direct_chat_while_held(self):
+        self.handover.hold_restore("test copy")
+        board.save_json(self.handover.mark_path(), {"generation": 4, "still": True})
+        board.save_json(self.machine, 5)
+        board.track(self.root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+        def request(path, data=None, **headers):
+            data = urllib.parse.urlencode(data).encode() if data is not None else None
+            return urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=headers))
+
+        try:
+            with patch.object(monitor, "ensure", return_value="steward-test") as steward, \
+                    patch.object(console, "ensure", return_value="project-test") as project, \
+                    patch.object(console, "paste_into", return_value=True) as paste:
+                for path in ("/", "/steward?view=chat", "/?p=0", "/settings", "/models"):
+                    with request(path) as r:
+                        page = r.read().decode()
+                    self.assertIn(self.handover.RESTORE_NOTICE, page, path)
+                    self.assertIn("Checked, resume", page, path)
+                    self.assertLess(page.index(self.handover.RESTORE_NOTICE), page.index("</main>"))
+                steward.assert_not_called()
+                project.assert_not_called()
+                key = re.search(r"name='key' value='([^']+)'", page)[1]
+                for target in ("0", "steward"):
+                    with request("/chat/send", {"p": target, "text": "Let me check this"}) as r:
+                        self.assertEqual(r.status, 204)
+                self.assertEqual(paste.call_count, 2)
+                self.assertTrue(board.restore_held(), "talking to a console doesn't lift the hold")
+                for form, headers in (({}, {}), ({"key": "wrong"}, {}),
+                                      ({"key": key}, {"Origin": "https://somewhere.invalid"})):
+                    with self.assertRaises(urllib.error.HTTPError) as refused:
+                        request("/resume-restored", form, **headers)
+                    self.assertEqual(refused.exception.code, 403)
+                    self.assertTrue(board.restore_held())
+                with request("/resume-restored", {"key": key}) as r:
+                    self.assertNotIn("Checked, resume", r.read().decode())
+            self.assertFalse(board.restore_held())
+            self.assertEqual(json.loads(self.machine.read_text()), 4)
+            self.assertFalse(self.handover.started())
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join()
+
+
 class StartHereTest(BoardBase):
     """R125: a new board's front page says where to begin, and goes once a project is on the board."""
 
@@ -10356,6 +10590,24 @@ class MigrateTest(BoardBase):
             self.migrate.unpack(archive, force=True, say=lambda line: None)
         self.assertEqual((self.alpha / "notes.md").read_text(), "plans")
 
+    def test_same_path_archive_restore_is_held_even_with_equal_generations(self):
+        from colony import handover
+        board.save_json(handover.mark_path(), {"generation": 1, "still": True})
+        machine = board.machine_state() / "generation"
+        board.save_json(machine, 1)
+        archive, _ = self.pack()
+        self.assertNotIn(str(machine), self.members(archive), "the machine's record never travels with the home")
+
+        def remake(note, say):
+            self.assertTrue(board.restore_held(), "held before machine setup can turn on autostart")
+
+        with patch.object(self.migrate, "remake", side_effect=remake):
+            self.migrate.unpack(archive, force=True, say=lambda line: None)
+        self.assertTrue(handover.started())
+        self.assertIn("archive", json.loads((board.home() / "restore-hold.json").read_text())["why"])
+        handover.resume_restored()
+        self.assertFalse(handover.started())
+
     def test_unpack_refuses_another_home_folder(self):
         archive, _ = self.pack()
         other = Path(self.tmp.name) / "someone"
@@ -10518,7 +10770,8 @@ class MigrateTest(BoardBase):
         self.assertIn("colony settings autostart on again", text)
         actions = [text.index(x) for x in ("To install here:", "Sign in again", "Then enter again:", "Then start colony:")]
         self.assertEqual(actions, sorted(actions))
-        self.assertIn("sign in first", text)
+        self.assertIn("Nothing runs by itself until you check the restored copy", text)
+        self.assertIn("colony resume --restored", text)
 
 class ChatMediaTest(BoardBase):
     def setUp(self):

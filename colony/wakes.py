@@ -152,6 +152,8 @@ def fire(root, w, now=None, steward=False):
 def tick(now=None):
     """The watcher's pass: each project's due wakes fire once its console is idle (or off) inside the person's hours;
     one working, or asking something, is left until its turn ends."""
+    if board.restore_held():
+        return
     from . import console, monitor
     now = hours.clock() if now is None else now
     if not hours.active(now):

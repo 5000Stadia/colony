@@ -84,6 +84,8 @@ def wanted(root):
 
 def tick(now=None):
     """Called by the watcher: wake each project that has sat idle long enough with work it can start."""
+    if board.restore_held():
+        return
     from . import hours
     now = time.time() if now is None else now
     for root in board.projects():

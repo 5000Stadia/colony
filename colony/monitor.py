@@ -581,6 +581,7 @@ class Watcher:
 
     def __init__(self, interval=4.0, enabled=True):
         self.enabled = enabled
+        self.restore_waiting = board.restore_held()
         self.interval = interval
         self.states, self.pending = {}, []
         self.completed = {}                  # what each project had completed when last looked at: items done, shown
@@ -923,6 +924,8 @@ class Watcher:
         """What colony has for the steward waits in its inbox, and its own hook hands it over with its next prompt as
         context, never as the person's words; so only one short line is typed, when it is idle, and none of colony's
         text lands in the conversation the person reads. A line that didn't bring it over is typed again later."""
+        if board.restore_held():
+            return
         rows = inbox()
         if not rows or snapshot()["state"] != "idle":
             return
@@ -1014,7 +1017,7 @@ class Watcher:
         """Every minute, with no tokens: each program's usage limits; past the threshold its projects wind down
         (told on their next turn, not woken), and at the reset they're woken to carry on. Then turbo, which turns
         projects up while a program's week runs behind pace."""
-        if time.time() - self.usage_checked < 60:
+        if board.restore_held() or time.time() - self.usage_checked < 60:
             return
         self.usage_checked = time.time()
         from . import turbo, usage
@@ -1103,6 +1106,15 @@ class Watcher:
         context.tick_all()
 
     def tick(self):
+        if board.restore_held():
+            return
+        if self.restore_waiting:
+            if self.enabled:
+                ensure()
+            else:
+                from . import turbo
+                turbo.stand_down("the steward is off, and turbo runs with it")
+            self.restore_waiting = False
         from . import vision, continuation, recovery, repair
         console.expire_inputs()                     # retract only proven stale system input, never the person's draft
         repair.tick()                               # optional native repair host, independent of the steward agent
@@ -1509,12 +1521,13 @@ def last_commit(root):
 def start(enabled=True):
     """The steward's session and the watcher, alongside the board. Without the steward, the watcher keeps neither
     the safe pause nor turbo, so turbo stands down."""
-    if enabled:
-        ensure()
-    else:
-        from . import turbo
-        turbo.stand_down("the steward is off, and turbo runs with it")
     watcher = Watcher(enabled=enabled)
+    if not board.restore_held():
+        if enabled:
+            ensure()
+        else:
+            from . import turbo
+            turbo.stand_down("the steward is off, and turbo runs with it")
     threading.Thread(target=watcher.run, daemon=True).start()
     return watcher
 

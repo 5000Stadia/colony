@@ -2,7 +2,8 @@
 
 `colony stop --still`: every project lands its work as a pause does (R134), helpers included; once each is still, the
 Codex app hosts stop and the sessions end, and only then is the clean-stop mark written, so a copy of the folder taken
-after it carries no half-written minute. The next start resumes what it paused.
+after it carries no half-written minute. An ordinary start resumes what it paused; a restored copy waits for the
+person to check it.
 
 `colony move NAME`: one project, the same way: what outside it names its folder is shown first, then it lands its
 work, its console and Codex host stop, the folder moves, everything colony keeps about it is re-pointed
@@ -20,6 +21,7 @@ from . import board, console
 
 WAIT = 60 * 60          # the longest a hand-over waits for work to land, as a restart does (machine.py)
 LOOK = 5                # seconds between looks
+RESTORE_NOTICE = "This colony was restored from a copy; nothing runs by itself until you check it."
 
 
 def still(root):
@@ -57,6 +59,31 @@ def mark_path():
     return board.home() / "stopped.json"
 
 
+def _mark():
+    try:
+        mark = json.loads(mark_path().read_text())
+        return mark if isinstance(mark, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _generation(value):
+    return value if type(value) is int and value >= 0 else None
+
+
+def _machine_generation():
+    try:
+        return _generation(json.loads((board.machine_state() / "generation").read_text()))
+    except (OSError, ValueError):
+        return None
+
+
+def hold_restore(why):
+    """Keep the reason and first time a copy was found, including across starts while it waits."""
+    if not board.restore_held():
+        board.save_json(board.home() / "restore-hold.json", {"why": why, "since": board.now()})
+
+
 def stop_still(stop_sessions, wait=WAIT, say=print):
     """colony stop --still. Returns 0 once still and stopped, 1 if work hadn't landed in time (nothing stopped)."""
     roots = [p for p in board.projects(board.registry()) if p.exists() and not board.paused(p)]
@@ -72,29 +99,52 @@ def stop_still(stop_sessions, wait=WAIT, say=print):
         say(f"not stopped: the Codex app host of {', '.join(held)} didn't stop; everything stays paused, so try again")
         return 1
     stop_sessions()
-    try:
-        generation = json.loads(mark_path().read_text()).get("generation", 0) + 1
-    except (OSError, ValueError):
-        generation = 1
+    generation = (_generation(_mark().get("generation")) or 0) + 1
     board.save_json(mark_path(), {"at": board.now(), "still": True, "generation": generation})
+    board.save_json(board.machine_state() / "generation", generation)
     say("colony is still: every project landed its work, and nothing of colony's is running. `~/colony/start` brings "
         "it back, each project resuming where it stopped.")
     return 0
 
 
 def started():
-    """At start: projects stilled by stop --still resume, and the clean-stop mark is cleared (a copy taken from here
-    on is of a running colony)."""
+    """Before launch, tell a restored copy from a crash. Return whether it must wait for the person."""
+    with board.board_lock("restore"):
+        if board.restore_held():
+            return True
+        mark = _mark()
+        generation, machine = _generation(mark.get("generation")), _machine_generation()
+        if generation is not None and (machine is None or generation < machine):
+            hold_restore("This home has a generation but no record on this machine." if machine is None else
+                         f"This home's generation ({generation}) is behind this machine's ({machine}).")
+            return True
+        # An old board or a fresh install starts its records here. A home ahead of the machine can be a stop
+        # interrupted between the two writes, so it brings the machine forward without a restore hold.
+        generation = generation if generation is not None else (machine or 0)
+        board.save_json(board.machine_state() / "generation", generation)
+        _resume_still(dict(mark, generation=generation))
+        return False
+
+
+def resume_restored():
+    """The person's check accepts this copy. Match the machine before letting the watcher run again."""
+    with board.board_lock("restore"):
+        if not board.restore_held():
+            return False
+        mark = _mark()
+        generation = _generation(mark.get("generation")) or 0
+        board.save_json(board.machine_state() / "generation", generation)
+        _resume_still(dict(mark, generation=generation))
+        (board.home() / "restore-hold.json").unlink()
+        return True
+
+
+def _resume_still(mark):
+    """Resume only projects stilled for copying; keep pauses the person chose."""
     for root, row in list(board.paused_projects().items()):
         if row.get("by") == "still" and Path(root).exists():
             board.resume_project(root)
-    path = mark_path()
-    try:
-        mark = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return
-    if mark.get("still"):
-        board.save_json(path, dict(mark, still=False, started=board.now()))
+    board.save_json(mark_path(), dict(mark, still=False, started=board.now()))
 
 
 def outside(root):

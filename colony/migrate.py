@@ -755,6 +755,8 @@ def unpack(archive, force=False, say=print):
             raise SystemExit(f"colony: unpacking stopped: {err}. What was unpacked before it stays; once that's put "
                              "right, --force unpacks it all again")
         r.whole = True
+    from . import handover
+    handover.hold_restore("This colony was unpacked from an archive.")
     kinds = [p["kind"] for p in note["parts"]]
     say(f"Unpacked: colony's home, {kinds.count('project')} project folder(s) on the board and {kinds.count('archived')} "
         f"archived, {kinds.count('claude')} folder(s) of Claude Code's conversations"
@@ -815,8 +817,8 @@ def remake(note, say=print):
         + (["the Artificial Analysis key (colony bench key)"] if m["aa_key"] else [])
     if later:
         say("Then enter again: " + "; ".join(later))
-    say("Then start colony: colony board. Consoles that were running come back in their own conversations, as after a "
-        "restart, and any with a note waiting starts at once: so sign in first.")
+    say("Then start colony: colony board. Nothing runs by itself until you check the restored copy. "
+        "When ready, use Checked, resume on the board or colony resume --restored.")
 
 
 def _command(checkout):
