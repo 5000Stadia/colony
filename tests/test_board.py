@@ -7095,7 +7095,9 @@ class HandoverTest(BoardBase):
                 roots, by, wait, say, clock=lambda: next(ticks), nap=lambda s: None)):
             self.assertEqual(handover.stop_still(lambda: stopped.append(1), wait=120, say=said.append), 1)
         self.assertIn("waiting for plants (R1 in flight) to land its work", said[0])
-        self.assertIn("plants (R1 in flight) hadn't landed", said[-1])
+        self.assertIn("plants (R1 in flight) has an item of the lead's in flight", said[-1],
+                      "idle with only the item left, it stops waiting at once and says why")
+        self.assertLess(len(said), 3, "not an hour of looks")
         self.assertIn("nothing was stopped", said[-1])
         self.assertEqual(stopped, [], "nothing stopped")
         self.assertIsNone(board.paused(self.root), "carries on as it was")

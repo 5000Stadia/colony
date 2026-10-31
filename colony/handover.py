@@ -59,14 +59,30 @@ def stilled():
     return bool(_mark().get("still")) or any(row.get("by") == "still" for row in board.paused_projects().values())
 
 
+IDLE_LOOKS = 3           # looks in a row with only the lead's items left and every console idle: waiting moves nothing
+
+
+def _items_only(root):
+    """Not still only because an item of the lead's is in flight, its console idle: paused, nothing moves it on."""
+    if not in_flight(root):
+        return False
+    if not console.running(console.session_name(root)):
+        return True
+    return board.seen(console.snapshot(root, lines=4))["state"] != "working"
+
+
 def settle(roots, by, wait=WAIT, say=print, clock=time.monotonic, nap=time.sleep):
     """Each project lands its work (paused, as R134 does, marked `by`); returns those still busy when the wait ran
-    out (empty: all still)."""
+    out (empty: all still). Once all that's left is the lead's items in flight with every console idle, it stops
+    waiting at once: a paused project moves no item on, so the hour would only end in the same refusal."""
     for root in roots:
         board.pause_project(root, by=by)
-    deadline, busy, told = clock() + wait, list(roots), 0
+    deadline, busy, told, idle = clock() + wait, list(roots), 0, 0
     while busy and clock() < deadline:
         busy = [r for r in busy if not still(r)]
+        idle = idle + 1 if busy and all(_items_only(r) for r in busy) else 0
+        if idle >= IDLE_LOOKS:
+            break
         if busy and clock() - told >= 60:
             say(f"waiting for {busy_names(busy)} to land its work…")
             told = clock()
@@ -171,8 +187,9 @@ def stop_still(stop_sessions, wait=WAIT, say=print, sessions=()):
     if busy:
         for root in roots:
             board.resume_project(root)
-        say(f"not stopped: {busy_names(busy)} hadn't landed its work within {wait // 60} minutes; nothing was stopped "
-            "and everything carries on as it was")
+        why = ("has an item of the lead's in flight, which a paused project can't land: land it or hand it back, then "
+               "stop again" if all(_items_only(r) for r in busy) else f"hadn't landed its work within {wait // 60} minutes")
+        say(f"not stopped: {busy_names(busy)} {why}; nothing was stopped and everything carries on as it was")
         return 1
     held = [board.name_of(p) for p in board.projects(board.registry()) if p.exists() and not _codex_stop(p)]
     if held:
