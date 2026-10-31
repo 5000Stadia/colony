@@ -6964,25 +6964,25 @@ class HandoverTest(BoardBase):
     def test_the_folders_trust_moves_with_it_and_nothing_else_in_claude_codes_file(self):
         from colony import handover
         claude = providers.get("claude")
-        self.assertEqual(claude.settings_file(), Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json")
+        self.assertEqual(claude.global_config(), Path(os.environ["CLAUDE_CONFIG_DIR"]) / ".claude.json")
         mine = {"hasTrustDialogAccepted": True, "allowedTools": ["Bash"], "lastSessionId": "s1"}
         before = {"numStartups": 7, "theme": "dark", "oauthAccount": {"emailAddress": "someone@example.com"},
                   "projects": {str(self.root): mine, "/somewhere/else": {"hasTrustDialogAccepted": False}}}
-        claude.settings_file().parent.mkdir(parents=True, exist_ok=True)
-        claude.settings_file().write_text(json.dumps(before, indent=2))
+        claude.global_config().parent.mkdir(parents=True, exist_ok=True)
+        claude.global_config().write_text(json.dumps(before, indent=2))
         dest = Path(self.tmp.name) / "elsewhere" / "plants"
         said = []
         with patch.object(handover, "still", lambda root: True), patch.object(handover, "outside", lambda root: []):
             self.assertEqual(handover.move(self.root, dest, say=said.append), 0, said)
         console.stop(dest)
         self.root = dest
-        after = json.loads(claude.settings_file().read_text())
+        after = json.loads(claude.global_config().read_text())
         self.assertEqual(after["projects"].pop(str(dest.resolve())), {"hasTrustDialogAccepted": True},
                          "its trust answer, nothing else of the old entry")
         self.assertEqual(after, before, "the rest of the file as Claude Code wrote it")
         self.assertIn("trust of the folder carried", said[-1])
         self.assertFalse(claude.carry_trust("/never/trusted", dest / "x"), "an untrusted folder stays untrusted")
-        self.assertFalse(list(claude.settings_file().parent.glob("*.colony-part")))
+        self.assertFalse(list(claude.global_config().parent.glob("*.colony-part")))
 
     def test_a_moved_console_asking_its_trust_question_is_reported_not_resumed(self):
         from colony import handover

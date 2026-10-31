@@ -626,18 +626,11 @@ class ClaudeCode(Provider):
                 path.symlink_to(target, target_is_directory=True)
         return dest
 
-    @classmethod
-    def settings_file(cls):
-        """Claude Code's own record of the person's choices (its sign-up, each folder's trust): .claude.json in its
-        config home when CLAUDE_CONFIG_DIR is set, else in the home folder beside .claude."""
-        home = cls.config_home()
-        return home / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR") else home.parent / ".claude.json"
-
     def carry_trust(self, old, new):
         """PROVIDER: a moved folder keeps the trust the person gave it (Claude Code asks again at a path it hasn't
         seen, "No, exit" first, and the console waits there). Only that one answer is copied to the new path; the rest
         of the file stays as Claude Code wrote it. True when it was carried."""
-        path = self.settings_file()
+        path = self.global_config()
         try:
             data = json.loads(path.read_text())
             folders = data["projects"]
