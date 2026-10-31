@@ -4843,15 +4843,21 @@ class NeedsYouTest(BoardBase):
     def setUp(self):
         super().setUp()
         board.track(self.root)
-        self.saved = (console.snapshot, console.screen, console.press, console.type_into)
-        self.pressed, self.typed, self.state = [], [], {"state": "idle"}
+        self.saved = (console.snapshot, console.screen, console.press, console.type_into, console.paste_into, console.ensure)
+        self.pressed, self.typed, self.state, self.pastes = [], [], {"state": "idle"}, []
         console.snapshot = lambda root, lines=6, name=None: {"state": self.state["state"], "lines": ["done."]}
         console.screen = lambda name: self.CHOICE
         console.press = lambda name, keys: self.pressed.append(keys)
         console.type_into = hearing(self.typed)
+        real_ensure = console.ensure                 # the project's console, said to be there; the monitor's as it was
+        console.ensure = lambda root, *a, settle=0, **kw: "s" if not a else real_ensure(root, *a, **kw)
+        # a reply goes as Chat's messages do: waited for, a choice giving way, its lines in one piece
+        console.paste_into = lambda name, text, answer=False, wait=0: (self.pastes.append((text, answer, wait)),
+                                                                       self.typed.append(text))[-1] or True
 
     def tearDown(self):
-        console.snapshot, console.screen, console.press, console.type_into = self.saved
+        (console.snapshot, console.screen, console.press, console.type_into, console.paste_into,
+         console.ensure) = self.saved
         super().tearDown()
 
     def post(self, port, path, **form):
@@ -4901,6 +4907,8 @@ class NeedsYouTest(BoardBase):
             self.assertIn("asked in its console", board.needs_you(board.registry()))
             self.post(port, "/reply", p=0, text="CSV please", back="/monitor")
             self.assertEqual(self.typed, ["CSV please"], "the reply is typed into its console")
+            self.assertEqual(self.pastes[-1][1:], (True, board.CHAT_WAIT),
+                             "as Chat's send: a choice gives way, and a console not yet showing its box is waited for")
             self.assertNotIn("asked in its console", board.needs_you(board.registry()))
             own = board.render(board.registry(), 0, "")
             self.assertEqual(own.count("class='need'"), board.needs_you(board.registry()).count("class='need'"),
@@ -4917,6 +4925,21 @@ class NeedsYouTest(BoardBase):
             self.assertIn("Keep the old export?", board.needs_you(board.registry()), "left as it was: theirs again")
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+    def test_a_refused_reply_says_why_and_its_question_stays(self):
+        board.record_ask(self.root, "u1", "Export is done. Which format do you want?")
+        console.paste_into = lambda name, text, answer=False, wait=0: False
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as got:
+                self.post(httpd.server_address[1], "/reply", p=0, text="CSV please\nand a PDF", back="/monitor")
+            self.assertEqual(got.exception.code, 409)
+            self.assertIn("Not sent", got.exception.read().decode(), "the page says why, beside what was typed")
+            self.assertIn("asked in its console", board.needs_you(board.registry()), "the question is still theirs")
         finally:
             httpd.shutdown()
             httpd.server_close()

@@ -2768,6 +2768,10 @@ PLAYER = """
       if (r.ok && (r.headers.get('content-type') || '').includes('text/html')) ahead.set(url, {at: Date.now(), url: r.url, html: await r.text()});
     } catch (e) {}
     while (ahead.size > 6) ahead.delete(ahead.keys().next().value); };
+  // a form sent while something is being read, and refused or never delivered: said beside it, what was typed kept
+  const refused = (f, why) => { if (!f) return; const n = f.nextElementSibling;
+    const p = n && n.matches('p.notsent') ? n : document.createElement('p');
+    p.className = 'muted notsent'; p.textContent = why || 'Not sent: try again.'; if (!p.isConnected) f.after(p); };
   const go = async (url, how = {}) => {
     const blocked = () => document.documentElement.classList.contains('media-open') || (how.readingChoice !== undefined && how.readingChoice !== readingFollow.version()) || (how.automatic && (!readingFollow.inChat() || !readingFollow.canFollow()));
     if (blocked()) return;
@@ -2781,15 +2785,15 @@ PLAYER = """
       if (blocked()) { root.classList.remove('going'); return; }
       if (mine !== going) return;
       root.classList.remove('going');
-      if (!r) { if (method === 'GET') location.href = url; return; }
-      if (!(r.headers.get('content-type') || '').includes('text/html')) { if (method === 'GET') location.href = r.url; return; }
+      if (!r) { if (method === 'GET') location.href = url; else refused(how.form, 'Not sent: the board could not be reached. Try again.'); return; }
+      if (!(r.headers.get('content-type') || '').includes('text/html')) { if (method === 'GET') location.href = r.url; else if (!r.ok) refused(how.form, (await r.text()).trim()); return; }
       html = await r.text(); got = r.url; redirected = r.redirected;
       if (blocked()) { root.classList.remove('going'); return; }
     }
     root.classList.remove('going');
     const doc = new DOMParser().parseFromString(html, 'text/html');
     if (mine !== going) return;
-    if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = got; return; }
+    if (!doc.querySelector('body > main')) { if (method === 'GET') location.href = got; else if (r && !r.ok) refused(how.form, ((doc.querySelector('p') || doc.body).textContent || '').trim()); return; }
     const from = location.href, to = method !== 'GET' && !redirected ? location.href : got;
     if (blocked()) return;
     document.dispatchEvent(new Event('colony-leave'));
@@ -2847,7 +2851,7 @@ PLAYER = """
     let d; try { d = b ? new FormData(f, b) : new FormData(f); } catch (e) { d = new FormData(f); if (b && b.name) d.append(b.name, b.value); }
     ev.preventDefault();
     if (method === 'GET') { action.search = new URLSearchParams(d).toString(); go(action.href); }
-    else go(action.href, {method, body: multi ? d : new URLSearchParams(d)});
+    else go(action.href, {method, body: multi ? d : new URLSearchParams(d), form: f});
   });
   window.colonyNav = {keep: O, prefetch, go: (u, how = {}) => document.documentElement.classList.contains('media-open') || (how.automatic && (!readingFollow.inChat() || !readingFollow.canFollow())) ? Promise.resolve() : busy() || how.automatic || how.readingChoice !== undefined ? go(new URL(u, location.href).href, how) : (location.href = u),
     replace: (u) => document.documentElement.classList.contains('media-open') ? Promise.resolve() : busy() ? go(new URL(u, location.href).href, {replace: true}) : location.replace(u),
@@ -5639,13 +5643,19 @@ CHAT = """
   });
   // dictating into the box holds the reading, and Send takes it up within its own tap: the player's, for every box
   P.attach(view);
-  // an answer to what it needs goes from here, the page staying where it is
+  // an answer to what it needs, or a reply to what it asked, goes from here, the page staying where it is; refused, it
+  // says why beside the box, what was typed kept
   box.addEventListener('submit', async (ev) => {
-    const f = ev.target.closest('form[action="/answer"]'); if (!f) return;
+    const f = ev.target.closest('form[action="/answer"], form[action="/reply"]'); if (!f) return;
     ev.preventDefault();
     const d = new FormData(f); if (ev.submitter && ev.submitter.name) d.append(ev.submitter.name, ev.submitter.value);
-    const r = await fetch('/answer', {method: 'POST', body: f.enctype === 'multipart/form-data' ? d : new URLSearchParams(d), redirect: 'manual'}).catch(() => null);
-    if (!r || !(r.ok || r.type === 'opaqueredirect')) { const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: try again.'; f.appendChild(p); return; }
+    const r = await fetch(f.getAttribute('action'), {method: 'POST', body: f.enctype === 'multipart/form-data' ? d : new URLSearchParams(d), redirect: 'manual'}).catch(() => null);
+    if (!r || !(r.ok || r.type === 'opaqueredirect')) {
+      let why = 'Not sent: try again.';
+      if (r) { try { const doc = new DOMParser().parseFromString(await r.text(), 'text/html'); why = ((doc.querySelector('p') || doc.body).textContent || '').trim() || why; } catch (e) {} }
+      const n = f.nextElementSibling, p = n && n.matches('p.notsent') ? n : document.createElement('p');
+      p.className = 'muted notsent'; p.textContent = why; if (!p.isConnected) f.after(p); return; }
+    const n = f.nextElementSibling; if (n && n.matches('p.notsent')) n.remove();
     f.querySelectorAll('textarea, input[type=file]').forEach((t) => { t.value = ''; }); document.activeElement && document.activeElement.blur();
     refresh();
   });
@@ -10510,8 +10520,10 @@ class Handler(BaseHTTPRequestHandler):
                          author='person' if text else 'colony')
             append(root, "dismissed.jsonl", {"type": "dismissed", "key": "verify:" + iid, "at": now()})
         elif path == "/reply" and text:
-            if not console.type_into(console.session_name(root), text, _purpose='person'):
-                return self._send(409, held(root.name, form.get("back", "/")).encode())
+            # as Chat sends it: a console still coming up is waited for, a choice on screen gives way to the answer,
+            # and lines go in one piece (typed, a reply waited on nothing and refused whenever the box wasn't in view)
+            if not console.paste_into(console.ensure(root, settle=SETTLE), text, answer=True, wait=CHAT_WAIT):
+                return self._send(409, held(root.name, form.get("back", "/"), root).encode())
             answer_asks(root, "from the board")
         elif path == "/console/stop":
             console.stop(root)
