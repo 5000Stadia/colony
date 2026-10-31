@@ -898,7 +898,10 @@ def type_into(name, text, wait=0, *, _purpose='system'):
     is theirs to send, or its box isn't on screen (looked for up to `wait` seconds while it comes up): then nothing
     is typed, and False says so. Colony's own unsent line left there earlier is sent first, rather than mistaken for
     the person's draft, and then the message: sending only the leftover lost the person's first message to the
-    steward. True only once the message has left the box."""
+    steward. True only once the message has left the box. Colony's own words never go to a project the person paused
+    (R134); theirs do."""
+    if _purpose == 'system' and held(name):
+        return False
     if not running(name) or ready(name, wait) is None or asking(name):   # a choice on screen is the person's: colony's word waits
         return False
     with _typing(name) as mine:
@@ -918,6 +921,12 @@ def type_into(name, text, wait=0, *, _purpose='system'):
             return _sent(name, text)
         except (subprocess.CalledProcessError, OSError, ValueError):
             return False
+
+
+def held(name):
+    """Whether this session is the console of a project the person paused: colony types nothing of its own there."""
+    from . import board
+    return any(session_name(root) == name for root in board.paused_projects())
 
 
 def paste_into(name, text, answer=False, wait=0):

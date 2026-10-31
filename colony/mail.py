@@ -62,6 +62,8 @@ def sender():
 def blocker(root, snap=None):
     """Known local reasons for delay. Cached authentication is explicitly a last check, not a fresh probe."""
     from . import providers, usage
+    if board.paused(root):
+        return {'code': 'project-paused', 'reason': "the person paused the recipient; it hears its mail when they resume it"}
     paused = usage.paused().get(str(root))
     if paused:
         window = paused.get('window', 'usage')

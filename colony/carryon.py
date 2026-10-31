@@ -67,7 +67,7 @@ def woke(root):
 def wanted(root):
     """Whether this project may be woken to carry on now, by everything but time."""
     from . import progress, providers, usage
-    if board.project_settings(root)[1].get("carry_on") == "off":
+    if board.project_settings(root)[1].get("carry_on") == "off" or board.paused(root):
         return False
     if progress.current(root):                       # a version under way carries itself on
         return False

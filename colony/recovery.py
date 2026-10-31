@@ -103,7 +103,7 @@ def tick(root):
     if found["key"] in done or now - found["at"] < GRACE:
         return None
     g = lead.info(root)
-    if (str(root) in usage.paused() or g.get("paused") or g.get("handoff") or context.refreshing(root)
+    if (str(root) in usage.paused() or board.paused(root) or g.get("paused") or g.get("handoff") or context.refreshing(root)
             or board.asks(root)):
         return None
     name = console.session_name(root)
@@ -159,7 +159,7 @@ def frozen(root, now=None):
         rows = {}
     mine = rows.get(key, {"restarts": []})
     g = lead.info(root)
-    if (str(root) in usage.paused() or g.get("paused") or g.get("handoff") or context.refreshing(root)
+    if (str(root) in usage.paused() or board.paused(root) or g.get("paused") or g.get("handoff") or context.refreshing(root)
             or board.asks(root)):
         _timers.pop(key, None)
         return None
@@ -289,7 +289,7 @@ def rebooted(now=None):
     for r, text in list(tell.items()):
         root, name = on[r], console.session_name(on[r])
         g = lead.info(root)
-        if r in back or not console.running(name) or str(root) in usage.paused() or g.get("paused") or g.get("handoff") \
+        if r in back or not console.running(name) or str(root) in usage.paused() or board.paused(root) or g.get("paused") or g.get("handoff") \
                 or context.refreshing(root) or board.asks(root):
             continue
         if console.age(name) > 20 and console.snapshot(root, lines=1)["state"] == "idle" and not console.drafting(name) \

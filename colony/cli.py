@@ -1161,6 +1161,7 @@ def cmd_notes(a):
                                         for n in fresh)          # the person, in the console or on the board
         text = "\n\n".join(filter(None, [
             standing,
+            board.PAUSED_TEXT if board.paused(root) else "",
             _monitor.render_inbox(handed),
             board.open_gates_line(root) if spoke and not own_monitor else "",
             lead.role_text(root) if a.session else '',
@@ -1767,6 +1768,24 @@ def cmd_remove(a):
     return 0
 
 
+def cmd_pause(a):
+    from . import board
+    root = _project(a.name) if a.name else board.root_of()
+    name = board.name_of(root)
+    if a.off:
+        print(f"{name} is resumed: what it holds is back on the person's list, and colony reaches its agent again"
+              if board.resume_project(root) == "resumed" else f"{name} isn't paused")
+        return 0
+    if board.pause_project(root) == "already":
+        print(f"{name} is already paused (colony pause {a.name or ''} --off resumes it)".replace("  ", " "))
+        return 0
+    row = board.paused(root)
+    print(f"{name} is paused: " + ("its agent was told to land what's in flight; " if row.get("told") else
+                                   "it was at work and couldn't be told, so it stops when this turn ends; " if row.get("working") else "")
+          + "colony sends it nothing, and what it waits on is off the person's list until it is resumed")
+    return 0
+
+
 def cmd_close(a):
     from . import board
     try:
@@ -2166,6 +2185,9 @@ def main(argv=None):
     p.add_argument("--cancel", action="store_true", help="stop it: each project asked carries on")
     p.add_argument("--status", action="store_true", help="how far the parking is")
     p.set_defaults(fn=cmd_reboot)
+    p = sub.add_parser("pause", help="pause a project: it lands its work, colony sends it nothing, and what it waits on leaves the person's list until resumed")
+    p.add_argument("name", nargs="?"); p.add_argument("--off", action="store_true", help="resume it: what it holds comes back, then its agent")
+    p.set_defaults(fn=cmd_pause)
     p = sub.add_parser("close", help="close a project safely: it lands its work, then comes off the board (files and conversation kept)")
     p.add_argument("name"); p.add_argument("--cancel", action="store_true", help="keep it on the board after all")
     p.set_defaults(fn=cmd_close)

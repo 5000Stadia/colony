@@ -7497,6 +7497,91 @@ class ActiveHoursTest(HoursBase):
         self.assertIn('plants showed "Watering chart"', self.sent[0], "held, not lost: it comes when their hours begin")
 
 
+class PauseTest(HoursBase):
+    """R134: a project the person paused. Colony leaves its console alone; what it waits on is off their list, kept,
+    and comes back as new when they resume it."""
+
+    def test_a_paused_project_holds_its_items_off_needs_you_and_resume_puts_them_back_as_new(self):
+        with self.clock(14):                                           # Wednesday afternoon
+            first = board.add_gate(self.root, "Which reminders first?", "R3", default="email first")
+            plain = board.add_gate(self.root, "Keep the old export?", "R2")
+        with self.clock(15):
+            self.assertEqual(len(board.moments(self.root)), 2)
+            self.assertIn("Pause project", board.settings_panel(0, self.root))
+            self.assertEqual(board.pause_project(self.root), "paused")
+            self.assertEqual(board.pause_project(self.root), "already")
+            self.assertEqual((board.waiting_items(self.root), board.moments(self.root)), ([], []))
+            needs = board.needs_you(board.registry())
+            self.assertNotIn("Which reminders first?", needs)
+            self.assertIn("Paused, holding theirs until you resume: <a href='/?p=0'>plants</a> (2)", needs)
+            page = board.render(board.registry(), 0)
+            self.assertIn("<b>Paused</b> since", page)
+            self.assertIn("its 2 items for you are off Needs you until you resume", page)
+            self.assertNotIn("Pause project", board.settings_panel(0, self.root))
+            self.assertTrue(board.at_work(self.root).startswith("Paused"))
+            self.assertEqual(self.sent, [], "an idle agent is told nothing")
+            self.assertIn(board.PAUSED_TEXT, self.deliver(), "the person talking to it: it knows it is paused")
+        with self.clock(7, 30, day=12):                                # Monday: past when the default would have stood
+            self.assertEqual(board.stand_defaults(self.root), [], "no default stands while paused")
+        with self.clock(9, day=12):
+            self.assertEqual(board.resume_project(self.root), "resumed")
+            self.assertEqual(board.resume_project(self.root), "not paused")
+            self.assertEqual({w["key"] for w in board.waiting_items(self.root)}, {"gate:" + first["id"], "gate:" + plain["id"]})
+            self.assertEqual(board.stand_defaults(self.root), [], "back as new: the default's clock starts at the resume")
+            self.assertFalse([n for n in board.notes(self.root) if n.get("kind") == "resume"], "idle when paused: no carry-on")
+            self.assertNotIn("<b>Paused</b>", board.render(board.registry(), 0))
+        with self.clock(7, 29, day=14):
+            self.assertEqual(board.stand_defaults(self.root), [])
+        with self.clock(7, 30, day=14):                                # Wednesday: after a whole Tuesday on their list
+            self.assertEqual([g["id"] for g in board.stand_defaults(self.root)], [first["id"]])
+
+    def test_an_agent_at_work_is_told_once_to_land_and_told_to_carry_on_at_resume(self):
+        console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
+        board.pause_project(self.root)
+        board.pause_project(self.root)
+        self.assertEqual(self.sent, [board.PAUSE_LINE])
+        self.assertTrue(board.paused(self.root)["told"])
+        board.resume_project(self.root)
+        [note] = [n for n in board.notes(self.root) if n.get("kind") == "resume"]
+        self.assertEqual(note["text"], "The person resumed this project: carry on where you stopped.")
+
+    def test_colony_types_nothing_of_its_own_into_a_paused_console_and_the_person_still_can(self):
+        from colony import mail
+        real, name = self.saved[1], console.session_name(self.root)
+        board.pause_project(self.root)
+        self.assertTrue(console.held(name))
+        self.assertFalse(console.held("board-other-0000"))
+        self.assertEqual(mail.blocker(self.root)["code"], "project-paused")
+        looked = []
+        with patch.object(console, "running", side_effect=lambda n: looked.append(n) or False):
+            self.assertFalse(real(name, "[colony] You have mail."))
+            self.assertEqual(looked, [], "refused before its console is even looked at")
+            real(name, "my own words", _purpose="person")
+            self.assertEqual(looked, [name], "the person's own message goes on to its console")
+        board.resume_project(self.root)
+        self.assertFalse(console.held(name))
+        self.assertIsNone(mail.blocker(self.root))
+
+    def test_what_the_person_cleared_stays_cleared_across_a_pause(self):
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [x] R1", "- [?] R1"))
+        board.clear_waiting(self.root, "verify:R1")
+        self.assertEqual(board.waiting_items(self.root), [])
+        board.pause_project(self.root)
+        self.assertEqual(board.waiting_items(self.root), [])
+        board.resume_project(self.root)
+        self.assertEqual(board.waiting_items(self.root), [])
+        self.assertIn("verify:R1", board.dismissed(self.root))
+
+    def test_colony_pause_names_the_project_and_off_resumes_it(self):
+        out = self.cli("pause", "plants")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("plants is paused", out.stdout)
+        self.assertIn("plants is already paused", self.cli("pause", "plants").stdout)
+        self.assertIn("plants is resumed", self.cli("pause", "plants", "--off").stdout)
+        self.assertIn("plants isn't paused", self.cli("pause", "plants", "--off").stdout)
+        self.assertIsNone(board.paused(self.root))
+
+
 class DailyPageTest(HoursBase):
     """R80: one page a day for each project, made by code from colony's records: what landed, the day's decisions by
     number with defaults that stand if skipped, the queue, and what is held for the person's hours."""

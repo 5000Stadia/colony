@@ -1441,6 +1441,109 @@ def _closed_path():
     return home() / "closed.json"
 
 
+# Pausing a project (R134, the person: "pause a project, which basically pauses the agents console. saves then retracts
+# all gated needs you items. Unpausing Resurfaced those items then unpauses."). While paused, colony types nothing of its
+# own into its console (console.type_into), what it waits on is off the person's list (waiting_items), and no skipped
+# default stands (stand_defaults). Nothing is answered or withdrawn: resuming puts it all back.
+PAUSE_LINE = ("[colony] The person paused this project. Land your work now: let what is running finish, helpers included "
+              "(don't cancel them), take in what they hand back, and commit what works (an unfinished item stays in "
+              "progress); start nothing new. Then end your turn with a short word on where things stand. Colony sends you "
+              "nothing more until they resume it, and your open questions wait off their list until then.")
+PAUSED_TEXT = ("This project is paused by the person: colony sends you nothing until they resume it, and your open "
+               "questions wait off their list. Answer what they ask here; start nothing else.")
+
+
+def _paused_path():
+    return home() / "paused-projects.json"
+
+
+def paused_projects():
+    """The projects the person paused: {path: {at, by, working}}."""
+    try:
+        return json.loads(_paused_path().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def paused(root):
+    """The person's pause of this project ({at, by, working}), or None."""
+    return paused_projects().get(str(Path(root)))
+
+
+@contextmanager
+def _pause_lock():
+    """One pause or resume at a time: the person's tap and the steward's command can't undo each other."""
+    import fcntl
+    home().mkdir(parents=True, exist_ok=True)
+    with (home() / "paused-projects.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def _save_paused(rows):
+    home().mkdir(parents=True, exist_ok=True)
+    path = _paused_path()
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rows, indent=1))
+    tmp.replace(path)
+
+
+def pause_project(root, by="person"):
+    """Pause it: an agent at work is told once to land what's in flight, then colony leaves its console alone and holds
+    what it waits on off the person's list. "paused", or "already"."""
+    root = Path(root)
+    with _pause_lock():
+        rows = paused_projects()
+        if str(root) in rows:
+            return "already"
+        working = console.snapshot(root, lines=1)["state"] == "working"
+        told = working and console.type_into(console.session_name(root), PAUSE_LINE)
+        rows[str(root)] = {"at": now(), "by": by, "working": working, "told": bool(told)}
+        _save_paused(rows)
+    return "paused"
+
+
+def resume_project(root):
+    """Resume it: what waited comes back to the person's list as new (a skipped default stands a whole day from now, not
+    from before the pause), then colony reaches its agent again; one at work when paused is told to carry on.
+    "resumed", or "not paused"."""
+    root = Path(root)
+    with _pause_lock():
+        rows = paused_projects()
+        row = rows.get(str(root))
+        if not row:
+            return "not paused"
+        until = now()
+        with gate_lock(root):                        # what it held first, back on the list as new; then its agent
+            for g in gates(root):
+                if not g["answer"] and not g.get("waits_for") and (g.get("held_until") or "") < until:
+                    append(root, "gates.jsonl", {"type": "held", "of": g["id"], "at": until, "until": until})
+        rows.pop(str(root), None)
+        _save_paused(rows)
+    if row.get("working"):
+        add_note(root, None, "The person resumed this project: carry on where you stopped.", author="colony", kind="resume")
+    return "resumed"
+
+
+def paused_since(at):
+    ts = epoch(at)
+    return hours.at_clock(ts) if time.localtime(ts)[:3] == time.localtime()[:3] else hours.at_day(ts)
+
+
+def pause_line(root, pid):
+    """While a project is paused, said on every tab of it, with Resume."""
+    row = paused(root)
+    if not row:
+        return ""
+    n = len(moments_of(waiting_items(root, paused_too=True)))
+    held = (f"its {n} item{'s' * (n != 1)} for you {'are' if n != 1 else 'is'} off Needs you until you resume"
+            if n else "anything it asks waits off Needs you until you resume")
+    return (f"<div class='card paused'><p><b>Paused</b> since {e(paused_since(row['at']))}. Colony sends its agent nothing, and "
+            f"{held}. Your own messages in Chat still reach it.</p><form method='post' action='/project/pause'>"
+            f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='off' value='1'>"
+            f"<button>Resume</button></form></div>")
+
+
 def fenced(root):
     """Whether a project is being closed or was closed and not reopened: continuation leaves it alone, so nothing
     sets it going again behind the person's close."""
@@ -1864,7 +1967,9 @@ def stand_defaults(root, gs=None):
     """A reversible decision the person skipped: a gate with a default, still unanswered as their next day begins
     after a whole day on their page, is answered with it by colony, and its note reaches the agent as their answer.
     Never a gate without a default or with consultant points, nor one they have started answering on the page. The
-    gates whose defaults stood."""
+    gates whose defaults stood. None while the project is paused: the person hasn't seen them."""
+    if paused(root):
+        return []
     gs = gates(root) if gs is None else gs
     times = item_times(root) if any(g.get("when") and g.get("default") for g in gs) else {}
     clock = epoch(now())
@@ -2438,6 +2543,12 @@ def stirred():
 
 
 def at_work(root, n=70):
+    """What a project is at, in a few words from its roadmap, led by Paused while the person has it paused."""
+    doing = _at_work(root, n)
+    return ("Paused · " + doing if doing else "Paused") if paused(root) else doing
+
+
+def _at_work(root, n=70):
     """What a project is at, in a few words from its roadmap: the item in progress (and how many more are), else the
     next one to come outside Later. Sharing a plan, an agent's own items in progress; a helper with none, nothing."""
     from . import lead
@@ -6082,7 +6193,7 @@ def render(reg, pid, view="overview", show_all=""):
     # of a phone's first screen before the tab's own content (the sections review, 2026-10-28)
     front = view == "overview"
     out.append(f"<header class='project'><div class='titlerow'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{pin}{message}{settings}</div>{tabs(pid, view, root)}"
-               + switch_line(root) + lead_status
+               + switch_line(root) + pause_line(root, pid) + lead_status
                + (f"{vision_box(root, pid)}{rules_box(root, pid)}{wakes_box(root, pid)}<p class='muted'>Roadmap: {done}/{total}{active}</p>"
                   + project_usage(root) if front else "") + "</header>")
     if view == "showcase":
@@ -6995,7 +7106,13 @@ def settings_panel(pid, root):
     merged, own = project_settings(root)
     return (f"{project_settings_form(pid, own, root=root)}"
                 f"<p class='muted'>Provider, model, effort and remote access apply when its console next starts; helper tiers at once.</p>"
-                f"<p class='muted'>Folder: <code>{e(workdir(root))}</code></p>{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr><div class='dangers'>"
+                f"<p class='muted'>Folder: <code>{e(workdir(root))}</code></p>{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr>"
+                + ("" if paused(root) else
+                   f"<p class='muted'>Pause stops colony setting its agent going (at work, it lands that turn first) and "
+                   f"takes its decisions and questions off Needs you, keeping them all; Resume puts them back.</p>"
+                   f"<form method='post' action='/project/pause'><input type='hidden' name='p' value='{pid}'>"
+                   f"<button class='quiet'>Pause project</button></form>")
+                + "<div class='dangers'>"
                 f"<p class='muted'>Archive takes it off the board and {e(the_steward(possessive=True))} watch (at work, it finishes that turn "
                 f"first); All projects → Archived brings it back as it was, the same conversation.</p>"
                 f"<form method='post' action='/project/archive'><input type='hidden' name='p' value='{pid}'>"
@@ -7687,7 +7804,7 @@ def clash_page(reg, pid, pin, draft, kept):
     return shell(reg, pid, body)
 
 
-def waiting_items(p, snap=None):
+def waiting_items(p, snap=None, paused_too=False):
     """Everything a project is waiting on the person for. The one definition: Needs you, the project's
     Waiting on you, the sidebar's count, `colony projects` and the steward's wake-ups all read this.
       gate    a decision the agent put to the person (`colony gate`), once due: not before its item, nor their hours;
@@ -7696,8 +7813,9 @@ def waiting_items(p, snap=None):
       screen  its console needs the person but the choice can't be read (answer it in the console)
       ask     a turn that asked the person something in the console, once their hours hold
       verify  a roadmap item built but waiting to be checked or accepted
-    Each has a key that stays the same while it waits, so it is announced once."""
-    if not p.exists():
+    Each has a key that stays the same while it waits, so it is announced once. A project the person paused waits on
+    nothing until they resume it (paused_too: what it holds meanwhile)."""
+    if not p.exists() or (not paused_too and paused(p)):
         return []
     gs = gates(p)
     if stand_defaults(p, gs):
@@ -7783,7 +7901,10 @@ def moments(p, snap=None):
     """What a project waits on the person for, as moments to answer rather than items: a gate or a choice
     on screen is its own; a turn that asked something, together with the items it left to verify, is one;
     items to verify with no question beside them are one. The counts count these."""
-    items = waiting_items(p, snap)
+    return moments_of(waiting_items(p, snap))
+
+
+def moments_of(items):
     single = [[w] for w in items if w["kind"] in ("gate", "choice", "screen", "checkpoint")]
     asks, verify = [w for w in items if w["kind"] == "ask"], [w for w in items if w["kind"] == "verify"]
     return single + ([asks + verify] if asks else [verify] if verify else [])
@@ -8143,7 +8264,12 @@ def needs_you(reg):
     from . import monitor
     rows = ([choices] if choices else []) + support_rows() + lesson_rows()
     aside = []                                         # the projects the person left out of the steward's: named, not listed
+    held = []                                          # the projects the person paused: what each holds, named
     for pid, p, _ in arranged(projects(reg)):
+        if p.exists() and paused(p):
+            n = len(moments_of(waiting_items(p, paused_too=True)))
+            held += [f"<a href='/?p={pid}'>{e(name_of(p))}</a>" + (f" ({n})" if n else "")]
+            continue
         if p.exists() and not monitor.involved(p):
             n = len(moments(p))
             aside += [f"<a href='/?p={pid}'>{e(name_of(p))}</a> ({n})"] if n else []
@@ -8158,6 +8284,7 @@ def needs_you(reg):
                     f"<span class='badge gate' title='waiting on you'>{len(decided) + len(others)}</span></h3>"
                     f"{''.join(decided[:NEEDS_SHOWN])}{fold}{box}{''.join(others)}</section>")
     out = "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
+    out += f"<p class='muted'>Paused, holding theirs until you resume: {', '.join(held)}.</p>" if held else ""
     return out + (f"<p class='muted'>Also waiting, in projects {e(the_steward())} doesn't follow: {', '.join(aside)}.</p>" if aside else "") + lessons_kept()
 
 
@@ -10438,6 +10565,13 @@ class Handler(BaseHTTPRequestHandler):
             keys = providers.of(root).choose(console.screen(name), form["option"])
             if keys:
                 console.press(name, keys)
+        elif path == "/project/pause":
+            (resume_project if form.get("off") else pause_project)(root)
+            self.send_response(303)
+            self.send_header("Location", f"/?p={pid}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         elif path in ("/project/archive", "/project/close", "/nest/join", "/nest/leave"):
             from . import nest
             if path == "/project/close":
