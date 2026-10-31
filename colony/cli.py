@@ -105,7 +105,7 @@ def server():
 
 def _tmux_env():
     """tmux gives a new session the tmux server's environment, not ours: pass on what the board needs."""
-    keep = ("COLONY_BOARD_HOME", "COLONY_CONSOLE_CMD", "PYTHONPATH", "PATH")
+    keep = ("COLONY_BOARD_HOME", "COLONY_SECRETS_HOME", "COLONY_CONSOLE_CMD", "PYTHONPATH", "PATH")
     return [x for k in keep if os.environ.get(k) for x in ("-e", f"{k}={os.environ[k]}")]
 
 

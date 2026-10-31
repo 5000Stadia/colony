@@ -24,13 +24,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 def token():
-    """The console's key: made once and kept in the board's folder, so a page open in the browser still
+    """The console's key: made once and kept with its secrets, so a page open in the browser still
     reattaches after the board restarts."""
     from . import board
-    path = board.home() / "console-token"
+    path = board.secrets() / "console-token"
     if not path.exists():
-        board.home().mkdir(parents=True, exist_ok=True)
-        path.write_text(secrets.token_urlsafe(24))
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(secrets.token_urlsafe(24))
         path.chmod(0o600)
     return path.read_text().strip()
 # How a session starts is its provider's (colony/providers.py): with Claude Code, Remote Control named for the

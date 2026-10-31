@@ -18,6 +18,7 @@ A record, one JSON object per line for `colony bench import FILE`:
    "url": where it was found, "note": anything a reader needs (the source's own name for the variant)}
 """
 import json
+import os
 import re
 from pathlib import Path
 
@@ -441,7 +442,7 @@ AA_STEPS = [("Create a free account at Artificial Analysis", "https://artificial
 
 
 def key_path():
-    return board.home() / "bench" / "aa-key"
+    return board.secrets() / "bench" / "aa-key"
 
 
 def aa_key():
@@ -458,7 +459,9 @@ def set_key(key):
     if not key.strip():
         p.unlink(missing_ok=True)
         return
-    p.write_text(key.strip() + "\n")
+    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(key.strip() + "\n")
     p.chmod(0o600)
 
 

@@ -14,7 +14,7 @@ import html
 import json
 import os
 import re
-import secrets
+import secrets as random_secrets
 import shutil
 import subprocess
 import time
@@ -218,6 +218,60 @@ SKELETON = """# Roadmap
 
 def home():
     return Path(os.environ.get("COLONY_BOARD_HOME", Path.home() / ".config" / "colony"))
+
+
+# Colony-owned secrets, relative to secrets(): also the archive's exclusion list. Provider-owned sign-ins stay
+# with their programs. PROVIDER: claude-token is Claude Code's long-lived subscription sign-in.
+SECRET_PATHS = {
+    "claude-token": ("colony's long-lived Claude sign-in", "claude setup-token, pasted in Settings"),
+    "connections": ("the connections' keys", "entered again on the Connections page"),
+    "bench/aa-key": ("the Artificial Analysis key", "colony bench key"),
+    "console-token": ("the board's key for its consoles", "made again by colony"),
+    "page-secret": ("the board's key for its pages", "made again by colony"),
+}
+
+
+def _move_secret(old, new):
+    """Move legacy keys without replacing a key already saved at the destination."""
+    if not old.exists():
+        return
+    if old.is_dir():
+        new.mkdir(parents=True, exist_ok=True, mode=0o700)
+        new.chmod(0o700)
+        for child in old.iterdir():
+            _move_secret(child, new / child.name)
+        old.rmdir()
+    else:
+        new.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if new.exists():
+            if old.read_bytes() != new.read_bytes():
+                raise RuntimeError(f"Different secrets exist at {old} and {new}; keep the intended one before retrying.")
+            new.chmod(0o600)
+            old.unlink()
+        else:
+            old.chmod(0o600)
+            shutil.move(str(old), str(new))
+
+
+def secrets(*, create=True):
+    """Machine-local keys. A test board gets its own sibling folder; listing an archive must not create or move it."""
+    default = home().with_name(home().name + "-secrets") if "COLONY_BOARD_HOME" in os.environ else \
+        Path.home() / ".config" / "colony"
+    folder = Path(os.environ.get("COLONY_SECRETS_HOME", default)).expanduser()
+    if create:
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        folder.chmod(0o700)
+        if folder.resolve() != home().resolve():
+            # The board and its command-line clients can first read an old key at the same time.
+            import fcntl
+            fd = os.open(folder, os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                for name in SECRET_PATHS:
+                    _move_secret(home() / name, folder / name)
+            finally:
+                os.close(fd)
+    return folder
 
 
 def scoped(base):
@@ -773,7 +827,7 @@ def ident(root, make=True):
         pass
     if not make or not Path(root).is_dir():
         return None
-    value = secrets.token_hex(6)
+    value = random_secrets.token_hex(6)
     path.parent.mkdir(exist_ok=True)
     path.write_text(value + "\n")
     _exclude_id(root)
@@ -1207,7 +1261,7 @@ def record_ask(root, key, text, explicit=False):
     if not explicit and all(restates_gate(q, root) for q in questions(text) or [text]):
         return None
     answer_asks(root, "superseded by a later turn")
-    ask = {"type": "ask", "id": "a" + secrets.token_hex(4), "at": now(), "key": key, "text": text.strip()}
+    ask = {"type": "ask", "id": "a" + random_secrets.token_hex(4), "at": now(), "key": key, "text": text.strip()}
     until = hours.held_until(epoch(ask["at"]))       # asked at night: the person's when their hours begin
     if until:
         ask["held_until"] = until
@@ -1431,7 +1485,7 @@ def track(path, register=True, private=False, described=""):
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if first_track and not paired and not any(n.get('onboarding') == 'vision' for n in notes(root)):
         said = " ".join(str(described or "").split())[:2000]     # what they wrote in "What is it?" (R125)
-        append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(4), at=now(),
+        append(root, 'notes.jsonl', dict(type='note', id='n' + random_secrets.token_hex(4), at=now(),
                author='colony', anchor=None, text=(join if joining else BEGIN)
                + (f"\n\nThe person described it as they added it: \"{said}\"" if said else ""), onboarding='vision'))
     wire(root)
@@ -1875,7 +1929,7 @@ def said_reply(root, text):
 
 def add_note(root, anchor, text, *, author, quiet=False, kind=None):
     """A note for the agent. A quiet one reaches it on its next turn like any other, but does not wake it."""
-    note = {"type": "note", "id": "n" + secrets.token_hex(4), "at": now(), "author": author,
+    note = {"type": "note", "id": "n" + random_secrets.token_hex(4), "at": now(), "author": author,
             "anchor": anchor, "text": text.strip(), **({"quiet": True} if quiet else {}), **({"kind": kind} if kind else {})}
     append(root, "notes.jsonl", note)
     return note
@@ -1904,7 +1958,7 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
     """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
     (stand_defaults); one with consultant points never does, since each point needs their decision."""
     default = (default or "").strip()
-    gate = dict(type="gate", id="g" + secrets.token_hex(4), at=now(), question=question.strip(), item=item or when,
+    gate = dict(type="gate", id="g" + random_secrets.token_hex(4), at=now(), question=question.strip(), item=item or when,
                 why=why.strip(), **({"when": when} if when else {}), **({"default": default} if default else {}))
     if not gate["question"]:
         raise ValueError("A gate needs its question.")
@@ -1986,7 +2040,7 @@ def _answer_gate(root, gate_id, text, *, tell, decisions, via=None):
         raise ValueError("This gate has no consultant points.")
     elif not text:
         raise ValueError("Give your answer to this gate.")
-    answer["note_id"] = "n" + secrets.token_hex(4) if tell else None
+    answer["note_id"] = "n" + random_secrets.token_hex(4) if tell else None
     append(root, "gates.jsonl", answer)
     if tell:
         _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"], author="person")
@@ -2028,7 +2082,7 @@ def clear_gate(root, gate_id):
             return  # A choice saved before Clear wins; it is never erased.
         if not gate["answer"]:
             answer = dict(type="answer", of=gate_id, at=now(), cleared=True,
-                          text="(cleared by the person without an answer)", note_id="n" + secrets.token_hex(4))
+                          text="(cleared by the person without an answer)", note_id="n" + random_secrets.token_hex(4))
             append(root, "gates.jsonl", answer)
             gate.update(answer=answer["text"], answered_at=answer["at"], note_id=answer["note_id"], cleared=True)
         _gate_note(root, gate, gate["note_id"],
@@ -2080,7 +2134,7 @@ def stand_defaults(root, gs=None):
             for g in gates(root):
                 if g["id"] in ripe and not g["answer"]:
                     answer = dict(type="answer", of=g["id"], at=now(), author="colony",
-                                  text=f"Default stood (skipped): {g['default']}", note_id="n" + secrets.token_hex(4))
+                                  text=f"Default stood (skipped): {g['default']}", note_id="n" + random_secrets.token_hex(4))
                     append(root, "gates.jsonl", answer)
                     _gate_note(root, g, answer["note_id"], answer["text"], answer["at"], author="colony")
                     stood.append(g)
@@ -5157,7 +5211,7 @@ def mark_line(plist, how, keys, dev="", view=""):
     a Clear took is, so undoing the Clear leaves it heard."""
     if how not in MARKS:
         raise ValueError(how)
-    clear, t, at = (secrets.token_hex(4) if how == "cleared" else None), time.time(), now()
+    clear, t, at = (random_secrets.token_hex(4) if how == "cleared" else None), time.time(), now()
     held = [a for a, looked in _LISTEN.values() if t - looked <= CLAIM]
     out = {"marked": {}, "refused": {}, **({"clear": clear} if clear else {})}
     for p, ks in (keys or {}).items():
@@ -6784,9 +6838,11 @@ def library_html(pid, root, q=""):
 def page_sig(root, path):
     """The signature on one page's way back: only the board, which made it, can give a page its address."""
     import hmac
-    secret = home() / "page-secret"
+    secret = secrets() / "page-secret"
     if not secret.exists():
-        secret.write_text(secrets.token_hex(32))
+        fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(random_secrets.token_hex(32))
         secret.chmod(0o600)
     return hmac.new(secret.read_bytes(), f"{Path(root).resolve()}|{Path(path).resolve()}".encode(), "sha256").hexdigest()[:32]
 
@@ -9566,7 +9622,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, IndexError):
             return self._send(404, b"No such project")
         path = pins.inside(root, rel)
-        if not path or not secrets.compare_digest(sig, page_sig(root, path)):
+        if not path or not random_secrets.compare_digest(sig, page_sig(root, path)):
             return self._send(403, b"not this page's address")
         text = self.rfile.read(min(int(self.headers.get("Content-Length") or 0), 16 * 1024)).decode("utf-8", "replace").strip()
         if not text:
@@ -9591,7 +9647,7 @@ class Handler(BaseHTTPRequestHandler):
         """Upgrade to a WebSocket bridged to the project's session. A browser always sends Origin on a
         WebSocket; it must be this page's, and the token must be the one this board made."""
         origin_ok = self._from_this_page() and self.headers.get("Origin") is not None
-        if not origin_ok or not secrets.compare_digest(token, console.token()) or \
+        if not origin_ok or not random_secrets.compare_digest(token, console.token()) or \
                 self.headers.get("Upgrade", "").lower() != "websocket":
             return self._send(403, b"not from this page")
         # RFC 6455 requires HTTP/1.1 here: Chrome forgives 1.0, but Safari and every iPhone browser refuse it.

@@ -281,7 +281,7 @@ def environment(root, home, source):
     env = {k: v for k, v in os.environ.items() if not k.startswith('COLONY_')}
     env.update(CODEX_HOME=str(home), COLONY_CODEX_SOURCE_HOME=str(source),
                COLONY_PROJECT=str(Path(root).resolve()), COLONY_CONSOLE=context.seat(root),
-               COLONY_BOARD_HOME=str(board.home()))
+               COLONY_BOARD_HOME=str(board.home()), COLONY_SECRETS_HOME=str(board.secrets()))
     # Remote enrollment uses the person's ChatGPT sign-in, not an unrelated API key.
     env.pop('OPENAI_API_KEY', None)
     env.pop('CODEX_API_KEY', None)

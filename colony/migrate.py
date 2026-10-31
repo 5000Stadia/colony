@@ -156,15 +156,14 @@ def parts(reg=None):
 
 def _never():
     """Sign-ins and keys, found where the code keeps them: {path: (what it is, how it comes back)}. None is ever packed."""
-    from . import bench, connections, providers
+    from . import providers
     claude, codex = providers.get("claude"), providers.get("codex")
-    return {Path(claude.config_home()) / ".credentials.json": ("Claude Code's sign-in", "claude, then /login"),
-            Path(codex.config_home()) / "auth.json": ("Codex's sign-in", "codex login"),
-            claude.token_path(): ("colony's long-lived Claude sign-in", "claude setup-token, pasted in Settings"),
-            connections.keys_dir(): ("the connections' keys", "entered again on the Connections page"),
-            bench.key_path(): ("the Artificial Analysis key", "colony bench key"),
-            board.home() / "console-token": ("the board's key for its consoles", "made again by colony"),
-            board.home() / "page-secret": ("the board's key for its pages", "made again by colony")}
+    out = {Path(claude.config_home()) / ".credentials.json": ("Claude Code's sign-in", "claude, then /login"),
+           Path(codex.config_home()) / "auth.json": ("Codex's sign-in", "codex login")}
+    # Both places are excluded even before the first reader has moved a legacy key.
+    out.update({folder / name: why for folder in (board.home(), board.secrets(create=False))
+                for name, why in board.SECRET_PATHS.items()})
+    return out
 
 
 def _remade():
@@ -337,19 +336,21 @@ def machine(reg=None):
     """What belongs to this machine and isn't carried as files, recorded so the new one can be made the same or the
     person told: the voice, starting with the machine, remote access, the programs and sign-ins in use, which of the
     projects' own services were enabled, and the crontab's lines (not a file of the person's: kept here whole)."""
-    from . import autostart, bench, connections, providers, voice
+    from . import autostart, providers, voice
     reg = reg or board.registry()
     used = {providers.key(providers.of(p)) for p in board.projects(reg, adopt=False) if p.exists()}
     used.add(providers.key(providers.of(None)))                       # the steward's
-    held = connections.keys_dir()
-    keys = sorted({f.stem if f.parent == held else f.parent.name for f in held.rglob("*.env")}) if held.is_dir() else []
+    homes = {board.home(), board.secrets(create=False)}
+    keys = sorted({f.stem if f.parent == folder / "connections" else f.parent.name
+                   for folder in homes for f in (folder / "connections").rglob("*.env")})
+    token = any((p / "claude-token").is_file() and (p / "claude-token").stat().st_size for p in homes)
     mine = {u.name for u in _units()}
     enabled = sorted({w.name for w in autostart.path().parent.glob("*.wants/*") if w.name in mine})
     on = autostart.available() and autostart.on()
     return {"voice": voice.ready(), "autostart": on, "lingers": bool(on and autostart.lingers()),
             "remote": reg["settings"].get("tailscale") or "", "https": bool(reg["settings"].get("https_board")),
-            "providers": sorted(used), "claude_token": bool(providers.get("claude").token()),
-            "connection_keys": keys, "aa_key": bench.key_path().exists(), "crontab": _crontab(),
+            "providers": sorted(used), "claude_token": token,
+            "connection_keys": keys, "aa_key": any((p / "bench/aa-key").exists() for p in homes), "crontab": _crontab(),
             "services_enabled": enabled}
 
 
