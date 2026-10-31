@@ -1438,6 +1438,16 @@ class Codex(Provider):
         return codex_history.repoint(old, new)
 
     @staticmethod
+    def retarget_history(home, pairs, backup=None):
+        """PROVIDER: a colony-owned Codex home whose project folders and own place moved together (an unpack under
+        another home folder): every recorded path follows. A native writer still open is refused as ValueError."""
+        from . import codex_history, codex_transfer
+        try:
+            return codex_history.retarget(home, pairs, backup=backup)
+        except codex_transfer.TransferError as err:
+            raise ValueError(str(err)) from err
+
+    @staticmethod
     def rehome_history(home, old_home, backup=None):
         """PROVIDER: a colony-owned Codex home moved whole records its own place; its paths follow it. A native
         writer still open is refused as ValueError, which pauses the change-over to be resumed."""

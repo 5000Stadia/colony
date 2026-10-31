@@ -946,26 +946,6 @@ def _roots(note, pairs):
     return list(dict.fromkeys(roots))
 
 
-def _codex_home(home, old, new):
-    """PROVIDER: the paths inside one of colony's stopped Codex homes that name `old` (a folder, or under it) say `new`.
-    The Codex adapter's re-point for a moved project does this, so it is borrowed: for the call the home takes the name
-    `new` would give it, where the adapter finds it and rewrites what it holds (rollouts, databases, config and
-    records), then it takes its own name back. A pass interrupted between the two names puts it back first."""
-    from . import codex_remote, providers
-    stand = codex_remote.home_for(new)
-    if (stand.exists() or stand.is_symlink()) and not home.exists():
-        stand.rename(home)
-    if not home.is_dir():
-        return
-    if stand.exists() or stand.is_symlink():
-        raise ValueError(f"{stand} is in the way of re-pointing {home}")
-    home.rename(stand)
-    try:
-        providers.get("codex").repoint_history(old, new)
-    finally:
-        stand.rename(home)
-
-
 def _follow(note, begun, journal, say):
     """After unpacking under another home: everything colony keeps re-pointed from the old paths to the new, in one
     pass of steps, each written to the journal as done, so a pass interrupted anywhere finishes when run again and
@@ -994,7 +974,7 @@ def _follow(note, begun, journal, say):
             repoint.rewrite(path, changes)
     step("records", records)
     for name in begun["plan"]["codex"]:
-        step(f"codex:{name}", lambda name=name: [_codex_home(board.codex_homes() / name, old, new) for old, new in pairs])
+        step(f"codex:{name}", lambda name=name: providers.get("codex").retarget_history(board.codex_homes() / name, pairs))
 
     def worktrees():
         mains = [n for _, n in moved] + [Path(_place(p["path"], pairs)) for p in note["parts"] if not p["inside"]]

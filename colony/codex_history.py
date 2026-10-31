@@ -192,6 +192,16 @@ def repoint(old, new):
     return [(str(was), str(now))], ["its Codex history re-pointed"] if changed else []
 
 
+def retarget(home, pairs, backup=None):
+    """Every path recorded in the stopped home at `home` under an old prefix of `pairs` says the new one: what a whole
+    colony unpacked under another home folder needs, where the project folders and the home itself moved together."""
+    home = Path(home)
+    if not home.is_dir():
+        return False
+    with stopped(home):
+        return _rewrite(home, [(str(a), str(b)) for a, b in pairs], backup)
+
+
 def rehome(home, old_home, backup=None):
     """The stopped home now at `home`, formerly at `old_home`, finds its own files again.
 
