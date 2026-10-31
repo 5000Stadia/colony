@@ -1284,6 +1284,8 @@ class ChatTest(BoardBase):
         self.assertIn("x.addEventListener('click', () => { gfile.value = ''; chosen(); }); gfiles.append(n, x);", page)
         # held back by a touch, the read-along looks again once the page is let be, while the same part plays
         self.assertIn("if (!canFollow()) { later(s, readingFollow.remaining()); return null; }", page)
+        # a tap on the player's own controls (Skip) isn't the person taking the page: the text follow carries on to the next
+        self.assertIn("if (ev.target && ev.target.closest && ev.target.closest('#cplayer')) return;", page)
         self.assertIn("refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); }", board.CHAT)
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")

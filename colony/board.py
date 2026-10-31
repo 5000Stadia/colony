@@ -3095,6 +3095,8 @@ PLAYER = """
     };
     const gesture = (ev) => {
       if (!ev.isTrusted || (ev.type === 'pointermove' && !ev.buttons && ev.pointerType !== 'touch')) return;
+      // the player's own controls steer the reading, not the page: Skip with text follow on moves the page along with it
+      if (ev.target && ev.target.closest && ev.target.closest('#cplayer')) return;
       if (Date.now() < programUntil && window.scrollTo) window.scrollTo({left: window.scrollX, top: window.scrollY, behavior: 'instant'});
       last = Date.now(); version += 1; programUntil = 0;
       const scrolling = /^(wheel|touch|pointer)/.test(ev.type) || (ev.type === 'keydown' && /^(Arrow|Page|Home|End| )/.test(ev.key));
