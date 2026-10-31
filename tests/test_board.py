@@ -1466,6 +1466,13 @@ class ChatTest(BoardBase):
         self.assertEqual(board.nav_order(plist), [["p", plist.index(p)] for p in (glaze, kiln, self.root)])
         board.save_json(board.home() / "woke.json", {str(self.root.resolve()): "2026-10-31T09:00:00Z"})
         self.assertEqual(board.nav_order(plist)[0], ["p", plist.index(self.root)], "a project that stirs snaps in at the left")
+        # the person: "if an active project goes idle it bumps below all active projects as well"
+        board.working_now([self.root, kiln])
+        self.assertEqual(board.nav_order(plist)[:2], [["p", plist.index(self.root)], ["p", plist.index(kiln)]])
+        board.working_now([kiln])
+        self.assertEqual(board.nav_order(plist)[:2], [["p", plist.index(kiln)], ["p", plist.index(self.root)]],
+                         "gone idle, it falls behind every project still at work, however lately it stirred")
+        board.working_now([])
         # the list: every project, its nest named, Recent first and the three sorts, the choice kept on the device
         listing = side[side.index("class='bandpop'"):]
         self.assertEqual(re.findall(r"data-name='([\w-]+)' data-nest='([^']*)'", listing),
