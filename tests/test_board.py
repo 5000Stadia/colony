@@ -8891,6 +8891,57 @@ class TokensTest(BoardBase):
         self.assertEqual(tokens.owner("/tmp/claude-1000/" + re.sub(r"[^A-Za-z0-9]", "-", str(self.root)) + "/s/scratchpad", [self.root],
                                       monitor.home()), ("project", "plants"), "a helper's scratch folder is its project's")
 
+    def test_a_helper_in_a_temporary_folder_is_counted_as_its_projects(self):
+        """Seen 2026-10-31: Bookflow's Codex helpers, each in a worktree under /tmp, and Memory Research's runs in empty
+        temporary folders showed as 40% "Outside colony" of the Codex week, and the person feared a stolen sign-in."""
+        import subprocess
+        from colony import tokens
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, True)
+        board.track(self.root)
+        git = lambda *a, cwd=self.root: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=cwd,
+                                                       capture_output=True, check=True)
+        git("init", "-q")
+        git("commit", "-qm", "x", "--allow-empty")
+        tree, empty = base / "bf-m4-pos9", base / "r26-qb-abc"
+        git("worktree", "add", "-q", "-b", "build/pos9", str(tree))
+        self.addCleanup(subprocess.run, ["git", "-C", str(self.root), "worktree", "remove", "--force", str(tree)], capture_output=True)
+        empty.mkdir()
+        self.assertEqual(tokens._home_repo(str(tree / "src")), str(self.root.resolve()))
+        self.assertIsNone(tokens._home_repo(str(empty)))
+        now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        roll = base / "codex" / "sessions" / "2026"
+        roll.mkdir(parents=True)
+
+        def rollout(name, cwd, n):
+            (roll / name).write_text("\n".join([
+                json.dumps({"timestamp": now, "type": "session_meta", "payload": {"cwd": str(cwd)}}),
+                json.dumps({"timestamp": now, "type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {
+                    "input_tokens": n, "cached_input_tokens": 0, "output_tokens": 0}}}})]) + "\n")
+            return roll / name
+        rollout("rollout-tree.jsonl", tree, 100)
+        held = rollout("rollout-held.jsonl", empty, 10)
+        rollout("rollout-other.jsonl", base, 1)
+        # the empty folder's session is still being written by a process its project's console started
+        writer = subprocess.Popen([sys.executable, "-c", "import sys, time; f = open(sys.argv[1], 'a'); time.sleep(60)", str(held)],
+                                  env=dict(os.environ, COLONY_PROJECT=str(self.root)))
+        self.addCleanup(writer.wait)
+        self.addCleanup(writer.kill)
+        for _ in range(50):
+            if any(os.readlink(fd) == str(held) for fd in Path(f"/proc/{writer.pid}/fd").iterdir()):
+                break
+            time.sleep(0.1)
+        # an hour kept before worktrees were followed is re-filed once
+        state = tokens.load()
+        state["hours"][f"{int(time.time()) // 3600 * 3600}|codex|{tree}"] = [1000, 0, 0, 0]
+        tokens._save(state)
+        with patch.object(providers.get("claude"), "config_home", lambda: base / "claude"), \
+                patch.object(providers.get("codex"), "config_home", lambda: base / "codex"):
+            REAL_COUNT()
+        rows = tokens.windows()[0]
+        self.assertEqual(rows[("project", "plants")]["4 h"], 1000 + 100 + 10, "the worktree's, the held session's and the kept hour")
+        self.assertEqual(rows[("outside", "Outside colony")]["4 h"], 1, "a folder no project's console started stays outside")
+
 
 class RulesTest(BoardBase):
     """The person's standing rules, kept by colony and handed back at every session start, after a compaction too."""

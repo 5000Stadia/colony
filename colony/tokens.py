@@ -65,7 +65,80 @@ def _where(cwd):
     return f"colony:{m[1]}" if m else cwd or ""
 
 
-def _claude(state, f, st):
+def _home_repo(cwd):
+    """The repository a git worktree belongs to: a helper building in a copy of its project elsewhere (/tmp/…) works
+    for that project. None for any other folder."""
+    p = Path(cwd)
+    for folder in (p, *list(p.parents)[:3]):
+        git = folder / ".git"
+        if git.is_dir():
+            return None
+        if git.is_file():
+            try:
+                m = re.match(r"gitdir:\s*(.+?)/\.git/worktrees/[^/\n]+\s*$", git.read_text())
+            except OSError:
+                return None
+            return m[1] if m else None
+    return None
+
+
+def _project_env(proc):
+    """COLONY_PROJECT of a process or the nearest of its parents: what a project's console starts carries it."""
+    for _ in range(8):
+        try:
+            for kv in (proc / "environ").read_bytes().split(b"\0"):
+                if kv.startswith(b"COLONY_PROJECT="):
+                    return kv[15:].decode(errors="replace") or None
+            ppid = (proc / "stat").read_text().rsplit(")", 1)[1].split()[1]
+        except (OSError, IndexError):
+            return None
+        if ppid in ("0", "1"):
+            return None
+        proc = Path("/proc") / ppid
+    return None
+
+
+def _holders():
+    """{transcript: the project whose console started its writer}, from the running processes holding one open."""
+    out = {}
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            open_ = [os.readlink(fd) for fd in (proc / "fd").iterdir()]
+        except OSError:
+            continue
+        open_ = [x for x in open_ if x.endswith(".jsonl")]
+        if open_ and (project := _project_env(proc)):
+            out.update(dict.fromkeys(open_, project))
+    return out
+
+
+class _Places:
+    """Where each transcript's tokens are kept: its folder, unless that folder is no project's and colony's (a
+    temporary folder): then a git worktree's repository, else the project whose console started the session, read from
+    the running process. Looked up once per transcript and folder."""
+
+    def __init__(self, roots, steward):
+        self.roots, self.steward, self.held = roots, steward, None
+
+    def outside(self, cwd):
+        return owner(cwd, self.roots, self.steward)[0] == "outside"
+
+    def __call__(self, st, f):
+        cwd = st.get("cwd") or ""
+        if st.get("where_of") != cwd or "where" not in st:
+            where = _where(cwd)
+            if where and self.outside(where):
+                where = _home_repo(cwd) or self._started_by(f) or where
+            st["where_of"], st["where"] = cwd, where
+        return st["where"]
+
+    def _started_by(self, f):
+        if self.held is None:
+            self.held = _holders()
+        return self.held.get(str(f))
+
+
+def _claude(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
     with open(f, "rb") as fh:
         fh.seek(st["at"])
         for raw in fh:
@@ -90,11 +163,11 @@ def _claude(state, f, st):
             if not u or not mid or mid in st.setdefault("seen", []) or m.get("model") == "<synthetic>":
                 continue
             st["seen"] = (st["seen"] + [mid])[-20:]
-            _add(state, _hour(d.get("timestamp")), "claude", _where(st["cwd"]), u.get("input_tokens"),
+            _add(state, _hour(d.get("timestamp")), "claude", place(st, f), u.get("input_tokens"),
                  u.get("cache_read_input_tokens"), u.get("cache_creation_input_tokens"), u.get("output_tokens"))
 
 
-def _codex(state, f, st):
+def _codex(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
     with open(f, "rb") as fh:
         fh.seek(st["at"])
         for raw in fh:
@@ -116,7 +189,7 @@ def _codex(state, f, st):
             u = ((d.get("payload") or {}).get("info") or {}).get("last_token_usage")
             if u:
                 cached = u.get("cached_input_tokens") or 0
-                _add(state, _hour(d.get("timestamp")), "codex", _where(st.get("cwd")), (u.get("input_tokens") or 0) - cached,
+                _add(state, _hour(d.get("timestamp")), "codex", place(st, f), (u.get("input_tokens") or 0) - cached,
                      cached, u.get("cache_write_input_tokens"), u.get("output_tokens"))
 
 
@@ -143,8 +216,19 @@ def update(budget=BUDGET):
     if not _lock.acquire(blocking=False):
         return False
     try:
+        from . import monitor
         state, end = load(), time.time() + budget
         files, done = state["files"], True
+        place = _Places([Path(p) for p in board.projects(board.registry())], monitor.home())
+        if state.get("v", 0) < 2:                       # hours kept before worktrees were followed: theirs now
+            hours = {}
+            for k, v in state["hours"].items():
+                hour, prog, cwd = k.split("|", 2)
+                if place.outside(cwd) and (repo := _home_repo(cwd)):
+                    k = f"{hour}|{prog}|{repo}"
+                    v = [a + b for a, b in zip(hours.get(k, [0, 0, 0, 0]), v)]
+                hours[k] = v
+            state["hours"], state["v"] = hours, 2
         for f, prog in sources():
             if time.time() > end:
                 done = False
@@ -155,7 +239,7 @@ def update(budget=BUDGET):
                 if size < st["at"]:
                     st.update(at=0, seen=[])                # rewritten from the start
                 if size > st["at"]:
-                    (_claude if prog == "claude" else _codex)(state, f, st)
+                    (_claude if prog == "claude" else _codex)(state, f, st, place)
             except OSError:
                 continue
         old = time.time() - KEEP
