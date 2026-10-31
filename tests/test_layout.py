@@ -302,6 +302,22 @@ class LayoutTest(unittest.TestCase):
         for name in values:
             self.assertIn(name, "\n".join(said))
 
+    def test_files_git_tracks_stay_in_the_project(self):
+        """A source folder called secrets/ or a committed test key is the project's code: moving it out would change the
+        repository under it, and what's committed is in its history anyway. Only untracked keys leave."""
+        git = lambda *a: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=self.project,
+                                        capture_output=True, check=True)
+        git("init", "-q")
+        (self.project / "secrets").mkdir()
+        (self.project / "secrets" / "__init__.py").write_text("def hide(x): return x\n")
+        (self.project / "tests").mkdir()
+        (self.project / "tests" / "fixture.key").write_text("not a real key")
+        git("add", "secrets", "tests")
+        git("commit", "-qm", "code")
+        (self.project / ".env").write_text("TOKEN=distinctive-untracked")
+        found = {p.relative_to(self.project).as_posix() for p in migrate.project_keys(self.project)}
+        self.assertEqual(found, {".env"})
+
     def test_agent_history_item_keys_and_retained_secret_paths_survive(self):
         agent, trees, _, _ = self.fixture()
         remote = codex_remote.home_for(agent)

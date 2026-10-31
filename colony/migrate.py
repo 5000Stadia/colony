@@ -52,17 +52,30 @@ def into_colony(say=print):
     return layout.into_colony(say)
 
 
+def _tracked(root):
+    """The project's files under git: a key already committed is in its history, and moving a tracked file (or a source
+    folder that happens to be called secrets/) would change the project's code under it."""
+    got = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True)
+    if got.returncode:
+        return set()
+    files = {Path(root) / f for f in got.stdout.decode(errors="replace").split("\0") if f}
+    return files | {d for f in files for d in f.parents}
+
+
 def project_keys(root):
-    """Key-like files and secrets folders, without following a project's links or opening git history."""
+    """Key-like files and secrets folders the project keeps untracked, without following its links or opening git
+    history."""
     root = Path(root)
+    tracked = _tracked(root)
     for folder, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__")]
         for name in list(dirs):
             if name == "secrets":
-                yield Path(folder) / name
+                if Path(folder) / name not in tracked:
+                    yield Path(folder) / name
                 dirs.remove(name)
         for name in files:
-            if KEYLIKE.match(name):
+            if KEYLIKE.match(name) and Path(folder) / name not in tracked:
                 yield Path(folder) / name
 
 
