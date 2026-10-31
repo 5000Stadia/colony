@@ -1418,6 +1418,13 @@ class ChatTest(BoardBase):
         with patch.object(console, "snapshot", side_effect=lambda p, lines=1: {"state": "idle"}):
             w.stir()
         self.assertEqual(order(), ["kiln", "photonic", self.root.name, "glaze"], "kiln stirred last; the nest after it, whole")
+        # at work as its dot shows it: an idle screen with background work running behind it counts (the person saw an
+        # idle-looking box left of one whose dot was at work, its helpers and shells unseen by the order)
+        behind = {"state": "idle", "lines": ["⏵⏵ bypass permissions on · 2 shells"], "activity": {"agents": []}}
+        with patch.object(console, "snapshot", side_effect=lambda p, lines=1: behind if Path(p) == lone else {"state": "idle"}):
+            w.stir()
+        self.assertEqual(board.at_work_now(), {str(lone.resolve())})
+        self.assertEqual(board.seen(behind)["state"], "working", "the same reading as its dot")
 
     def test_a_nest_renamed_keeps_its_projects_vision_and_standards_and_tells_them(self):
         from colony import nest

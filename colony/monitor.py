@@ -621,7 +621,9 @@ class Watcher:
             else:
                 self.settling.pop(str(p), None)
             self.states[str(p)] = now
-            self.at_work(p, now == "working")  # it comes to the front of the board's list, and stays while working
+            # it comes to the front of the board's list, and stays while working: at work as its dot shows it, helpers or
+            # background commands running behind an idle screen included (an idle-looking one sat left of one at work)
+            self.at_work(p, now == "working" or board.seen(snap)["state"] == "working")
             if now == "working":
                 self.worked.add(str(p))
             # What it completed since the last look; the first look, at the board's start, only notes where it is.
@@ -1158,7 +1160,7 @@ class Watcher:
         each other, a group jumping back and forth). Apart from the steward's own watch, which muting stops."""
         for p in board.projects():
             if p.exists():
-                self.at_work(p, console.snapshot(p, lines=1)["state"] == "working")
+                self.at_work(p, board.seen(console.snapshot(p, lines=4))["state"] == "working")   # as its dot shows it
 
     def at_work(self, p, working):
         seen = getattr(self, "stirring", None)
