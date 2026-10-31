@@ -4,7 +4,11 @@ import json
 import base64
 import os
 from pathlib import Path
+import pty
+import select
+import shlex
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -84,7 +88,9 @@ class NativeRemoteTest(unittest.TestCase):
         self.source = self.base / 'source'
         self.source.mkdir()
         env = {k: v for k, v in os.environ.items() if not k.startswith(('COLONY_', 'OPENAI_', 'CODEX_'))}
-        env.update(COLONY_BOARD_HOME=str(self.base / 'board'), CODEX_HOME=str(self.source), PYTHONPATH=str(REPO))
+        env.update(HOME=str(self.base), CLAUDE_CONFIG_DIR=str(self.base / 'claude'),
+                   XDG_CONFIG_HOME=str(self.base / 'config'), XDG_STATE_HOME=str(self.base / 'state'),
+                   COLONY_BOARD_HOME=str(self.base / 'board'), CODEX_HOME=str(self.source), PYTHONPATH=str(REPO))
         self.environment = patch.dict(os.environ, env, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
@@ -144,6 +150,97 @@ class NativeRemoteTest(unittest.TestCase):
             if event.get('method') == 'turn/completed':
                 self.assertEqual(event['params']['turn']['status'], 'completed')
                 return result['turn']['id']
+
+    def test_fresh_consoles_apply_permissions_and_remote_resume_keeps_them(self):
+        from colony import providers
+        policies = {'ask': ('workspace-write', 'on-request'), 'edits': ('workspace-write', 'never'),
+                    'all': ('danger-full-access', 'never'), 'plan': ('read-only', 'on-request')}
+        # A native console loads this too; its defaults must not replace the project's choice.
+        path = self.source / 'config.toml'
+        path.write_text('sandbox_mode="workspace-write"\napproval_policy="never"\n' + path.read_text())
+        for mode in ('remote', 'local'):
+            for permission, (sandbox, approval) in policies.items():
+                with self.subTest(mode=mode, permission=permission):
+                    root = self.base / (mode + '-' + permission)
+                    root.mkdir()
+                    home = remote.home_for(root)
+                    settings = dict(self.settings[0], permissions=permission)
+                    config = remote.overrides(root, home, settings)
+                    config['features.hooks'] = False      # this checks native policy, not hook delivery
+                    remote.prepare_home(root, home, self.source)
+                    with (home / 'config.toml').open('a') as file:
+                        file.write('\n[projects.' + json.dumps(str(root)) + ']\ntrust_level="trusted"\n')
+                    client = None
+                    try:
+                        if mode == 'remote':
+                            client = remote.start(root, home, self.source, config)
+                            args = ['codex', '--remote', 'unix://' + str(remote.socket_for(home)), '--no-alt-screen',
+                                    *remote.flags(remote.console_config(config))]
+                        else:
+                            args = shlex.split(providers.get('codex').local_command(root.name, settings, root=root))
+                            args += ['--no-daemon', '-c', 'features.hooks=false']
+                        rows = self.console_turn(args, root, home)
+                        policy = next(row['payload'] for row in rows if row['type'] == 'turn_context')
+                        self.assertEqual(policy['sandbox_policy']['type'], sandbox)
+                        self.assertEqual(policy['approval_policy'], approval)
+                        if client:
+                            tid = next(row['payload']['id'] for row in rows if row['type'] == 'session_meta')
+                            self.assertEqual(remote.attach(client, root, config, tid), tid)
+                            args = ['codex', '--remote', 'unix://' + str(remote.socket_for(home)), '--no-alt-screen',
+                                    *remote.flags(remote.console_config(config, resume=True)), 'resume', tid]
+                            rows = self.console_turn(args, root, home, completed=2)
+                            policy = [row['payload'] for row in rows if row['type'] == 'turn_context'][-1]
+                            self.assertEqual(policy['sandbox_policy']['type'], sandbox)
+                            self.assertEqual(policy['approval_policy'], approval)
+                    finally:
+                        if client:
+                            client.close()
+                        remote.stop_host(root)
+
+    def console_turn(self, args, root, home, completed=1):
+        """Exercise the native console's thread request; direct RPC misses its permission defaults."""
+        import fcntl
+        import struct
+        import termios
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 160, 0, 0))
+        process = None
+        output = b''
+        try:
+            process = subprocess.Popen([*args, 'Say the probe passed.'], cwd=root,
+                        env=dict(remote.environment(root, home, self.source), TERM='xterm-256color'),
+                        stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+            os.close(slave)
+            slave = None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and process.poll() is None:
+                if select.select([master], [], [], .1)[0]:
+                    try:
+                        chunk = os.read(master, 65536)
+                    except OSError:
+                        break
+                    output += chunk
+                    if b'\x1b[6n' in chunk:
+                        os.write(master, b'\x1b[1;1R')       # terminal cursor query
+                for path in home.glob('sessions/**/*.jsonl'):
+                    try:
+                        rows = [json.loads(line) for line in path.read_text().splitlines()]
+                    except ValueError:
+                        continue                           # native writer has not finished this line
+                    if sum(row.get('payload', {}).get('type') == 'task_complete' for row in rows) >= completed:
+                        return rows
+            self.fail('Native console did not finish: ' + output.decode(errors='replace')[-3000:])
+        finally:
+            if process and process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            os.close(master)
+            if slave is not None:
+                os.close(slave)
 
     def test_two_projects_same_folder_keep_settings_hooks_and_cold_resume(self):
         ids = []
@@ -374,6 +471,28 @@ if __name__ == '__main__':
 
 
 class ConsoleConfigTest(unittest.TestCase):
+    def test_remote_flags_keep_each_permission_for_fresh_consoles_only(self):
+        import tomllib
+        policies = {'ask': ('workspace-write', 'on-request'), 'edits': ('workspace-write', 'never'),
+                    'all': ('danger-full-access', 'never'), 'plan': ('read-only', 'on-request')}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder), \
+                patch.object(bench, 'effective', return_value={}):
+            root = Path(folder) / 'project'
+            root.mkdir()
+            board.save_registry({'roots': [], 'settings': {'messaging': False}})
+            for permission, (sandbox, approval) in policies.items():
+                with self.subTest(permission=permission):
+                    config = remote.overrides(root, remote.home_for(root), {'permissions': permission})
+                    for values in (config, remote.console_config(config)):
+                        args = remote.flags(values)
+                        parsed = tomllib.loads('\n'.join(args[1::2]))
+                        self.assertEqual(parsed['sandbox_mode'], sandbox)
+                        self.assertEqual(parsed['approval_policy'], approval)
+                    resumed = remote.console_config(config, resume=True)
+                    self.assertNotIn('sandbox_mode', resumed)
+                    self.assertNotIn('approval_policy', resumed)
+                    self.assertFalse(any(k.startswith('sandbox_workspace_write.') for k in resumed))
+
     def test_remote_version_gate_allows_only_checked_releases(self):
         self.assertTrue(remote.supported_version('codex-cli 0.160.0'))
         self.assertTrue(remote.supported_version('codex-cli 0.159.3'))
@@ -385,7 +504,9 @@ class ConsoleConfigTest(unittest.TestCase):
         from colony import codex_remote
         config = {"model": "gpt-6-astra", "sandbox_workspace_write.writable_roots": ["/x"], "hooks.Stop": [],
                   "sandbox_mode": "danger-full-access", "approval_policy": "never"}
-        self.assertEqual(sorted(codex_remote.console_config(config)), ["hooks.Stop", "model"])
+        self.assertEqual(sorted(codex_remote.console_config(config)),
+                         ["approval_policy", "hooks.Stop", "model", "sandbox_mode"])
+        self.assertEqual(sorted(codex_remote.console_config(config, resume=True)), ["hooks.Stop", "model"])
 
     def test_a_new_codex_is_checked_once_with_no_tokens_and_admitted_only_if_it_passes(self):
         from colony import providers
@@ -546,6 +667,31 @@ class StewardRemoteTest(unittest.TestCase):
         self.project_home = remote.home_for(self.project)
         remote.atomic_json(self.project_home / 'colony-thread.json', {'thread': 'project-thread'})
         self.settings = dict(model='fixture', effort='high', permissions='all', remote=True)
+
+    def test_launch_passes_permissions_only_to_a_fresh_remote_console(self):
+        class Exec(BaseException):
+            pass
+        with patch.object(self.codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]), \
+                patch.object(bench, 'effective', return_value={}), patch.object(remote, 'alive', return_value=False), \
+                patch.object(remote, 'trust_hooks'), patch.object(remote, 'transfer'), \
+                patch.object(remote, 'offer_pairing'), patch.object(remote, 'start') as start, \
+                patch.object(remote, 'Client') as client, patch.object(remote.os, 'execvpe', side_effect=Exec) as execute:
+            rpc = start.return_value.__enter__.return_value
+            rpc.call.return_value = dict(model='fixture', reasoningEffort='high', approvalPolicy='never',
+                                         sandbox={'type': 'dangerFullAccess'}, thread={'id': 'saved-thread'})
+            client.return_value.__enter__.return_value.call.return_value = {'status': 'connected'}
+            for resume in (None, 'saved-thread'):
+                with self.subTest(resume=resume), self.assertRaises(Exec):
+                    remote.launch(self.root, self.settings, resume)
+                args = execute.call_args.args[1]
+                self.assertEqual('sandbox_mode="danger-full-access"' in args, resume is None)
+                self.assertEqual('approval_policy="never"' in args, resume is None)
+                self.assertFalse(any(arg.startswith('sandbox_workspace_write.') for arg in args))
+                if resume:
+                    self.assertEqual(args[-2:], ['resume', resume])
+                    rpc.call.assert_any_call('thread/resume', dict(cwd=str(self.root), model='fixture',
+                        approvalPolicy='never', sandbox='danger-full-access',
+                        config={'model_reasoning_effort': 'high'}, threadId=resume, excludeTurns=True))
 
     def test_console_launch_uses_steward_folder_and_resumes_its_conversation(self):
         import shlex
