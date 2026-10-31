@@ -94,6 +94,8 @@ def nudge(found, helpers):
 def tick(root):
     """Nudge the project's console once about what a network drop stopped there, when that is safe: the words
     typed, or None."""
+    if board.restore_held():
+        return None
     found = stop(root)
     if not found:
         return None
@@ -151,6 +153,8 @@ def _conversation(root):
 
 def frozen(root, now=None):
     """Restart the project's console if it froze mid-work, or carry on one restarted earlier: what was done, or None."""
+    if board.restore_held():
+        return None
     now = now or time.time()
     name, key = console.session_name(root), str(root)
     try:
@@ -249,6 +253,8 @@ def _booted_at():
 
 def rebooted(now=None):
     """Keep the record of what runs, and after a restart bring it back: what was done this pass, or None."""
+    if board.restore_held():
+        return None
     now = now or time.time()
     boot = _boot()
     if not boot:
@@ -309,6 +315,8 @@ def rebooted(now=None):
 
 def tick_all():
     """Every project's console. One's trouble stops no other's, nor the rest of the watcher's round."""
+    if board.restore_held():
+        return
     from . import machine
     for step in (machine.tick, rebooted):     # the machine's own restart: parked first, then brought back
         try:

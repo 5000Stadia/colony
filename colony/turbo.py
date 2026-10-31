@@ -425,6 +425,8 @@ def save(state):
 def tick(now=None):
     """The watcher's minute, with no tokens: each program's pace, and while turbo is on, what it does for that
     program's projects. What changed, as (program or project, what)."""
+    if board.restore_held():
+        return []
     now = time.time() if now is None else now
     state, done = load(), []
     s = board.registry()["settings"]

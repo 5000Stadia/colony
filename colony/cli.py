@@ -222,9 +222,18 @@ def first_program(choice=None, run=None, ask=None):
 def cmd_board(a):
     """The board runs in its own tmux session, so it outlives the terminal that started it and the
     steward can restart it; --foreground runs it here instead."""
-    from . import board, monitor
+    from . import board, monitor, handover
+    notice = handover.RESTORE_NOTICE + " Use Checked, resume on the board or `colony resume --restored`."
+    if not a.foreground and subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode == 0:
+        print("the board is already running (colony urls shows where; colony restart reloads it)")
+        if board.restore_held():
+            print(notice)
+        return 0
+    held = handover.started()                    # before setup, the steward, or any watcher can run
+    if held:
+        print(notice)
     fresh = not (board.home() / "board.json").exists() and not (board.home() / "setup-asked").exists()
-    if fresh and not a.no_monitor and not a.foreground:
+    if fresh and not held and not a.no_monitor and not a.foreground:
         # a new install: the program and its sign-in are settled here, before the steward exists (R125); never again
         # after, so a lapse later raises the board's sign-in notice rather than switching programs
         key, lines = first_program(a.program, ask=input if sys.stdin.isatty() and not a.program else None)
@@ -236,7 +245,7 @@ def cmd_board(a):
     elif a.program:
         print("--program chooses the steward's program on a new board only; here: colony settings provider")
     settled = board.settle_provider()            # the default runs on a program that is here
-    if fresh and not a.no_monitor:
+    if fresh and not held and not a.no_monitor:
         board.home().mkdir(parents=True, exist_ok=True)
         monitor.setup()                          # a new install: the steward walks the person through setup
     if settled:
@@ -245,9 +254,6 @@ def cmd_board(a):
         board.serve(a.port or 8790, lan=_lan(a), monitor=not a.no_monitor)
         return 0
     saved = board.home() / "server.json"
-    if subprocess.run(["tmux", "has-session", "-t", server()], capture_output=True).returncode == 0:
-        print("the board is already running (colony urls shows where; colony restart reloads it)")
-        return 0
     # The port asked for, else the one it had last time, else 8790; if another program holds it, the next free one.
     old = json.loads(saved.read_text()) if saved.exists() else []
     wanted = a.port or (int(old[old.index("--port") + 1]) if "--port" in old else 8790)
@@ -261,10 +267,15 @@ def cmd_board(a):
     print(f"the board is running (tmux session {server()}); open it at:")
     for u in board.urls(a.port, lan=_lan(a)):
         print(f"  {u}")
-    if fresh and not a.no_monitor:
+    if fresh and not held and not a.no_monitor:
         print(steward_whereabouts())
+    return 0
+
+
+def cmd_resume(a):
     from . import handover
-    handover.started()                           # what stop --still paused resumes; the clean-stop mark clears
+    print("Restored colony checked; automatic work can resume." if handover.resume_restored()
+          else "This colony is not waiting for a restore check.")
     return 0
 
 
@@ -2128,6 +2139,9 @@ def main(argv=None):
     p = sub.add_parser("stop"); p.set_defaults(fn=cmd_stop)
     p.add_argument("--still", action="store_true", help="each project lands its work first, and the Codex hosts stop too: for copying colony's folders")
     p.add_argument("--wait", type=float, default=60, help="minutes to wait for work to land (default 60)")
+    p = sub.add_parser("resume", help="resume automatic work after checking a restored colony")
+    p.add_argument("--restored", action="store_true", required=True, help="this restored copy has been checked")
+    p.set_defaults(fn=cmd_resume)
     p = sub.add_parser("move", help="move a project to another folder, landing its work first; everything follows it")
     p.add_argument("name"); p.add_argument("--to", help="where (default ~/Colony/projects/NAME)")
     p.add_argument("--yes", action="store_true", help="move it although something outside it names its folder")
