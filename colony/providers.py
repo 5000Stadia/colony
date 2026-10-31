@@ -259,6 +259,16 @@ class Provider:
         """Whether the program can find the bookmarked conversation at its current working folder."""
         return False
 
+    def first_run(self, folders):
+        """For a migration: the program's own answers to its first-run screens and its trust in these folders (and
+        those under them), never a sign-in, key or anything else, or None where it keeps none apart from its config."""
+        return None
+
+    def restore_first_run(self, state):
+        """Merge first_run's answers into this machine's, keeping every answer already here; returns a line to say,
+        or None."""
+        return None
+
     def wire(self, root, protocol, private=False):
         """Put the colony protocol where the CLI reads project instructions, and arrange for `colony notes --deliver`
         output to reach the agent at session start (`--session`) and before each turn typed to it. Rewritten when it
@@ -643,6 +653,94 @@ class ClaudeCode(Provider):
             return False
         path = self.config_home() / 'projects' / claude_key(board.workdir(root)) / (saved['conversation'] + '.jsonl')
         return path.is_file() and path.resolve() == Path(saved['transcript']).resolve()
+
+    # PROVIDER: Claude Code asks these once per machine and once per folder. Its onboarding and each folder's trust are
+    # kept in its global config (.claude.json, beside the sign-in's account, user ID and tokens); its theme and the
+    # bypass-permissions acceptance in its settings (settings.json in its config folder, read on this machine
+    # 2026-10-31). Only these answers travel.
+    FIRST_RUN = ("hasCompletedOnboarding", "lastOnboardingVersion")
+    FIRST_RUN_SETTINGS = ("theme", "skipDangerousModePermissionPrompt")
+    FOLDER_TRUST = ("hasTrustDialogAccepted", "hasCompletedProjectOnboarding")
+
+    @classmethod
+    def global_config(cls):
+        """Claude Code's global config: .claude.json in CLAUDE_CONFIG_DIR where that is set, else in the home folder."""
+        folder = os.environ.get("CLAUDE_CONFIG_DIR")
+        return Path(folder) / ".claude.json" if folder else Path.home() / ".claude.json"
+
+    def first_run(self, folders):
+        try:
+            config = json.loads(self.global_config().read_text())
+        except (OSError, ValueError):
+            return None
+        if not isinstance(config, dict):
+            return None
+        folders = [str(f).rstrip("/") for f in folders]
+        trust = {path: {k: row[k] for k in self.FOLDER_TRUST if k in row}
+                 for path, row in (config.get("projects") or {}).items()
+                 if isinstance(row, dict) and any(path == f or path.startswith(f + "/") for f in folders)}
+        state = {k: config[k] for k in self.FIRST_RUN if k in config}
+        if trust := {path: row for path, row in trust.items() if row}:
+            state["projects"] = trust
+        try:
+            settings = json.loads((Path(self.config_home()) / "settings.json").read_text())
+        except (OSError, ValueError):
+            settings = {}
+        if isinstance(settings, dict) and (kept := {k: settings[k] for k in self.FIRST_RUN_SETTINGS if k in settings}):
+            state["settings"] = kept
+        return state or None
+
+    def restore_first_run(self, state):
+        path = self.global_config()
+        try:
+            config = json.loads(path.read_text()) if path.exists() else {}
+        except (OSError, ValueError):
+            return f"{path} couldn't be read, so Claude Code's first-run answers weren't added to it"
+        if not isinstance(config, dict):
+            return None
+        added = 0
+        for k in self.FIRST_RUN:
+            if k in state and k not in config:
+                config[k], added = state[k], added + 1
+        had = "projects" in config
+        projects = config.setdefault("projects", {})
+        for folder, row in (state.get("projects") or {}).items() if isinstance(projects, dict) else ():
+            here = projects.setdefault(folder, {})
+            if not isinstance(here, dict):
+                continue
+            for k in self.FOLDER_TRUST:
+                if k in row and k not in here:
+                    here[k], added = row[k], added + 1
+        if not projects and not had:
+            config.pop("projects")
+        if added:
+            self._write_private(path, config)              # it also holds the sign-in's account
+        spath, chosen = Path(self.config_home()) / "settings.json", 0
+        try:
+            settings = json.loads(spath.read_text()) if spath.exists() else {}
+        except (OSError, ValueError):
+            settings = None
+        if isinstance(settings, dict):
+            for k, v in (state.get("settings") or {}).items():
+                if k in self.FIRST_RUN_SETTINGS and k not in settings:
+                    settings[k], chosen = v, chosen + 1
+            if chosen:
+                self._write_private(spath, settings)
+        if not added and not chosen:
+            return None
+        return (f"Claude Code's first-run answers (its theme, onboarding and bypass-permissions acceptance, and trust in "
+                f"{len(state.get('projects') or {})} of the archive's folders) added, keeping those already here")
+
+    @staticmethod
+    def _write_private(path, data):
+        partial = path.with_name(path.name + ".colony-part")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+        if path.exists():
+            os.chmod(partial, path.stat().st_mode & 0o777)
+        partial.replace(path)
 
     def command(self, label, s, resume=None, root=None):
         """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort;

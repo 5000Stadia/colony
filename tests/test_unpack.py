@@ -125,6 +125,22 @@ class UnpackElsewhereTest(unittest.TestCase):
         board.save_json(self.item / ".board" / "context-session.json", {"path": str(self.item / "history.jsonl")})
         board.save_json(board.home() / "leads.json", {"group": {"canonical": str(self.plants), "lead": str(self.plants),
                                                                "items": {"R1": str(self.item)}}})
+        # a linked worktree kept outside its project, with work not yet committed (proof finding 2)
+        self.side = self.old / "side-worktree"
+        self.git(self.plants, "worktree", "add", "-q", "-b", "side", str(self.side))
+        (self.side / "draft.txt").write_text("not committed yet\n")
+        # Claude Code's own first-run answers, beside its sign-in's account (proof finding 3)
+        (self.old / ".claude").mkdir(exist_ok=True)
+        (self.old / ".claude" / ".claude.json").write_text(json.dumps({
+            "hasCompletedOnboarding": True,
+            "oauthAccount": {"emailAddress": "SECRET-account"}, "userID": "SECRET-user-id",
+            "projects": {str(self.plants): {"hasTrustDialogAccepted": True, "allowedTools": ["SECRET-tool"],
+                                            "mcpServers": {"x": {"env": {"KEY": "SECRET-mcp-key"}}}},
+                         str(self.old / "elsewhere"): {"hasTrustDialogAccepted": True}}}))
+        # its theme and bypass-permissions acceptance are in its settings, beside the person's hooks and permissions
+        (self.old / ".claude" / "settings.json").write_text(json.dumps({
+            "theme": "dark", "skipDangerousModePermissionPrompt": True,
+            "hooks": {"Stop": [{"hooks": [{"command": "SECRET-hook"}]}]}, "permissions": {"allow": ["SECRET-perm"]}}))
         values = measures.folder(self.plants) / "values.jsonl"
         values.parent.mkdir(parents=True)
         values.write_text('{"value": 7}\n')
@@ -190,6 +206,18 @@ class UnpackElsewhereTest(unittest.TestCase):
         self.assertIn(f"worktree {item}", listed)
         self.assertNotIn("prunable", listed)
         self.assertEqual(self.git(item, "rev-parse", "--abbrev-ref", "HEAD").strip(), "work-1")
+        side = self.at(self.side)
+        self.assertIn(f"worktree {side}", listed, "the worktree kept outside its project came back, repaired")
+        self.assertEqual(self.git(side, "rev-parse", "--abbrev-ref", "HEAD").strip(), "side")
+        self.assertEqual((side / "draft.txt").read_text(), "not committed yet\n", "with its uncommitted work")
+        self.assertIn("1 linked worktree(s) kept outside their project", said)
+        # Claude Code's first-run answers, for the folders the archive carries, at their place here; nothing else
+        config = json.loads((self.new / ".claude" / ".claude.json").read_text())
+        self.assertTrue(config["hasCompletedOnboarding"])
+        self.assertEqual(config["projects"], {str(plants): {"hasTrustDialogAccepted": True}})
+        self.assertNotIn("SECRET", json.dumps(config))
+        settings = json.loads((self.new / ".claude" / "settings.json").read_text())
+        self.assertEqual(settings, {"theme": "dark", "skipDangerousModePermissionPrompt": True}, "those two, nothing else")
         self.assertTrue(board.restore_held())
         self.assertFalse(migrate._journal().exists(), "the journal goes once the pass is done")
         self.assertIn(f"Re-pointed from {self.old} to {self.new}", said)
@@ -239,6 +267,48 @@ class UnpackElsewhereTest(unittest.TestCase):
                          "each conversation folder once, at its new name")
         rows = json.loads((board.home() / "conversations.json").read_text())
         self.assertEqual(len(rows), 3, "one bookmark row per project")
+
+    def test_a_linked_worktree_whose_folder_has_gone_is_named_not_skipped(self):
+        self.fixture(colony_layout=False)
+        gone = self.old / "gone-worktree"
+        self.git(self.beta, "worktree", "add", "-q", "-b", "gone", str(gone))
+        shutil.rmtree(gone)
+        said = []
+        migrate.listing(say=said.append)
+        said = "\n".join(said)
+        self.assertIn("plants's worktree side-worktree", said, "the one outside its project is a part of its own")
+        self.assertIn("whose folder has gone", said)
+        self.assertIn("beta's ~/gone-worktree", said)
+        self.assertNotIn("R1-1", said, "an item's worktree inside colony's folder is packed with it")
+        archive = migrate.pack(self.disk, say=lambda line: None)
+        manifest = json.loads(next(self.disk.glob("*.manifest.json")).read_text())
+        self.assertEqual(manifest["worktrees_not_carried"], [{"project": "beta", "path": str(gone)}])
+        self.assertIn("worktree", [p["kind"] for p in manifest["parts"]])
+        self.assertTrue(archive.exists())
+
+    def test_first_run_answers_never_overwrite_this_machines(self):
+        self.live_in(self.new)
+        claude = providers.get("claude")
+        config = claude.global_config()
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"theme": "light", "oauthAccount": {"emailAddress": "mine"},
+                                      "projects": {"/a": {"hasTrustDialogAccepted": False, "history": ["x"]}}}))
+        config.chmod(0o600)
+        (config.parent / "settings.json").write_text(json.dumps({"theme": "light"}))
+        said = claude.restore_first_run({"settings": {"theme": "dark", "skipDangerousModePermissionPrompt": True},
+                                         "hasCompletedOnboarding": True,
+                                         "projects": {"/a": {"hasTrustDialogAccepted": True},
+                                                      "/b": {"hasTrustDialogAccepted": True}}})
+        self.assertIn("first-run answers", said)
+        got = json.loads(config.read_text())
+        self.assertEqual(json.loads((config.parent / "settings.json").read_text()),
+                         {"theme": "light", "skipDangerousModePermissionPrompt": True}, "an answer given here stands")
+        self.assertTrue(got["hasCompletedOnboarding"])
+        self.assertEqual(got["oauthAccount"], {"emailAddress": "mine"})
+        self.assertEqual(got["projects"], {"/a": {"hasTrustDialogAccepted": False, "history": ["x"]},
+                                           "/b": {"hasTrustDialogAccepted": True}})
+        self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+        self.assertIsNone(claude.restore_first_run({"settings": {"theme": "dark"}}), "nothing to add: nothing written or said")
 
     def test_a_part_outside_the_home_that_cant_be_written_stops_before_anything_is_unpacked(self):
         archive = self.pack_and_move(colony_layout=False)

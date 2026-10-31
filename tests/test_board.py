@@ -7009,6 +7009,140 @@ class HandoverTest(BoardBase):
         self.assertIsNone(board.paused(self.root), "the next start resumes what the still stop paused")
         self.assertFalse(json.loads(handover.mark_path().read_text())["still"], "running again: no longer a clean copy")
 
+    def session(self, command):
+        """A tmux session of the test's own, standing in for a console, running `command`."""
+        name = f"colony-still-test-{os.getpid()}-{len(self._sessions)}"
+        self._sessions.append(name)
+        subprocess.run(["tmux", "new-session", "-d", "-s", name, command], check=True)
+        self.addCleanup(subprocess.run, ["tmux", "kill-session", "-t", name], capture_output=True)
+        return name
+
+    _sessions = []
+
+    def end(self, pids):
+        """Make sure nothing a test started outlives it."""
+        import signal
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    def test_the_mark_waits_until_every_program_the_sessions_ran_has_exited(self):
+        """Finding 1a: Claude Code outlives its session by a second or so, and a copy taken before it exits isn't
+        clean. Here a program that ignores the hang-up keeps running two seconds after its session ends."""
+        from colony import handover
+        name = self.session("sh -c 'trap \"\" HUP TERM; sleep 2; sleep 0'")
+        deadline = time.time() + 10
+        while time.time() < deadline and not any("sleep" in row[2] for row in handover.programs([name]).values()):
+            time.sleep(0.1)
+        ran = handover.programs([name])
+        self.addCleanup(self.end, list(ran))
+        self.assertTrue(any("sleep" in row[2] for row in ran.values()), ran)
+        ended = []
+
+        def stop_sessions():
+            subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+            ended.append(time.time())
+        with patch.object(handover, "settle", return_value=[]):
+            self.assertEqual(handover.stop_still(stop_sessions, say=lambda s: None, sessions=[name]), 0)
+        self.assertGreater(handover.mark_path().stat().st_mtime, ended[0] + 1, "marked only once they had exited")
+        self.assertFalse([pid for pid, row in ran.items() if handover._start(pid) == row[0]], "nothing outlived it")
+
+    def test_a_program_outliving_the_wait_leaves_the_stop_unmarked_and_named(self):
+        from colony import handover
+        name = self.session("sh -c 'trap \"\" HUP TERM; sleep 30'")
+        deadline = time.time() + 10
+        while time.time() < deadline and not any("sleep" in row[2] for row in handover.programs([name]).values()):
+            time.sleep(0.1)
+        ran = handover.programs([name])
+        self.addCleanup(self.end, list(ran))
+        said = []
+        with patch.object(handover, "settle", return_value=[]):
+            self.assertEqual(handover.stop_still(
+                lambda: subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True),
+                wait=1, say=said.append, sessions=[name]), 1)
+        self.assertFalse(handover.mark_path().exists(), "no clean-stop mark while something still runs")
+        self.assertIn("not marked still", said[-1])
+        self.assertIn("sleep 30", said[-1])
+
+    def test_a_stop_typed_in_a_console_doesnt_wait_for_itself(self):
+        from colony import handover
+        with patch.object(console, "_descendants", return_value=[os.getpid(), os.getppid()]), \
+                patch.object(handover.subprocess, "run",
+                             return_value=subprocess.CompletedProcess([], 0, f"{os.getpid()}\n", "")):
+            self.assertEqual(handover.programs(["any"]), {})
+
+    def test_a_lead_item_in_flight_is_waited_for_and_named_and_past_the_wait_nothing_stops(self):
+        """Finding 1c: a helper's item still working may hold uncommitted work in its worktree; the hand-over waits for
+        it to land as for a console mid-turn."""
+        from colony import handover, lead
+        helper = Path(self.tmp.name) / "helper"
+        helper.mkdir()
+        here = str(self.root.resolve())
+        group = {"id": "g", "canonical": here, "members": [here, str(helper.resolve())], "lead": here,
+                 "assignments": {"R1": {"item": "R1", "owner": str(helper.resolve()), "state": "working"},
+                                 "R2": {"item": "R2", "owner": here, "state": "working"},
+                                 "R0": {"item": "R0", "owner": str(helper.resolve()), "state": "integrated"}}}
+        board.save_json(lead.location(), {"g": group})
+        self.assertEqual(handover.in_flight(self.root), ["R1"], "the lead's own item is its console's work")
+        self.assertEqual(handover.in_flight(helper), ["R1"])
+        self.assertFalse(handover.still(self.root))
+        said, stopped = [], []
+        ticks = iter(range(0, 10_000, 30))
+        real = handover.settle
+        with patch.object(handover, "settle", lambda roots, by, wait, say: real(
+                roots, by, wait, say, clock=lambda: next(ticks), nap=lambda s: None)):
+            self.assertEqual(handover.stop_still(lambda: stopped.append(1), wait=120, say=said.append), 1)
+        self.assertIn("waiting for plants (R1 in flight) to land its work", said[0])
+        self.assertIn("plants (R1 in flight) has an item of the lead's in flight", said[-1],
+                      "idle with only the item left, it stops waiting at once and says why")
+        self.assertLess(len(said), 3, "not an hour of looks")
+        self.assertIn("nothing was stopped", said[-1])
+        self.assertEqual(stopped, [], "nothing stopped")
+        self.assertIsNone(board.paused(self.root), "carries on as it was")
+        group["assignments"]["R1"]["state"] = "integrated"
+        board.save_json(lead.location(), {"g": group})
+        self.assertTrue(handover.still(self.root), "landed: still")
+
+    def test_a_codex_check_and_all_it_started_end_with_a_still_stop(self):
+        """Finding 1b: the detached check of a new Codex runs Codex app hosts in sessions of their own that no project
+        home names; a still stop ends it and everything under it."""
+        from colony import codex_remote, handover
+        script = ("import subprocess, sys, time; "
+                  "subprocess.Popen(['sleep', '60'], start_new_session=True); time.sleep(60)")
+        check = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+        self.addCleanup(check.wait)
+        deadline = time.time() + 10
+        while time.time() < deadline and len(console._descendants(check.pid)) < 2:
+            time.sleep(0.05)
+        tree = console._descendants(check.pid)
+        self.addCleanup(self.end, tree)
+        self.assertEqual(len(tree), 2, "the check and the host it started in a session of its own")
+        codex_remote._record_check("detached", check.pid)
+        with patch.object(handover, "still", lambda root: True):
+            self.assertEqual(handover.stop_still(lambda: None, say=lambda s: None), 0)
+        check.wait(timeout=5)
+        self.assertFalse([pid for pid in tree if codex_remote.process_start(pid)], "nothing of the check outlived it")
+        self.assertFalse(codex_remote._check_path().exists())
+
+    def test_no_codex_check_starts_while_colony_is_still_or_held(self):
+        from colony import codex_remote, handover
+        board.pause_project(self.root, by="still")
+        self.assertTrue(handover.stilled())
+        with patch.object(codex_remote, "subprocess") as run:
+            codex_remote.start_check()
+            self.assertIsNone(codex_remote.check_version("codex-cli 9.9.1"))
+        board.resume_project(self.root)
+        self.assertFalse(handover.stilled())
+        handover.hold_restore("test copy")
+        with patch.object(codex_remote, "subprocess") as held:
+            codex_remote.start_check()
+            self.assertIsNone(codex_remote.check_version("codex-cli 9.9.1"))
+        for mock in (run, held):
+            mock.Popen.assert_not_called()
+            mock.run.assert_not_called()
+
 
 class RestoreTest(BoardBase):
     """A restored home serves the person, but waits for their check before any automatic work."""

@@ -397,9 +397,16 @@ class LayoutTest(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(value)
         (self.project / ".env.example").write_text("EXAMPLE=fill-this-in")
+        (self.project / ".gitignore").write_text("secrets/\n")          # matches a folder, not the link left there
+        self.git(self.project, "add", ".gitignore")
+        self.git(self.project, "commit", "-qm", "ignore")
         dest = self.colony / "projects" / "plants"
         said = []
         self.assertEqual(handover.move(self.project, dest, sure=True, say=said.append), 0, said)
+        untracked = {line[3:] for line in self.git(dest, "status", "--porcelain", "--untracked-files=all").splitlines()}
+        self.assertIn(".env.example", untracked)
+        for name in (".env", "secrets", "credentials-work.json"):
+            self.assertNotIn(name, untracked, "a key's link is never committed by `git add -A`")
         keys = self.old_home / "project-keys" / self.project_id
         for name, value in values.items():
             self.assertEqual((keys / name).read_text(), value)

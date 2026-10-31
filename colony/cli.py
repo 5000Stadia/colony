@@ -446,14 +446,17 @@ def cmd_stop(a):
     project lands its work first and the Codex app hosts stop too, for a copy of colony's folders (R127)."""
     from . import board, console, monitor
 
+    def named():
+        return [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
+
     def sessions():
-        names = [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
+        names = named()
         ended = [n for n in names if (monitor.stop() if n == monitor.name() else
                  subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True)).returncode == 0]
         print(f"stopped {len(ended)} session(s): {', '.join(ended) or 'none were running'}")
     if getattr(a, "still", False):
         from . import handover
-        return handover.stop_still(sessions, wait=int(a.wait * 60))
+        return handover.stop_still(sessions, wait=int(a.wait * 60), sessions=named())
     sessions()
     return 0
 

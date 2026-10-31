@@ -513,11 +513,15 @@ class ConsoleConfigTest(unittest.TestCase):
         codex = providers.get('codex')
         runs = []
 
-        def run(cmd, **kw):
-            runs.append(cmd[-1])
-            return subprocess.CompletedProcess(cmd, 0 if cmd[-1] == '9.9.1' else 1, '', 'FAILED (errors=1)')
+        class Run:
+            def __init__(self, cmd, **kw):
+                runs.append(cmd[-1])
+                self.pid, self.returncode = os.getpid(), 0 if cmd[-1] == '9.9.1' else 1
+
+            def communicate(self, timeout=None):
+                return '', 'FAILED (errors=1)'
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder), \
-                patch.object(remote.subprocess, 'run', side_effect=run):
+                patch.object(remote.subprocess, 'Popen', Run):
             self.assertFalse(remote.supported_version('codex-cli 9.9.1'))
             self.assertTrue(remote.check_version('codex-cli 9.9.1')['passed'])
             self.assertTrue(remote.supported_version('codex-cli 9.9.1'), 'passed: admitted for app access')
