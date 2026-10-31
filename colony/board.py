@@ -758,6 +758,68 @@ def wire(root):
     return exclude(root)
 
 
+IDENT = re.compile(r"[0-9a-f]{12}")
+
+
+def ident(root, make=True):
+    """A project's own identity (R127): 12 hex characters in its .board/id, made once and kept out of git, so colony
+    knows the project wherever its folder goes. None for a folder that has none and isn't to get one."""
+    path = Path(root) / ".board" / "id"
+    try:
+        value = path.read_text().strip()
+        if IDENT.fullmatch(value):
+            return value
+    except OSError:
+        pass
+    if not make or not Path(root).is_dir():
+        return None
+    value = secrets.token_hex(6)
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(value + "\n")
+    _exclude_id(root)
+    return value
+
+
+def _exclude_id(root):
+    """.board/id stays out of git even where a project commits its .board/: a clone elsewhere is another project."""
+    found = subprocess.run(["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-path", "info/exclude",
+                            "--show-prefix"], capture_output=True, text=True)
+    if found.returncode:
+        return
+    path, prefix = (found.stdout.splitlines() + ["", ""])[:2]
+    line, path = f"/{prefix}.board/id", Path(path)
+    have = path.read_text() if path.exists() else ""
+    if line not in have.splitlines():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(have + ("\n" if have and not have.endswith("\n") else "") + line + "\n")
+
+
+def keep_ids(plist=None):
+    """Each project on the board known by its ID, in the registry's map ({id: path}); a folder carrying an ID that
+    belongs to another project still where it was is a copy, and gets an ID of its own (said once, in the log).
+    Written only when it changes. Returns {id: path}."""
+    with board_lock("ids"):
+        reg = registry()
+        ids, changed = dict(reg.get("ids") or {}), False
+        for root in (plist if plist is not None else projects(reg)):
+            if not Path(root).is_dir():
+                continue
+            value, here = ident(root), str(root)
+            other = ids.get(value)
+            if other and other != here and Path(other).is_dir() and ident(other, make=False) == value:
+                (Path(root) / ".board" / "id").unlink(missing_ok=True)      # a copy: an identity of its own
+                value = ident(root)
+                with (home() / "ids.jsonl").open("a") as f:
+                    f.write(json.dumps({"at": now(), "copy": here, "of": other, "id": value}) + "\n")
+            if ids.get(value) != here:
+                ids[value], changed = here, True
+        if changed:
+            raw = json.loads((home() / "board.json").read_text()) if (home() / "board.json").exists() else {}
+            raw["ids"] = ids
+            save_registry(raw)
+        return ids
+
+
 def exclude(root):
     """Colony's files in the repository's own exclude list (.git/info/exclude, which is local and never committed),
     each line added only if missing; ROADMAP.md only while the project doesn't track it, since untracking a plan it
@@ -1358,6 +1420,7 @@ def track(path, register=True, private=False, described=""):
         settings.write_text(json.dumps(dict(own, private=True), indent=2) + "\n")
     (root / ".board").mkdir(exist_ok=True)
     first_track = not any((root / '.board' / name).exists() for name in ('vision.jsonl', 'vision-installed'))
+    ident(root)                                    # its identity, wherever its folder goes (R127)
     from . import lead
     paired = lead.group(root)
     if not paired and not joining and not (root / "ROADMAP.md").exists():

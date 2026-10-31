@@ -6694,6 +6694,35 @@ class StayCurrentTest(BoardBase):
         self.assertEqual(len(reloaded), 1, "off: nothing")
 
 
+class IdentityTest(BoardBase):
+    """R127, P1: each project has an identity of its own, in its .board/ and out of git, and the board knows it."""
+
+    def test_a_project_gets_an_identity_kept_out_of_git_and_the_board_maps_it(self):
+        board.track(self.root)
+        value = board.ident(self.root)
+        self.assertRegex(value, r"^[0-9a-f]{12}$")
+        self.assertEqual(board.ident(self.root), value, "made once")
+        self.assertIn("/.board/id", (self.root / ".git" / "info" / "exclude").read_text())
+        self.assertEqual(self.git("check-ignore", ".board/id").strip(), ".board/id", "never committed")
+        self.assertEqual(board.keep_ids(), {value: str(self.root)})
+        self.assertEqual(board.registry()["ids"], {value: str(self.root)})
+
+    def test_a_copy_gets_an_identity_of_its_own_and_a_move_keeps_it(self):
+        board.track(self.root)
+        value = board.ident(self.root)
+        board.keep_ids()
+        copy = Path(self.tmp.name) / "plants-copy"
+        shutil.copytree(self.root, copy)
+        board.track(copy)
+        ids = board.keep_ids()
+        self.assertNotEqual(board.ident(copy), value, "a copy beside the original is another project")
+        self.assertEqual(ids[value], str(self.root))
+        self.assertEqual(ids[board.ident(copy)], str(copy))
+        moved = Path(self.tmp.name) / "moved-plants"
+        self.root.rename(moved)
+        self.assertEqual(board.ident(moved, make=False), value, "moved, it is the same project")
+
+
 class StartHereTest(BoardBase):
     """R125: a new board's front page says where to begin, and goes once a project is on the board."""
 
