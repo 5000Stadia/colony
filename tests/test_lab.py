@@ -73,7 +73,7 @@ class LockPlayTest(BoardBase):
         page = body.decode()
         for key, name, _ in lab.WAYS:
             self.assertIn(f"data-way='{key}'", page, name)
-        self.assertEqual(len(KEYS), 7, "A to F, and G: the silent loop underneath")
+        self.assertEqual(len(KEYS), 8, "A to F; G, the silent loop underneath; H, the stream fed silence")
         self.assertIn("lock the phone, and wait two minutes", page)
         self.assertIn("navigator.audioSession", page)
         self.assertIn("isTypeSupported", page)
@@ -86,7 +86,7 @@ class LockPlayTest(BoardBase):
         self.assertEqual(lab.text("B", 3).split(".")[0], "Loop trick, clip 3 of 12")
         status, _, body = self.ask("GET", "/lab/lockplay/status")
         got = json.loads(body)
-        self.assertEqual((got["made"], got["total"]), (84, 84))
+        self.assertEqual((got["made"], got["total"]), (96, 96))
         self.assertAlmostEqual(got["durations"]["D"][0], 5 * 0.024, places=3, msg="the summary frame isn't counted")
 
     def test_the_stream_sends_every_clip_back_to_back_without_tags_in_order(self):
@@ -161,7 +161,7 @@ class LockPlayTest(BoardBase):
                          (2, 1, False, 1, "2026-10-31T10:00:02Z"), "stopped at its latest clip")
         self.assertEqual((b["reached"], b["hidden"], b["finished"], b["name"]), (12, 11, True, "Loop trick"))
         self.assertEqual((g["reached"], g["silent_paused"]), (2, True), "G says when its silent element was paused")
-        self.assertEqual({k: g[k] for k in lab.MEASURES}, {"bytes": 3000, "requests": 4, "calls": 9, "hidden_calls": 3,
+        self.assertEqual({k: g[k] for k in lab.MEASURES}, {"bytes": 3000, "requests": 4, "calls": 9, "hidden_calls": 3, "silence": 0,
                                                            "playing": 2}, "its cost: the most each measure reached")
         self.assertEqual((a["bytes"], a["held"]), (0, None))
         self.assertEqual([r["run"] for r in json.loads(body)], ["G-1", "B-1", "A-1"], "newest first")
@@ -234,6 +234,33 @@ class LockPlayTest(BoardBase):
                          "clip 3 started hidden after 4 s; clip 4's 6 s came with the screen on")
         self.assertEqual((runs["F-1"]["ramp"], runs["F-1"]["longest_gap_hidden"]), (False, None), "no ramp, no gaps")
         self.assertIn("Longest gap survived while hidden", lab.SCRIPT)
+
+    def test_h_is_fed_silence_in_the_clips_own_format(self):
+        self.assertEqual(self.ask("GET", "/lab/lockplay/silence")[0], 404, "nothing to match before the clips")
+        self.made()
+        status, headers, body = self.ask("GET", "/lab/lockplay/silence")
+        self.assertEqual((status, headers["Content-Type"]), (200, "audio/mpeg"))
+        size, plays = lab.frame(body, 0)
+        self.assertEqual(len(body) % size, 0)
+        frames = [body[i:i + size] for i in range(0, len(body), size)]
+        self.assertAlmostEqual(len(frames) * plays, 0.5, delta=0.03, msg="half a second a time")
+        clip = lab.sound(lab.clip("H", 1))[0]
+        for f in frames:
+            self.assertEqual(f[1] & 0xFE, clip[1] & 0xFE, "the clips' MPEG version and layer")
+            self.assertEqual(f[2] & 0x0C, clip[2] & 0x0C, "their sample rate")
+            self.assertEqual(f[3] & 0xC0, clip[3] & 0xC0, "their channels")
+            self.assertEqual(f[4:], bytes(size - 4), "side information and sound all zeros: silence")
+        self.assertLess(len(body), 1024, "tiny")
+        self.assertEqual(lab.strip(body * 3)[0], body * 3, "frames a stream takes back to back")
+        self.assertIn("H(c)", lab.SCRIPT)
+        self.assertIn("timestampOffset", lab.SCRIPT, "each clip spliced in over the silence, not after all of it")
+
+    def test_the_silence_fed_is_a_cost(self):
+        rows = [dict(approach="H", run="H-1", clip=n, event="start", t=f"2026-10-31T10:00:{n:02d}Z", vis="visible",
+                     silence=s) for n, s in ((1, 0.5), (2, 3.25), (3, "x"))]
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(rows))[0], 200)
+        self.assertEqual([r["silence"] for r in lab.rows()], [0.5, 3.2, 0], "seconds, to a tenth")
+        self.assertEqual(lab.summary()[0]["silence"], 3.2)
 
     def test_a_clip_the_phone_held_until_unlock_did_not_survive_its_gap(self):
         # Kabe's A run with the ramp (Oct 31): clip 4 was sent on time after its 6 s gap but started only when the

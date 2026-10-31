@@ -33,6 +33,7 @@ WAYS = (
     ("E", "Loop trick, playback session", "The loop trick, with Safari told this page plays media (navigator.audioSession)."),
     ("F", "Silent bridge", "Today's way, with colony's looping silence playing while the next clip is fetched and set."),
     ("G", "Silent loop underneath", "Today's way, with a second element looping colony's silence the whole run, so sound never stops between clips."),
+    ("H", "Stream fed silence", "One continuous stream built in the page, as C, but each clip is asked for only when the last has played; while it waits, silence is fed in, so the sound never stops."),
 )
 NAMES = {k: name for k, name, _ in WAYS}
 # what each way is expected to cost the phone, so the person can weigh the ways that keep playing
@@ -44,8 +45,9 @@ COST = {
     "E": "As B; only Safari's audio session setting differs.",
     "F": "As A, plus a short silent loop decoded during each fetch and a second download of each clip (the fetch).",
     "G": "As A, plus a second element decoding a silent loop continuously for the whole run.",
+    "H": "One element, as C, fed a little silence from JavaScript during each wait: a tiny download once, appends every half second while waiting.",
 }
-MEASURES = ("bytes", "requests", "calls", "hidden_calls", "playing")
+MEASURES = ("bytes", "requests", "calls", "hidden_calls", "playing", "silence")
 
 
 def gap(n):
@@ -190,6 +192,17 @@ def silence():
     return "data:audio/wav;base64," + base64.b64encode(raw.getvalue()).decode()
 
 
+def quiet(path, seconds=0.5):
+    """Silent MP3 frames in a clip's own format (MPEG version, sample rate, channels), at the lowest bitrate: each
+    frame's side information and sound all zeros, which decodes to silence. H feeds them while a clip is late."""
+    head = sound(path)[0][:4]
+    if not frame(head, 0):
+        return b""
+    head = bytes([0xFF, head[1] | 1, 1 << 4 | head[2] & 0x0C, head[3] & 0xC0])   # no CRC, the lowest bitrate, no padding
+    size, plays = frame(head, 0)
+    return (head + bytes(size - 4)) * max(1, round(seconds / plays))
+
+
 def write(row):
     row = dict(row, at=board.now())
     with _writing:
@@ -206,8 +219,8 @@ def take(rows):
             continue
         row = {k: str(r.get(k, ""))[:200] for k in ("approach", "run", "event", "t", "vis", "why", "session", "main", "silent")}
         for k in ("clip", "gap") + MEASURES:
-            try:
-                row[k] = int(r.get(k) or 0)
+            try:                                   # whole numbers, but for the seconds of silence fed
+                row[k] = round(float(r.get(k) or 0), 1) if k == "silence" else int(r.get(k) or 0)
             except (TypeError, ValueError):
                 row[k] = 0
         write(dict(row, source="page"))
@@ -380,6 +393,11 @@ def get(handler, path, q):
     if path == "/lab/lockplay/status":
         make()
         return send(handler, 200, json.dumps(status()).encode(), "application/json")
+    if path == "/lab/lockplay/silence":
+        body = quiet(clip("H", 1)) if clip("H", 1).exists() else b""
+        if not body:
+            return send(handler, 404, b"no clips to match yet", "text/plain; charset=utf-8")
+        return send(handler, 200, body, "audio/mpeg", (("Cache-Control", "private, max-age=86400"),))
     if path == "/lab/lockplay/results":
         return send(handler, 200, json.dumps(summary()).encode(), "application/json")
     if path == "/lab/lockplay/clip":
@@ -503,7 +521,7 @@ SCRIPT = r"""
     try { performance.getEntriesByType('resource').forEach((e) => {
       if (e.name.includes(`run=${encodeURIComponent(c.run)}`)) { bytes += e.transferSize || 0; requests += 1; } }); } catch (e) {}
     return {bytes, requests, calls: c.calls, hidden_calls: c.callsHidden,
-      playing: [c.audio, c.silent].filter((x) => x && !x.paused).length};
+      playing: [c.audio, c.silent].filter((x) => x && !x.paused).length, silence: Math.round((c.silenceFed || 0) * 10) / 10};
   };
   const counted = (c, fn) => function (...args) {
     if (c === cur) { c.calls += 1; if (document.visibilityState === 'hidden') c.callsHidden += 1; }
@@ -623,6 +641,65 @@ SCRIPT = r"""
       const play = (n) => { c.clip = n; a.src = url(c.key, n); go(c, a); };
       a.onended = () => { ended(c, c.clip); if (c.clip < COUNT) play(c.clip + 1); };
       play(1); },
+    // H: one continuous source, as C, but each clip asked for only once the last has played (with the ramp's wait,
+    // as A sees it). Silence is kept LEAD seconds ahead of what plays, since on iOS a stream that runs dry while
+    // locked never recovers, and a hidden page's code may run late; each clip, when it comes, is spliced in a moment
+    // after what plays now, over the silence there, so the lead adds no delay
+    H(c) { const MS = window.ManagedMediaSource || window.MediaSource, type = 'audio/mpeg';
+      if (!MS || !MS.isTypeSupported(type)) { log('error', {why: MS ? 'audio/mpeg not supported by MediaSource' : 'no MediaSource here'});
+        show('This browser\'s MediaSource cannot play MP3 (audio/mpeg): H cannot run here.'); return stopped(); }
+      const a = element(c, false), src = count(c, new MS()), starts = [], ends = [];
+      a.disableRemotePlayback = true;                   // Safari's ManagedMediaSource opens only with this set
+      const LEAD = 5, lengths = (status && status.durations.H) || [];
+      let sb = null, quiet = null, chain = Promise.resolve(), asked = 0, last = 0, feeding = false, closed = false;
+      let splice = 'overwrite';                         // falls back to 'remove' if an overlapping append leaves a hole
+      c.silenceFed = 0;
+      const tail = () => { const b = sb.buffered; return b.length ? b.end(b.length - 1) : 0; };
+      const append = (buf) => new Promise((ok) => {
+        const tryIt = (again) => {
+          try { sb.appendBuffer(buf); sb.addEventListener('updateend', () => ok(true), {once: true}); }
+          catch (err) {
+            if (err.name === 'QuotaExceededError' && again && a.currentTime > 3) {
+              sb.addEventListener('updateend', () => tryIt(false), {once: true}); sb.remove(0, a.currentTime - 2); return; }
+            log('error', {why: `append: ${err.name}`}); ok(false);
+          } };
+        tryIt(true); });
+      // every append waits its turn, so a clip that arrives goes in after the silence already there
+      const queue = (job) => (chain = chain.then(() => (c.stopped ? null : job())).catch(() => {}));
+      const feed = () => {
+        if (!sb || !quiet || feeding || closed || c.stopped || last >= COUNT || tail() - a.currentTime >= LEAD) return;
+        feeding = true;
+        queue(async () => { const from = tail(); if (await append(quiet)) c.silenceFed += tail() - from; })
+          .then(() => { feeding = false; feed(); });
+      };
+      const ask = (n) => { asked = n;
+        fetch(url(c.key, n, true)).then(counted(c, (r) => r.arrayBuffer())).then(counted(c, (buf) => queue(async () => {
+          const at = Math.min(a.currentTime + 0.3, tail()), plays = lengths[n - 1] || 0;
+          if (splice === 'remove' && tail() > at) await new Promise((ok) => {
+            sb.addEventListener('updateend', ok, {once: true}); sb.remove(at, Infinity); });
+          sb.timestampOffset = at;                      // in sequence mode, where the next sound goes
+          if (await append(buf)) {
+            starts[n] = at; ends[n] = plays ? at + plays : tail(); last = n;
+            const b = sb.buffered, whole = b.length === 1 && b.start(0) <= a.currentTime + 0.05 && b.end(0) >= ends[n] - 0.05;
+            log('splice', {clip: n, why: `${splice}${whole ? '' : ', left a hole'}`});
+            if (!whole && splice === 'overwrite') splice = 'remove';
+          }
+          if (n === COUNT) { try { src.endOfStream(); } catch (e) {} closed = true; }
+        }))).catch((err) => log('error', {why: `fetch: ${err}`}));
+      };
+      src.addEventListener('sourceopen', () => { sb = count(c, src.addSourceBuffer(type)); sb.mode = 'sequence';
+        fetch('/lab/lockplay/silence').then(counted(c, (r) => r.arrayBuffer())).then(counted(c, (buf) => {
+          quiet = buf; ask(1); feed(); })).catch((err) => log('error', {why: `silence: ${err}`})); }, {once: true});
+      src.addEventListener('startstreaming', feed);
+      a.addEventListener('waiting', feed);
+      a.addEventListener('timeupdate', () => {
+        const t = a.currentTime;
+        for (let n = 1; n <= last; n++) if (t >= starts[n] && t < ends[n]) { reached(c, n); break; }
+        if (last && t >= ends[last] && !c.ends.has(last)) { ended(c, last); if (last < COUNT && asked === last) ask(last + 1); }
+        feed(); });
+      a.addEventListener('playing', () => handlers(c, false));
+      a.onended = () => ended(c, COUNT);
+      c.clip = 1; a.src = URL.createObjectURL(src); go(c, a); },
   };
 
   const buttons = [...document.querySelectorAll('[data-way]')];
@@ -664,7 +741,7 @@ SCRIPT = r"""
     if (!runs.length) { $('results').textContent = 'No runs yet.'; return; }
     const kb = (n) => n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
     $('results').innerHTML = '<table><tr><th>Way</th><th>Started</th><th>Clips reached</th><th>While hidden</th><th>Stopped</th>' +
-      '<th>Bytes (page / board)</th><th>Requests (page / board)</th><th>Code ran (all / hidden)</th><th>Playing at once</th><th>Held open</th><th>Longest gap survived while hidden</th></tr>' +
+      '<th>Bytes (page / board)</th><th>Requests (page / board)</th><th>Code ran (all / hidden)</th><th>Playing at once</th><th>Held open</th><th>Silence fed</th><th>Longest gap survived while hidden</th></tr>' +
       runs.map((r) => `<tr><td>${esc(r.approach)}. ${esc(r.name)}${r.ramp ? ' <b>ramp</b>' : ''}</td><td>${clock(r.began)}</td><td>${r.reached} of ${COUNT}</td>` +
         `<td>${r.hidden}</td><td>${r.finished ? 'finished, ' + clock(r.last) : r.reached ? 'after clip ' + r.reached + ', ' + clock(r.last) : 'never started'}` +
         `${r.approach === 'D' ? ` <span class="muted">(board sent ${r.sent})</span>` : ''}` +
@@ -672,7 +749,7 @@ SCRIPT = r"""
         `${r.stalls ? ` <span class="muted">${r.stalls} stall${r.stalls > 1 ? 's' : ''}</span>` : ''}` +
         `${r.approach === 'G' ? ` <span class="muted">(silent element ${r.silent_paused ? 'got paused' : 'kept playing'})</span>` : ''}</td>` +
         `<td>${kb(r.bytes)} / ${kb(r.server_bytes)}</td><td>${r.requests} / ${r.server_requests}</td>` +
-        `<td>${r.calls} / ${r.hidden_calls}</td><td>${r.playing}</td><td>${r.held === null ? '' : r.held + ' s'}</td>` +
+        `<td>${r.calls} / ${r.hidden_calls}</td><td>${r.playing}</td><td>${r.held === null ? '' : r.held + ' s'}</td><td>${r.silence ? r.silence + ' s' : ''}</td>` +
         `<td>${r.longest_gap_hidden === null ? '' : r.longest_gap_hidden + ' s'}</td></tr>`).join('') + '</table>';
   }).catch(() => {});
 
