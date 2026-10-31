@@ -9064,7 +9064,8 @@ class PhonePageTest(HoursBase):
         self.assertIn("N.silent = !N.tapped && aloud() && mode() === 'text';", board.PLAYER, "each part asks, not the reading's start")
         self.assertEqual(len(re.findall(r"N\.silent = (?!=)", board.PLAYER)), 1, "no reading carries a choice of its own")
         self.assertIn("if (!N.silent) hush(); begin(N.j, N.piece); }", board.PLAYER, "chosen mid-reading: at once")
-        self.assertIn("if (view) view.mark(); heed(); },", board.PLAYER, "a mode chosen")
+        # and the silent element follows: Text only keeps none for Auto, sound again takes it up within the tap
+        self.assertIn("if (view) view.mark(); heed(); humSync('a mode chosen'); },", board.PLAYER, "a mode chosen")
         self.assertIn("changed(); heed(); look(); }\n", board.PLAYER, "Auto turned on")
         # a reply tapped ▷ on is read aloud whatever Auto's mode; what the line reads (Play, a row, Auto) follows Auto's
         direct = board.PLAYER.split("    read(v, secs) {", 1)[1].split("    // a chat's seen:", 1)[0]
@@ -9569,7 +9570,7 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 190, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 200, result.stdout)
 
 
 class DocumentAudioTest(BoardBase):
@@ -10148,11 +10149,17 @@ class LineTest(BoardBase):
         self.assertIn("const LONG = 2 * 3600e3;", js)
         self.assertIn("if (!autoPaused() && stopAt && Date.now() - stopAt >= LONG) {", js)
         # a locked phone: the silence between replies lets go only after two quiet hours; the lock screen's stop pauses
-        self.assertIn("O.si.call(window, () => { if (resting && Date.now() - resting > LONG) {", js)
+        self.assertIn("O.si.call(window, () => { if (resting && !N && Date.now() - resting > LONG) {", js)
         self.assertIn("['stop', () => hold(true, 'lock screen')]", js)
         self.assertIn("ms.playbackState = N ? (playing && !paused ? 'playing' : 'paused')", js)
         self.assertIn("{title: 'Waiting for replies', artist: 'colony', album: 'colony'}", js)
-        self.assertIn("if (waits.length) { bridge(); return Promise.all(waits).then(sound); }", js, "no gap while the next is made")
+        # no gap while the next is made: the silent element (way G of /lab/lockplay) holds every wait, the player never
+        # switches to the silence (the old bridge let go on the person's locked iPhone once a wait reached 14 s)
+        self.assertIn("if (waits.length) return Promise.all(waits).then(sound);", js, "no gap while the next is made")
+        self.assertIn("const hum = new Audio(); hum.loop = true; hum.src = SILENT;", js)
+        self.assertNotIn("bridge()", js)
+        self.assertNotIn("player.loop = true", js)
+        self.assertIn("restStop('the phone stopped the silence')", js)
         # seen: three seconds to a reply's last part, only where nothing will read it
         self.assertIn("const SEEN = 3000", chat)
         self.assertIn("const waiting = document.visibilityState === 'visible' && P.quiet() && !covered ? P.unheard(key) : new Map();", chat,
