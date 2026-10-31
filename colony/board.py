@@ -7593,6 +7593,7 @@ def monitor_page(reg, view="overview"):
             + ("" if on else f"<form method='post' action='/mute' class='helmform'><input type='hidden' name='state' "
                f"value='{'off' if monitor.muted() else 'on'}'><button class='quiet'>{'Unmute' if monitor.muted() else 'Mute'}</button></form>")
             + "</div>" + switch_line(monitor.home(), monitor.name(), "monitor")
+            + (remote_line(monitor.home()) if monitor.provider() is providers.get("codex") else "")
             + f"<div class='tabs'>{tab('overview', 'Overview')}{tab('helm', 'Helm')}{tab('chat', 'Chat')}{tab('console', 'Console')}</div></header>")
     plist = projects(reg)
     if view == "chat":
@@ -8927,7 +8928,8 @@ def signed_out():
 
 def remote_line(root):
     """Whether the project's console is reachable from the person's app, and the one step that connects it."""
-    if providers.of(root) is providers.get('codex'):
+    from . import context
+    if context.program(root) is providers.get('codex'):
         from . import codex_remote
         from .codex_rpc import Client, RPCError
         home = codex_remote.home_for(root)
@@ -8951,31 +8953,35 @@ def remote_line(root):
 
 
 def codex_pairing_options(reg):
-    from . import codex_remote
+    from . import codex_remote, context, monitor
     roots = [root for root in projects(reg) if root.exists() and providers.of(root) is providers.get('codex')]
+    if monitor.provider() is providers.get('codex'):
+        roots.insert(0, monitor.home())
     if not roots:
         return ''
     rows = []
     for root in roots:
         ready = codex_remote.alive(codex_remote.home_for(root))
         offered = codex_remote.pairing_choice(root) == 'offered'
-        rows.append(f"<li><b>{e(name_of(root))}</b> "
-                    + ("<p>Would you like to pair this project with ChatGPT now? Open the app first; the code expires quickly.</p>" if offered else '')
+        rows.append(f"<li><b>{e(steward_name() if context.is_monitor(root) else name_of(root))}</b> "
+                    + ("<p>Would you like to pair this console with ChatGPT now? Open the app first; the code expires quickly.</p>" if offered else '')
                     + (f"<form method='post' action='/codex-pair'><input type='hidden' name='project' value='{e(str(root))}'>"
                        + ("<button>Yes, pair now</button> <button formaction='/codex-pair/defer' class='quiet'>Not now</button>" if offered else
                           "<button>Pair with ChatGPT</button>") + "</form>" if ready else
                        "<span class='muted'>Open its console with Remote Control on to pair it.</span>") + '</li>')
     offered = any(codex_remote.pairing_choice(root) == 'offered' for root in roots)
     return (f"<details class='more' id='codex-pairing'{' open' if offered else ''}><summary>Codex in ChatGPT "
-            f"<span class='muted'>({len(roots)} project{'s' * (len(roots) != 1)})</span></summary><p>Pair each project once with your ChatGPT app. "
+            f"<span class='muted'>({len(roots)} console{'s' * (len(roots) != 1)})</span></summary><p>Pair each console once with your ChatGPT app. "
             "Sign in to the same account as Codex. When you are ready, get a fresh code and open Codex → Add manually in the app. "
             "You can pair another device here later.</p><ul class='folders'>" + ''.join(rows) + '</ul></details>')
 
 
 def codex_pairing_page(reg, root, result):
     from datetime import datetime, timezone
+    from . import codex_remote, context
+    back = "/steward" if context.is_monitor(root) else "/settings"
     expiry = datetime.fromtimestamp(result['expiresAt'], timezone.utc).strftime('%H:%M:%S UTC')
-    body = (f"<header><h1>Pair {e(name_of(root))} with ChatGPT</h1></header><div class='card'>"
+    body = (f"<header><h1>Pair {e(steward_name() if context.is_monitor(root) else name_of(root))} with ChatGPT</h1></header><div class='card'>"
             "<ol class='steps'><li>In the ChatGPT app, sign in to the same account as Codex.</li>"
             "<li>Open <b>Codex</b>, then choose <b>Add manually</b>.</li>"
             "<li>Enter this code before it expires:</li></ol>"
@@ -8984,8 +8990,8 @@ def codex_pairing_page(reg, root, result):
             f"<p id='pair-expiry' data-expiry='{result['expiresAt']}'>Expires at {expiry}.</p>"
             f"<form id='pair-again' method='post' action='/codex-pair'><input id='pair-project' type='hidden' name='project' value='{e(str(root))}'>"
             "<button>Get a fresh code</button></form>"
-            "<p>Once paired, open this project’s named conversation in the app’s Codex section.</p>"
-            "<p><a href='/settings'>Back to Settings</a></p></div>" + r"""
+            "<p>Once paired, open this console’s named conversation in the app’s Codex section.</p>"
+            f"<p><a href='{back}'>Back</a></p></div>" + r"""
 <script>(() => {
   const code = document.getElementById('pair-code'), state = document.getElementById('pair-state');
   const expiry = document.getElementById('pair-expiry'), project = document.getElementById('pair-project').value;
@@ -10111,9 +10117,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, str(err).encode())
             return self._send(200, b'Saved')
         if path in ('/codex-pair', '/codex-pair/status', '/codex-pair/defer'):
-            from . import codex_remote
-            root = next((r for r in projects(reg) if str(r) == form.get('project')), None)
-            if root is None or not root.exists() or providers.of(root) is not providers.get('codex'):
+            from . import codex_remote, context, monitor
+            root = next((r for r in [*projects(reg), monitor.home()] if str(r) == form.get('project')), None)
+            if root is None or not root.exists() or context.program(root) is not providers.get('codex'):
                 return self._send(404, b'Codex project not found on this board')
             if path.endswith('/defer'):
                 codex_remote.pairing_choice(root, 'deferred')
@@ -10751,7 +10757,7 @@ class Handler(BaseHTTPRequestHandler):
         pid = int(form.get("p", "0"))
         if pid == -1 and path == "/console/stop":
             from . import monitor
-            subprocess.run(["tmux", "kill-session", "-t", monitor.name()], capture_output=True)
+            monitor.stop()
             self.send_response(303)
             self.send_header("Location", "/steward")
             self.send_header("Content-Length", "0")

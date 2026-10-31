@@ -65,6 +65,8 @@ def command(label, root=None, folder=None):
     # PROVIDER: the label is the session's title in its program's app, where it has one (Claude's Remote Control):
     # the steward goes by the name the person gave it, a change reloading it there once it sits idle.
     title = (board.steward_named() or "steward") if label == "monitor" and not root else label
+    if label == "monitor" and not root:
+        return providers.of(None).steward_command(title, s, resume=resume)
     return providers.of(root).command(title, s, root=root, **({"resume": resume} if resume else {}))
 
 

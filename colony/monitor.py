@@ -136,6 +136,7 @@ You were once called the monitor: older records, files and settings still say `m
      machine's addresses. With Tailscale: its https address; they open it on the phone and tell you it opened, and
      only then is it done. The program's app (Remote Control) shows you and each project's own session, not the
      board: in the Claude app you are there as your name (Remote Control); for
+     you on Codex, open your steward page and press Connect to ChatGPT; for
      Codex projects, the ChatGPT app once each is paired (Settings → Agent programs → Codex in ChatGPT makes a
      short-lived code, entered in the app under Codex → Add manually; never paste codes into notes). Then show what
      you do for them there: "what needs me?" (`colony waiting`), each project's state, starting a project. The home
@@ -556,6 +557,14 @@ def ensure():
     for old in (".claude/agents/colony-scout.md", ".codex/agents/colony-scout.toml"):     # the scout runs apart now
         (home() / old).unlink(missing_ok=True)
     return console.ensure(home(), name(), "monitor")
+
+
+def stop():
+    """An explicit stop ends the steward's console and its app host together."""
+    running = providers.PROVIDERS.get(console.running_program(name())) or provider()
+    result = subprocess.run(["tmux", "kill-session", "-t", name()], capture_output=True)
+    running.stop_console_host(home())
+    return result
 
 
 def snapshot():

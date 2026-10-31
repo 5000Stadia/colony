@@ -80,7 +80,7 @@ def scoped(root, key, payload):
         return False
     if console.transcript_provider(payload['transcript_path'], key) != key:
         return False                            # a late hook from the outgoing provider cannot claim the new seat
-    if key == 'codex' and not is_monitor(root):
+    if key == 'codex':
         from . import codex_remote
         expected = codex_remote.read_json(codex_remote.home_for(root) / 'colony-thread.json').get('thread')
         if expected and sid != expected:

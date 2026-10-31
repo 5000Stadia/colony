@@ -1,4 +1,4 @@
-"""PROVIDER: project-bound Codex app servers, shared by the console and ChatGPT.
+"""PROVIDER: Codex app servers for projects and the steward, shared by the console and ChatGPT.
 
 Only launch() changes lifecycle. Rendering commands, fingerprints and settings
 does not start a daemon. SIGHUP drains admitted turns and never forces shutdown.
@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 
+from . import context
 from .codex_rpc import Client, RPCError
 from .codex_transfer import TransferError, atomic_json, transfer
 
@@ -97,8 +98,18 @@ def start_check():
 
 def home_for(root):
     from . import board
-    key = hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:12]
+    key = 'steward' if context.is_monitor(root) else hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:12]
     return board.home() / 'codex-remote' / key
+
+
+def workdir(root):
+    from . import board
+    return Path(root) if context.is_monitor(root) else board.workdir(root)
+
+
+def label(root):
+    from . import board
+    return (board.steward_named() or 'steward') if context.is_monitor(root) else Path(root).name
 
 
 def socket_for(home):
@@ -175,7 +186,7 @@ def remote_problem(root, settings):
         return (f'{version.strip() or "this Codex"} is not yet checked for app access, so its consoles run local '
                 f'until it is; colony checks it by itself (python3 -m colony.codex_remote check runs it now)')
     from . import console
-    status = read_json(home_for(root) / 'colony-status.json') if console.running(console.session_name(root)) else {}
+    status = read_json(home_for(root) / 'colony-status.json') if console.running(context.seat(root)) else {}
     # A previous fallback may have drained its daemon after recording pending.
     local_fallback = status.get('mode') == 'local' or status.get('mode') == 'pending' and not alive(home_for(root))
     if local_fallback and status.get('reason'):
@@ -191,7 +202,8 @@ def pair(root, manual_code=None):
     """
     home = home_for(root)
     if not alive(home):
-        raise RemoteError('Open this project’s console with Remote Control on, then return here to pair it.')
+        who = 'the steward’s' if context.is_monitor(root) else 'this project’s'
+        raise RemoteError(f'Open {who} console with Remote Control on, then return here to pair it.')
     try:
         with Client(socket_for(home), timeout=40) as client:
             if manual_code is not None:
@@ -245,6 +257,12 @@ def offer_pairing(root):
     from . import board, monitor
     if pairing_choice(root) is not None:
         return
+    if context.is_monitor(root):
+        monitor.queue("Ask the person whether to connect you to ChatGPT now. On yes, have them open your steward page "
+                      "and press Connect to ChatGPT. In the ChatGPT app, signed in to the same account, open "
+                      "Codex → Add manually and enter the fresh code before it expires. Never put codes in notes.", relay=True)
+        pairing_choice(root, 'offered')
+        return
     name = Path(root).name
     ask = (f"Ask the person whether to connect {name} to ChatGPT now. On yes, run `colony pair {name}` and give them "
            "the code it prints in your reply, with its steps: in the ChatGPT app, signed in to the same account, open "
@@ -262,7 +280,7 @@ def environment(root, home, source):
     from . import board, console
     env = {k: v for k, v in os.environ.items() if not k.startswith('COLONY_')}
     env.update(CODEX_HOME=str(home), COLONY_CODEX_SOURCE_HOME=str(source),
-               COLONY_PROJECT=str(Path(root).resolve()), COLONY_CONSOLE=console.session_name(root),
+               COLONY_PROJECT=str(Path(root).resolve()), COLONY_CONSOLE=context.seat(root),
                COLONY_BOARD_HOME=str(board.home()))
     # Remote enrollment uses the person's ChatGPT sign-in, not an unrelated API key.
     env.pop('OPENAI_API_KEY', None)
@@ -346,16 +364,17 @@ def overrides(root, home, settings):
     config['sandbox_mode'] = {'all': 'danger-full-access', 'plan': 'read-only'}.get(permission, 'workspace-write')
     config['sandbox_workspace_write.writable_roots'] = [str(board.home())]
     from . import lead
-    if root and str(Path(root).resolve()) == lead.info(root)['lead']:
+    project = root if not context.is_monitor(root) else None
+    if project and str(Path(root).resolve()) == lead.info(root)['lead']:
         config['sandbox_workspace_write.writable_roots'].append(str(lead.plan_root(root)))
-    if root:
+    if project:
         config['sandbox_workspace_write.writable_roots'] += [str(p) for p in lead.workspaces(root)]
     for event, entries in providers.hook_entries(provider).items():
         config['hooks.' + event] = entries
     hook = shlex.join(providers.own_module('colony.codex_remote') + ['hook'])
     for event in ('PreToolUse', 'PostToolUse'):
         config['hooks.' + event] = [{'matcher': '.*request_user_input.*', 'hooks': [{'type': 'command', 'command': hook}]}]
-    tiers = bench.effective(root)
+    tiers = bench.effective(project)
     # Immutable helper generations: preparing a pending launch cannot change the
     # overlays still used by an active app turn.
     pairs = {k: {f: v.get(f) for f in ('model', 'effort')} for k, v in tiers.items()}
@@ -486,7 +505,7 @@ def start(root, home, source, config, *, cwd=None, project=True):
         env.pop('COLONY_PROJECT', None)
         env.pop('COLONY_CONSOLE', None)
     try:
-        process = subprocess.Popen(command, cwd=cwd if cwd is not None else board.workdir(root), env=env,
+        process = subprocess.Popen(command, cwd=cwd if cwd is not None else workdir(root), env=env,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
         _processes[process.pid] = process
     finally:
@@ -519,7 +538,7 @@ def trust_hooks(client, root, config):
     from . import board
     commands = {h['command'] for k, entries in config.items() if k.startswith('hooks.')
                 for entry in entries for h in entry['hooks']}
-    result = client.call('hooks/list', {'cwds': [str(board.workdir(root))]})
+    result = client.call('hooks/list', {'cwds': [str(workdir(root))]})
     hooks = [h for entry in result['data'] for h in entry['hooks'] if h.get('command') in commands]
     expected = sum(len(entry['hooks']) for k, entries in config.items() if k.startswith('hooks.') for entry in entries)
     if len(hooks) != expected or any(not h['enabled'] for h in hooks):
@@ -534,7 +553,7 @@ def trust_hooks(client, root, config):
 
 def attach(client, root, config, resume):
     from . import board, console
-    params = dict(cwd=str(board.workdir(root)), model=config.get('model'),
+    params = dict(cwd=str(workdir(root)), model=config.get('model'),
                   approvalPolicy=config['approval_policy'], sandbox=config['sandbox_mode'],
                   config={'model_reasoning_effort': config.get('model_reasoning_effort')})
     if resume:
@@ -547,7 +566,7 @@ def attach(client, root, config, resume):
         raise RemoteError('Codex returned different session settings; attachment stopped')
     thread = result['thread']
     atomic_json(home_for(root) / 'colony-thread.json', {'thread': thread['id']})
-    client.call('thread/name/set', {'threadId': thread['id'], 'name': Path(root).name})
+    client.call('thread/name/set', {'threadId': thread['id'], 'name': label(root)})
     if thread.get('path'):
         console.remember(root, thread['id'], thread['path'])
     return thread['id']
@@ -632,7 +651,7 @@ def launch(root, settings, resume=None):
 def local(root, settings, resume, home):
     from . import providers
     provider = providers.get('codex')
-    args = shlex.split(provider.local_command(Path(root).name, settings, resume, root))
+    args = shlex.split(provider.local_command(label(root), settings, resume, None if context.is_monitor(root) else root))
     source = Path(os.environ.get('COLONY_CODEX_SOURCE_HOME') or provider.config_home()).resolve()
     if home == home_for(root):
         # Same persistent hook/helper configuration in embedded mode after remote off.
@@ -680,15 +699,13 @@ def accepts_hook(root, payload):
         return False
     if os.environ.get('COLONY_CONSOLE') != context.seat(root):
         return False
-    if context.is_monitor(root):
-        return True
     expected = read_json(home_for(root) / 'colony-thread.json').get('thread')
     if not expected and payload.get('session_id'):
         # The console's own new conversation: its first hook makes it the project's authoritative thread.
         atomic_json(home_for(root) / 'colony-thread.json', {'thread': payload['session_id']})
         try:                                    # named for the project, as ChatGPT lists it
             with Client(socket_for(home_for(root))) as client:
-                client.call('thread/name/set', {'threadId': payload['session_id'], 'name': Path(root).name})
+                client.call('thread/name/set', {'threadId': payload['session_id'], 'name': label(root)})
         except (RPCError, OSError, ValueError):
             pass
         return True

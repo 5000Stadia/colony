@@ -11,7 +11,9 @@ for you across them.
 
 That's it. It installs colony, checks that Claude Code or Codex is signed in (and stops with how to sign in if
 neither is), starts the board and prints where to open it. Then talk with the steward, colony's own agent, in Chat
-on the board, or in your Claude app, where it appears by its name: it introduces colony and sets it up with you in
+on the board, or in your Claude app, where it appears by its name. On Codex, open the steward’s page and press
+**Connect to ChatGPT**, then enter the code in the ChatGPT app under **Codex → Add manually**.
+The steward introduces colony and sets it up with you in
 a few short steps. Tell it what you want and it starts projects and works with each for you, or press
 **+ Add project** yourself and use the steward as little as you like. You need
 [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex), tmux and

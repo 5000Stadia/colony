@@ -2881,7 +2881,9 @@ class GlanceTest(BoardBase):
             self.assertIn("You are `steward", (monitor.home() / f).read_text())
         stand_in, console.COMMAND = console.COMMAND, None
         try:
-            self.assertTrue(console.command("monitor").startswith("codex "), "started with the default provider's command")
+            command = console.command("monitor")
+            self.assertIn("colony.codex_remote launch", command, "Codex starts through its app host")
+            self.assertIn("--project " + str(monitor.home()), command, "the host belongs to the steward")
         finally:
             console.COMMAND = stand_in
         self.assertIn(">Codex in <code>", board.monitor_page(board.registry(), "console"), "its console says what runs it")
