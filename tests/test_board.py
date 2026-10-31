@@ -3014,8 +3014,12 @@ class GlanceTest(BoardBase):
 
     def test_a_new_install_is_walked_through_setup_by_the_monitor(self):
         self.assertIn("First-time setup", monitor.ROLE)
-        for step in ("Agent programs", "artificialanalysis.ai/login", "never into the conversation", "Where new projects go", "The helm"):
+        for step in ("Introduction", "Your name", "only the desk can do", "The phone, confirmed", "The first project",
+                     "never into the conversation", "never switch programs during setup"):
             self.assertIn(step, monitor.ROLE)
+        setup = monitor.ROLE[monitor.ROLE.index("**First-time setup**"):monitor.ROLE.index("{direction}")]
+        self.assertLessEqual(len(re.findall(r"(?m)^  \d\. ", setup)), 5, "five steps before the first project (R125)")
+        self.assertNotIn("colony settings providers", setup, "settled by the start command, before the steward exists")
         monitor.setup()
         queued = (board.home() / "to_monitor.jsonl").read_text()
         self.assertIn("First-time setup: walk the person through it now", queued)
@@ -3938,7 +3942,10 @@ class FoldersTest(BoardBase):
             self.post(port, "/add", path=str(secret), private="on")
             self.assertTrue(board.is_private(secret))
             self.assertTrue((secret / "CLAUDE.local.md").exists() and not (secret / "CLAUDE.md").exists())
-            self.post(port, "/new", within=str(shelf), name="fresh idea")
+            landed = self.post(port, "/new", within=str(shelf), name="fresh idea", what="a recipe box\nfor my family")
+            self.assertTrue(landed.geturl().endswith("/?n=fresh%20idea"), "a link by name, not by position (R125)")
+            self.assertIn('described it as they added it: "a recipe box for my family"',
+                          board.notes(shelf / "fresh idea")[0]["text"], "What is it? reaches its first brief")
             self.assertTrue((shelf / "fresh idea" / "ROADMAP.md").exists())
             self.assertTrue(console.live(shelf / "fresh idea"))
             self.assertEqual(board.roadmap(shelf / 'fresh idea')['milestones'], [])
@@ -3947,6 +3954,12 @@ class FoldersTest(BoardBase):
             # an emoji in the name: never a folder opening on a dash, which its program would read as an option
             self.post(port, "/new", within=str(shelf), name="🌈 Snack Stand")
             self.assertTrue((shelf / "Snack Stand" / "ROADMAP.md").exists())
+            page = urllib.request.urlopen(f"http://127.0.0.1:{port}/?n=fresh%20idea").read().decode()
+            self.assertIn(f"id='dot-{[x.name for x in board.projects()].index('fresh idea')}'", page)
+            self.assertRegex(page, r"class='proj on'[^>]*>.{0,400}fresh idea", "the same link, another project added since")
+            form = board.add_project_page(board.registry())
+            self.assertIn("name='what'", form)
+            self.assertIn("<details class='more'><summary>More options", form, "the rest folded, with working defaults")
             console.stop(shelf / "Snack Stand")
             self.post(port, "/roots", add=str(shelf))
             self.post(port, "/roots", default=str(shelf))
@@ -4118,7 +4131,7 @@ class StewardNameTest(BoardBase):
     def test_its_title_in_the_app_is_the_name(self):
         saved, console.COMMAND = console.COMMAND, None
         try:
-            self.assertIn("--remote-control monitor", console.command("monitor"), "unnamed, as it always was")
+            self.assertIn("--remote-control steward", console.command("monitor"), "unnamed: the steward, as the board calls it")
             board.set_setting("steward_name", "Mr Jarvis")
             self.assertIn("--remote-control 'Mr Jarvis'", console.command("monitor"))
             self.assertIn("--remote-control plants", console.command("plants"), "a project's is its own")
@@ -5377,14 +5390,17 @@ class ConsoleSurvivalTest(BoardBase):
 class SelfHostTest(BoardBase):
     def test_when_colony_is_on_its_own_board_the_monitor_reports_to_it_and_changes_nothing(self):
         monitor.brief()
-        self.assertIn("Fix bugs yourself", (monitor.home() / "CLAUDE.md").read_text())
+        own = (monitor.home() / "CLAUDE.md").read_text()
+        self.assertIn("never change its code, even a one-line fix", own, "someone else's install: the tested release (R125)")
+        self.assertNotIn("Fix bugs yourself", own)
+        self.assertIn("as an issue to colony's", own)
         reg = board.registry()
         reg["projects"] = [str(ROOT)]                 # colony's own source, tracked by path only
         board.save_registry(reg)
         monitor.rebrief()
         self.assertIn("read 'The board is yours to keep healthy'", (board.home() / "to_monitor.jsonl").read_text(), "it is told")
         brief = (monitor.home() / "CLAUDE.md").read_text()
-        self.assertNotIn("Fix bugs yourself", brief)
+        self.assertNotIn("never change its code", brief)
         self.assertIn(f"Colony's source is itself a project on this board, `{ROOT.name}`", brief)
         self.assertIn(f"colony tell {ROOT.name}", brief)
 
@@ -6678,6 +6694,204 @@ class StayCurrentTest(BoardBase):
         self.assertEqual(len(reloaded), 1, "off: nothing")
 
 
+class StartHereTest(BoardBase):
+    """R125: a new board's front page says where to begin, and goes once a project is on the board."""
+
+    def test_an_empty_board_starts_here_and_a_project_replaces_it(self):
+        for p in board.projects(board.registry()):
+            board.remove(p)
+        page = board.home_list(board.registry())
+        self.assertIn("Start here", page)
+        self.assertIn("href='/steward?view=console'", page)
+        self.assertIn("href='/add'", page)
+        board.set_setting("steward_name", "Pip")
+        self.assertIn("Chat with Pip", board.home_list(board.registry()))
+        root = Path(self.tmp.name) / "first"
+        root.mkdir()
+        (root / "ROADMAP.md").write_text(ROADMAP)
+        board.track(root)
+        self.assertNotIn("Start here", board.home_list(board.registry()))
+
+
+class ThroughTheStewardTest(BoardBase):
+    """R125, P2 and P4: on the phone, the steward is the person's board: what waits on them, as Needs you has it, and
+    their own answer carried to that exact question, once."""
+
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+
+    def run_as(self, who, *args):
+        env = dict(os.environ, PYTHONPATH=str(ROOT), COLONY_CONSOLE=who)
+        return subprocess.run([sys.executable, "-m", "colony", *args], cwd=self.root, capture_output=True, text=True, env=env)
+
+    def test_what_waits_is_listed_as_needs_you_has_it(self):
+        from colony import cli
+        g = board.add_gate(self.root, "Which colour?", options=["red", "blue"], recommended="blue", default="blue")
+        board.record_ask(self.root, "t1", "Shall I go on with the next part?", explicit=True)
+        lines = cli.waiting_lines()
+        items = board.waiting_items(self.root)
+        self.assertEqual(len(lines), len(items), "the same items as Needs you, no more, no fewer")
+        self.assertTrue(lines[0].startswith(f"{board.name_of(self.root)}  {g['id']}  gate: "), "in its order, by its ID")
+        self.assertIn("options: red | blue  (recommended: blue)", lines[0])
+        self.assertIn("default if skipped: blue", lines[0])
+        self.assertRegex(lines[1], r"  a[0-9a-f]{8}  ask: asked you: Shall I go on")
+
+    def test_a_relayed_answer_lands_once_on_that_gate_in_their_words(self):
+        g = board.add_gate(self.root, "Which colour?", options=["red", "blue"])
+        r = self.run_as(monitor.name(), "answer", "plants", g["id"], "blue, the darker one")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        done = next(x for x in board.gates(self.root) if x["id"] == g["id"])
+        self.assertEqual(done["answer"], "blue, the darker one", "their words, verbatim")
+        self.assertEqual(done["answered_by"], "person", "the person's answer, carried")
+        self.assertIn('"via": "steward"', (self.root / ".board" / "gates.jsonl").read_text())
+        notes_before = len(board.notes(self.root))
+        again = self.run_as(monitor.name(), "answer", "plants", g["id"], "red")
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn("no longer open", again.stderr)
+        self.assertEqual(len(board.notes(self.root)), notes_before, "one answer, one note")
+        g2 = board.add_gate(self.root, "Go?")
+        board.answer_gate(self.root, g2["id"], "yes")                   # the person, on the board, first
+        late = self.run_as(monitor.name(), "answer", "plants", g2["id"], "no")
+        self.assertIn("no longer open", late.stderr, "answered on the board meanwhile: never doubled")
+        self.assertEqual(next(x for x in board.gates(self.root) if x["id"] == g2["id"])["answer"], "yes")
+
+    def test_only_the_steward_carries_answers(self):
+        g = board.add_gate(self.root, "Go?")
+        r = self.run_as(console.session_name(self.root), "answer", "plants", g["id"], "yes")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("Only the steward", r.stderr)
+        self.assertIsNone(next(x for x in board.gates(self.root) if x["id"] == g["id"])["answer"])
+
+    def test_consultant_points_need_a_choice_each(self):
+        board.append(self.root, "gates.jsonl", dict(type="gate", id="gpts0001", at=board.now(), question="Take these?",
+                                                     item=None, points=[{"id": "P1", "text": "one"}, {"id": "P2", "text": "two"}]))
+        bare = self.run_as(monitor.name(), "answer", "plants", "gpts0001", "sounds good")
+        self.assertIn("Accept or reject every consultant point", bare.stderr, "no choices are assumed")
+        r = self.run_as(monitor.name(), "answer", "plants", "gpts0001", "the first only", "--accept", "P1", "--reject", "p2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        done = next(x for x in board.gates(self.root) if x["id"] == "gpts0001")
+        self.assertEqual(done["point_decisions"], {"P1": "accept", "P2": "reject"})
+
+    def test_a_question_is_answered_only_while_it_is_the_open_one(self):
+        old = board.record_ask(self.root, "t1", "Shall I start?", explicit=True)
+        new = board.record_ask(self.root, "t2", "Which part first?", explicit=True)
+        with self.assertRaisesRegex(ValueError, "no longer open: superseded by a later turn"):
+            board.relay_ask(self.root, old["id"], "yes")
+        typed = []
+        with patch.object(console, "ensure", lambda root, **kw: "board-plants"), \
+                patch.object(console, "paste_into", lambda name, text, **kw: typed.append(text) or True):
+            board.relay_ask(self.root, new["id"], "the second part")
+        self.assertEqual(typed, ["the second part"], "typed as the person's message")
+        self.assertEqual(board.asks(self.root), [], "and it's answered")
+        with self.assertRaisesRegex(ValueError, "through the steward"):
+            board.relay_ask(self.root, new["id"], "again")
+
+
+class FirstProgramTest(BoardBase):
+    """R125, P1: a fresh install's program is settled by the start command, before the steward exists: whichever is
+    signed in, by its status and one tiny real call; only a sign-out stops the board."""
+
+    def pick(self, states, choice=None, ask=None):
+        """states: {key: (signed_in, answers)}; programs not named aren't installed."""
+        from colony import cli
+        patches = [patch.object(providers, "installed", lambda p: providers.key(p) in states)]
+        for k, (s, ans) in states.items():
+            cls = type(providers.get(k))
+            patches += [patch.object(cls, "signed_in", lambda self, run=None, s=s: s),
+                        patch.object(cls, "answers", lambda self, run=None, ans=ans: dict(ans))]
+        for x in patches:
+            x.start()
+        try:
+            return cli.first_program(choice, ask=ask)
+        finally:
+            for x in patches:
+                x.stop()
+
+    OK = dict(ok=True, code=None, reason="")
+    LIMIT = dict(ok=False, code="usage-limit", reason="Claude Code usage limit reached.")
+    AUTH = dict(ok=False, code="authentication", reason="Claude Code authentication failed.")
+
+    def test_one_signed_in_is_used_and_none_signed_in_stops_with_how_to_sign_in(self):
+        key, lines = self.pick({"claude": (False, self.OK), "codex": (True, self.OK)})
+        self.assertEqual(key, "codex")
+        self.assertIn("The steward runs on Codex.", lines)
+        key, lines = self.pick({"claude": (False, self.OK), "codex": (False, self.OK)})
+        self.assertIsNone(key, "nothing can run the steward: the board doesn't start")
+        self.assertTrue(any("run `claude`, then `/login`" in x for x in lines))
+        self.assertTrue(any("run `codex login`" in x for x in lines))
+
+    def test_a_failed_call_is_a_sign_out_only_when_it_says_so(self):
+        key, lines = self.pick({"claude": (True, self.LIMIT)})
+        self.assertEqual(key, "claude", "signed in at a usage limit: still chosen, never told to sign in again")
+        self.assertTrue(any("didn't answer just now" in x and "usage limit" in x for x in lines))
+        self.assertFalse(any("/login" in x for x in lines))
+        key, lines = self.pick({"claude": (True, self.AUTH)})
+        self.assertIsNone(key, "the call refused for authentication: signed out, whatever its status said")
+        key, _ = self.pick({"claude": (None, self.OK)})
+        self.assertEqual(key, "claude", "a status that can't tell, and a call that answers")
+
+    def test_both_signed_in_asks_or_takes_the_flag(self):
+        both = {"claude": (True, self.OK), "codex": (True, self.OK)}
+        self.assertEqual(self.pick(both)[0], "claude", "no terminal to ask in: Claude Code")
+        self.assertEqual(self.pick(both, ask=lambda q: "codex")[0], "codex")
+        self.assertEqual(self.pick(both, ask=lambda q: "")[0], "claude", "Enter takes the default")
+        self.assertEqual(self.pick(both, choice="codex")[0], "codex")
+        key, lines = self.pick({"claude": (True, self.OK), "codex": (False, self.OK)}, choice="codex")
+        self.assertIsNone(key, "the program asked for is signed out: stop, naming the one that works")
+        self.assertTrue(any("--program claude" in x for x in lines))
+
+    def test_only_a_new_board_checks_and_nothing_signed_in_keeps_it_from_starting(self):
+        import argparse
+        from colony import cli
+        args = argparse.Namespace(no_monitor=False, foreground=False, program=None, port=None, lan=False, local=False)
+        (board.home() / "board.json").unlink(missing_ok=True)
+        (board.home() / "setup-asked").unlink(missing_ok=True)
+        with patch.object(cli, "first_program", lambda *a, **kw: (None, ["Claude Code isn't signed in"])), \
+                patch.object(cli, "_launch", lambda *a: self.fail("the board must not start")):
+            self.assertEqual(cli.cmd_board(args), 1)
+        self.assertFalse((board.home() / "setup-asked").exists(), "no steward asked to set up")
+
+    def test_the_start_command_says_where_the_steward_waits(self):
+        from colony import cli
+        board.set_setting("provider", "claude")
+        line = cli.steward_whereabouts()
+        self.assertIn("ready in Chat on the board", line)
+        self.assertIn('in your Claude app, as "steward"', line)
+        board.set_setting("steward_name", "Pip")
+        self.assertIn('as "Pip"', cli.steward_whereabouts())
+        board.set_setting("remote", False)
+        self.assertNotIn("Claude app", cli.steward_whereabouts(), "Remote Control off: the board only")
+        board.set_setting("provider", "codex")
+        self.assertIn("pairs with you during setup", cli.steward_whereabouts())
+        start = (Path(__file__).resolve().parent.parent / "start").read_text()
+        self.assertIn('colony board "$@" || exit 1', start, "the board's own lines shown, and its refusal kept")
+        self.assertNotIn("front page", start)
+
+    def test_the_probe_reads_why_a_call_failed(self):
+        claude = providers.get("claude")
+        limit = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps(
+            {"is_error": True, "result": "You've hit your weekly limit · resets Tue"}), "")
+        self.assertEqual(claude.answers(run=limit)["code"], "usage-limit")
+        refused = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps(
+            {"is_error": True, "result": "Invalid API key · Please run /login"}), "")
+        self.assertEqual(claude.answers(run=refused)["code"], "authentication")
+
+        def slow(cmd, **kw):
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        self.assertEqual(claude.answers(run=slow)["code"], "timeout")
+        fine = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "ok"}), "")
+        self.assertTrue(claude.answers(run=fine)["ok"])
+        codex = providers.get("codex")
+        down = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "ERROR: unexpected status 503 Service Unavailable")
+        self.assertEqual(codex.answers(run=down)["code"], "server-error")
+
+        def answered(cmd, **kw):
+            Path(cmd[cmd.index("-o") + 1]).write_text("ok")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        self.assertTrue(codex.answers(run=answered)["ok"])
+
+
 class SignInTest(BoardBase):
     """Claude Code's long-lived sign-in, kept by colony and given to each console; each program's sign-in
     checked without model tokens and reported directly on the board."""
@@ -7595,6 +7809,39 @@ class ActiveHoursTest(HoursBase):
             w.tick()
         self.assertEqual(len(self.sent), 1)
         self.assertIn('plants showed "Watering chart"', self.sent[0], "held, not lost: it comes when their hours begin")
+
+
+class LaterOffersTest(HoursBase):
+    """R125, P3: what first-time setup leaves for later comes up with the steward once, when it first matters, by a
+    trigger in code; on a board set up before, never."""
+
+    def queued(self):
+        path = board.home() / "to_monitor.jsonl"
+        return path.read_text() if path.exists() else ""
+
+    def test_nothing_is_offered_on_a_board_set_up_before(self):
+        self.assertFalse(monitor.offer("bench"))
+        board.models_page(board.registry())
+        self.assertNotIn("benchmark data yet", self.queued())
+
+    def test_each_offer_comes_once_when_it_first_matters(self):
+        monitor.setup()
+        board.models_page(board.registry())
+        board.models_page(board.registry())
+        self.assertEqual(self.queued().count("benchmark data yet"), 1, "Models opened twice: offered once")
+        with self.clock(2):
+            board.add_gate(self.root, "Night question?")
+            board.add_gate(self.root, "Another?")
+        self.assertEqual(self.queued().count("held for their active hours (07:30-23:45)"), 1)
+        board.answer_gate(self.root, board.gates(self.root)[0]["id"], "yes")
+        board.answer_gate(self.root, board.gates(self.root)[1]["id"], "no")
+        w = monitor.Watcher()
+        with self.clock(10):
+            board.add_gate(self.root, "Which pot size?")
+            w.events()
+            w.events()
+        self.assertEqual(self.queued().count("Offer them the helm once"), 1, "the first question for the person: once")
+        self.assertFalse(monitor.offer("helm"), "already raised")
 
 
 class PauseTest(HoursBase):
@@ -9387,10 +9634,11 @@ class FirstRunTest(BoardBase):
 
     def test_the_stewards_setup_offers_the_phone_without_pressure_and_only_addresses_from_colony_urls(self):
         role = " ".join(monitor.ROLE.split())
-        step = role[role.index("6. Access"):role.index("7. Start-up questions")]
-        self.assertIn("the board answers this machine only", step)
+        step = role[role.index("3. The steps only the desk can do"):role.index("5. The first project")]
+        self.assertIn("The board answers this machine only", step)
+        self.assertIn("offer both and press neither", step)
         self.assertIn("comes from `colony urls`, never worked out from the settings", step)
-        self.assertIn("shows each project's own session, not the board", step)
+        self.assertIn("shows you and each project's own session, not the board", step)
         self.assertIn("HTTPS certificates in Tailscale's admin page", step)
         self.assertIn("The home network only if they ask: `colony settings lan on`, then `colony restart`", step)
         self.assertNotIn("home network (lan); Remote Control", step)

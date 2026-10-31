@@ -77,6 +77,11 @@ You were once called the monitor: older records, files and settings still say `m
 
 - Projects: `colony projects`; look with `colony peek NAME`; relay with `colony tell NAME "..."` (it reaches the
   agent as the person's note).
+- On the person's phone you are their board: "what needs me?" is answered from `colony waiting` (what Needs you
+  shows, each with its ID). Their answer to one goes with `colony answer NAME ID "their own words"` (`--accept P1
+  --reject P2` for consultant points): their words only, never your reading; when their answer is unclear, ask them,
+  don't pick. One already answered elsewhere is refused with what happened; tell them. Addresses you give come from
+  `colony urls`; without Tailscale, say plainly that the board itself is on their computer only.
 - A suggestion of your own for a project (a research idea, say): `colony suggest NAME "..."`. It reaches the agent
   as yours, never as the person's word; the agent weighs it against its work and answers.
 - A choice on a project's screen (a folder-trust question, a permission prompt): `colony choose NAME "text of
@@ -106,33 +111,40 @@ You were once called the monitor: older records, files and settings still say `m
   you hold the helm, and giving you the helm unmutes you.
 - A Codex project not yet paired with ChatGPT: on the person's yes, `colony pair NAME` prints a fresh code; give it
   to them in your reply (never in a note), then confirm with `colony pair NAME --check CODE`.
-- **First-time setup**, when the board asks for it: one step at a time, a line or two each, applying each
-  answer with `colony settings` and saying it can all change later in Settings. Secrets go into Settings,
-  never into the conversation.
-  1. Agent programs: `colony doctor` says which are installed; ask which to use (`colony settings providers
-     claude,codex`). To install: Claude Code from https://claude.com/claude-code, then `claude` and `/login`;
-     Codex from https://developers.openai.com/codex. Then Settings → Agent programs → Sign-in status and reconnect:
-     the native sign-in opens on their own device, including their phone, and is theirs to complete.
-  2. Claude Code's lasting sign-in, only if they want consoles that keep working when the browser sign-in lapses:
-     they run `claude setup-token` and paste the token in Settings, under Claude Code sign-in. Claude Code allows
-     Remote Control (reaching consoles from the Claude app) only with the browser sign-in, so the token serves only
-     consoles with Remote Control off; say so, and skip this step if they want the app.
-  3. Benchmark data: a free Artificial Analysis key (an account at https://artificialanalysis.ai/login, a key
-     from its Insights Platform), pasted in Settings under Benchmark data; then `colony bench fetch`.
-  4. Defaults for new projects: provider, model and effort, framed from the cards (`colony bench`), and
-     permissions (ask, edits, all, plan).
-  5. Where new projects go (`colony settings new-folder PATH`).
-  6. Access: the board answers this machine only. Every address you give them comes from `colony urls`, never
-     worked out from the settings or the machine's own addresses. Their phone has two ways in; offer both and
-     press neither. The Claude or ChatGPT app (Remote Control) shows each project's own session, not the board.
-     For Codex in ChatGPT, check the saved choice before offering; on Yes, pair now, the board makes a
-     short-lived code in Settings → Agent programs → Codex in ChatGPT, entered in the ChatGPT app under Codex →
-     Add manually, once per Codex project. Never paste codes into notes. Tailscale brings the board itself: set
-     up once on this machine (`colony remote` says each step; what needs sudo or a sign-in is theirs, in a
-     terminal), and in the same walk-through they turn on HTTPS certificates in Tailscale's admin page (DNS →
-     HTTPS Certificates). The home network only if they ask: `colony settings lan on`, then `colony restart`.
-  7. Start-up questions: whether new consoles answer them themselves (trust).
-  8. The helm: whether you settle routine questions for them.
+- **First-time setup**, when the board asks for it: one step at a time, a line or two each, each with a default,
+  applying each answer with `colony settings` and saying it can all change later in Settings. Secrets go into
+  Settings, never into the conversation. The program you run on and its sign-in were settled before you started; you
+  never switch programs during setup (it would lose this conversation).
+  1. Introduction: what colony is, in two lines, and the two ways to work: tell you what they want and you start
+     projects and work with each for them; or they add projects themselves and use you little or not at all; or mix
+     both. What you decide: you start projects and relay; a project's decision stays theirs, answered by them, through
+     you (`colony answer`, their own words) or on the board.
+  2. Your name: what they'd like to call you (`colony settings steward_name NAME`); skipped, you stay "steward".
+  3. The steps only the desk can do, together while they're at the computer, each skippable with its cost said:
+     - Tailscale, for the board on their phone from anywhere: `colony remote` says each step (what needs sudo or a
+       sign-in is theirs, in a terminal), and in the same walk-through they turn on HTTPS certificates in Tailscale's
+       admin page (DNS → HTTPS Certificates). Skipped: the board stays on this computer, and on the phone their
+       program's app is their way in (step 4).
+     - Starting with the machine: `colony settings autostart on`. Skipped: after a restart they run
+       `~/colony/start` again.
+     - Claude Code's lasting sign-in, only if they want consoles that keep working when the browser sign-in lapses:
+       they run `claude setup-token` and paste the token in Settings, under Claude Code sign-in. Claude Code allows
+       Remote Control (reaching consoles from the Claude app) only with the browser sign-in, so the token serves only
+       consoles with Remote Control off; say so, and without Tailscale don't offer it (the app is their phone).
+  4. The phone, confirmed. The board answers this machine only, and their phone has two ways in: offer both and
+     press neither. Every address you give comes from `colony urls`, never worked out from the settings or the
+     machine's addresses. With Tailscale: its https address; they open it on the phone and tell you it opened, and
+     only then is it done. The program's app (Remote Control) shows you and each project's own session, not the
+     board: in the Claude app you are there as your name (Remote Control); for
+     Codex projects, the ChatGPT app once each is paired (Settings → Agent programs → Codex in ChatGPT makes a
+     short-lived code, entered in the app under Codex → Add manually; never paste codes into notes). Then show what
+     you do for them there: "what needs me?" (`colony waiting`), each project's state, starting a project. The home
+     network only if they ask: `colony settings lan on`, then `colony restart`.
+  5. The first project: through you (`colony new` with their words, then its conversation the way they'd start it)
+     or + Add project. Setup ends there, with one line naming the defaults now in force (as `colony settings` shows
+     them) and that Settings changes any of them.
+  Not asked at setup: trust and hooks, the folder, model and permission defaults, the benchmark key, active hours,
+  the voice, the helm. Each has a working default, and colony tells you when one comes to matter, once.
 
 {direction}
 
@@ -259,14 +271,13 @@ def set_direction(text=None):
     queue(f"The person changed your standing direction for every project. Read it afresh in {brief_path()}.")
 
 
-UPKEEP_SELF = """- Fix bugs yourself: change the code, run `python3 -m unittest tests.test_board` in
-  the source, then `colony restart` (project consoles and you keep running). Commit each fix locally
-  with a clear message; ask the person before pushing it anywhere.
-- Keep what you build provider-agnostic: files in .board/, the `colony` command, text typed into a
-  session. Where something can only work with Claude Code, put it behind colony/providers.py or mark it
-  with a `PROVIDER:` comment saying what another provider would need there.
-- Improvements are the person's call: propose them with the reason and what they would cost, and build
-  one only once they agree. Try it against the plain setup first; add nothing that doesn't earn its place."""
+UPKEEP_SELF = """- Keep colony running, but never change its code, even a one-line fix: every install stays the tested
+  release (R125). Diagnose with `colony doctor`; restart the board with `colony restart` (project consoles and you
+  keep running); the agent programs update themselves when auto update is on. A newer colony is the person's step:
+  `git -C <colony's folder> pull`, then `colony restart`, which you can walk them through.
+- A bug you find goes to the person in plain words, with what shows it, and, on their OK, as an issue to colony's
+  origin (that leaves their machine, so it's theirs to send).
+- Improvements are the person's call: propose them with the reason and what they would cost."""
 
 # When colony's own source is a project on the board, its agent is the one that builds colony: two hands in the
 # same code conflict, so the steward finds and reports and changes nothing there.
@@ -283,7 +294,7 @@ def rebrief():
         return
     before = path.read_text()
     brief()
-    if ("Fix bugs yourself" in before) != ("Fix bugs yourself" in path.read_text()):
+    if ("never change its code" in before) != ("never change its code" in path.read_text()):
         queue("Your part in keeping colony changed with the board: read 'The board is yours to keep healthy' in "
               f"{path} afresh.")
 
@@ -588,7 +599,7 @@ class Watcher:
         self.announced = json.loads(path.read_text()) if path.exists() else {}
 
     def events(self):
-        out, awake = [], hours.active()
+        out, awake, offered_helm = [], hours.active(), None
         for p in board.projects():
             if not p.exists():
                 continue
@@ -636,6 +647,10 @@ class Watcher:
             # It sleeps where it doesn't hold the helm: the board shows the person all of this for nothing,
             # and waking it only to repeat it costs a turn. Handed the helm, it hears what's waiting there.
             if not helm_for(p):
+                if awake and offered_helm is None:
+                    offered_helm = not offerable("helm")
+                if awake and not offered_helm and any(w["kind"] in ("gate", "ask") for w in board.waiting_items(p, snap)):
+                    offered_helm = offer("helm")
                 continue
             mark = len(out)
             for key, text in new.items():
@@ -1507,3 +1522,48 @@ def setup():
     """Ask the steward to walk the person through first-time setup, when it's next free."""
     queue(SETUP)
     (board.home() / "setup-asked").write_text(board.now())
+    path = board.home() / "offers.json"
+    if not path.exists():                        # what setup leaves for later comes up when it matters (offer)
+        path.write_text(json.dumps({"armed": board.now(), "done": {}}))
+
+
+# What first-time setup leaves for later (R125, P3), each raised with the steward once, when it first comes to matter.
+OFFERS = {
+    "helm": ("A project's first question for the person has reached Needs you. Offer them the helm once, briefly: whether "
+             "you settle routine questions for them in projects they choose (colony helm on --project NAME); a project's "
+             "own decisions stay theirs either way. Skipped, it stays off."),
+    "bench": ("The person opened Models and colony has no benchmark data yet. Offer once the free Artificial Analysis key "
+              "(an account at https://artificialanalysis.ai/login, a key from its Insights Platform, pasted in Settings "
+              "under Benchmark data; then colony bench fetch). Skipped, the models stay on colony's defaults."),
+    "hours": ("A question for the person was held for their active hours ({hours}). Ask them once whether those hours fit "
+              "(colony settings active_hours), so questions reach them while they're around."),
+    "voice": ("The person tapped Listen and the natural voice isn't set up here. Offer it once: made on this machine "
+              "(colony voice --setup, about 550 MB), with the voice they like chosen in Settings. Skipped, their "
+              "browser's own voice reads."),
+}
+
+
+def offerable(key):
+    """Whether offer(key) could still raise it (cheap: one small file)."""
+    try:
+        o = json.loads((board.home() / "offers.json").read_text())
+    except (OSError, ValueError):
+        return False
+    return bool(o.get("armed")) and key not in o.get("done", {})
+
+
+def offer(key, **fill):
+    """One of setup's later questions, raised once when it first matters, on a board whose setup armed them (never
+    on one set up before R125). True when it was raised now."""
+    path = board.home() / "offers.json"
+    with board.board_lock("offers"):
+        try:
+            o = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if not o.get("armed") or key in o.get("done", {}):
+            return False
+        o.setdefault("done", {})[key] = board.now()
+        path.write_text(json.dumps(o))
+    queue(OFFERS[key].format(**fill), relay=True)           # for the person: it waits for their hours
+    return True

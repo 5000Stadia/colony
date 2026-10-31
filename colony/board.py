@@ -1148,8 +1148,30 @@ def record_ask(root, key, text, explicit=False):
     until = hours.held_until(epoch(ask["at"]))       # asked at night: the person's when their hours begin
     if until:
         ask["held_until"] = until
+        hours_matter()
     append(root, "asks.jsonl", ask)
     return ask
+
+
+def relay_ask(root, ask_id, text, wait=0):
+    """The person's answer to a turn that asked them, carried by the steward (R125): typed into that console as their
+    message, as Chat sends it, only while that question is the open one (an older one, replaced by a newer question or
+    answered meanwhile, is refused with what happened to it)."""
+    open_ = {a["id"]: a for a in asks(root)}
+    if ask_id not in open_:
+        gone = next((e for e in reversed(read(root, "asks.jsonl")) if e["type"] == "answered" and e["of"] == ask_id), None)
+        raise ValueError(f"That question is no longer open: {gone['how']} at {on_day(gone['at'])}." if gone
+                         else f"No question {ask_id} here.")
+    if not console.paste_into(console.ensure(root, settle=SETTLE), text, answer=True, wait=wait):
+        raise ValueError("Its console didn't take the message just now (busy, or a choice on screen); try again shortly.")
+    answer_asks(root, "through the steward")
+
+
+def hours_matter():
+    """A question was just held for the person's active hours: setup left those for when they matter (R125), now, once."""
+    from . import monitor
+    if monitor.offerable("hours"):
+        monitor.offer("hours", hours=registry()["settings"].get("active_hours") or "colony's default")
 
 
 def answer_asks(root, how):
@@ -1314,7 +1336,7 @@ def render_notes(ns, heading):
     return "\n".join(lines)
 
 
-def track(path, register=True, private=False):
+def track(path, register=True, private=False, described=""):
     """Put a project on the board: its roadmap, its .board folder, and its provider's wiring (for Claude Code,
     the colony protocol in CLAUDE.md and the delivery hooks) — added to whatever the project already has. Private,
     none of it enters the project's git history (wire()); a project once private stays so."""
@@ -1344,8 +1366,10 @@ def track(path, register=True, private=False):
     vision.observe(root)
     join = JOIN.replace("CLAUDE.md", providers_of(root).instructions)      # the file its program reads
     if first_track and not paired and not any(n.get('onboarding') == 'vision' for n in notes(root)):
+        said = " ".join(str(described or "").split())[:2000]     # what they wrote in "What is it?" (R125)
         append(root, 'notes.jsonl', dict(type='note', id='n' + secrets.token_hex(4), at=now(),
-               author='colony', anchor=None, text=join if joining else BEGIN, onboarding='vision'))
+               author='colony', anchor=None, text=(join if joining else BEGIN)
+               + (f"\n\nThe person described it as they added it: \"{said}\"" if said else ""), onboarding='vision'))
     wire(root)
     from . import bench
     bench.write_helpers(root)                        # its helpers at the tiers, from the start
@@ -1841,6 +1865,7 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
     until = hours.held_until(epoch(gate["at"]))     # outside the person's active hours: theirs when those begin
     if until:
         gate["held_until"] = until
+        hours_matter()
     if consultation:
         from . import consult
         gate.update(consult=consultation, points=consult.gate_points(root, consultation, points, item))
@@ -1850,13 +1875,20 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
     return gate
 
 
-def answer_gate(root, gate_id, text, tell=True, *, decisions=None):
+def answer_gate(root, gate_id, text, tell=True, *, decisions=None, only_open=False, via=None):
     """The person's answer to a gate. From the board it reaches the agent the way every other word from the
-    person does, as a note; settled in conversation, the agent records it and already knows (tell=False)."""
+    person does, as a note; settled in conversation, the agent records it and already knows (tell=False). only_open:
+    refused, inside the same lock that records it, if the gate was answered meanwhile (the steward relaying while the
+    person answers on the board gives one answer); via: who carried the person's words ("steward")."""
     with gate_lock(root):
         before = next((g for g in gates(root) if g["id"] == gate_id), None)
+        if only_open and before is None:
+            raise ValueError(f"No gate {gate_id} here.")
+        if only_open and before["answer"]:
+            how = {"colony": "its default stood", "agent": "the agent withdrew it"}.get(before["answered_by"], "answered")
+            raise ValueError(f"Gate {gate_id} is no longer open: {how} at {on_day(before['answered_at'])}: {before['answer']}")
         # a held call's outcome is told once, by colony, as it runs or not (connections.answered)
-        answer = _answer_gate(root, gate_id, text, tell=tell and not (before or {}).get("hold"), decisions=decisions)
+        answer = _answer_gate(root, gate_id, text, tell=tell and not (before or {}).get("hold"), decisions=decisions, via=via)
     if tell and before and before.get("hold") and not before["answer"]:
         from . import connections                    # theirs, from the board, the first answer: a held call runs on yes
         connections.answered(root, before, text)
@@ -1870,10 +1902,10 @@ def _gate_note(root, gate, ident, text, at, *, author, quiet=False):
             **({"quiet": True} if quiet else {})))
 
 
-def _answer_gate(root, gate_id, text, *, tell, decisions):
+def _answer_gate(root, gate_id, text, *, tell, decisions, via=None):
     gate = next(g for g in gates(root) if g["id"] == gate_id)
     text = text.strip()
-    answer = dict(type="answer", of=gate_id, at=now(), text=text)
+    answer = dict(type="answer", of=gate_id, at=now(), text=text, **({"via": via} if via else {}))
     if gate.get("points"):
         ids = {p["id"] for p in gate["points"]}
         if (not isinstance(decisions, dict) or set(decisions) != ids
@@ -2431,7 +2463,18 @@ def home_list(reg):
     top = "".join([choices] if choices else []) + "".join(support_rows())
     return (top + "".join(waiting)
             + (f"<h2>Nothing waiting on you</h2>" if waiting and quiet else "") + "".join(quiet)
-            + ("" if plist else "<p class='muted'>No projects yet.</p>"))
+            + ("" if plist else start_here()))
+
+
+def start_here():
+    """A new board's front page (R125): where to begin, the steward or a project of one's own. Gone once a project is."""
+    who = the_steward()
+    return ("<div class='card starthere'><h2>Start here</h2>"
+            f"<p><a class='go' href='/steward?view=console'>Chat with {e(who)} →</a></p>"
+            f"<p class='muted'>{e(the_steward(start=True))} introduces colony and sets it up with you. Tell it what you want, "
+            "and it starts projects and works with each for you.</p>"
+            f"<p><a href='/add'>Or add a project yourself</a> <span class='muted'>and use {e(who)} as much or as little as "
+            "you like.</span></p></div>")
 
 
 def machine_card():
@@ -7354,6 +7397,12 @@ def add_project_page(reg, tab="new", error=""):
                .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0]
                + (f"<label>Voice, reading its replies aloud <select name='voice'>{voice_choices()}</select></label>" if voice.ready() else "")
                + connection_ticks())
+    two = sum(1 for k, pv in providers.PROVIDERS.items() if providers.usable(pv) and providers.enabled(pv)) > 1
+    # R125: what it is goes to its agent's first brief; the rest has working defaults, folded until wanted
+    choices = ("<label>What is it? <span class='muted'>(optional: a line or two its agent starts from)</span>"
+               "<textarea name='what' rows='2' placeholder='what you want it to become'></textarea></label>"
+               f"<details class='more'><summary>More options <span class='muted'>({'program, ' if two else ''}model, "
+               f"permissions, colour, voice, connections; blank keeps colony's)</span></summary>{choices}</details>")
     where = reg["new_root"]
     picker = lambda name, value, placeholder: (
         f"<div class='picker'><div class='chosen'><input name='{name}' value='{e(value)}' placeholder='{e(placeholder)}' readonly>"
@@ -8443,6 +8492,9 @@ def needs_you(reg):
 
 def models_page(reg):
     from . import bench, intelligence, providers
+    if not bench.key_path().exists():
+        from . import monitor
+        monitor.offer("bench")                   # setup left it for when models matter (R125): now, once
     entries = bench.standings()
     points = intelligence.pairs(entries)
     ceiling = max((p['score'] for p in points), default=None)
@@ -9636,6 +9688,10 @@ class Handler(BaseHTTPRequestHandler):
             pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
         except ValueError:
             pid = 0
+        named = (q.get("n") or [""])[0]                # a link by name doesn't shift when a project is added (R125)
+        if named:
+            pid = next((i for i, r in enumerate(plist) if r.name == named), next(
+                (i for i, r in enumerate(plist) if name_of(r) == named), pid))
         if url.path == '/progress/artifact' and plist:
             from . import progress
             c = progress.current(plist[pid])
@@ -9653,7 +9709,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store')
             self.end_headers()
             return self.wfile.write(body)
-        if url.path == "/" and "p" not in q:          # the front page: every project and what each needs of the person
+        if url.path == "/" and "p" not in q and "n" not in q:   # the front page: every project and what each needs of the person
             return self._send(200, home_page(reg).encode())
         if url.path == "/":
             view = (q.get("view") or ["overview"])[0]           # switching to a project starts on its Overview
@@ -9718,6 +9774,9 @@ class Handler(BaseHTTPRequestHandler):
             ask = self.headers.get("Range", "")
             voice.heard(ask + (" auto" if q.get("auto") else ""), self.headers.get("User-Agent", ""), bool(clip))
             if not clip:
+                if not voice.ready() and not q.get("auto"):
+                    from . import monitor
+                    monitor.offer("voice")           # setup left it for when they listen (R125): now, once
                 return self._send(404, b"no voice here")
             body = clip.read_bytes()
             # Safari plays audio only as byte ranges, each answered with just the part it asked for
@@ -10278,8 +10337,8 @@ class Handler(BaseHTTPRequestHandler):
                 connections.pick(dest, values.get("svc", []), values.get("svc_listed", []))
                 if form.get("voice"):
                     choose_voice("0", dest, form["voice"])
-                track(dest)                        # a clone has work of its own: its agent brings the plan over
-                target = f"/?p={projects().index(dest.resolve())}"
+                track(dest, described=form.get("what", ""))     # a clone has work of its own: its agent brings the plan over
+                target = "/?n=" + urllib.parse.quote(dest.resolve().name)
             self.send_response(303)
             self.send_header("Location", target)
             self.send_header("Content-Length", "0")
@@ -10304,7 +10363,7 @@ class Handler(BaseHTTPRequestHandler):
                         root = sharing(folder, name, chosen, role=form['role'])
                     except ValueError as err:
                         return self._send(409, str(err).encode())
-                    target = f"/?p={projects().index(root)}"
+                    target = "/?n=" + urllib.parse.quote(root.name)
                 else:
                     if chosen:
                         project_settings(folder, chosen)
@@ -10312,10 +10371,10 @@ class Handler(BaseHTTPRequestHandler):
                     if form.get("voice"):
                         choose_voice("0", folder, form["voice"])
                     try:
-                        track(folder, private=form.get("private") == "on")
+                        track(folder, private=form.get("private") == "on", described=form.get("what", ""))
                     except ValueError as err:
                         return self._send(409, str(err).encode())
-                    target = f"/?p={projects().index(folder)}"
+                    target = "/?n=" + urllib.parse.quote(folder.name)
             elif path == "/new" and folder_name(form.get("name", "")):
                 new = Path(form.get("within") or reg["new_root"]).expanduser() / folder_name(form["name"])
                 new.mkdir(parents=True, exist_ok=True)
@@ -10324,9 +10383,9 @@ class Handler(BaseHTTPRequestHandler):
                 connections.pick(new, values.get("svc", []), values.get("svc_listed", []))
                 if form.get("voice"):
                     choose_voice("0", new, form["voice"])
-                track(new)
+                track(new, described=form.get("what", ""))
                 console.ensure(new)
-                target = f"/?p={projects().index(new)}"
+                target = "/?n=" + urllib.parse.quote(new.name)
             elif path == "/roots":
                 reg = registry()
                 if form.get("add") and form["add"] not in reg["roots"]:

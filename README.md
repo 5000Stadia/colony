@@ -9,20 +9,33 @@ for you across them.
 
     git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start
 
-That's it. It installs colony, starts the board and prints where to open it. The board answers this
-machine only; from your phone, use Tailscale (below, with HTTPS) or the Claude or ChatGPT app, where every
-project's session appears. `~/colony/start --lan` opens it to every device on your home network instead.
-The steward, an agent of its own, then walks you through setup. You need
+That's it. It installs colony, checks that Claude Code or Codex is signed in (and stops with how to sign in if
+neither is), starts the board and prints where to open it. Then talk with the steward, colony's own agent, in Chat
+on the board, or in your Claude app, where it appears by its name: it introduces colony and sets it up with you in
+a few short steps. Tell it what you want and it starts projects and works with each for you, or press
+**+ Add project** yourself and use the steward as little as you like. You need
 [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex), tmux and
-Python 3.10+.
+Python 3.10+. With both programs signed in, `~/colony/start --program codex` (or `claude`) picks the steward's.
 
-Then **+ Add project**: start a new one, pick a folder you already have, or clone one from GitHub. Its
-agent starts working in its own console right away (it spends tokens from then on), and the project joins
-the board.
+The board answers this machine only. From your phone: the Claude or ChatGPT app, where the steward and every
+project's session appear, or the board itself through Tailscale with HTTPS (the steward walks you through it;
+see [The board from anywhere](#the-board-from-anywhere-safely-tailscale)). `~/colony/start --lan` opens it to
+every device on your home network instead.
+
+A project's agent starts working in its own console right away (it spends tokens from then on), and the project
+joins the board.
 
 `colony stop` ends the board, steward and project consoles. Optional repair access stays available;
 turn it off separately in Settings. `~/colony/start` brings the board back, and each console returns
 to its conversation when you open it.
+
+### If you're an agent installing colony for someone
+
+1. `git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start` (add `--program claude` or
+   `--program codex` if they named one; never `--lan` unless they asked for their home network).
+2. If `start` stops, give them its line as it is (usually how to sign in), and run it again once they have.
+3. Give them the local link it printed, and say the steward is waiting there and in their program's app.
+4. Leave signing in, keys and Tailscale to them and the steward: those need their own accounts and passwords.
 
 ### Moving to a fresh machine
 
@@ -37,24 +50,6 @@ their conversations, reports each setup step, and tells you what to install, sig
 before starting the board. Provider sign-ins and Colony connection keys stay behind; a project's own key
 files travel with it, so keep the archive private. Python environments, dependencies and voice files are
 made again. Moving to a different home path comes later.
-
-### The board from anywhere, safely (Tailscale)
-
-The board has no login of its own, so never put it on the internet. [Tailscale](https://tailscale.com) (free
-for personal use) puts this machine and your phone on a private, encrypted network that only your devices
-join; its addresses mean nothing to anyone else. The board answers only your devices, from anywhere.
-
-1. On this machine: `curl -fsSL https://tailscale.com/install.sh | sh`
-2. Then `sudo tailscale up --operator=$USER`, and open the login link it prints with the account you'll use on
-   your phone.
-3. On your phone: install the Tailscale app, log in with the same account, and switch it on.
-4. Back here: `colony remote`. It prints the board's address, `http://<this machine>.<your network>.ts.net:<port>/`
-   (or its `100.x.y.z` address), at the board's port: whichever `colony urls` prints.
-5. Open that address on your phone.
-
-Once it's on, the board refuses every device that isn't yours, the open home network included, so a guest on
-your wifi can't reach it: at home your phone reaches it through Tailscale as well. `colony remote --check` says
-where things stand; `colony remote --off` puts it back as it was.
 
 And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects with one strong agent.
 
@@ -264,6 +259,26 @@ The first time Claude Code opens in a folder it asks whether you trust it: answe
 board (the choice shows as buttons) or the app. The state shown for each session (working, needs you,
 idle) is read off its screen, so a change in Claude Code's wording could mislabel it; the lines shown
 are always the real ones.
+
+### The board from anywhere, safely (Tailscale)
+
+The board has no login of its own, so never put it on the internet. [Tailscale](https://tailscale.com) (free
+for personal use) puts this machine and your phone on a private, encrypted network that only your devices
+join; its addresses mean nothing to anyone else. The board answers only your devices, from anywhere.
+
+1. On this machine: `curl -fsSL https://tailscale.com/install.sh | sh`
+2. Then `sudo tailscale up --operator=$USER`, and open the login link it prints with the account you'll use on
+   your phone.
+3. On your phone: install the Tailscale app, log in with the same account, and switch it on.
+4. In Tailscale's admin page, under DNS, turn on HTTPS Certificates (two taps; some browser features, like the
+   microphone, need https).
+5. Back here: `colony remote`. It prints the board's addresses, `https://<this machine>.<your network>.ts.net/`
+   among them: whichever `colony urls` prints.
+6. Open that address on your phone.
+
+Once it's on, the board refuses every device that isn't yours, the open home network included, so a guest on
+your wifi can't reach it: at home your phone reaches it through Tailscale as well. `colony remote --check` says
+where things stand; `colony remote --off` puts it back as it was.
 
 ### Leads and completed versions
 

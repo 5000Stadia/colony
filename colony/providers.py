@@ -161,6 +161,7 @@ def _mail_reason(provider, diagnostic):
     return {'code': code, 'reason': f'{provider.label} {why}.'}
 
 
+PROBE_WAIT = 60             # seconds a fresh install's one-line probe of a program may take (R125)
 TURN_WAIT = 2.0             # seconds an end-of-turn hook reads the transcript again while the turn shows no words yet
 
 
@@ -292,6 +293,32 @@ class Provider:
     def signed_in(self, run=None):
         """False when it is signed out here, so its consoles can't work (None: can't tell)."""
         return None
+
+    def answers(self, run=None, timeout=PROBE_WAIT):
+        """Whether it answers a one-line prompt right now, by one tiny real call: {ok, code, reason}. ok None: no
+        probe for this program. A failure says why where it can (authentication, usage-limit, network, server-error),
+        so a signed-in person at a usage limit isn't told to sign in again (R125)."""
+        return dict(ok=None, code=None, reason="")
+
+    def _probe(self, cmd, run, timeout, env=None, read=None):
+        import subprocess
+        import tempfile
+        here = tempfile.mkdtemp(prefix="colony-probe-")
+        try:
+            r = (run or subprocess.run)(cmd(here), input="Reply with: ok", capture_output=True, text=True,
+                                        cwd=here, timeout=timeout, env=env or dict(os.environ))
+        except subprocess.TimeoutExpired:
+            return dict(ok=False, code="timeout", reason=f"{self.label} didn't answer within {timeout} seconds.")
+        except OSError as err:
+            return dict(ok=False, code="unknown", reason=f"{self.label} couldn't run ({err.__class__.__name__}).")
+        said, error = read(r, here)
+        if said:
+            return dict(ok=True, code=None, reason="")
+        texts = [error or ""] + [line for line in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines() if line.strip()]
+        found = next((m for m in (_mail_reason(self, x.strip()) for x in texts if x.strip()) if m), None)
+        if found:
+            return dict(ok=False, **found)
+        return dict(ok=False, code="unknown", reason=f"{self.label} didn't answer: {' '.join((error or '').split())[:160] or 'no reply'}")
 
     def signin_command(self):
         """Its native, non-model browser login argv, or None when this program has no board login yet."""
@@ -697,6 +724,22 @@ class ClaudeCode(Provider):
         if d.get("is_error") or not d.get("result"):
             return False, (d.get("result") or r.stderr or "the token was refused").strip()[:200]
         return True, "signed in"
+
+    def answers(self, run=None, timeout=PROBE_WAIT):
+        from . import bench
+        cheap = (bench.tiers_for("claude").get("rote") or {}).get("model") or "haiku"
+
+        def read(r, here):
+            try:
+                d = json.loads(r.stdout or "{}")
+            except ValueError:
+                return False, (r.stderr or r.stdout or "").strip()
+            return bool(d.get("result")) and not d.get("is_error"), str(d.get("result") or "")
+        env = dict(os.environ)
+        if token := self.token():
+            env[self.TOKEN_ENV] = token
+        return self._probe(lambda here: [self.program, "-p", "--model", cheap, "--setting-sources", "",
+                                         "--output-format", "json"], run, timeout, env, read)
 
     def signed_in(self, run=None):
         """Whether Claude Code is signed in here, by its own status (no tokens spent)."""
@@ -1636,6 +1679,19 @@ class Codex(Provider):
     # PROVIDER: only Codex has a native goal; colony progress sets and refreshes it (continuation.py).
     GOAL = ("- As lead, establish the checkpoint's native goal and keep it aligned with the next agreed pause: when "
             "you select the next bounded checkpoint, the goal refreshes automatically; do not wait for another /goal.\n")
+
+    def answers(self, run=None, timeout=PROBE_WAIT):
+        from . import bench
+        cheap = (bench.tiers_for("codex").get("rote") or {}).get("model")
+
+        def read(r, here):
+            last = Path(here) / "answer.txt"
+            said = last.read_text().strip() if last.exists() else ""
+            return bool(said), ""
+        return self._probe(lambda here: [self.program, "exec", *(["-m", cheap] if cheap else []),
+                                         "-c", "model_reasoning_effort=low", "-s", "read-only", "--skip-git-repo-check",
+                                         "--ephemeral", "--ignore-user-config", "-o", str(Path(here) / "answer.txt"),
+                                         "-C", here, "-"], run, timeout, dict(os.environ, CODEX_HOME=str(self.config_home())), read)
 
     def signed_in(self, run=None):
         """Whether Codex is signed in here, by its own status (no tokens spent)."""

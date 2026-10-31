@@ -179,11 +179,62 @@ def _launch(args):
     return False
 
 
+SIGN_IN = {"claude": "run `claude`, then `/login`", "codex": "run `codex login`"}
+
+
+def first_program(choice=None, run=None, ask=None):
+    """A fresh install's program for the steward, settled before the steward exists (R125, P1): whichever is signed in,
+    checked by its status and one tiny real call. Returns (key or None, lines to print). None: nothing can run the
+    steward, so the board doesn't start. Only a sign-out stops it: a signed-in program that doesn't answer just now (a
+    usage limit, the network) is still chosen, with its own reason said."""
+    from . import providers
+    here = {k: p for k, p in providers.PROVIDERS.items() if providers.installed(p)}
+    seen, lines = {}, []
+    for k, p in here.items():
+        if p.signed_in(run) is False:
+            seen[k] = dict(ok=False, code="authentication", reason=f"{p.label} isn't signed in.")
+        else:
+            seen[k] = p.answers(run)
+    signed = [k for k, s in seen.items() if s.get("code") != "authentication"]
+    out = lambda k: f"{here[k].label} isn't signed in: {SIGN_IN.get(k, 'sign in to it')}, then run ~/colony/start again."
+    if choice:
+        if choice not in here:
+            return None, [f"{choice} isn't installed here."]
+        if choice not in signed:
+            return None, [out(choice)] + ([f"{here[k].label} is signed in: ~/colony/start --program {k} uses it."
+                                           for k in signed])
+        key = choice
+    elif not signed:
+        return None, [out(k) for k in here]
+    elif len(signed) == 1 or ask is None:
+        key = "claude" if "claude" in signed else signed[0]
+    else:
+        names = " or ".join(f"{k} ({here[k].label})" for k in signed)
+        said = (ask(f"Both are signed in. Which should the steward run on, {names}? [{signed[0]}] ") or "").strip().lower()
+        key = next((k for k in signed if said and (k.startswith(said) or here[k].label.lower().startswith(said))), signed[0])
+    if seen[key].get("ok") is False:
+        lines.append(f"{here[key].label} is signed in but didn't answer just now: {seen[key]['reason']} The board starts; "
+                     f"the steward begins setup once {here[key].label} answers.")
+    lines.append(f"The steward runs on {here[key].label}.")
+    return key, lines
+
+
 def cmd_board(a):
     """The board runs in its own tmux session, so it outlives the terminal that started it and the
     steward can restart it; --foreground runs it here instead."""
     from . import board, monitor
     fresh = not (board.home() / "board.json").exists() and not (board.home() / "setup-asked").exists()
+    if fresh and not a.no_monitor and not a.foreground:
+        # a new install: the program and its sign-in are settled here, before the steward exists (R125); never again
+        # after, so a lapse later raises the board's sign-in notice rather than switching programs
+        key, lines = first_program(a.program, ask=input if sys.stdin.isatty() and not a.program else None)
+        for line in lines:
+            print(line)
+        if not key:
+            return 1
+        board.set_setting("provider", key)
+    elif a.program:
+        print("--program chooses the steward's program on a new board only; here: colony settings provider")
     settled = board.settle_provider()            # the default runs on a program that is here
     if fresh and not a.no_monitor:
         board.home().mkdir(parents=True, exist_ok=True)
@@ -210,7 +261,22 @@ def cmd_board(a):
     print(f"the board is running (tmux session {server()}); open it at:")
     for u in board.urls(a.port, lan=_lan(a)):
         print(f"  {u}")
+    if fresh and not a.no_monitor:
+        print(steward_whereabouts())
     return 0
+
+
+def steward_whereabouts():
+    """Where a new install's steward waits for the person, in a line for the start command (R125, P2)."""
+    from . import board, monitor, providers
+    line = f"{board.the_steward(start=True)} is ready in Chat on the board: talk with it to set colony up, or add a project yourself."
+    # PROVIDER: Claude Code's Remote Control puts the steward's session in the Claude app; Codex needs pairing first
+    if board.registry()["settings"]["remote"] and providers.key(monitor.provider()) == "claude":
+        line += (f" On your phone it's also in your Claude app, as \"{board.steward_named() or 'steward'}\" "
+                 "(Remote Control, with the browser sign-in).")
+    elif providers.key(monitor.provider()) == "codex":
+        line += " To reach it from the ChatGPT app, it pairs with you during setup."
+    return line
 
 
 def cmd_urls(a):
@@ -1930,6 +1996,55 @@ def cmd_supports(a):
     return 0
 
 
+def waiting_lines(name=None):
+    """What waits on the person, as Needs you has it (board.waiting_items, the one definition), a line per item with the
+    ID the steward answers it by: for the steward on the phone, where it is the person's board (R125)."""
+    from . import board
+    plist = [_project(name)] if name else board.projects(board.registry())
+    out = []
+    for p in plist:
+        for w in board.waiting_items(p):
+            ident = {"gate": lambda: w["gate"]["id"], "ask": lambda: w["ask"]["id"], "verify": lambda: w["item"]["id"]
+                     }.get(w["kind"], lambda: w["key"])()
+            line = f"{board.name_of(p)}  {ident}  {w['kind']}: {' '.join(w['summary'].split())}"
+            g = w.get("gate") or {}
+            if g.get("options"):
+                line += "  options: " + " | ".join(g["options"]) + (f"  (recommended: {g['recommended']})" if g.get("recommended") else "")
+            if g.get("points"):
+                line += "  points: " + " ".join(f"{x['id']}: {x['text']}" for x in g["points"])
+            if g.get("default"):
+                line += f"  default if skipped: {g['default']}"
+            out.append(line)
+    return out
+
+
+def cmd_waiting(a):
+    lines = waiting_lines(a.name)
+    print("\n".join(lines) if lines else "Nothing waits on the person.")
+    return 0
+
+
+def cmd_answer(a):
+    """(steward) Carry the person's own answer to a project's gate or question: their words, never your reading. Refused
+    if it was answered meanwhile (on the board, or in the project's Chat), with what happened to it."""
+    from . import board, monitor
+    if os.environ.get("COLONY_CONSOLE") and os.environ["COLONY_CONSOLE"] != monitor.name():
+        raise SystemExit("Only the steward carries the person's answers; a project's own questions are the person's to answer.")
+    root = _project(a.name)
+    try:
+        if a.id.startswith("a"):
+            if a.accept or a.reject:
+                raise ValueError("A question in the console has no consultant points.")
+            board.relay_ask(root, a.id, a.text, wait=board.CHAT_WAIT)
+        else:
+            decisions = {**{x.upper(): "accept" for x in a.accept}, **{x.upper(): "reject" for x in a.reject}} or None
+            board.answer_gate(root, a.id, a.text, decisions=decisions, only_open=True, via="steward")
+    except (ValueError, StopIteration) as err:
+        raise SystemExit(str(err) or f"No gate {a.id} in {a.name}.")
+    print(f"answered {a.id} in {board.name_of(root)} with the person's words")
+    return 0
+
+
 def cmd_decided(a):
     from . import monitor
     if not _caught_up(_project(a.name)):
@@ -1988,6 +2103,7 @@ def main(argv=None):
     p.add_argument("--no-steward", "--no-monitor", dest="no_monitor", action="store_true", help="don't start the steward session and its watcher")
     p.add_argument("--foreground", action="store_true", help="run here instead of in its tmux session")
     p.add_argument("--local", action="store_true", help="answer only this machine, whatever the settings say")
+    p.add_argument("--program", choices=("claude", "codex"), help="on a new board, the program the steward runs on")
     p.set_defaults(fn=cmd_board)
     sub.add_parser("restart").set_defaults(fn=cmd_restart)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
@@ -2064,6 +2180,13 @@ def main(argv=None):
     p.add_argument("--urgent", action="store_true", help="deliver even mid-turn, not when the turn ends")
     p.set_defaults(fn=cmd_send)
     p = sub.add_parser("reply"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_reply)
+    p = sub.add_parser("waiting", help="(steward) what waits on the person, as Needs you has it, with each item's ID")
+    p.add_argument("name", nargs="?"); p.set_defaults(fn=cmd_waiting)
+    p = sub.add_parser("answer", help="(steward) carry the person's own answer to a project's gate or question")
+    p.add_argument("name"); p.add_argument("id"); p.add_argument("text", nargs="?", default="")
+    p.add_argument("--accept", action="append", default=[], help="a consultant point they accept (P1)")
+    p.add_argument("--reject", action="append", default=[], help="a consultant point they reject (P2)")
+    p.set_defaults(fn=cmd_answer)
     p = sub.add_parser("mail"); p.add_argument("--project"); p.add_argument("--last", type=int, default=20)
     p.set_defaults(fn=cmd_mail)
     p = sub.add_parser("peek"); p.add_argument("name"); p.add_argument("-n", "--lines", type=int, default=30)
