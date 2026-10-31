@@ -2507,24 +2507,27 @@ def woken():
         return {}
 
 
-def working_now(roots):
-    """The projects at work, as the steward's watch saw them just now: they lead the board's lists. Written only when
-    it changes, and once a minute besides, so a watch that has stopped is not believed for long."""
+def working_now(roots, behind=()):
+    """The projects at work, as the steward's watch saw them just now: they lead the board's lists; behind, those of
+    them whose screen is idle while only helpers or background commands run. Written only when it changes, and once a
+    minute besides, so a watch that has stopped is not believed for long."""
     path, rows = home() / "working.json", sorted(str(Path(r).resolve()) for r in roots)
+    back = sorted(str(Path(r).resolve()) for r in behind)
     try:
         was = json.loads(path.read_text())
     except (OSError, ValueError):
         was = {}
-    if was.get("roots") != rows or time.time() - was.get("at", 0) > 60:
-        save_json(path, {"at": time.time(), "roots": rows})
+    if was.get("roots") != rows or (was.get("behind") or []) != back or time.time() - was.get("at", 0) > 60:
+        save_json(path, {"at": time.time(), "roots": rows, "behind": back})
 
 
-def at_work_now():
+def at_work_now(behind=False):
+    """The projects at work now; with behind, those of them at work only behind an idle screen."""
     try:
         was = json.loads((home() / "working.json").read_text())
     except (OSError, ValueError):
         return set()
-    return set(was.get("roots") or []) if time.time() - was.get("at", 0) < 180 else set()
+    return set(was.get("behind" if behind else "roots") or []) if time.time() - was.get("at", 0) < 180 else set()
 
 
 def stirred():
@@ -2572,9 +2575,10 @@ def _at_work(root, n=70):
 def by_activity(plist):
     """Every project on its own by activity, [(index, project)]: those at work now first, then the one that last stirred
     (went from idle to working, or took up a roadmap item). A nest never moves as one here."""
-    rec, busy = stirred(), at_work_now()
+    rec, busy, behind = stirred(), at_work_now(), at_work_now(behind=True)
+    rank = lambda r: 2 if r in busy and r not in behind else 1 if r in busy else 0   # mid-turn, background only, neither
     return sorted(enumerate(plist), reverse=True,
-                  key=lambda ip: (str(ip[1].resolve()) in busy, rec.get(str(ip[1].resolve()), ""), -ip[0]))
+                  key=lambda ip: (rank(str(ip[1].resolve())), rec.get(str(ip[1].resolve()), ""), -ip[0]))
 
 
 def nav_groups(plist):
@@ -2641,10 +2645,13 @@ def sidebar(reg, pid):
             tint = PALETTE.get(colour(p)) if p.exists() else None
             tint = f" style='--pc:{tint[0]};--pcd:{tint[1]}'" if tint else ""
             chips.append(f"<a class='proj{' on' if i == pid else ''}'{tint} href='/?p={i}'><span class='pname'>"
-                         f"<span class='sdot {snap['state'].replace(' ', '-')}' id='dot-{i}'></span>{project_label(p)}{rename_pencil(p)}{badge}</span>"
+                         f"<span class='sdot {dot(snap)}' id='dot-{i}'></span>{project_label(p)}{rename_pencil(p)}{badge}</span>"
+                         # its helpers' dots on a line of their own under its name (the person: "Cool to have subagent
+                         # status dots right under the text newline in a box")
+                         f"{helper_html(i, helper_dots(p, snap) if p.exists() else [])}"
                          f"<span class='sline' id='sline-{i}'>{e(snap.get('behind') or snap['state'] if snap['state'] != 'off' else '')}"
                          f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
-            listed[i] = (p, snap["state"], waiting, work, tint)
+            listed[i] = (p, dot(snap), waiting, work, tint)
         # each project a box of its own, the pinned first: no nest chip, nothing that slides out
         side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here == PINNED else chips
     # the steward first: on a phone it stays in reach at the left
@@ -2694,7 +2701,7 @@ def band_list(plist, pid, listed):
         here = homes.get(str(p.resolve()), "") if p.exists() else ""
         rows.append(f"<a class='prow bandrow{' on' if i == pid else ''}' href='/?p={i}' data-i='{i}' "
                     f"data-name='{e(name_of(p).casefold())}' data-nest='{e(here)}'{tint}><span class='prowline'>"
-                    f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}'></span><b>{e(name_of(p))}</b>"
+                    f"<span class='sdot msdot {st}' data-p='{i}'></span><b>{e(name_of(p))}</b>{helper_html(i, [])}"
                     f"<span class='pwork' data-p='{i}'>{e(work)}</span>"
                     f"<span class='badge gate pbadge' data-p='{i}'{'' if waiting else ' hidden'}>{waiting}</span></span>"
                     + (f"<span class='psub'>{e(here)}</span>" if here else "") + "</a>")
@@ -2702,7 +2709,7 @@ def band_list(plist, pid, listed):
                     for k, label in (("recent", "Recent"), ("nest", "Nest A–Z"), ("name", "Project A–Z")))
     return (f"<div class='bandshade' hidden></div><div class='bandpop' role='dialog' aria-label='All projects' hidden>"
             f"<div class='bandsort' role='group' aria-label='Sort the list'>{sorts}</div>"
-            f"<div class='bandrows'>{''.join(rows)}</div><a class='bandall' href='/projects'>All projects page ›</a></div>")
+            f"<div class='bandrows'>{''.join(rows)}</div>{HELPER_LEGEND}<a class='bandall' href='/projects'>All projects page ›</a></div>")
 
 
 def own_colour(reg, pid):
@@ -4384,15 +4391,22 @@ async function poll() {
         else { x.dataset.name = s.name; x.setAttribute('aria-label', 'Rename ' + s.name); }
       });
       const dot = document.getElementById('dot-' + i), line = document.getElementById('sline-' + i);
-      if (dot) dot.className = 'sdot ' + s.state.replace(' ', '-');
-      document.querySelectorAll(`.msdot[data-p="${i}"]`).forEach((d) => { d.className = 'sdot msdot ' + s.state.replace(' ', '-'); });
+      const dc = s.state.replace(' ', '-') + (s.behind ? ' behind' : '');      // mid-turn, or only background work
+      const hk = JSON.stringify(s.helpers || []);
+      document.querySelectorAll(`.hdots[data-p="${i}"]`).forEach((box) => { if (box.dataset.k === hk) return; box.dataset.k = hk;
+        box.textContent = ''; const hs = s.helpers || [];
+        hs.slice(0, 6).forEach((h) => { const d = document.createElement('i'); d.className = 'hd ' + h.tier + (h.quiet ? ' quiet' : '');
+          d.title = h.title; box.append(d); });
+        if (hs.length > 6) { const m = document.createElement('b'); m.className = 'hdmore'; m.textContent = '+' + (hs.length - 6); box.append(m); } });
+      if (dot) dot.className = 'sdot ' + dc;
+      document.querySelectorAll(`.msdot[data-p="${i}"]`).forEach((d) => { d.className = 'sdot msdot ' + dc; });
       document.querySelectorAll(`.pwork[data-p="${i}"]`).forEach((x) => { x.textContent = s.work || ''; });
       document.querySelectorAll(`.pbadge[data-p="${i}"]`).forEach((x) => { x.hidden = !s.waiting; x.textContent = s.waiting; });
       if (line) line.textContent = (s.state === 'off' ? '' : s.behind || s.state) + (s.work ? (s.state === 'off' ? '' : ' · ') + s.work : '');
       const status = document.getElementById('status-' + i);
       if (status) {
         const act = s.activity || {}, st = s.state.replace(' ', '-');
-        status.querySelector('.sdot').className = 'sdot ' + st;
+        status.querySelector('.sdot').className = 'sdot ' + st + (s.behind ? ' behind' : '');
         status.querySelector('b').textContent = s.behind || s.state;
         status.querySelector('.statusline .muted').textContent = s.work ? ' · ' + s.work : '';
         const box = status.querySelector('.agents'); box.textContent = '';
@@ -7541,6 +7555,79 @@ def monitor_page(reg, view="overview"):
     return shell(reg, -1, body)
 
 
+# Helpers and subagents as dots (R136, the person: "Would be cool to show colored dots to indicate helpers and
+# subagents and their status"): one per helper at work, coloured by its tier, pulsing while its tokens move, and a hollow
+# amber ring once they have stood still a while (waiting on a long command, or stuck).
+HELPER_QUIET = 15 * 60
+HELPER_DOTS = 6                    # dots shown in a box; the rest as +N
+_HELPER_SEEN = {}                  # (project, name) -> [[started, tokens, when they last moved, last seen]]
+
+
+def helper_tier(name):
+    """A helper's tier by its name, for its dot's colour: colony's tiers by theirs, a project's own by their words."""
+    n = name.lower()
+    for tier, words in (("stepup", ("stepup", "step-up")), ("rote", ("rote",)), ("chores", ("chores", "light")),
+                        ("routine", ("routine", "builder"))):
+        if any(w in n for w in words):
+            return tier
+    return "other"
+
+
+def _span_secs(text):
+    m = re.match(r"\s*(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?", text or "")
+    return sum(int(x or 0) * k for x, k in zip(m.groups(), (3600, 60, 1)))
+
+
+def _tokens(text):
+    m = re.search(r"([\d.]+)\s*([kKmM]?)\s*tokens", text or "")
+    return float(m.group(1)) * {"": 1, "k": 1e3, "m": 1e6}[m.group(2).lower()] if m else None
+
+
+def helper_dots(root, snap):
+    """The helpers a console has at work, as its dots show them: [{name, tier, quiet, title}]. Quiet: its tokens
+    haven't moved for HELPER_QUIET since colony first saw it (each known by its name and when it started)."""
+    from . import chat
+    out, clock = [], time.time()
+    for h in chat.helpers(snap):
+        stats = h.get("stats", "")
+        started, toks = clock - _span_secs(stats), _tokens(stats)
+        rows = _HELPER_SEEN.setdefault((str(root), h["name"]), [])
+        row = min((r for r in rows if abs(r[0] - started) < 120), key=lambda r: abs(r[0] - started), default=None)
+        if row is None:
+            row = [started, toks, clock, clock]
+            rows.append(row)
+        elif toks is None or toks != row[1]:
+            row[1], row[2] = toks, clock
+        row[3] = clock
+        quiet = clock - row[2] >= HELPER_QUIET
+        out.append({"name": h["name"], "tier": helper_tier(h["name"]), "quiet": quiet,
+                    "title": " · ".join(filter(None, (h["name"], h.get("what"), stats, "quiet a while" if quiet else "")))})
+    for key, rows in list(_HELPER_SEEN.items()):        # those gone an hour are forgotten
+        rows[:] = [r for r in rows if clock - r[3] < 3600]
+        if not rows:
+            _HELPER_SEEN.pop(key, None)
+    return out
+
+
+def helper_html(i, dots):
+    """A project's helper dots, where the poll keeps them current."""
+    shown = "".join(f"<i class='hd {d['tier']}{' quiet' if d['quiet'] else ''}' title='{e(d['title'])}'></i>"
+                    for d in dots[:HELPER_DOTS])
+    more = f"<b class='hdmore'>+{len(dots) - HELPER_DOTS}</b>" if len(dots) > HELPER_DOTS else ""
+    return f"<span class='hdots' data-p='{i}'>{shown}{more}</span>"
+
+
+HELPER_LEGEND = ("<p class='hdlegend'>Helpers: <i class='hd stepup'></i> step-up <i class='hd routine'></i> routine "
+                 "<i class='hd chores'></i> chores <i class='hd rote'></i> rote <i class='hd other'></i> other "
+                 "<i class='hd routine quiet'></i> quiet a while</p>")
+
+
+def dot(snap):
+    """A status dot's classes: its state, and behind where only helpers or background commands are at work (R136, the
+    person: "maybe we just need more thourough animations for active states")."""
+    return snap["state"].replace(" ", "-") + (" behind" if snap.get("behind") else "")
+
+
 def seen(snap):
     """A console as the board's dots and lines show it: idle on screen while its helpers or background commands are at
     work is working, saying what runs ("2 helpers running"). What decides when to write to it keeps the screen's own."""
@@ -7557,7 +7644,7 @@ def status_card(pid, snap, work="", waiting=None):
     agents = "".join(f"<div class='agent{' current' if a['current'] else ''}'><span>{'●' if a['current'] else '○'} {e(a['name'])}</span>"
                      f"<span class='muted'>{e(a['detail'])}</span></div>" for a in act.get("agents", []))
     return (f"<a class='status' id='status-{pid}' href='/?p={pid}&view=console'><div class='statusline'>"
-            f"<span class='sdot {snap['state'].replace(' ', '-')}'></span><b>{e(snap.get('behind') or snap['state'])}</b>"
+            f"<span class='sdot {dot(snap)}'></span><b>{e(snap.get('behind') or snap['state'])}</b>"
             f"<span class='muted'>{(' · ' + e(work)) if work else ''}</span></div>"
             f"<div class='agents'>{agents}</div>"
             + ("" if waiting is None else f"<div class='waits muted'{' hidden' if waiting else ''}>Nothing waits on you.</div>")
@@ -9308,7 +9395,7 @@ def status_payload(reg, plist):
         for p in plist:
             if p.exists():
                 snap = console.snapshot(p)
-                rows.append(dict(seen(snap), name=name_of(p), project=str(p), waiting=len(moments(p, snap)),
+                rows.append(dict(seen(snap), helpers=helper_dots(p, snap), name=name_of(p), project=str(p), waiting=len(moments(p, snap)),
                                  work=at_work(p), followed=monitor.involved(p)))
             else:
                 rows.append(dict(name=name_of(p), project=str(p), state='off', lines=[], waiting=0, work='', followed=False))
@@ -10802,8 +10889,9 @@ nav .proj { display:flex; align-items:center; gap:6px; padding:7px 10px; border-
 nav .band { display:contents } nav .bandlist { display:flex; align-items:center; gap:8px; width:100%; margin:0 0 6px; padding:7px 10px;
   border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--ink); font:inherit; font-size:13px; cursor:pointer }
 nav .bandlist[aria-expanded='true'] { background:var(--accent); color:var(--card); border-color:var(--accent) }
-.bandshade { position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.2) }
-.bandpop { position:fixed; z-index:41; top:calc(var(--bandtop, 56px) + 6px); left:8px; width:min(440px, calc(100vw - 16px));
+.bandshade { position:fixed; inset:0; z-index:56; background:rgba(0,0,0,.2) }
+/* over the box, the tabs and the player while open; under the player's own sheet */
+.bandpop { position:fixed; z-index:57; top:calc(var(--bandtop, 56px) + 6px); left:8px; width:min(440px, calc(100vw - 16px));
   max-height:calc(100dvh - var(--bandtop, 56px) - 20px); overflow-y:auto; overscroll-behavior:contain; padding:10px;
   border:1px solid var(--line); border-radius:6px; background:var(--card); box-shadow:0 10px 30px rgba(0,0,0,.22); white-space:normal }
 .bandsort { display:flex; margin:0 0 8px; border:1px solid var(--line); border-radius:4px; overflow:hidden }
@@ -11180,19 +11268,12 @@ table.tokens tr.head td { padding-top:12px; font-size:12.5px; font-weight:600; c
   border:1px solid var(--line); font-size:14px; line-height:1 } .voicesheet .rate { display:inline-flex; align-items:center; justify-content:center;
   min-width:52px; flex:none } .voicesheet .shut { width:32px; height:32px; min-height:32px; padding:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:16px }
-/* Auto on: a small light circles the player's Next, the way Auto goes on by itself, its tail in the rainbow, glowing; in Chat the
-   part being read, while it sounds, has a calm border and a soft glow (the person: "for text highlight ... a gentle
-   border solid maybe light glow but no stark animation too visually busy for readability") */
-.cpbar .cpnext, .chat .say.reading { position:relative }
-html.autoon .cpbar .cpnext::before {
-  content:''; position:absolute; inset:1px; border-radius:50%; padding:2px; pointer-events:none;
-  background:conic-gradient(transparent 0deg 190deg, #a66bff 250deg, #2fb8ff 290deg, #47e891 320deg, #ffc371 342deg, #ff5f6d 358deg, #fff 360deg);
-  -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite:xor; mask-composite:exclude;
-  filter:drop-shadow(0 0 2px #ff9ad5); animation:autoring 1.8s linear infinite }
-@keyframes autoring { to { transform:rotate(360deg) } }
+/* In Chat the part being read, while it sounds, has a calm border and a soft glow (the person: "for text highlight ... a
+   gentle border solid maybe light glow but no stark animation too visually busy for readability"). The player's Skip is
+   plain: its rainbow ring for Auto went (the person: "it doesnt make sense anymore, lets ditch the animation") */
+.chat .say.reading { position:relative }
 html.autoon.cpgo .chat .say.reading::before { content:''; position:absolute; inset:-8px; border-radius:8px; pointer-events:none;
   border:1.5px solid color-mix(in srgb, var(--accent) 55%, transparent); box-shadow:0 0 10px color-mix(in srgb, var(--accent) 25%, transparent) }
-@media (prefers-reduced-motion: reduce) { html.autoon .cpbar .cpnext::before { animation:none } }
 .chat .turnacts button { width:36px; height:36px; min-height:36px; padding:0; border:0; border-radius:8px; background:transparent;
   color:var(--muted); font-size:18px; cursor:pointer } @media (hover: hover) {.chat .turnacts button:hover { color:var(--accent); background:var(--sunk) }}
 .chatlive { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px }
@@ -11317,13 +11398,35 @@ textarea.direction { width:100%; min-height:60vh; font:inherit; font-size:14px; 
 .picker { display:flex; flex-direction:column; gap:6px }
 .chosen { max-width:100% } .chosen input, form.options .chosen input:not([type]) { min-width:0; flex:1 1 auto; width:auto } .chosen button { flex:none }
 .psettings .panel { position:absolute; right:0; z-index:10; width:min(440px, calc(100vw - 32px)); padding:14px 16px;
-  border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
+  border-radius:10px; background:var(--card); border:1px solid var(--line); box-shadow:0 8px 24px rgba(0,0,0,.18) }
+/* longer than the page, the panel's foot (Pause, Archive, Delete) went under the floating box and player with no room to
+   scroll it out (the person: "Settings spill behind message bar unviewable"): room below it, as tall as what floats */
+.psettings .panel::after { content:''; position:absolute; left:0; right:0; top:100%; height:calc(var(--stk, 64px) + 24px); pointer-events:none } hr { border:0; border-top:1px solid var(--line); margin:14px 0 }
 .sdot { width:10px; height:10px; border-radius:50%; flex:none; background:transparent; border:2px solid var(--line); box-sizing:border-box }
 .sdot.off { opacity:.55 }
 /* in the bar, a project's dot is in its own colour, whichever project's page is open */
 nav .proj[style] .sdot { --accent:var(--pc) } @media (prefers-color-scheme: dark) { nav .proj[style] .sdot { --accent:var(--pcd) } }
 .sdot.idle { border-color:var(--accent) }
 .sdot.working { border-color:var(--accent); border-top-color:transparent; animation:spin .8s linear infinite }
+.sdot.working.behind { border-style:dotted; border-top-color:var(--accent); animation:spin 2.8s linear infinite }
+.hdots { display:inline-flex; align-items:center; gap:3px; margin-left:3px; flex:none } .hdots:empty { display:none }
+.hd { display:inline-block; width:7px; height:7px; border-radius:50%; flex:none; background:var(--hd); vertical-align:middle;
+  animation:hdpulse 1.6s ease-in-out infinite } .hd.routine { --hd:#3b82c4 } .hd.stepup { --hd:#8a4fd1 } .hd.chores { --hd:#2a9d8f }
+.hd.rote { --hd:#8a8f98 } .hd.other { --hd:#c47b3b } .hd.quiet { background:transparent; box-shadow:inset 0 0 0 1.6px var(--flag); animation:none }
+nav .proj.on .hd:not(.quiet) { box-shadow:0 0 0 1.2px var(--card) } nav .proj.on .hd.quiet { box-shadow:inset 0 0 0 1.6px var(--card) }
+.hdmore { font-size:11px; font-weight:600; color:var(--muted) } nav .proj.on .hdmore { color:var(--card) }
+.hdlegend { margin:10px 2px 0; color:var(--muted); font-size:12px; line-height:1.9 } .hdlegend .hd { animation:none; margin:0 2px 0 6px }
+.hdlegend .hd:first-child { margin-left:2px } nav .proj > .hdots { display:flex; margin:2px 0 1px 16px }
+nav .proj > .hdots:empty { display:none }
+@keyframes hdpulse { 50% { opacity:.4 } } @media (prefers-reduced-motion: reduce) { .hd { animation:none } }
+nav .proj:has(> .pname > .sdot.working:not(.behind)) { position:relative; overflow:hidden }
+nav .proj:has(> .pname > .sdot.working:not(.behind))::after { content:''; position:absolute; left:0; bottom:0; width:38%; height:3px;
+  background:var(--accent); animation:boxrun 1.5s ease-in-out infinite }
+nav .proj[style]:has(> .pname > .sdot.working:not(.behind))::after { background:var(--pc) }
+@media (prefers-color-scheme: dark) { nav .proj[style]:has(> .pname > .sdot.working:not(.behind))::after { background:var(--pcd) } }
+nav .proj.on:has(> .pname > .sdot.working:not(.behind))::after { background:var(--card) }
+@keyframes boxrun { from { transform:translateX(-100%) } to { transform:translateX(265%) } }
+@media (prefers-reduced-motion: reduce) { nav .proj::after { animation:none !important; width:100% } }
 .sdot.needs-you { background:var(--flag); border-color:var(--flag); animation:beat 1.1s ease-in-out infinite }
 @keyframes spin { to { transform:rotate(360deg) } }
 @keyframes beat { 50% { transform:scale(1.35); box-shadow:0 0 0 4px color-mix(in srgb, var(--flag) 25%, transparent) } }
@@ -11492,7 +11595,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   nav .bandlist { flex:none; width:46px; margin:0 1px 0 0; padding:0; justify-content:center; border:0; border-radius:0 }
   nav .bandlist .long { display:none }
   nav .navrow { flex:1; min-width:0; display:flex; align-items:stretch; gap:1px; padding:0; overflow-x:auto; scrollbar-width:none }
-  nav .navrow::-webkit-scrollbar { display:none } nav .navrow .rename-project { display:none }   /* renamed from its page's title */
+  nav .navrow::-webkit-scrollbar { display:none } nav .navrow .proj { flex-direction:column; align-items:flex-start; justify-content:center } nav .navrow .rename-project { display:none }   /* renamed from its page's title */
   nav .pinjump:not([hidden]) { display:flex; position:absolute; left:52px; bottom:4px; z-index:2; width:34px; height:34px;
     align-items:center; justify-content:center; border-radius:50%; border:1px solid var(--line); background:var(--card);
     box-shadow:0 2px 8px rgba(0,0,0,.18); font-size:15px; padding:0; cursor:pointer }
@@ -11502,7 +11605,7 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
   nav span.nestgroup .members .proj { min-height:32px; padding:2px 10px; font-size:14px }
   nav .proj { flex:none; flex-direction:row; align-items:center; margin:0; padding:0 13px; min-height:42px; border:0;
     border-radius:0; background:var(--card) }
-  nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working { border-top-color:transparent }
+  nav .proj.on { background:var(--accent); color:var(--card) } nav .proj.on .sdot:not(.needs-you) { border-color:var(--card) } nav .proj.on .sdot.working:not(.behind) { border-top-color:transparent }
   nav .sline, nav .badge.new { display:none }
   /* the steward is no project: a slim bar of its own across the top, its state, the helm and what waits in every project */
   nav .proj.monitor { display:flex; gap:10px; margin:0; padding:6px 14px; min-height:38px; border:0; border-radius:0;

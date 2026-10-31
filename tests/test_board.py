@@ -1449,6 +1449,60 @@ class ChatTest(BoardBase):
             nest.rename("Memory", "Other")
         self.assertFalse(nest.rename("Q Branch", "Q Branch"))
 
+    def test_active_states_are_drawn_apart_and_the_band_orders_by_them_with_helpers_as_dots(self):
+        # R136, the person: "maybe we just need more thourough animations for active states", "colored dots to indicate
+        # helpers and subagents and their status", "right under the text newline in a box"
+        kiln, glaze = Path(self.tmp.name) / "kiln", Path(self.tmp.name) / "glaze"
+        for p in (kiln, glaze):
+            p.mkdir()
+        for p in (self.root, kiln, glaze):
+            board.track(p)
+        plist = board.projects()
+        board.save_json(board.home() / "woke.json", {str(self.root.resolve()): "2026-10-30T09:00:00Z",
+                                                     str(kiln.resolve()): "2026-10-30T10:00:00Z",
+                                                     str(glaze.resolve()): "2026-10-30T11:00:00Z"})
+        board.working_now([self.root, glaze], behind=[glaze])
+        self.assertEqual(board.nav_order(plist), [["p", plist.index(p)] for p in (self.root, glaze, kiln)],
+                         "mid-turn first, then background only, then idle, however lately each stirred")
+        w = monitor.Watcher.__new__(monitor.Watcher)
+        w.at_work(kiln, True, behind=True)
+        self.assertIn(str(kiln.resolve()), board.at_work_now(behind=True))
+        w.at_work(kiln, True)
+        self.assertNotIn(str(kiln.resolve()), board.at_work_now(behind=True), "back mid-turn")
+        board.working_now([])
+        # the dot's classes
+        self.assertEqual(board.dot({"state": "working", "behind": "2 helpers running"}), "working behind")
+        self.assertEqual(board.dot({"state": "needs you"}), "needs-you")
+        self.assertIn(".sdot.working.behind { border-style:dotted", board.CSS)
+        self.assertIn("nav .proj:has(> .pname > .sdot.working:not(.behind))::after", board.CSS, "mid-turn: a stripe runs along the box")
+        # helpers: a dot each, by tier; quiet once their tokens stand still a quarter hour; past six, +N
+        board._HELPER_SEEN.clear()
+        snap = lambda mins, toks: {"state": "idle", "helpers": [
+            {"name": "colony-stepup", "what": "Hard part", "stats": f"{mins}m 0s · ↓ {toks}k tokens"},
+            {"name": "bf-light", "what": "", "stats": f"{mins}m 0s · ↓ 3k tokens"},
+            {"name": "general-purpose", "what": "", "stats": ""}]}
+        t0 = time.time()
+        with patch.object(board.time, "time", return_value=t0):
+            dots = board.helper_dots(self.root, snap(5, 10))
+        self.assertEqual([(d["tier"], d["quiet"]) for d in dots], [("stepup", False), ("chores", False), ("other", False)])
+        self.assertEqual(dots[0]["title"], "colony-stepup · Hard part · 5m 0s · ↓ 10k tokens")
+        with patch.object(board.time, "time", return_value=t0 + 16 * 60):
+            dots = board.helper_dots(self.root, snap(21, 12))
+        self.assertEqual([d["quiet"] for d in dots[:2]], [False, True], "the one whose tokens stood still is quiet")
+        self.assertTrue(dots[1]["title"].endswith("quiet a while"))
+        many = board.helper_html(0, [{"name": "h", "tier": "rote", "quiet": False, "title": "h"}] * 8)
+        self.assertEqual(many.count("<i class='hd rote'"), 6)
+        self.assertIn("<b class='hdmore'>+2</b>", many)
+        # under the name in the band's box, in the list with its key, and in each poll
+        side = board.sidebar(board.registry(), 0)
+        self.assertRegex(side, r"</span></span><span class='hdots' data-p='\d+'></span><span class='sline'")
+        self.assertIn("class='hdlegend'>Helpers:", side)
+        self.assertIn("nav .navrow .proj { flex-direction:column", board.CSS)
+        self.assertIn("helpers", json.loads(board.status_payload(board.registry(), plist))["projects"][0])
+        self.assertIn("document.querySelectorAll(`.hdots[data-p=\"${i}\"]`)", board.POLL)
+        # a project's Settings, opened, scrolls clear of what floats at the foot
+        self.assertIn(".psettings .panel::after { content:''; position:absolute; left:0; right:0; top:100%; height:calc(var(--stk, 64px) + 24px)", board.CSS)
+
     def test_the_band_is_each_project_alone_by_activity_with_a_list_sorted_three_ways(self):
         # R135, the person: "a button that pops up an organized list of all projects ... a solid bar across the screen
         # with clean corner boxes (not pills) ... In this visualization though the nest isn't shown"
@@ -8055,7 +8109,7 @@ class PhonePageTest(HoursBase):
         self.assertNotIn("cpskip", board.PLAYER)
         self.assertIn("markParts(N, N.blocks.slice(N.j).map((b) => b.k), 'skipped');", board.PLAYER)
         self.assertNotIn("PICON.check", board.PLAYER, "no ✓ on the last: ⏭ is always the way on")
-        self.assertIn("html.autoon .cpbar .cpnext::before", board.CSS)
+        self.assertNotIn(".cpnext::before", board.CSS, "Skip is plain: no rainbow ring for Auto")
         self.assertNotIn(".cphold::before", board.CSS)
         self.assertIn("next", board.ICONS)
         # a tap on Next (or the rest of the player) isn't a finger moving the page: the page goes on with what is read

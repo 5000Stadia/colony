@@ -623,7 +623,8 @@ class Watcher:
             self.states[str(p)] = now
             # it comes to the front of the board's list, and stays while working: at work as its dot shows it, helpers or
             # background commands running behind an idle screen included (an idle-looking one sat left of one at work)
-            self.at_work(p, now == "working" or board.seen(snap)["state"] == "working")
+            back = board.seen(snap).get("behind") if now != "working" else ""
+            self.at_work(p, now == "working" or bool(back), behind=bool(back))
             if now == "working":
                 self.worked.add(str(p))
             # What it completed since the last look; the first look, at the board's start, only notes where it is.
@@ -1160,18 +1161,23 @@ class Watcher:
         each other, a group jumping back and forth). Apart from the steward's own watch, which muting stops."""
         for p in board.projects():
             if p.exists():
-                self.at_work(p, board.seen(console.snapshot(p, lines=4))["state"] == "working")   # as its dot shows it
+                s = board.seen(console.snapshot(p, lines=4))                                    # as its dot shows it
+                self.at_work(p, s["state"] == "working", behind=bool(s.get("behind")))
 
-    def at_work(self, p, working):
+    def at_work(self, p, working, behind=False):
         seen = getattr(self, "stirring", None)
         if seen is None:
             seen = self.stirring = {}
+        back = getattr(self, "behind", None)
+        if back is None:
+            back = self.behind = set()
+        (back.add if working and behind else back.discard)(str(p))
         if working and str(p) not in seen:
             board.woke(p)
             seen[str(p)] = time.time()
         elif not working:
             seen.pop(str(p), None)
-        board.working_now(seen)                       # the steward on or off: written only as it changes, or each minute
+        board.working_now(seen, back)                 # the steward on or off: written only as it changes, or each minute
 
     def run(self):
         mine = board.home()          # the board it was started for: its home changed under it, it stops
