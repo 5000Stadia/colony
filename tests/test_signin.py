@@ -388,7 +388,11 @@ class SigninTest(unittest.TestCase):
                 until = time.monotonic() + 2
                 while time.monotonic() < until:
                     status = Path('/proc') / str(pid) / 'stat'
-                    if not status.exists() or status.read_text().split()[2] == 'Z':
+                    try:
+                        state = status.read_text().split()[2]
+                    except (FileNotFoundError, ProcessLookupError):
+                        break  # The expected exit can happen between opening and reading /proc.
+                    if state == 'Z':
                         break
                     time.sleep(.01)
                 else:
