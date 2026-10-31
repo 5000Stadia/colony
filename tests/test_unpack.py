@@ -132,11 +132,15 @@ class UnpackElsewhereTest(unittest.TestCase):
         # Claude Code's own first-run answers, beside its sign-in's account (proof finding 3)
         (self.old / ".claude").mkdir(exist_ok=True)
         (self.old / ".claude" / ".claude.json").write_text(json.dumps({
-            "hasCompletedOnboarding": True, "theme": "dark", "bypassPermissionsModeAccepted": True,
+            "hasCompletedOnboarding": True,
             "oauthAccount": {"emailAddress": "SECRET-account"}, "userID": "SECRET-user-id",
             "projects": {str(self.plants): {"hasTrustDialogAccepted": True, "allowedTools": ["SECRET-tool"],
                                             "mcpServers": {"x": {"env": {"KEY": "SECRET-mcp-key"}}}},
                          str(self.old / "elsewhere"): {"hasTrustDialogAccepted": True}}}))
+        # its theme and bypass-permissions acceptance are in its settings, beside the person's hooks and permissions
+        (self.old / ".claude" / "settings.json").write_text(json.dumps({
+            "theme": "dark", "skipDangerousModePermissionPrompt": True,
+            "hooks": {"Stop": [{"hooks": [{"command": "SECRET-hook"}]}]}, "permissions": {"allow": ["SECRET-perm"]}}))
         values = measures.folder(self.plants) / "values.jsonl"
         values.parent.mkdir(parents=True)
         values.write_text('{"value": 7}\n')
@@ -209,10 +213,11 @@ class UnpackElsewhereTest(unittest.TestCase):
         self.assertIn("1 linked worktree(s) kept outside their project", said)
         # Claude Code's first-run answers, for the folders the archive carries, at their place here; nothing else
         config = json.loads((self.new / ".claude" / ".claude.json").read_text())
-        self.assertEqual({k: config[k] for k in ("hasCompletedOnboarding", "theme", "bypassPermissionsModeAccepted")},
-                         {"hasCompletedOnboarding": True, "theme": "dark", "bypassPermissionsModeAccepted": True})
+        self.assertTrue(config["hasCompletedOnboarding"])
         self.assertEqual(config["projects"], {str(plants): {"hasTrustDialogAccepted": True}})
         self.assertNotIn("SECRET", json.dumps(config))
+        settings = json.loads((self.new / ".claude" / "settings.json").read_text())
+        self.assertEqual(settings, {"theme": "dark", "skipDangerousModePermissionPrompt": True}, "those two, nothing else")
         self.assertTrue(board.restore_held())
         self.assertFalse(migrate._journal().exists(), "the journal goes once the pass is done")
         self.assertIn(f"Re-pointed from {self.old} to {self.new}", said)
@@ -289,18 +294,21 @@ class UnpackElsewhereTest(unittest.TestCase):
         config.write_text(json.dumps({"theme": "light", "oauthAccount": {"emailAddress": "mine"},
                                       "projects": {"/a": {"hasTrustDialogAccepted": False, "history": ["x"]}}}))
         config.chmod(0o600)
-        said = claude.restore_first_run({"theme": "dark", "hasCompletedOnboarding": True,
+        (config.parent / "settings.json").write_text(json.dumps({"theme": "light"}))
+        said = claude.restore_first_run({"settings": {"theme": "dark", "skipDangerousModePermissionPrompt": True},
+                                         "hasCompletedOnboarding": True,
                                          "projects": {"/a": {"hasTrustDialogAccepted": True},
                                                       "/b": {"hasTrustDialogAccepted": True}}})
         self.assertIn("first-run answers", said)
         got = json.loads(config.read_text())
-        self.assertEqual(got["theme"], "light", "an answer given here stands")
+        self.assertEqual(json.loads((config.parent / "settings.json").read_text()),
+                         {"theme": "light", "skipDangerousModePermissionPrompt": True}, "an answer given here stands")
         self.assertTrue(got["hasCompletedOnboarding"])
         self.assertEqual(got["oauthAccount"], {"emailAddress": "mine"})
         self.assertEqual(got["projects"], {"/a": {"hasTrustDialogAccepted": False, "history": ["x"]},
                                            "/b": {"hasTrustDialogAccepted": True}})
         self.assertEqual(config.stat().st_mode & 0o777, 0o600)
-        self.assertIsNone(claude.restore_first_run({"theme": "dark"}), "nothing to add: nothing written or said")
+        self.assertIsNone(claude.restore_first_run({"settings": {"theme": "dark"}}), "nothing to add: nothing written or said")
 
     def test_a_part_outside_the_home_that_cant_be_written_stops_before_anything_is_unpacked(self):
         archive = self.pack_and_move(colony_layout=False)
