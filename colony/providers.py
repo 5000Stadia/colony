@@ -1437,6 +1437,16 @@ class Codex(Provider):
         from . import codex_history
         return codex_history.repoint(old, new)
 
+    @staticmethod
+    def rehome_history(home, old_home, backup=None):
+        """PROVIDER: a colony-owned Codex home moved whole records its own place; its paths follow it. A native
+        writer still open is refused as ValueError, which pauses the change-over to be resumed."""
+        from . import codex_history, codex_transfer
+        try:
+            return codex_history.rehome(home, old_home, backup=backup)
+        except codex_transfer.TransferError as err:
+            raise ValueError(str(err)) from err
+
     def verify_history(self, root):
         """PROVIDER: verify Codex's own index and rollout without spending a turn."""
         from . import codex_history

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from colony import board, codex_remote, console, handover, migrate, voice
+from colony import board, codex_remote, console, handover, migrate, providers, voice
 
 
 class LayoutTest(unittest.TestCase):
@@ -149,6 +149,7 @@ class LayoutTest(unittest.TestCase):
         remote.mkdir(parents=True)
         (remote / "auth.json").write_text("distinctive-codex-auth")
         (remote / "history.jsonl").write_text("a remembered conversation\n")
+        self.conversations = {self.project: self.codex_conversation(self.project)}
         values = ["distinctive-codex-auth"]
         for number, secret in enumerate(board.SECRET_PATHS):
             p = self.old_home / secret
@@ -160,6 +161,116 @@ class LayoutTest(unittest.TestCase):
             values.append(value)
         self.stop_still()
         return agent, worktrees, remote, values
+
+    def codex_conversation(self, root):
+        """A saved Codex conversation in the project's owned home, shaped as Codex 0.166 keeps it: the index's
+        rollout path, the runtime records and the database home all name the home, and the history's byte offsets
+        point at the turn's line, which comes after records whose length the change-over alters."""
+        import sqlite3
+        from contextlib import closing
+        home = codex_remote.home_for(root)
+        tid = "01930000-0000-7000-8000-0000000000" + ("01" if root == self.project else "02")
+        rollout = home / "sessions" / "2026" / "10" / "31" / f"rollout-{tid}.jsonl"
+        rollout.parent.mkdir(parents=True)
+        cwd = str(board.workdir(root))
+        policy = dict(type="workspace-write", writable_roots=[cwd, str(home / "memories")])
+        rows = [dict(type="session_meta", payload=dict(id=tid, cwd=cwd, runtime_workspace_roots=[cwd, str(home)])),
+                dict(type="turn_context", payload=dict(cwd=cwd, sandbox_policy=policy)),
+                dict(type="world_state", payload=dict(state=dict(environments=dict(local=dict(cwd=cwd))))),
+                dict(type="event_msg", payload=dict(type="thread_settings_applied", thread_settings=dict(
+                    cwd=cwd, runtime_workspace_roots=[cwd, str(home)], sandbox_policy=policy))),
+                dict(type="response_item", payload=dict(type="message", role="user",
+                                                        content=[dict(text="Remember marigold-otter-127, café.")]))]
+        lines = [(json.dumps(row, ensure_ascii=False) + "\n").encode() for row in rows]
+        rollout.write_bytes(b"".join(lines))
+        with closing(sqlite3.connect(home / "state_5.sqlite")) as db, db:
+            db.executescript("""CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, rollout_path TEXT NOT NULL,
+                sandbox_policy TEXT NOT NULL, title TEXT, archived INTEGER);
+                CREATE TABLE rollout_migration_skipped_rollouts (migration_id TEXT, rollout_path TEXT, skip_reason TEXT);""")
+            db.execute("INSERT INTO threads VALUES (?,?,?,?,?,?)",
+                       (tid, cwd, str(rollout), json.dumps(policy), "marigold", 0))
+            db.execute("INSERT INTO rollout_migration_skipped_rollouts VALUES (?,?,?)", ("m", str(rollout), "fixture"))
+        with closing(sqlite3.connect(home / "thread_history_1.sqlite")) as db, db:
+            db.executescript("""CREATE TABLE thread_turns (thread_id TEXT, rollout_byte_offset INTEGER,
+                rollout_end_byte_offset INTEGER);
+                CREATE TABLE thread_history_projection_state (thread_id TEXT, next_rollout_byte_offset INTEGER);""")
+            db.execute("INSERT INTO thread_turns VALUES (?,?,?)", (tid, sum(map(len, lines[:-1])), sum(map(len, lines))))
+            db.execute("INSERT INTO thread_history_projection_state VALUES (?,?)", (tid, sum(map(len, lines))))
+        (home / "config.toml").write_text("sqlite_home=" + json.dumps(str(home)) + "\n")
+        (home / "colony-thread.json").write_text(json.dumps(dict(thread=tid, rollout=str(rollout))))
+        console.remember(root, tid, str(rollout))
+        self.assertTrue(providers.get("codex").verify_history(root))
+        return home, tid, lines[-1]
+
+    def assert_codex_conversation(self, root, old_home, tid, message):
+        """The moved home names only itself, Codex's lookup finds the conversation, and its turn reads the same."""
+        import sqlite3
+        from contextlib import closing
+        home = codex_remote.home_for(root)
+        self.assertTrue(home.is_dir())
+        self.assertTrue(providers.get("codex").verify_history(root))
+        for path in home.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            if path.suffix == ".sqlite":
+                with closing(sqlite3.connect(path)) as db:
+                    text = "\n".join(db.iterdump())
+            else:
+                text = path.read_text(errors="replace")
+            self.assertNotIn(str(old_home), text, str(path))
+        with closing(sqlite3.connect(home / "state_5.sqlite")) as db:
+            rollout = Path(db.execute("SELECT rollout_path FROM threads WHERE id=?", (tid,)).fetchone()[0])
+        self.assertEqual(rollout.parent.parent.parent.parent.parent, home)
+        with closing(sqlite3.connect(home / "thread_history_1.sqlite")) as db:
+            start, end = db.execute("SELECT rollout_byte_offset,rollout_end_byte_offset FROM thread_turns").fetchone()
+            following = db.execute("SELECT next_rollout_byte_offset FROM thread_history_projection_state").fetchone()[0]
+        self.assertEqual(rollout.read_bytes()[start:end], message)
+        self.assertEqual(following, end)
+        self.assertEqual(codex_remote.user_config(home)["sqlite_home"], str(home))
+        self.assertEqual(json.loads((home / "colony-thread.json").read_text())["rollout"], str(rollout))
+
+    def test_codex_homes_are_told_their_new_place_once_after_an_interruption_following_the_moves(self):
+        from colony import layout
+
+        class Interrupted(BaseException):
+            pass
+
+        fixture = self.fixture()
+        generation = json.loads((self.old_home / "stopped.json").read_text())["generation"]
+        step, rehome = layout._step, providers.get("codex").rehome_history
+        calls = []
+
+        def stop_after_moves(journal, note, name, action):
+            if name.startswith("rehome:") and name not in note["done"]:
+                self.assertTrue(all(f"move:{i}" in note["done"] for i in range(len(note["moves"]))))
+                raise Interrupted()
+            return step(journal, note, name, action)
+
+        def counted(home, old_home, backup=None):
+            calls.append(home)
+            return rehome(home, old_home, backup)
+
+        with patch.object(layout, "_step", side_effect=stop_after_moves):
+            with self.assertRaises(Interrupted):
+                self.migrate()
+        self.assertFalse(providers.get("codex").verify_history(self.project), "the moved home still names the old one")
+        with patch.object(providers.get("codex"), "rehome_history", side_effect=counted):
+            self.migrate()
+        self.assertEqual(calls, [board.codex_homes() / codex_remote.home_for(self.project).name])
+        self.assert_changed_over(*fixture, generation)
+        backups = board.machine_state() / "backups" / "into-colony"
+        old_state = self.old_home / "codex-remote" / calls[0].name / "state_5.sqlite"
+        self.assertTrue((backups / str(board.codex_homes() / calls[0].name / "state_5.sqlite").lstrip("/")).is_file())
+        self.assertFalse(old_state.exists())
+
+    def test_an_agent_codex_home_is_rehomed_and_then_follows_its_moved_agent(self):
+        agent, *_ = self.fixture()
+        old_home = codex_remote.home_for(agent)
+        self.conversations[agent] = self.codex_conversation(agent)
+        self.migrate()
+        moved_agent = board.agents_home() / agent.name
+        self.assertNotEqual(codex_remote.home_for(moved_agent).name, old_home.name)
+        self.assert_codex_conversation(moved_agent, old_home, *self.conversations[agent][1:])
 
     def test_change_over_preserves_projects_and_repairs_both_worktrees(self):
         agent, worktrees, remote, values = self.fixture()
@@ -194,6 +305,8 @@ class LayoutTest(unittest.TestCase):
             self.assertEqual((board.cache() / cache / "payload").read_text(), f"cached {cache}")
             self.assertFalse((board.home() / cache).exists())
         moved_remote = board.codex_homes() / remote.name
+        for root, (home, tid, message) in self.conversations.items():
+            self.assert_codex_conversation(root, home, tid, message)
         self.assertEqual((moved_remote / "auth.json").read_text(), "distinctive-codex-auth")
         self.assertEqual((moved_remote / "history.jsonl").read_text(), "a remembered conversation\n")
         for secret in board.SECRET_PATHS:
