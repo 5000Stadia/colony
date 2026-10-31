@@ -10848,14 +10848,25 @@ class MigrateTest(BoardBase):
         handover.resume_restored()
         self.assertFalse(handover.started())
 
-    def test_unpack_refuses_another_home_folder(self):
+    def test_unpack_under_another_home_folder_puts_each_part_at_its_place_there(self):
         archive, _ = self.pack()
+        note = json.loads(next(self.disk.glob("*.manifest.json")).read_text())
         other = Path(self.tmp.name) / "someone"
+        other.mkdir()
+        shutil.rmtree(self.k)                                  # the old machine's home is gone
         os.environ.update(HOME=str(other), COLONY_BOARD_HOME=str(other / "colony"))
-        with self.assertRaises(SystemExit) as refused:
+        with patch.object(self.migrate, "remake"):
             self.migrate.unpack(archive, say=lambda line: None)
-        self.assertIn(f"made for the home folder {self.k}", str(refused.exception))
-        self.assertFalse((other / "colony").exists(), "nothing was unpacked")
+        at = lambda p: Path(str(p).replace(str(self.k), str(other), 1))
+        for part in note["parts"]:
+            self.assertTrue(at(part["path"]).exists(), part["path"])
+        self.assertEqual(board.registry()["projects"], [str(at(self.alpha)), str(at(self.job)), str(at(self.helper))])
+        self.assertEqual(board.workdir(at(self.helper)), at(self.elsewhere))
+        steward = other / ".claude" / "projects" / self.migrate.claude_key(other / "colony" / "monitor")
+        self.assertTrue((steward / "s3.jsonl").is_file(), "the steward's conversations under its new name")
+        self.assertEqual(os.readlink(other / "colony" / "codex-remote" / "abc123" / "auth.json"),
+                         str(other / ".codex" / "auth.json"))
+        self.assertFalse(self.k.exists(), "nothing written at the old home")
 
     def test_unpack_writes_only_where_the_manifest_says_and_never_through_a_link(self):
         inside, outside = self.k / "Projects" / "alpha", Path(self.tmp.name) / "outside"
