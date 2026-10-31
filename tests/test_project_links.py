@@ -1,6 +1,11 @@
 import html
 from html.parser import HTMLParser
+import json
 import re
+import shutil
+import subprocess
+import unittest
+from unittest.mock import patch
 import urllib.parse
 
 from colony import board, pins
@@ -177,3 +182,79 @@ class ProjectLinksTest(fixtures.BoardBase):
         for path in ("/?n=gone", "/?n=", "/?n=&p=0", "/?n=gone&p=0", "/open?n=gone&f=ROADMAP.md", "/item?n=gone&id=R2",
                      "/pins/add?n=gone", "/pin/edit?n=gone&id=missing"):
             self.assertEqual(self.fetch(path)[0], 404, path)
+
+    def test_named_document_audio_returns_the_current_key_for_voice_controls(self):
+        board.track(self.root)
+        other = self.root.parent / "Weekend recipes"
+        other.mkdir()
+        board.track(other)
+        (self.root / "brief.md").write_text("# Garden brief\n\nKeep the plants watered.\n")
+        (other / "brief.md").write_text("# Recipe brief\n\nCook a weekend meal.\n")
+        board.choose_voice("0", self.root, "af_heart")
+        board.choose_voice("1", other, "bm_fable")
+        self.serve()
+        with patch("colony.voice.ready", return_value=False):
+            status, _, body = self.fetch("/open?n=plants&f=brief.md&audio=1")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["key"], "0")
+            reg = board.registry()
+            reg["projects"].reverse()
+            board.save_registry(reg)
+            status, _, body = self.fetch("/open?n=plants&f=brief.md&audio=1")
+            self.assertEqual(status, 200)
+            data = json.loads(body)
+            self.assertEqual((data["key"], data["project"], data["voice"]), ("1", "plants", "af_heart"))
+            self.assertIn("Keep the plants watered.", body)
+            self.assertNotIn("Cook a weekend meal.", body)
+            status, _, voice = self.fetch("/chat/voice?p=" + data["key"])
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(voice)["voice"], "af_heart")
+
+
+class LastProjectPageTest(unittest.TestCase):
+    def test_saved_project_tabs_keep_named_identity_and_respect_the_named_referrer(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is needed to exercise the page navigation script")
+        script = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const source = require('node:fs').readFileSync(0, 'utf8');
+function visit({saved, referer = '', from = '', nav = false}) {
+  const redirects = [], values = new Map([['page:plants', saved], ['page:other', '/?n=other&view=console']]);
+  const storage = (map) => ({getItem: (key) => map.get(key) ?? null, setItem: (key, value) => map.set(key, value)});
+  const location = new URL('http://board.invalid/?n=plants');
+  location.replace = (url) => redirects.push({method: 'location', url});
+  const window = {colonyFrom: from};
+  const context = {URL, URLSearchParams, location, window,
+    document: {body: {dataset: {project: 'plants'}}, referrer: referer},
+    sessionStorage: storage(new Map()), localStorage: storage(values)};
+  if (nav) context.colonyNav = window.colonyNav = {replace: (url) => redirects.push({method: 'colonyNav', url})};
+  vm.runInNewContext(source, context);
+  return {redirects, values};
+}
+function restored(result, view, method) {
+  assert.equal(result.redirects.length, 1);
+  assert.equal(result.redirects[0].method, method);
+  const destination = new URL(result.redirects[0].url, 'http://board.invalid');
+  assert.equal(destination.pathname, '/');
+  assert.equal(destination.searchParams.get('n'), 'plants');
+  assert.equal(destination.searchParams.get('view'), view);
+  assert.equal(destination.searchParams.has('p'), false);
+}
+restored(visit({saved: '/?n=plants&view=library'}), 'library', 'location');
+restored(visit({saved: '/?p=0&view=roadmap', nav: true}), 'roadmap', 'colonyNav');
+const inside = visit({saved: '/?n=plants&view=chat', referer: 'http://board.invalid/?n=plants&view=roadmap'});
+assert.equal(inside.redirects.length, 0);
+assert.equal(inside.values.get('page:plants'), '/?n=plants');
+assert.equal(inside.values.get('lastpage'), '/?n=plants');
+restored(visit({saved: '/?n=plants&view=library', referer: 'http://board.invalid/?n=other&view=chat'}), 'library', 'location');
+const inPlace = visit({saved: '/?p=0&view=chat', referer: 'http://board.invalid/?n=other',
+  from: 'http://board.invalid/?n=plants&view=roadmap', nav: true});
+assert.equal(inPlace.redirects.length, 0);
+console.log('PASS named project tab navigation');
+"""
+        result = subprocess.run([node, "-e", script], input=board.LASTPAGE, text=True,
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS named project tab navigation", result.stdout)
