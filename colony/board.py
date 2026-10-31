@@ -9880,6 +9880,9 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/monitor":                     # the steward's page was once /monitor: old links and bookmarks still work
             url = url._replace(path="/steward")
         q = urllib.parse.parse_qs(url.query, keep_blank_values=True)
+        if url.path.startswith("/lab/"):                # experiments tried on the person's phone (lab.py)
+            from . import lab
+            return lab.get(self, url.path, q)
         reg = registry()
         if url.path == '/signin':
             return self._signin_response(signin_page(reg), html=True)
@@ -10183,6 +10186,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._page_send()
         if not self._from_this_page():
             return self._send(403, b"not from this page")
+        if urllib.parse.urlparse(self.path).path.startswith("/lab/"):   # a lab page's reports: not the person's tap
+            from . import lab
+            return lab.post(self, urllib.parse.urlparse(self.path).path)
         if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status", "/repair/pair/status", "/chat/measure", "/chat/heard"):
             hours.seen()                               # the person tapped, typed or sent something
         if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:
