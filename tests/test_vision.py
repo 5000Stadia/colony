@@ -711,7 +711,7 @@ class StewardPageTest(BoardBase):
         needs = board.needs_you(board.registry())
         self.assertIn("Which pot size?", needs)
         self.assertNotIn("Which lamp?", needs)
-        self.assertIn("projects the steward doesn't follow: <a href='/?p=", needs)
+        self.assertIn("projects the steward doesn't follow: <a href='/?n=", needs)
 
     def test_the_steward_page_shows_its_last_word_and_follows_only_the_projects_left_checked(self):
         board.track(self.root)

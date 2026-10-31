@@ -1217,7 +1217,7 @@ PAGE = """
  (also reachable with <code>tmux attach -t {name}</code>)</span>
  <button class='quiet touch-only' id='fullscreen'>Full screen</button>
  <form method='post' action='/console/stop' onsubmit="return confirm('End this project\\'s session?')">
- <input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=console'>
+ <input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{back}'>
  <button class='quiet'>End session</button></form></div>
 <div class='keys' aria-label='Keys a phone keyboard lacks'>
  <button data-k='esc'>Esc</button><button data-k='tab'>Tab</button>

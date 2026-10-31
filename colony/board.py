@@ -156,7 +156,8 @@ steer all of them from one board, and the projects can write to each other.
   by every project: before researching, `colony research "a few words"`; after, `colony research --add FILE --title
   "…" --question "the question it answers"` (`--recheck DAYS` if it ages faster than 90 days).
 - In the person's Chat, a picture in the project shows in your reply written `![what it shows](path)`, and a linked file
-  there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked.
+  there (a PDF) opens; one made elsewhere is copied into the project first, and the copy linked. Link a project
+  to `/?n=NAME`, with its folder name URL-encoded (spaces as `%20`), so the link keeps its project as others are added.
 - Outside services (an API, a mailbox) reach you as connections, set by the person per project. Whatever needs an
   account or a key, or sends, posts or spends, goes through one, even for this project alone (it can have its own
   account there), never wired into the project with its keys in a file; public data needing neither, your own code
@@ -718,6 +719,21 @@ def projects(reg=None, adopt=True):
                     track(sub, register=False)
                 out.append(sub)
     return out
+
+
+def project_query(project):
+    """A project's stable query, using its folder name rather than its place in the menu."""
+    if str(project) == "steward":
+        return "p=steward"
+    root = project if isinstance(project, Path) else projects()[int(project)]
+    return "n=" + urllib.parse.quote(root.name, safe="")
+
+
+def project_url(project):
+    """The address to keep or share for a project."""
+    if str(project) in ("steward", "-1"):
+        return "/steward?view=overview"
+    return "/?" + project_query(project)
 
 
 def save_registry(reg):
@@ -2426,7 +2442,7 @@ def steer_row(pid, it):
     person's note on the item, and waits among their notes not yet acted on until the agent has."""
     if it["state"] not in ("todo", "doing"):
         return ""
-    back = f"/?p={pid}&view=roadmap"
+    back = f"{project_url(pid)}&view=roadmap"
     form = lambda text, label: (f"<form method='post' action='/note'><input type='hidden' name='p' value='{pid}'>"
                                 f"<input type='hidden' name='back' value='{e(back)}'><input type='hidden' name='kind' value='item'>"
                                 f"<input type='hidden' name='ref' value='{e(it['id'])}'><input type='hidden' name='text' value='{e(text)}'>"
@@ -2436,7 +2452,7 @@ def steer_row(pid, it):
 
 
 def note_box(pid, kind, ref, hint, back=None):
-    back = back or f"/?p={pid}"
+    back = back or project_url(pid)
     return (f"<form class='add' method='post' action='/note'><input type='hidden' name='p' value='{pid}'>"
             f"<input type='hidden' name='back' value='{e(back)}'>"
             f"<input type='hidden' name='kind' value='{e(kind)}'><input type='hidden' name='ref' value='{e(ref)}'>"
@@ -2538,7 +2554,7 @@ def project_row(i, p, sub=""):
     from . import monitor
     out = p.exists() and not monitor.involved(p)
     pinned = str(p.resolve()) in pinned_projects()
-    return (f"<a class='prow{' out' if out else ''}' href='/?p={i}'{' title=' + chr(39) + e(the_steward(True)) + ' leaves it out' + chr(39) if out else ''}><span class='prowline'>"
+    return (f"<a class='prow{' out' if out else ''}' href='{project_url(p)}'{' title=' + chr(39) + e(the_steward(True)) + ' leaves it out' + chr(39) if out else ''}><span class='prowline'>"
             f"<span class='sdot msdot {st.replace(' ', '-')}' data-p='{i}' title='{e(st)}'></span><b class='project-label' data-project-path='{e(str(p))}'>{e(name_of(p))}</b>{rename_pencil(p)}"
             f"<span class='pwork' data-p='{i}'>{e(at_work(p) if p.exists() else '')}</span>"
             f"<span class='badge gate pbadge' data-p='{i}' title='waiting on you'{'' if waiting else ' hidden'}>{waiting}</span>"
@@ -2818,7 +2834,7 @@ def sidebar(reg, pid):
             work = at_work(p) if p.exists() else ""
             tint = PALETTE.get(colour(p)) if p.exists() else None
             tint = f" style='--pc:{tint[0]};--pcd:{tint[1]}'" if tint else ""
-            chips.append(f"<a class='proj{' on' if i == pid else ''}'{tint} href='/?p={i}'><span class='pname'>"
+            chips.append(f"<a class='proj{' on' if i == pid else ''}'{tint} href='{project_url(p)}' data-p='{i}'><span class='pname'>"
                          f"<span class='sdot {dot(snap)}' id='dot-{i}'></span>{project_label(p)}{rename_pencil(p)}{badge}</span>"
                          # its helpers' dots on a line of their own under its name (the person: "Cool to have subagent
                          # status dots right under the text newline in a box")
@@ -2873,7 +2889,7 @@ def band_list(plist, pid, listed):
             continue
         p, st, waiting, work, tint = listed[i]
         here = homes.get(str(p.resolve()), "") if p.exists() else ""
-        rows.append(f"<a class='prow bandrow{' on' if i == pid else ''}' href='/?p={i}' data-i='{i}' "
+        rows.append(f"<a class='prow bandrow{' on' if i == pid else ''}' href='{project_url(p)}' data-i='{i}' "
                     f"data-name='{e(name_of(p).casefold())}' data-nest='{e(here)}'{tint}><span class='prowline'>"
                     f"<span class='sdot msdot {st}' data-p='{i}'></span><b>{e(name_of(p))}</b>{helper_html(i, [])}"
                     f"<span class='pwork' data-p='{i}'>{e(work)}</span>"
@@ -2963,11 +2979,11 @@ LASTPAGE = """
     const was = localStorage.getItem('lastpage');
     if (fresh && was && was !== here && ['/', '/steward'].includes(here)) return location.replace(was);
     const proj = document.body.dataset.project, q = new URLSearchParams(location.search);
-    if (proj && location.pathname === '/' && [...q.keys()].join() === 'p') {
+    if (proj && location.pathname === '/' && [...q.keys()].join() === 'n') {
       const last = localStorage.getItem('page:' + proj);
       let from = null; try { const r = window.colonyFrom || document.referrer; from = r ? new URL(r) : null; } catch (e) {}
-      const inside = from && from.origin === location.origin && from.searchParams.get('p') === q.get('p');
-      if (last && !inside) { const to = new URL(last, location.href); to.searchParams.set('p', q.get('p'));
+      const inside = from && from.origin === location.origin && from.searchParams.get('n') === q.get('n');
+      if (last && !inside) { const to = new URL(last, location.href); to.searchParams.delete('p'); to.searchParams.set('n', q.get('n'));
         if (to.pathname + to.search !== here) return window.colonyNav ? colonyNav.replace(to.pathname + to.search) : location.replace(to.pathname + to.search); }
     }
     if (proj) localStorage.setItem('page:' + proj, here);
@@ -4063,7 +4079,7 @@ PLAYER = """
     if (mine !== opening || controller.signal.aborted || !N || !N.document) return false;
     documentRequest = null;
     if (!got || !got.blocks || !got.blocks.length) { replyDone(); return false; }
-    N.name = got.title; N.projectName = (L.projects[N.p] || {}).name || (listed().find((x) => x.key === N.p) || {}).name || got.project; N.kvoice = got.voice; N.kokoro = got.kokoro;
+    N.p = got.key || N.p; N.name = got.title; N.projectName = (L.projects[N.p] || {}).name || (listed().find((x) => x.key === N.p) || {}).name || got.project; N.kvoice = got.voice; N.kokoro = got.kokoro;
     N.blocks = got.blocks; N.sections = got.sections; N.pending = false; loading = false;
     if (paused) { playing = false; save(); changed(); return true; }
     begin(0, 0); return true;
@@ -4158,12 +4174,12 @@ PLAYER = """
   // is a picker, so several projects' voices can be set while there. The projects are read off the page's own menu.
   const listed = () => { const out = new Map();
     if (document.querySelector('nav a.proj.monitor')) out.set('steward', {key: 'steward', name: 'steward', href: '/steward?view=chat'});
-    document.querySelectorAll('nav a.proj[href^="/?p="]').forEach((a) => { const k = new URL(a.href).searchParams.get('p'), n = a.querySelector('.pname');
+    document.querySelectorAll('nav a.proj[data-p]').forEach((a) => { const k = a.dataset.p, n = a.querySelector('.pname');
       if (out.has(k) || !n) return;
       const name = (n.querySelector('.project-label') || n).textContent.trim();
-      out.set(k, {key: k, name, href: '/?p=' + k + '&view=chat'}); });
+      out.set(k, {key: k, name, href: a.getAttribute('href') + '&view=chat'}); });
     return [...out.values()]; };
-  const here = () => location.pathname === '/steward' ? 'steward' : location.pathname === '/' ? new URLSearchParams(location.search).get('p') : null;
+  const here = () => location.pathname === '/steward' ? 'steward' : location.pathname === '/' ? document.querySelector('nav a.proj.on[data-p]')?.dataset.p : null;
   const voiced = () => { const mine = here(), p = listed().find((x) => x.key === mine);
     if (p) return {key: p.key, name: p.name};
     if (N && N.document) return {key: N.p, name: N.projectName || 'Document'};
@@ -4650,12 +4666,13 @@ def tabs(pid, view, root=None):
     tab is one more place to look that says nothing."""
     tab = lambda v, label, href: f"<a class='{'on' if view == v else ''}' href='{href}'>{label}</a>"
     shown = root is None or view == "showcase" or showcase.entries(root)
-    return ("<div class='tabs'>" + tab("overview", "Overview", f"/?p={pid}&view=overview")
-            + tab("roadmap", "Roadmap", f"/?p={pid}&view=roadmap")
-            + tab("library", "Library", f"/?p={pid}&view=library")
-            + (tab("showcase", "Showcase", f"/?p={pid}&view=showcase") if shown else "")
-            + tab("chat", "Chat", f"/?p={pid}&view=chat")
-            + tab("console", "Console", f"/?p={pid}&view=console") + "</div>")
+    root = root if root is not None else projects()[pid]
+    return ("<div class='tabs'>" + tab("overview", "Overview", f"{project_url(root)}&view=overview")
+            + tab("roadmap", "Roadmap", f"{project_url(root)}&view=roadmap")
+            + tab("library", "Library", f"{project_url(root)}&view=library")
+            + (tab("showcase", "Showcase", f"{project_url(root)}&view=showcase") if shown else "")
+            + tab("chat", "Chat", f"{project_url(root)}&view=chat")
+            + tab("console", "Console", f"{project_url(root)}&view=console") + "</div>")
 
 
 SETTLE = 2                   # seconds a console started for a message is watched first: one that dies at once says why
@@ -5221,7 +5238,7 @@ def line(plist, dev="", arm=""):
                 it = mine.get(r["t"]) or mine.setdefault(r["t"], {"p": p, "t": r["t"], "b": [], "at": r["at"], "w": r["w"], "e": r["e"]})
                 it["b"].append([k, r["at"]])
             if mine:
-                info[p] = {"name": name_of(root), "href": f"/?p={p}&view=chat", "voice": voice_of(p, root)[0], "n": len(mine)}
+                info[p] = {"name": name_of(root), "href": f"{project_url(root)}&view=chat", "voice": voice_of(p, root)[0], "n": len(mine)}
                 items += mine.values()
     items.sort(key=lambda x: x["e"])
     return {"since": line_since(), "ready": voice.ready(), "total": len(items), "projects": info,
@@ -5297,7 +5314,7 @@ def heard_list(plist, most=20):
                 got.append({"p": str(i), "t": turn, "b": [[k, rec["rows"][k]["at"]] for k in ks], "at": rec["rows"][ks[0]]["at"],
                             "w": rec["rows"][ks[0]]["w"], "h": when, "n": n, "how": how})
         if any(x["p"] == str(i) for x in got):
-            info[str(i)] = {"name": name_of(root), "href": f"/?p={i}&view=chat", "voice": voice_of(str(i), root)[0]}
+            info[str(i)] = {"name": name_of(root), "href": f"{project_url(root)}&view=chat", "voice": voice_of(str(i), root)[0]}
     got.sort(key=lambda x: (-x["h"], -x["n"]))
     got = [{k: v for k, v in x.items() if k != "n"} for x in got[:most]]
     return {"heard": got, "projects": {p: v for p, v in info.items() if any(x["p"] == p for x in got)}}
@@ -5423,7 +5440,7 @@ def chat_feed(key, root, shown=SHOWN):
     # own answer, so none is missed and however many there are take no room until opened
     asks = [g for g in gates(root) if due(g)] if key != "steward" else []
     # and the rest the project waits on them for, as its Overview shows it (a sign-off, a question asked in its console)
-    rest = waiting_parts(key, root, f"/?p={key}&view=chat", label=False, with_gates=False)[2] if key != "steward" else []
+    rest = waiting_parts(key, root, f"{project_url(root)}&view=chat", label=False, with_gates=False)[2] if key != "steward" else []
     # A choice on its console (a question with options, a permission) holds the agent until it is answered: Needs you
     # comes open with it first, stays open as the page is tapped, and a new choice opens it again. The person, 2026-10-28:
     # "it should be ever present on the project page until it is answered"
@@ -5453,7 +5470,7 @@ def chat_feed(key, root, shown=SHOWN):
             out.append("<div class='chatask'>" + "".join(f"<div>{e(q)}</div>" for q in question) + "<div class='choices'>"
                        + "".join(f"<button class='quiet' data-option='{e(o)}'>{e(o)}</button>" for o in options) + "</div></div>")
         else:
-            out.append(f"<div class='chatask'>It needs you in its console. <a href='/?p={key}&view=console'>Open it →</a></div>")
+            out.append(f"<div class='chatask'>It needs you in its console. <a href='{project_url(root)}&view=console'>Open it →</a></div>")
     return "".join(out)
 
 
@@ -6114,7 +6131,7 @@ box.addEventListener('click', (ev) => {{
 }});
 }})();</script>""")
     # pinning lives here too: with nothing pinned yet, the page has no Pinned section to start from
-    pin = f"<p class='pinlink'><a href='/pins/add?p={pid}'>+ Pin a file, link or upload, for you both to keep at hand</a></p>"
+    pin = f"<p class='pinlink'><a href='/pins/add?{project_query(plist[pid])}'>+ Pin a file, link or upload, for you both to keep at hand</a></p>"
     return (f"<details class='{cls}'><summary>Message</summary>"
             + (f"<div class='panel'>{form}{pin}</div>" if cls == "psettings" else form) + "</details>")
 
@@ -6351,7 +6368,7 @@ def version_hold(root):
 def where_waiting(member):
     """A link to the project a decision waits in, on its Overview."""
     at = next((i for i, p in enumerate(projects()) if p.resolve() == Path(member).resolve()), None)
-    return f"<a href='/?p={at}'>{e(name_of(member))}</a>" if at is not None else e(name_of(member))
+    return f"<a href='{project_url(Path(member))}'>{e(name_of(member))}</a>" if at is not None else e(name_of(member))
 
 
 def progress_panel(root, pid):
@@ -6361,7 +6378,7 @@ def progress_panel(root, pid):
     g = lead.group(root)
     if not g or not g['checkpoints']:
         return ''
-    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=roadmap'>"
+    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{project_url(root)}&view=roadmap'>"
     parts, c = [], progress.current(root)
     if c:
         summary = f"{c['outcome']} · {c['state']}"
@@ -6428,7 +6445,7 @@ def render(reg, pid, view="overview", show_all=""):
                          f"<p class='muted'>Install it, or choose another provider in this project's Settings.</p></div>")
         return shell(reg, pid, f"<header class='slim'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{tabs(pid, view, root)}{message}{switch_line(root)}</header>"
                      + vision_box(root, pid)
-                     + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
+                     + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, back=project_url(root) + "&view=console", token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
     root = plist[pid]
     road, gs = roadmap(root), gates(root)
@@ -6532,8 +6549,8 @@ def render(reg, pid, view="overview", show_all=""):
                         + f"<p>{e(it['desc'] or ('' if lead_clause(it['text'], 90) != it['text'] else 'No description yet.'))}</p>"
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
                         + thread(ns, its)
-                        + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"/?p={pid}&view=roadmap")
-                        + f"<p><a href='/item?p={pid}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
+                        + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"{project_url(root)}&view=roadmap")
+                        + f"<p><a href='/item?{project_query(root)}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")
                 return part_body(m, drawn)
             out.append(journey_html(road, times, inside, live, pid))
             out.append(f"<script>{TICK}</script>")
@@ -6552,7 +6569,7 @@ def render(reg, pid, view="overview", show_all=""):
             h, t, subj = line.split("\x1f")
             hist.append((stamp(t), f"<details class='item'><summary><code>{e(h)}</code> {e(local_day(t))} {e(subj)}"
                          + (f" <span class='badge new'>{len(by('commit', h))} notes</span>" if by("commit", h) else "")
-                         + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"/?p={pid}&view=roadmap") + "</details>"))
+                         + f"</summary>{thread(by('commit', h), items(road))}" + note_box(pid, "commit", h, "A note on this work; it reaches the agent on its next turn", back=f"{project_url(root)}&view=roadmap") + "</details>"))
         out.append(record_fold(pid, "history", "History", hist, hist_n, show_all, rest="the rest are in its git log"))
         whole = [(n["at"], thread([n], items(road))) for n in all_notes if not n["anchor"]]
         whole += [(m["at"], f"<div class='note'><span class='who'>you · {e(local_day(m['at']))} · "
@@ -6710,7 +6727,7 @@ def record_fold(pid, key, title, rows, total, show_all, rest=""):
     everything = show_all == key
     shown = rows[:RECORD_ALL] if everything else rows[:FOLD_SHOWN]
     latest = on_day(rows[0][0]) if rows else ""
-    more = (f"<p><a class='showall' href='/?p={pid}&view=roadmap&all={key}#{key}'>Show "
+    more = (f"<p><a class='showall' href='{project_url(pid)}&view=roadmap&all={key}#{key}'>Show "
             f"{f'all {total}' if total <= RECORD_ALL else f'the newest {RECORD_ALL} of {total}'} →</a></p>"
             if not everything and total > len(shown) else
             f"<p class='muted'>The newest {len(shown)}{'; ' + e(rest) if rest else ''}.</p>" if everything and total > len(shown) else "")
@@ -6730,10 +6747,10 @@ def since_html(pid, root, base):
     from . import opener
     s = since(root, base)
     times = item_times(root) if s["moved"] else {}
-    road = f"/?p={pid}&view=roadmap"
+    road = f"{project_url(root)}&view=roadmap"
     told = [n for n in s["replies"] if n.get("author") in ("person", "monitor") and not n.get("quiet")]
     events = [(times.get(iid, {}).get("since") or s["moved_at"], False,
-               f"<b>{e(was)} → {e(state)}</b> <a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a> {e(short(plain(text), 90))}")
+               f"<b>{e(was)} → {e(state)}</b> <a href='/item?{project_query(root)}&id={e(iid)}'>{e(iid)}</a> {e(short(plain(text), 90))}")
               for iid, was, state, text in s["moved"]]
     events += [(g["at"], False, f"gate opened: {e(short(g['question'], 100))}") for g in s["opened"]]
     events += [(n["addressed_at"], False, f"{'your' if n.get('author') == 'person' else e(the_steward(possessive=True).replace(chr(39), chr(8217)))} note "
@@ -6759,7 +6776,7 @@ def since_html(pid, root, base):
         counts = [(len(s["moved"]), "item moved", "items moved", f"{road}#roadmap"), (len(s["opened"]), "gate opened", "gates opened", ""),
                   (len(told), "note answered", "notes answered", f"{road}&all=messages#messages"),
                   (len(s["pinned"]), "pin", "pins", "#pinned"),
-                  (len(s["shown"]), "new to see", "new to see", f"/?p={pid}&view=showcase"), (s["count"], "commit", "commits", f"{road}#history")]
+                  (len(s["shown"]), "new to see", "new to see", f"{project_url(root)}&view=showcase"), (s["count"], "commit", "commits", f"{road}#history")]
         said = [(f"<a href='{href}'>{n} {one if n == 1 else many}</a>" if href else f"{n} {one if n == 1 else many}")
                 for n, one, many, href in counts if n]
         more = f"<p class='more muted'>In all: {' · '.join(said)}</p>"
@@ -6780,7 +6797,7 @@ def queue_html(pid, root):
     """The queue: open items outside Later, by milestone, folded behind its count (Later waits for the person)."""
     road = roadmap(root)
     its = items(road)
-    link = lambda iid: f"<a href='/item?p={pid}&id={e(iid)}'>{e(iid)}</a>" if iid in its else e(iid)
+    link = lambda iid: f"<a href='/item?{project_query(root)}&id={e(iid)}'>{e(iid)}</a>" if iid in its else e(iid)
     parts, count = [], 0
     for m in road["milestones"]:
         left = [i for i in m["items"] if i["state"] != "done"]
@@ -6802,13 +6819,13 @@ def library_html(pid, root, q=""):
     project is only a way to add one: a search, its results each with Add. A heading has no Rename of its own: in 11
     projects none was ever renamed or moved, and `colony regroup --rename` still renames one."""
     from . import library, opener
-    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='/?p={pid}&view=library'>"
+    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{project_url(root)}&view=library'>"
     groups = {}
     for x in sorted(pins.pins(root), key=lambda x: x["at"]):
         groups.setdefault(x.get("group") or "", []).append(x)
     heads = [g for g in groups if g] + [""] * ("" in groups)
     known = "".join(f"<option value='{e(g)}'>" for g in heads if g)
-    out = [f"<div class='pinhead'><h2>Library</h2><a href='/pins/add?p={pid}'>+ Add</a></div>"]
+    out = [f"<div class='pinhead'><h2>Library</h2><a href='/pins/add?{project_query(root)}'>+ Add</a></div>"]
     for g in heads:
         rows = []
         for x in reversed(groups[g]):
@@ -7052,7 +7069,7 @@ def roadmap_map(road, pid, all_notes, gs):
         flags = (f"<span class='badge gate'>{n_gates} waiting</span>" if n_gates else "") + \
                 (f"<span class='badge'>{n_notes} notes</span>" if n_notes else "")
         nodes.append(
-            f"<a class='node {it['state']}' href='/item?p={pid}&id={e(iid)}' style='left:{x}px;top:{y}px;width:{W}px;height:{H}px'>"
+            f"<a class='node {it['state']}' href='/item?{project_query(pid)}&id={e(iid)}' style='left:{x}px;top:{y}px;width:{W}px;height:{H}px'>"
             f"<span class='nid'>{e(iid)} · {e(it['milestone'])}</span><span class='ntext'>{e(it['text'])}</span>"
             f"{'<span class=dot></span>' if n_gates else ''}"
             f"<span class='pop'><b>{e(iid)} — {e(it['text'])}</b><span class='st {it['state']}'>{LABEL[it['state']]}</span>"
@@ -7073,8 +7090,8 @@ def render_item(reg, pid, iid):
     if not it:
         return shell(reg, pid, f"<p class='muted'>{e(iid)} is not on the roadmap.</p>")
     unlocks = [i for i, x in its.items() if iid in x["after"]]
-    link = lambda i: f"<a href='/item?p={pid}&id={e(i)}'>{e(i)} {e(its[i]['text'])}</a>" if i in its else e(i)
-    body = [f"<p><a href='/?p={pid}'>← {e(name_of(root))}</a></p><header><h1>{e(iid)} — {e(it['text'])}</h1>"
+    link = lambda i: f"<a href='/item?{project_query(root)}&id={e(i)}'>{e(i)} {e(its[i]['text'])}</a>" if i in its else e(i)
+    body = [f"<p><a href='{project_url(root)}'>← {e(name_of(root))}</a></p><header><h1>{e(iid)} — {e(it['text'])}</h1>"
             f"<p><span class='st {it['state']}'>{LABEL[it['state']]}</span> · milestone {e(it['milestone'])}</p></header>"]
     if lead_is_shared(root):
         from . import lead
@@ -7097,7 +7114,7 @@ def render_item(reg, pid, iid):
             until = (f"<p class='muted'>Held until {e(hours.at_clock(epoch(g['held'])))}: opened outside your active hours, it "
                      "reaches your list when they begin. You can answer it now.</p>" if g.get("held") and not g["answer"] else "")
             body.append(f"<div class='card{' gate' if due(g) else ''}'>" + until
-                        + gate_body(root, pid, g, f"/item?p={pid}&id={iid}") + "</div>")
+                        + gate_body(root, pid, g, f"/item?{project_query(root)}&id={iid}") + "</div>")
     from . import consult
     cs = [c for c in consult.records(root) if c["decision"] == iid]
     if cs:
@@ -7108,7 +7125,7 @@ def render_item(reg, pid, iid):
         or "<p class='muted'>No commits mention it yet.</p>") + "</div>")
     ns = [n for n in notes(root) if (n["anchor"] or {}).get("item") == iid]
     body.append("<h2>Direction and notes</h2><div class='card'>" + thread(ns, its)
-                + note_box(pid, "item", iid, "What should the agent cover or keep in mind for this item?", back=f"/item?p={pid}&id={iid}")
+                + note_box(pid, "item", iid, "What should the agent cover or keep in mind for this item?", back=f"/item?{project_query(root)}&id={iid}")
                 + "</div>")
     return shell(reg, pid, "".join(body))
 
@@ -7255,7 +7272,7 @@ def answer_box(pid, root, numbered, back, hint=False, day=False):
             f"<input type='hidden' name='back' value='{e(back)}'>"
             f"<input type='hidden' name='n' value='{e(','.join(f'{n}:{gid}' for n, gid in numbers.items()))}'>"
             f"<textarea name='text' placeholder='{e(hint_)}'>{e(text)}</textarea>"
-            + (f"<a class='dayline' href='/?p={pid}'>{e(name_of(root))} →</a>" if day else "")
+            + (f"<a class='dayline' href='{project_url(root)}'>{e(name_of(root))} →</a>" if day else "")
             + "<button>Send answers</button></form>"
             + ("<p class='muted'>One answer a line, or after a semicolon; “2 default” takes a default now. Skip one, and "
                "its default stands as your day begins after a whole day here.</p>" if hint else ""))
@@ -7373,7 +7390,7 @@ def settings_panel(pid, root):
     merged, own = project_settings(root)
     return (f"{project_settings_form(pid, own, root=root)}"
                 f"<p class='muted'>Provider, model, effort and remote access apply when its console next starts; helper tiers at once.</p>"
-                f"<p class='muted'>Folder: <code>{e(workdir(root))}</code></p>{remote_line(root)}<p><a href='/?p={pid}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr>"
+                f"<p class='muted'>Folder: <code>{e(workdir(root))}</code></p>{remote_line(root)}<p><a href='{project_url(root)}&view=connections'>Connections →</a></p>{lead_form(root, pid)}<hr>{nest_form(pid, root)}<hr>"
                 + ("" if paused(root) else
                    f"<p class='muted'>Pause stops colony setting its agent going (at work, it lands that turn first) and "
                    f"takes its decisions and questions off Needs you, keeping them all; Resume puts them back.</p>"
@@ -7679,7 +7696,7 @@ def monitor_page(reg, view="overview"):
     if view == "chat":
         return shell(reg, -1, head + chat_page("steward", monitor.home()))
     if view == "console":
-        body = head + console.PAGE.format(label=e(monitor.provider().label), path=e(monitor.home()), name=monitor.name(), pid=-1,
+        body = head + console.PAGE.format(label=e(monitor.provider().label), path=e(monitor.home()), name=monitor.name(), pid=-1, back="/steward?view=console",
                                           token=console.token(), focus='true', scrolled=e(monitor.provider().scrolled_marker))
         return shell(reg, -1, body, wide=True)
     if view == "direction":
@@ -7837,7 +7854,7 @@ def status_card(pid, snap, work="", waiting=None):
     act = snap.get("activity") or {}
     agents = "".join(f"<div class='agent{' current' if a['current'] else ''}'><span>{'●' if a['current'] else '○'} {e(a['name'])}</span>"
                      f"<span class='muted'>{e(a['detail'])}</span></div>" for a in act.get("agents", []))
-    return (f"<a class='status' id='status-{pid}' href='/?p={pid}&view=console'><div class='statusline'>"
+    return (f"<a class='status' id='status-{pid}' href='{project_url(pid)}&view=console'><div class='statusline'>"
             f"<span class='sdot {dot(snap)}'></span><b>{e(snap.get('behind') or snap['state'])}</b>"
             f"<span class='muted'>{(' · ' + e(work)) if work else ''}</span></div>"
             f"<div class='agents'>{agents}</div>"
@@ -7891,7 +7908,7 @@ def showcase_html(pid, root):
     if not rows:
         return ("<h2>Showcase</h2><p class='muted'>Nothing shown yet. When a deliverable reaches a stage where it should be "
                 "good, the agent puts it here: what it is and how to see it. Comment if you like; nothing waits on you.</p>")
-    back = f"/?p={pid}&view=showcase"
+    back = f"{project_url(root)}&view=showcase"
 
     def opens(x, button=True):
         """The picture, fitted to the screen and a tap to open it whole; or one button that says what it opens."""
@@ -8004,7 +8021,7 @@ def nest_page(reg, name):
         out.append(f"<div class='card show'><div class='showhead'><b>{e(x['title'])}</b><span class='who'>{e(name_of(p))} · "
                    f"{e(local_day(x['at']))}</span></div><div>{e(x['what'])}</div>"
                    + (f"<div class='try'><b>Try:</b> {e(x['try'])}</div>" if x.get("try") else "") + open_it
-                   + f" <a class='muted' href='/?p={i}&view=showcase'>comment in {e(name_of(p))}</a></div>")
+                   + f" <a class='muted' href='{project_url(p)}&view=showcase'>comment in {e(name_of(p))}</a></div>")
     if not demos:
         out.append("<p class='muted'>Nothing shown yet in these projects.</p>")
     return shell(reg, -2, "".join(out))
@@ -8036,7 +8053,7 @@ def pinned_section(pid, root):
     rows = [pin_row(pid, root, p) for p in pins.pins(root)]
     if not rows:
         return ""                          # nothing kept, no section: adding is also under Message, at the top
-    return (f"<div class='pinned' id='pinned'><div class='pinhead'><h2>Library</h2><a href='/?p={pid}&view=library'>"
+    return (f"<div class='pinned' id='pinned'><div class='pinhead'><h2>Library</h2><a href='{project_url(root)}&view=library'>"
             f"{'All ' + str(len(rows)) + ' →' if len(rows) > PINS_SHOWN else 'Open →'}</a></div>"
             + "".join(rows[:PINS_SHOWN]) + "</div>")
 
@@ -8052,7 +8069,7 @@ def pin_add_page(reg, pid):
     title = "<input name='title' placeholder='Title (optional)'>"
     hidden = f"<input type='hidden' name='p' value='{pid}'>"
     body = (f"<header class='project'><div class='titlerow'><h1>Pin to {e(name_of(root))}</h1>"
-            f"<a class='exitlink' href='/?p={pid}'>✕ Cancel</a></div><p class='muted'>A file in the project, a link, or an upload. "
+            f"<a class='exitlink' href='{project_url(root)}'>✕ Cancel</a></div><p class='muted'>A file in the project, a link, or an upload. "
             f"The agent hears of it on its next turn; a comment reaches it as a message.</p></header>"
             f"<h2>A file in the project</h2><div class='card'><form class='add pinform' method='post' action='/pin'>{hidden}"
             f"<input type='hidden' name='kind' value='file'><div class='chosen'><input name='target' id='pick' placeholder='No file chosen' readonly>"
@@ -8145,7 +8162,7 @@ def clash_page(reg, pid, pin, draft, kept):
             f"<h1>Not saved: {e(pin['title'])} changed while you edited it</h1>"
             f"<p>The file was written to (by the agent, most likely) after you opened it, so your save would have overwritten "
             f"that change. Nothing was overwritten: your draft is kept at <a href='{e(opener.ref(pid, kept))}'><code>{e(kept)}</code></a>, "
-            f"and the agent has been told where.</p><p><a class='open' href='/pin/edit?p={pid}&id={e(pin['id'])}'>Edit it as it is now</a></p>"
+            f"and the agent has been told where.</p><p><a class='open' href='/pin/edit?{project_query(pid)}&id={e(pin['id'])}'>Edit it as it is now</a></p>"
             f"<div class='clash'><div><h3>Yours</h3><textarea readonly>{e(draft)}</textarea></div>"
             f"<div><h3>Now in the file</h3><textarea readonly>{e(now_text)}</textarea></div></div>")
     return shell(reg, pid, body)
@@ -8344,7 +8361,7 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
         if w['kind'] == 'checkpoint':
             from . import lead
             c, candidate = w['checkpoint'], w['checkpoint']['candidate']
-            href = candidate['artifact'] if candidate['artifact'].startswith(('http://', 'https://')) else f"/progress/artifact?p={pid}&candidate={candidate['id']}"
+            href = candidate['artifact'] if candidate['artifact'].startswith(('http://', 'https://')) else f"/progress/artifact?{project_query(p)}&candidate={candidate['id']}"
             next_versions = [v for v in lead.info(p)['checkpoints'] if v['state'] == 'planned']
             choose_next = ("<label>After approval <select name='next'><option value=''>Pause here</option>" +
                            ''.join(f"<option value='{e(v['id'])}'>{e(v['outcome'])}</option>" for v in next_versions) + '</select></label>')
@@ -8375,7 +8392,7 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
                            if providers.of(p).dismiss_keys else "") + f"{foot}</div>")
         elif w["kind"] == "screen":
             rows.append(f"<div class='need'>{who('needs you in its console')}<pre>{e(chr(10).join(w['lines']))}</pre>"
-                        f"<a class='go' href='/?p={pid}&view=console'>Open its console →</a>{foot}</div>")
+                        f"<a class='go' href='{project_url(p)}&view=console'>Open its console →</a>{foot}</div>")
         elif w["kind"] == "ask":
             a = w["ask"]
             rows.append(f"<div class='need'>{who('asked in its console · ' + said_at(a['at']))}"
@@ -8390,7 +8407,7 @@ def waiting_html(pid, root):
     pointed to (it is answered there); and what is held for the person's hours. Nothing, nothing at all."""
     held = version_hold(root)
     elsewhere = [(m, g) for m, g in (held[1] if held else []) if m.resolve() != Path(root).resolve()]
-    return ("".join(waiting_on(pid, root, f"/?p={pid}", label=False))
+    return ("".join(waiting_on(pid, root, project_url(root), label=False))
             + "".join(f"<div class='need held'><div class='who'><span class='kind'>holds this version</span></div>"
                       f"Waiting on you in {where_waiting(m)}: <b>{e(g['question'])}</b></div>" for m, g in elsewhere)
             + held_html(pid, root))
@@ -8403,7 +8420,7 @@ def held_html(pid, root, back=None):
     asked = [a for a in asks(root) if a["held"]]
     if not later and not asked:
         return ""
-    back = back or f"/?p={pid}"
+    back = back or project_url(root)
     hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>"
     foot = lambda key, label="Clear": f"<div class='needfoot'>{clear_form(hidden, key, label)}</div>"
     until = lambda x: e(hours.at_clock(epoch(x["held"])))
@@ -8615,11 +8632,11 @@ def needs_you(reg):
     for pid, p, _ in arranged(projects(reg)):
         if p.exists() and paused(p):
             n = len(moments_of(waiting_items(p, paused_too=True)))
-            held += [f"<a href='/?p={pid}'>{e(name_of(p))}</a>" + (f" ({n})" if n else "")]
+            held += [f"<a href='{project_url(p)}'>{e(name_of(p))}</a>" + (f" ({n})" if n else "")]
             continue
         if p.exists() and not monitor.involved(p):
             n = len(moments(p))
-            aside += [f"<a href='/?p={pid}'>{e(name_of(p))}</a> ({n})"] if n else []
+            aside += [f"<a href='{project_url(p)}'>{e(name_of(p))}</a> ({n})"] if n else []
             continue
         decided, box, others = waiting_parts(pid, p, "/steward", label=False, day=True) if p.exists() else ([], "", [])
         if not decided and not others:
@@ -8627,7 +8644,7 @@ def needs_you(reg):
         more = decided[NEEDS_SHOWN:]
         fold = (f"<details class='more' data-k='more-{pid}'><summary>{len(more)} more decision{'s' * (len(more) != 1)} "
                 f"from {e(name_of(p))}</summary>{''.join(more)}</details>") if more else ""
-        rows.append(f"<section class='ngroup'><h3 class='nhead'><a href='/?p={pid}'>{e(name_of(p))}</a>"
+        rows.append(f"<section class='ngroup'><h3 class='nhead'><a href='{project_url(p)}'>{e(name_of(p))}</a>"
                     f"<span class='badge gate' title='waiting on you'>{len(decided) + len(others)}</span></h3>"
                     f"{''.join(decided[:NEEDS_SHOWN])}{fold}{box}{''.join(others)}</section>")
     out = "".join(rows) if rows else "<p class='muted'>Nothing is waiting on you.</p>"
@@ -9264,7 +9281,7 @@ def connections_page(reg):
                         f"project, ask any project's agent to add {e(s['title'])} through colony.</p>")
         if differ:
             body.append("<h4>Projects set their own</h4><p>" + ", ".join(
-                f"<a href='/?p={projects(reg).index(p)}&view=connections'>{e(name_of(p))}</a> ({VIA[connections.path_for(svc, p)]}"
+                f"<a href='{project_url(p)}&view=connections'>{e(name_of(p))}</a> ({VIA[connections.path_for(svc, p)]}"
                 + (", own settings" if connections.has_own(c, p) else "") + ")" for p in differ) + "</p>")
         out.append(f"<details class='conn card'><summary><b>{e(s['title'])}</b> · {VIA[way]}"
                    + (f" · {len(differ)} project{'s' * (len(differ) != 1)} differ" if differ else "")
@@ -9285,7 +9302,7 @@ def project_connections(pid, root):
     """A project's Connections: each service as colony-wide, through another source, off, or with its own account
     and holds."""
     from . import connections
-    data, back = connections.load(), f"/?p={pid}&view=connections"
+    data, back = connections.load(), f"{project_url(root)}&view=connections"
     out = [f"<p class='muted'>Set colony-wide on <a href='/connections'>Connections</a>; here this project can differ.</p>"]
     for svc, s in connections.services().items():
         s["id"] = svc
@@ -9713,7 +9730,7 @@ class Handler(BaseHTTPRequestHandler):
             pin = pins.add(root, rel, fields.get("title", ""), kind="upload")
             tell_pinned(root, pin, fields.get("comment", "").strip())
         self.send_response(303)
-        self.send_header("Location", f"/?p={pid}")
+        self.send_header("Location", project_url(pid))
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -9781,7 +9798,7 @@ class Handler(BaseHTTPRequestHandler):
             from . import document_audio
             from . import voice
             data = document_audio.ingest(path.read_text(errors="replace"), path.name, opener.kind(path) == "doc")
-            data.update(project=Path(root).name, voice=voice_of(key, root)[0], kokoro=voice.ready())
+            data.update(key=key, project=Path(root).name, voice=voice_of(key, root)[0], kokoro=voice.ready())
             body = json.dumps(data).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -9822,7 +9839,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urllib.parse.urlparse(self.path)
         if url.path == "/monitor":                     # the steward's page was once /monitor: old links and bookmarks still work
             url = url._replace(path="/steward")
-        q = urllib.parse.parse_qs(url.query)
+        q = urllib.parse.parse_qs(url.query, keep_blank_values=True)
         reg = registry()
         if url.path == '/signin':
             return self._signin_response(signin_page(reg), html=True)
@@ -9838,10 +9855,20 @@ class Handler(BaseHTTPRequestHandler):
             pid = min(max(int((q.get("p") or ["0"])[0]), 0), max(len(plist) - 1, 0))
         except ValueError:
             pid = 0
-        named = (q.get("n") or [""])[0]                # a link by name doesn't shift when a project is added (R125)
-        if named:
+        project_pages = {"/", "/item", "/open", "/pin/open", "/pin/edit", "/pins/add", "/showcase/open", "/progress/artifact"}
+        if url.path in project_pages and "n" in q:
+            named = q["n"][0]
             pid = next((i for i, r in enumerate(plist) if r.name == named), next(
-                (i for i, r in enumerate(plist) if name_of(r) == named), pid))
+                (i for i, r in enumerate(plist) if name_of(r) == named), None))
+            if pid is None:
+                return self._send(404, b"No such project")
+            q["p"] = [str(pid)]                         # existing handlers and form posts still use the current key
+        elif url.path == "/" and "p" in q:
+            key = q["p"][0]
+            if not key.isdigit() or int(key) >= len(plist):
+                return self._send(404, b"No such project")
+            query = [("n", plist[int(key)].name)] + [(k, v) for k, values in q.items() if k != "p" for v in values]
+            return self._redirect("/?" + urllib.parse.urlencode(query, quote_via=urllib.parse.quote))
         if url.path == '/progress/artifact' and plist:
             from . import progress
             c = progress.current(plist[pid])
@@ -10098,6 +10125,17 @@ class Handler(BaseHTTPRequestHandler):
             return self._console(plist[pid], (q.get("t") or [""])[0])
         if url.path == "/item" and plist:
             return self._send(200, render_item(reg, pid, (q.get("id") or [""])[0]).encode())
+        # Agents sometimes link the absolute folder or file they just made. Resolve only registered projects;
+        # the opener's containment check also refuses symlinks that escape the project.
+        from . import opener
+        requested = urllib.parse.unquote(url.path)
+        for root in sorted(plist, key=lambda r: len(str(r.resolve())), reverse=True):
+            base = root.resolve()
+            if requested.rstrip("/") in (str(root), str(base)):
+                return self._redirect(project_url(root))
+            path = pins.inside(base, requested)
+            if path and path.is_file():
+                return self._redirect(opener.ref(root, path.relative_to(base)))
         self._send(404, b"not here")
 
     def do_POST(self):
@@ -10447,13 +10485,13 @@ class Handler(BaseHTTPRequestHandler):
                 sent = not text or (console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True) if dst == src
                                     else console.type_into(console.ensure(src, settle=SETTLE), mail.instruction(mail.address(dst), text), _purpose='person'))
                 if not sent:
-                    return self._send(409, held(src.name, f"/?p={form.get('p', '0')}", src).encode())
+                    return self._send(409, held(src.name, project_url(form.get('p', '0')), src).encode())
                 if text and dst == src:
                     answer_asks(src, "in the console")
                 if text:                                   # the project's Messages keep what was sent
                     append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text,
                                                    "to": "console" if dst == src else dst.name})
-                where = f"/?p={form.get('p', '0')}&view=console"
+                where = f"{project_url(form.get('p', '0'))}&view=console"
             self.send_response(303)
             self.send_header("Location", where)
             self.send_header("Content-Length", "0")
@@ -10477,7 +10515,7 @@ class Handler(BaseHTTPRequestHandler):
                         bench.set_plan(root, t, m, x or None)
             bench.write_helpers(root)
             self.send_response(303)
-            self.send_header("Location", f"/?p={form.get('p', '0')}")
+            self.send_header("Location", project_url(form.get('p', '0')))
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -10495,7 +10533,7 @@ class Handler(BaseHTTPRequestHandler):
                 if form.get("voice"):
                     choose_voice("0", dest, form["voice"])
                 track(dest, described=form.get("what", ""))     # a clone has work of its own: its agent brings the plan over
-                target = "/?n=" + urllib.parse.quote(dest.resolve().name)
+                target = project_url(dest.resolve())
             self.send_response(303)
             self.send_header("Location", target)
             self.send_header("Content-Length", "0")
@@ -10520,7 +10558,7 @@ class Handler(BaseHTTPRequestHandler):
                         root = sharing(folder, name, chosen, role=form['role'])
                     except ValueError as err:
                         return self._send(409, str(err).encode())
-                    target = "/?n=" + urllib.parse.quote(root.name)
+                    target = project_url(root)
                 else:
                     if chosen:
                         project_settings(folder, chosen)
@@ -10531,7 +10569,7 @@ class Handler(BaseHTTPRequestHandler):
                         track(folder, private=form.get("private") == "on", described=form.get("what", ""))
                     except ValueError as err:
                         return self._send(409, str(err).encode())
-                    target = "/?n=" + urllib.parse.quote(folder.name)
+                    target = project_url(folder)
             elif path == "/new" and folder_name(form.get("name", "")):
                 new = Path(form.get("within") or reg["new_root"]).expanduser() / folder_name(form["name"])
                 new.mkdir(parents=True, exist_ok=True)
@@ -10542,7 +10580,7 @@ class Handler(BaseHTTPRequestHandler):
                     choose_voice("0", new, form["voice"])
                 track(new, described=form.get("what", ""))
                 console.ensure(new)
-                target = "/?n=" + urllib.parse.quote(new.name)
+                target = project_url(new)
             elif path == "/roots":
                 reg = registry()
                 if form.get("add") and form["add"] not in reg["roots"]:
@@ -10571,8 +10609,8 @@ class Handler(BaseHTTPRequestHandler):
                 add_note(root, None, f"The person retired a standing rule on the board ({form.get('id', '')}); it no longer holds.",
                          author="colony", quiet=True)
             except (ValueError, IndexError, KeyError):
-                pass
-            back = f"/?p={form.get('p', '')}&view=overview"
+                return self._send(404, b"No such project")
+            back = f"{project_url(root)}&view=overview"
             self.send_response(303)
             self.send_header("Location", back)
             self.send_header("Content-Length", "0")
@@ -10586,9 +10624,9 @@ class Handler(BaseHTTPRequestHandler):
                 add_note(root, None, f"The person cancelled your timed wake {form.get('id', '')} on the board; it won't come.",
                          author="colony", quiet=True)
             except (ValueError, IndexError, KeyError):
-                pass
+                return self._send(404, b"No such project")
             self.send_response(303)
-            self.send_header("Location", f"/?p={form.get('p', '')}&view=overview")
+            self.send_header("Location", f"{project_url(root)}&view=overview")
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -10854,7 +10892,7 @@ class Handler(BaseHTTPRequestHandler):
         text = form.get("text", "").strip()
         path = urllib.parse.urlparse(self.path).path
         back = form.get("back", "")
-        back = back if back.startswith("/") and not back.startswith("//") else f"/?p={pid}"
+        back = back if back.startswith("/") and not back.startswith("//") else project_url(pid)
         if path == "/answers/draft":                     # what's typed in the box for answering by number, as typed
             save_draft(root, form.get("text", "").replace("\r\n", "\n"), numbering(form.get("n")))
             self.send_response(204)
@@ -10900,7 +10938,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as err:
                 return self._send(409, shell(reg, pid, f"<h1>Vision</h1><p>{e(str(err))}</p>"
                                             f"<p>Your unsaved revision:</p><pre>{e(form.get('text', ''))}</pre>"
-                                            f"<p><a href='/?p={pid}'>Back to the project</a></p>").encode())
+                                            f"<p><a href='{project_url(pid)}'>Back to the project</a></p>").encode())
         elif path == "/note" and text:
             kind, ref = form.get("kind"), form.get("ref")
             from . import lead
@@ -10930,7 +10968,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, b"No such gate in this project.")
             except ValueError as err:
                 return self._send(400, shell(reg, pid, f"<h1>Gate answer not saved</h1><p>{e(str(err))}</p>"
-                                             f"<p><a href='/?p={pid}'>Back to the project</a></p>").encode())
+                                             f"<p><a href='{project_url(pid)}'>Back to the project</a></p>").encode())
         elif path == "/choose" and form.get("option"):
             name = console.session_name(root)
             keys = providers.of(root).choose(console.screen(name), form["option"])
@@ -10939,7 +10977,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/project/pause":
             (resume_project if form.get("off") else pause_project)(root)
             self.send_response(303)
-            self.send_header("Location", f"/?p={pid}")
+            self.send_header("Location", project_url(pid))
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -10960,7 +10998,7 @@ class Handler(BaseHTTPRequestHandler):
             if back.startswith("/nest?n=") and urllib.parse.unquote(back[8:]) not in nest.nests():
                 back = "/"                                   # its last project taken out, and nothing else kept it
             self.send_response(303)
-            self.send_header("Location", back if back.startswith("/nest?n=") else f"/?p={pid}")
+            self.send_header("Location", back if back.startswith("/nest?n=") else project_url(pid))
             self.send_header("Content-Length", "0")
             self.end_headers()
             return

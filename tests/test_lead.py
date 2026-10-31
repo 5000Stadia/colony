@@ -920,7 +920,7 @@ class LeadTest(unittest.TestCase):
             gate = board.add_gate(self.helper, 'Which soil?')      # a decision in the helper holds the shared version
         page = board.render(board.registry(), 0, 'roadmap')
         self.assertIn('Held: blocking decision', page)
-        self.assertIn("Waiting on you in <a href='/?p=1'>garden-codex</a>: Which soil?", page)
+        self.assertIn("Waiting on you in <a href='/?n=garden-codex'>garden-codex</a>: Which soil?", page)
         waiting = board.waiting_html(0, self.root)
         self.assertIn('holds this version', waiting, "the lead's own Waiting on you points to it")
         self.assertIn('Which soil?', waiting)

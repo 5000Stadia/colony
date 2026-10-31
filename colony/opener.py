@@ -53,9 +53,9 @@ def kind(path):
 
 
 def ref(key, rel, pin="", entry="", whole=False, viewer=False):
-    """The opener's address for a path of a project (key: its place on the board, or "steward"), from its folder."""
+    """The opener's address for a path of a project (key: its project folder, current menu position, or "steward"), from its folder."""
     q = lambda v: urllib.parse.quote(str(v), safe="")
-    return (f"/open?p={q(key)}&f={urllib.parse.quote(str(rel), safe='/')}" + (f"&pin={q(pin)}" if pin else "")
+    return (f"/open?{board.project_query(key)}&f={urllib.parse.quote(str(rel), safe='/')}" + (f"&pin={q(pin)}" if pin else "")
             + (f"&s={q(entry)}" if entry else "") + ("&whole=1" if whole else "") + ("&viewer=1" if viewer else ""))
 
 
@@ -70,7 +70,7 @@ def link(key, root, target, pin="", entry="", here=None):
     path = pins.inside(base, target)
     if not path or not path.exists():
         return None
-    return ref(key, path.relative_to(base), pin, entry), kind(path) == "raw"
+    return ref("steward" if key == "steward" else Path(root), path.relative_to(base), pin, entry), kind(path) == "raw"
 
 
 def address(key, url):
@@ -80,7 +80,7 @@ def address(key, url):
         host = urllib.parse.urlsplit(url).hostname
     except ValueError:
         return url
-    return f"/open?p={urllib.parse.quote(str(key))}&u={urllib.parse.quote(url, safe='')}" if host in LOCAL else url
+    return f"/open?{board.project_query(key)}&u={urllib.parse.quote(url, safe='')}" if host in LOCAL else url
 
 
 def reach(url, asked_at):
@@ -97,7 +97,7 @@ def entry_link(key, root, x):
     """Where a Showcase entry opens from the board: (address, in a tab of its own), carrying the entry so a comment
     made where it opens attaches to that showing. One without a link opens its card; one whose file is gone, None."""
     if not x.get("link"):
-        return f"/?p={key}&view=showcase#s-{x['id']}", False
+        return f"{board.project_url(root)}&view=showcase#s-{x['id']}", False
     if showcase.is_url(x):
         return address(key, x["link"]), True
     return _viewer(link(key, root, x["link"], entry=x["id"]), x['link'])
@@ -217,7 +217,9 @@ def came_from(referer, key, root, pin=None, entry=None, host=''):
         u = urllib.parse.urlsplit(referer or '')
         q = urllib.parse.parse_qs(u.query)
         view = (q.get('view') or ['overview'])[0]
-        if host and u.netloc.lower() == host.lower() and u.scheme in ('http', 'https') and u.path == '/' and (q.get('p') or [''])[0] == str(key) and view in AWAY:
+        same_project = ((q.get('n') or [''])[0] == Path(root).name
+                        or ('n' not in q and (q.get('p') or [''])[0] == str(key)))
+        if host and u.netloc.lower() == host.lower() and u.scheme in ('http', 'https') and u.path == '/' and same_project and view in AWAY:
             return return_ref(root, view), AWAY[view], False
     except ValueError:
         pass
@@ -337,7 +339,7 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
                f"<textarea name='text' placeholder='{e(hint)}'></textarea><button>Send</button></form></details>")
     # Edit stays with pinned text files: one reached here unpinned is read-only, so a phone writes no other file
     editable = pin and how in ("doc", "text") and not cut and pins.is_text(pin)
-    edit = f"<a class='readedit' href='/pin/edit?p={e(key)}&id={e(pin['id'])}'>Edit</a>" if editable else ""
+    edit = f"<a class='readedit' href='/pin/edit?{board.project_query(root)}&id={e(pin['id'])}'>Edit</a>" if editable else ""
     audio = (f"<div class='readaudio' role='group' aria-label='Document actions' data-url='{e(ref(key, rel) + '&audio=1')}'><button type='button' class='readplay'>Play document</button>"
              f"{edit}<span class='readaudiostatus' role='status'></span></div>") if how in ('doc', 'text') else ""
     project = '/steward?view=chat' if steward else return_ref(root)
