@@ -6815,17 +6815,97 @@ class RepointTest(BoardBase):
         self.assertIn("followed it there", (board.home() / "to_monitor.jsonl").read_text(), "said to the steward, once")
         self.assertEqual(repoint.refind(), [], "once")
 
+    def test_a_lead_groups_worktrees_find_the_moved_repository(self):
+        from colony import lead, repoint
+        self.lived_in()
+        bench = board.home() / "items" / "abc" / "R1-1"
+        bench.parent.mkdir(parents=True)
+        self.git("worktree", "add", "-q", "-b", "item-r1", str(bench))
+        board.save_json(board.home() / "leads.json", {"abc": {"id": "abc", "canonical": str(self.root.resolve()),
+                        "members": [str(self.root.resolve())], "lead": str(self.root.resolve()),
+                        "assignments": {"R1": {"workspace": str(bench)}}}})
+        old, new = self.root, Path(self.tmp.name) / "plants-moved"
+        old.rename(new)
+        self.root = new
+        repoint.repoint(old, new)
+        self.assertEqual(lead.group(new)["canonical"], str(new.resolve()), "the group follows its member")
+        self.assertIn(str(new.resolve()), (bench / ".git").read_text(), "the worktree points at the moved repository")
+        self.assertEqual(subprocess.run(["git", "-C", str(bench), "status", "--short"], capture_output=True).returncode, 0)
+
     def test_what_cant_move_by_itself_yet_is_refused_before_anything_changes(self):
-        from colony import repoint
+        from colony import codex_remote, repoint
         self.lived_in()
         old, new = self.root, Path(self.tmp.name) / "plants-moved"
-        board.save_json(board.home() / "leads.json", {"abc": {"canonical": str(old), "members": [str(old)]}})
         old.rename(new)
         self.root = new
         before = (board.home() / "board.json").read_text()
-        with self.assertRaisesRegex(ValueError, "lead group"):
-            repoint.repoint(old, new)
+        with patch.object(codex_remote, "alive", lambda home: True):
+            with self.assertRaisesRegex(ValueError, "Codex host is still running"):
+                repoint.repoint(old, new)
         self.assertEqual((board.home() / "board.json").read_text(), before, "nothing changed")
+
+
+class HandoverTest(BoardBase):
+    """R127, finding 3: a move and a still stop are hand-overs: work lands first, nothing runs while files move."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ["CLAUDE_CONFIG_DIR"] = str(Path(self.tmp.name) / "claude-home")    # never the person's own
+        self.addCleanup(os.environ.pop, "CLAUDE_CONFIG_DIR", None)
+        board.track(self.root)
+        board.keep_ids()
+
+    def test_a_project_moves_lands_first_and_resumes_in_its_new_folder(self):
+        from colony import handover
+        (self.root / ".venv").mkdir()
+        (self.root / ".venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        dest = Path(self.tmp.name) / "Colony" / "projects" / "plants"
+        said = []
+        self.assertEqual(handover.move(self.root, dest, say=said.append), 1, "something outside names it: asked first")
+        self.assertIn("Python environment in .venv", said[-1])
+        self.assertTrue(self.root.exists(), "nothing moved")
+        console.ensure(self.root)
+        value = board.ident(self.root)
+        name = console.session_name(self.root)
+        with patch.object(handover, "still", lambda root: True):
+            self.assertEqual(handover.move(self.root, dest, sure=True, say=said.append), 0, said)
+        self.assertFalse(self.root.exists())
+        self.assertEqual(board.ident(dest, make=False), value)
+        self.assertIn(str(dest), board.registry()["projects"])
+        self.assertIsNone(board.paused(dest), "resumed after the move")
+        self.assertEqual(console.session_name(dest), name)
+        self.assertTrue(console.running(name), "its console back, in the new folder")
+        self.assertIn("Still to fix: the Python environment", said[-1])
+        console.stop(dest)
+        self.root = dest
+
+    def test_work_that_doesnt_land_in_time_moves_nothing(self):
+        from colony import handover
+        ticks = iter(range(0, 10_000, 30))
+        with patch.object(handover, "still", lambda root: False):
+            busy = handover.settle([self.root], "move", wait=120, say=lambda s: None,
+                                   clock=lambda: next(ticks), nap=lambda s: None)
+        self.assertEqual(busy, [self.root])
+        board.resume_project(self.root)                  # settle leaves the pause to its caller
+        said = []
+        with patch.object(handover, "settle", lambda roots, by, wait, say: [self.root]):
+            self.assertEqual(handover.move(self.root, Path(self.tmp.name) / "x", say=said.append), 1)
+        self.assertTrue(self.root.exists())
+        self.assertIsNone(board.paused(self.root), "carries on as it was")
+
+    def test_a_still_stop_lands_everything_then_marks_it_and_the_next_start_resumes(self):
+        from colony import handover
+        stopped = []
+        with patch.object(handover, "still", lambda root: True):
+            self.assertEqual(handover.stop_still(lambda: stopped.append(1), say=lambda s: None), 0)
+        self.assertEqual(stopped, [1], "sessions end only once all is still")
+        mark = json.loads(handover.mark_path().read_text())
+        self.assertTrue(mark["still"])
+        self.assertEqual(mark["generation"], 1)
+        self.assertEqual(board.paused(self.root)["by"], "still")
+        handover.started()
+        self.assertIsNone(board.paused(self.root), "the next start resumes what the still stop paused")
+        self.assertFalse(json.loads(handover.mark_path().read_text())["still"], "running again: no longer a clean copy")
 
 
 class StartHereTest(BoardBase):

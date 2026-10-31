@@ -97,12 +97,6 @@ def refusal(old, new):
         return f"{new} isn't a folder"
     if board.ident(new, make=False) is None:
         return f"{new} has no colony identity (.board/id)"
-    try:
-        leads = (board.home() / "leads.json").read_text()
-    except OSError:
-        leads = ""
-    if f'"{old}"' in leads or f'"{old}/' in leads:
-        return "it's in a lead group, whose worktrees move with the hand-over (colony move), not by themselves"
     if codex_remote.alive(codex_remote.home_for(old)):
         return "its Codex host is still running; it moves once that host is stopped between turns"
     return None
@@ -150,6 +144,12 @@ def repoint(old, new):
     changed = [p for p in records(plist + [Path(new)]) if rewrite(p, pairs)]
     if changed:
         said.append(f"{len(changed)} record file(s) re-pointed")
+    # its git worktrees (a lead's item worktrees in colony's home, its own elsewhere) find the moved repository again
+    if (Path(new) / ".git").is_dir():
+        import subprocess
+        fixed = subprocess.run(["git", "-C", new, "worktree", "repair"], capture_output=True, text=True)
+        if fixed.stdout.strip() or fixed.stderr.strip():
+            said.append("its git worktrees repaired")
     return said
 
 

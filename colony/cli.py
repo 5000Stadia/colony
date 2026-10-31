@@ -263,6 +263,8 @@ def cmd_board(a):
         print(f"  {u}")
     if fresh and not a.no_monitor:
         print(steward_whereabouts())
+    from . import handover
+    handover.started()                           # what stop --still paused resumes; the clean-stop mark clears
     return 0
 
 
@@ -427,12 +429,28 @@ def _running_port(default):
 
 
 def cmd_stop(a):
-    """End the board, the steward and every project console this board started, and nothing else."""
+    """End the board, the steward and every project console this board started, and nothing else. --still: each
+    project lands its work first and the Codex app hosts stop too, for a copy of colony's folders (R127)."""
     from . import board, console, monitor
-    names = [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
-    ended = [n for n in names if subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True).returncode == 0]
-    print(f"stopped {len(ended)} session(s): {', '.join(ended) or 'none were running'}")
+
+    def sessions():
+        names = [server(), monitor.name()] + [console.session_name(p) for p in board.projects()]
+        ended = [n for n in names if subprocess.run(["tmux", "kill-session", "-t", n], capture_output=True).returncode == 0]
+        print(f"stopped {len(ended)} session(s): {', '.join(ended) or 'none were running'}")
+    if getattr(a, "still", False):
+        from . import handover
+        return handover.stop_still(sessions, wait=int(a.wait * 60))
+    sessions()
     return 0
+
+
+def cmd_move(a):
+    """Move a project to another folder (default ~/Colony/projects/NAME): it lands its work, moves, and resumes there
+    with everything colony keeps about it re-pointed (R127)."""
+    from . import handover
+    root = _project(a.name)
+    dest = Path(a.to).expanduser() if a.to else Path.home() / "Colony" / "projects" / root.name
+    return handover.move(root, dest, sure=a.yes, wait=int(a.wait * 60))
 
 
 def cmd_restart(a):
@@ -2106,7 +2124,14 @@ def main(argv=None):
     p.add_argument("--program", choices=("claude", "codex"), help="on a new board, the program the steward runs on")
     p.set_defaults(fn=cmd_board)
     sub.add_parser("restart").set_defaults(fn=cmd_restart)
-    sub.add_parser("stop").set_defaults(fn=cmd_stop)
+    p = sub.add_parser("stop"); p.set_defaults(fn=cmd_stop)
+    p.add_argument("--still", action="store_true", help="each project lands its work first, and the Codex hosts stop too: for copying colony's folders")
+    p.add_argument("--wait", type=float, default=60, help="minutes to wait for work to land (default 60)")
+    p = sub.add_parser("move", help="move a project to another folder, landing its work first; everything follows it")
+    p.add_argument("name"); p.add_argument("--to", help="where (default ~/Colony/projects/NAME)")
+    p.add_argument("--yes", action="store_true", help="move it although something outside it names its folder")
+    p.add_argument("--wait", type=float, default=60, help="minutes to wait for its work to land (default 60)")
+    p.set_defaults(fn=cmd_move)
     p = sub.add_parser("urls"); p.add_argument("--port", type=int, default=8790); p.set_defaults(fn=cmd_urls)
     p = sub.add_parser("remote", help="the board from your own devices, anywhere, through Tailscale (no one else reaches it)")
     p.add_argument("--off", action="store_true", help="stop: the board is reached as it was before")
