@@ -43,6 +43,7 @@ def unit():
     starts with a bare one, where neither claude nor codex would be found), and its own home if it has one."""
     here = Path(__file__).resolve().parent.parent
     home = os.environ.get("COLONY_BOARD_HOME")
+    secrets = os.environ.get("COLONY_SECRETS_HOME")
     return ("[Unit]\n"
             "Description=colony: the board, then its steward and the projects' consoles\n\n"
             "[Service]\n"
@@ -53,6 +54,7 @@ def unit():
             f"WorkingDirectory={here}\n"
             f"Environment=\"PATH={search_path()}\"\n"
             + (f"Environment=\"COLONY_BOARD_HOME={home}\"\n" if home else "")
+            + (f'Environment="COLONY_SECRETS_HOME={secrets}"\n' if secrets else "")
             + f"ExecStart={sys.executable} -m colony board\n\n"
             "[Install]\n"
             "WantedBy=default.target\n")

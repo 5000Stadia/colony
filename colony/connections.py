@@ -49,7 +49,7 @@ def path():
 
 
 def keys_dir():
-    return board.home() / "connections"
+    return board.secrets() / "connections"
 
 
 @contextmanager
@@ -483,7 +483,7 @@ def codex_args(root):
     for n in (servers(root) if root else {}):
         cmd = _server(n, root)
         out += ["-c", f"mcp_servers.{n}.command={toml(cmd[0])}", "-c", f"mcp_servers.{n}.args={toml(cmd[1:])}",
-                "-c", f"mcp_servers.{n}.env_vars={toml(['COLONY_BOARD_HOME'])}"]   # Codex passes on only what it's told
+                "-c", f"mcp_servers.{n}.env_vars={toml(['COLONY_BOARD_HOME', 'COLONY_SECRETS_HOME'])}"]   # Codex passes on only what it's told
     return out
 
 

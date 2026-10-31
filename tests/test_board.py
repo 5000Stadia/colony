@@ -77,6 +77,9 @@ class BoardBase(unittest.TestCase):
         auditing = patch.object(audit, 'start')       # nor starts a real audit (a fetch and a model) apart from it
         auditing.start()
         self.addCleanup(auditing.stop)
+        secrets_home = os.environ.pop("COLONY_SECRETS_HOME", None)
+        if secrets_home is not None:
+            self.addCleanup(os.environ.__setitem__, "COLONY_SECRETS_HOME", secrets_home)
         self.tmp = tempfile.TemporaryDirectory()
         base = Path(self.tmp.name)
         os.environ["COLONY_BOARD_HOME"] = str(base / "home")
@@ -10142,6 +10145,149 @@ class WakeTest(BoardBase):
         self.assertTrue((monitor.home() / ".board" / "wakes.jsonl").exists(), "kept under the steward's home")
 
 
+class SecretsTest(BoardBase):
+    VALUES = {"claude-token": "distinctive-claude-secret", "connections/shop.env": "TOKEN=distinctive-connection-secret",
+              "bench/aa-key": "distinctive-bench-secret", "console-token": "distinctive-console-secret",
+              "page-secret": "distinctive-page-secret"}
+
+    def setUp(self):
+        super().setUp()
+        self.person = Path(self.tmp.name) / "person"
+        env = patch.dict(os.environ, HOME=str(self.person), CLAUDE_CONFIG_DIR=str(self.person / ".claude"),
+                         CODEX_HOME=str(self.person / ".codex"))
+        env.start()
+        self.addCleanup(env.stop)
+
+    def read_secrets(self):
+        import hmac
+        from colony import bench, connections
+        self.assertEqual(providers.get("claude").token(), self.VALUES["claude-token"])
+        self.assertEqual(connections.keys("shop"), {"TOKEN": "distinctive-connection-secret"})
+        self.assertEqual(bench.aa_key(), self.VALUES["bench/aa-key"])
+        self.assertEqual(console.token(), self.VALUES["console-token"])
+        page = self.root / "page.html"
+        expected = hmac.new(self.VALUES["page-secret"].encode(),
+                            f"{self.root.resolve()}|{page.resolve()}".encode(), "sha256").hexdigest()[:32]
+        self.assertEqual(board.page_sig(self.root, page), expected)
+
+    def assert_home_has_no_secrets(self):
+        for p in board.home().rglob("*"):
+            if p.is_file():
+                for value in self.VALUES.values():
+                    self.assertNotIn(value.split("=")[-1].encode(), p.read_bytes(), str(p))
+
+    def test_each_writer_keeps_its_secret_outside_the_board_home(self):
+        from colony import bench, connections
+        providers.get("claude").set_token(self.VALUES["claude-token"])
+        connections.set_key("shop", "TOKEN", "distinctive-connection-secret")
+        connections.set_key("shop", "TOKEN", "distinctive-project-secret", self.root)
+        bench.set_key(self.VALUES["bench/aa-key"])
+        with patch.object(console.secrets, "token_urlsafe", return_value=self.VALUES["console-token"]), \
+                patch.object(board.random_secrets, "token_hex", return_value=self.VALUES["page-secret"]):
+            console.token()
+            board.page_sig(self.root, self.root / "page.html")
+        folder = board.secrets()
+        self.assertEqual(folder, board.home().with_name("home-secrets"))
+        self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700)
+        for name, value in self.VALUES.items():
+            self.assertEqual((folder / name).read_text().strip(), value)
+        for p in folder.rglob("*"):
+            if p.is_file():
+                self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o600, str(p))
+        self.assertEqual(connections.keys("shop", self.root), {"TOKEN": "distinctive-project-secret"})
+        self.read_secrets()
+        self.assert_home_has_no_secrets()
+        for p in board.home().rglob("*"):
+            if p.is_file():
+                self.assertNotIn(b"distinctive-project-secret", p.read_bytes())
+        self.assertFalse((self.person / ".config/colony").exists())
+
+    def test_legacy_secrets_move_once_and_readers_keep_the_same_values(self):
+        from colony import connections
+        for name, value in self.VALUES.items():
+            old = board.home() / name
+            old.parent.mkdir(parents=True, exist_ok=True)
+            old.write_text(value)
+        own = board.home() / "connections" / "shop" / "old-project.env"
+        own.parent.mkdir()
+        own.write_text("TOKEN=distinctive-project-secret")
+        records = board.home() / "bench/records.jsonl"
+        records.write_text("nonsecret benchmark data")
+        self.read_secrets()
+        folder = board.secrets()
+        self.assertEqual(records.read_text(), "nonsecret benchmark data")
+        self.assertEqual((connections.keys_dir() / "shop/old-project.env").read_text(), "TOKEN=distinctive-project-secret")
+        before = {p: (p.stat().st_ino, p.stat().st_mtime_ns) for p in folder.rglob("*") if p.is_file()}
+        self.read_secrets()
+        self.assertEqual(before, {p: (p.stat().st_ino, p.stat().st_mtime_ns) for p in before})
+        for name in board.SECRET_PATHS:
+            self.assertFalse((board.home() / name).exists(), name)
+        for p in folder.rglob("*"):
+            self.assertEqual(stat.S_IMODE(p.stat().st_mode), 0o700 if p.is_dir() else 0o600, str(p))
+        self.assert_home_has_no_secrets()
+
+    def test_default_is_the_machine_config_folder(self):
+        with patch.dict(os.environ):
+            os.environ.pop("COLONY_BOARD_HOME", None)
+            folder = board.secrets()
+            self.assertEqual(folder, self.person / ".config/colony")
+            self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700)
+            (folder / "console-token").write_text("existing")
+            self.assertEqual(console.token(), "existing")
+
+    def test_override_and_read_only_resolution(self):
+        folder = Path(self.tmp.name) / "separate-secrets"
+        with patch.dict(os.environ, COLONY_SECRETS_HOME=str(folder)):
+            self.assertEqual(board.secrets(create=False), folder)
+            self.assertFalse(folder.exists())
+            providers.get("claude").set_token("private")
+            self.assertEqual((folder / "claude-token").read_text().strip(), "private")
+            folder.chmod(0o755)
+            board.secrets()
+            self.assertEqual(stat.S_IMODE(folder.stat().st_mode), 0o700)
+
+    def test_child_programs_keep_the_same_secrets_folder(self):
+        from colony import autostart, cli, codex_remote, connections
+        folder = Path(self.tmp.name) / "chosen-secrets"
+        with patch.dict(os.environ, COLONY_SECRETS_HOME=str(folder)):
+            env = codex_remote.environment(self.root, self.person / "codex-project", self.person / ".codex")
+            self.assertEqual(env["COLONY_SECRETS_HOME"], str(folder))
+            self.assertIn(f"COLONY_SECRETS_HOME={folder}", cli._tmux_env())
+            with patch.object(autostart, "search_path", return_value="/usr/bin"):
+                self.assertIn(f'Environment="COLONY_SECRETS_HOME={folder}"', autostart.unit())
+            with patch.object(connections, "servers", return_value={"shop": {}}):
+                args = connections.codex_args(self.root)
+                forwarded = next(a for a in args if a.startswith("mcp_servers.shop.env_vars="))
+                self.assertIn('"COLONY_SECRETS_HOME"', forwarded)
+        # Remote Codex always sets COLONY_BOARD_HOME, even when its parent used the default. Pin the secret
+        # location too, so its connections do not mistake that for a separate test board.
+        with patch.dict(os.environ):
+            os.environ.pop("COLONY_BOARD_HOME", None)
+            expected = board.secrets()
+            env = codex_remote.environment(self.root, self.person / "codex-project", self.person / ".codex")
+            with patch.dict(os.environ, env, clear=True):
+                self.assertEqual(board.secrets(), expected)
+
+    def test_migration_merges_connections_without_replacing_existing_keys(self):
+        folder = board.secrets()
+        (folder / "connections").mkdir()
+        (folder / "connections/new.env").write_text("TOKEN=new")
+        (folder / "console-token").write_text("same")
+        (board.home() / "connections").mkdir()
+        (board.home() / "connections/old.env").write_text("TOKEN=old")
+        (board.home() / "console-token").write_text("same")
+        board.secrets()
+        self.assertEqual((folder / "connections/new.env").read_text(), "TOKEN=new")
+        self.assertEqual((folder / "connections/old.env").read_text(), "TOKEN=old")
+        self.assertFalse((board.home() / "connections").exists())
+        self.assertFalse((board.home() / "console-token").exists())
+        (board.home() / "console-token").write_text("different")
+        with self.assertRaisesRegex(RuntimeError, "Different secrets exist"):
+            board.secrets()
+        self.assertEqual((folder / "console-token").read_text(), "same")
+        self.assertEqual((board.home() / "console-token").read_text(), "different")
+
+
 class MigrateTest(BoardBase):
     """R127: colony migrate packs colony's home, the projects on the board and its shelf, their conversations and the
     program into one archive, leaving out sign-ins, keys and what the new machine makes again; unpacked under the same
@@ -10287,6 +10433,31 @@ class MigrateTest(BoardBase):
         self.assertIn("look like keys", said)
         self.assertTrue((self.disk / "colony.pyz").is_file())
         self.assertIn(f"python3 {self.disk / 'colony.pyz'} migrate --unpack {archive}", said)
+
+    def test_secrets_in_their_new_folder_are_listed_and_never_packed(self):
+        current = board.secrets()
+        disk = self.disk
+        # Cover the sibling folder, and an override inside a packed project: both use the same exclusion list.
+        for folder in (current, self.alpha / "private"):
+            with self.subTest(folder=folder):
+                if folder != current:
+                    shutil.move(str(current), str(folder))
+                self.disk = disk / folder.name
+                with patch.dict(os.environ, COLONY_SECRETS_HOME=str(folder)):
+                    archive, said = self.pack()
+                    with self.migrate._Reading(archive) as reader:
+                        content = b"".join(reader.tar.extractfile(m).read() for m in reader.members() if m.isfile())
+                        reader.whole = True
+                    for value in self.SECRETS.values():
+                        self.assertNotIn(value.split("=")[-1].encode(), content)
+                    note = json.loads(next(self.disk.glob("*.manifest.json")).read_text())
+                    listed = {r["path"] for r in note["left_out"]["sign_ins_and_keys"]}
+                    for name in board.SECRET_PATHS:
+                        self.assertIn(str(folder / name), listed)
+                        self.assertIn("~/" + str((folder / name).relative_to(self.k)), said)
+                    self.assertEqual(note["machine"]["connection_keys"], ["ebay", "gmail"])
+                    self.assertTrue(note["machine"]["claude_token"])
+                    self.assertTrue(note["machine"]["aa_key"])
 
     def test_the_manifest_lists_what_was_left_out(self):
         archive, _ = self.pack()
@@ -10456,12 +10627,14 @@ class MigrateTest(BoardBase):
         self.assertIn("colony board", said)
 
     def test_the_command_lists_without_writing(self):
+        before = self.snapshot([self.k])
         listed = subprocess.run([sys.executable, "-m", "colony", "migrate", "--list"], cwd=self.k, capture_output=True,
                                 text=True, env=dict(os.environ, PYTHONPATH=str(ROOT)))
         self.assertEqual(listed.returncode, 0, listed.stderr)
         self.assertIn("alpha", listed.stdout)
         self.assertIn("Never packed", listed.stdout)
         self.assertFalse(self.disk.exists())
+        self.assertEqual(self.snapshot([self.k]), before)
 
     def test_an_idle_running_board_still_warns_before_a_drive_wipe_copy(self):
         with patch.object(self.migrate, "_board_running", return_value=True), \

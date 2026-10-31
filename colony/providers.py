@@ -683,8 +683,8 @@ class ClaudeCode(Provider):
 
     @staticmethod
     def token_path():
-        from .board import home
-        return home() / "claude-token"
+        from .board import secrets
+        return secrets() / "claude-token"
 
     def token(self):
         try:
