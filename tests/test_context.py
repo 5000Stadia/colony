@@ -585,3 +585,121 @@ class ContextTest(unittest.TestCase):
         self.assertTrue(context.carry_reply(self.root, 'codex', payload))
         row = board.read(self.root, 'context-history.jsonl')[-1]
         self.assertEqual((row['status'], row['reason']), ('deferred', 'Carry-over was empty or too large (3,001 bytes).'))
+
+
+class WaitingTest(unittest.TestCase):
+    """R137: a check before each shell command turns back a sleep-and-check, for both programs."""
+    TURNED_BACK = ["sleep 30", "sleep 5s", "sleep 1m", "sleep 7.5", "sleep 1 2 3", "sleep infinity",
+                   "while ! test -f x; do sleep 10; done", "sleep 60 && tail -5 out.log",
+                   "until curl -s localhost:8790/healthz; do sleep 1; done", "for i in 1 2 3; do sleep 1; ls; done",
+                   "(sleep 10; ls)", "x=$(sleep 6; date)", "cd x &&\nsleep 20\ncat log"]
+    LET_THROUGH = ["sleep 3; curl -s http://127.0.0.1:8790/healthz", "sleep 2; pgrep -af colony", "sleep 2; curl -s x",
+                   "cd x && sleep 4.9", "for f in *.log; do echo $f; done; sleep 2", "echo sleep 30",
+                   "grep -n 'sleep 30' f", "sleep 30 &", "sleep $N", "python3 -c 'import time; time.sleep(30)'",
+                   "cat > f <<EOF\nsleep 30\nEOF\nls", "git status", ""]
+
+    def payload(self, program, command, **extra):
+        tool = "Bash" if program == "claude" else "exec_command"
+        return {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_use_id": "t1", "session_id": "s",
+                "tool_input": dict(command=command, **extra)}
+
+    def run_hook(self, program, raw):
+        import io
+        from colony import waiting
+        out = io.StringIO()
+        self.assertEqual(waiting.hook(program, io.StringIO(raw), out), 0)
+        return out.getvalue().strip()
+
+    def test_each_program_turns_back_sleep_and_check_and_lets_the_rest_through(self):
+        from colony import providers
+        for program in ("claude", "codex"):
+            p = providers.get(program)
+            for command in self.TURNED_BACK:
+                with self.subTest(program=program, command=command):
+                    said = json.loads(self.run_hook(program, json.dumps(self.payload(program, command))))
+                    out = said["hookSpecificOutput"]
+                    self.assertEqual((out["hookEventName"], out["permissionDecision"]), ("PreToolUse", "deny"))
+                    self.assertEqual(out["permissionDecisionReason"], p.WAIT_FREE)
+            for command in self.LET_THROUGH:
+                with self.subTest(program=program, command=command):
+                    said = self.run_hook(program, json.dumps(self.payload(program, command)))
+                    self.assertEqual(said, "{}" if program == "codex" else "")
+        self.assertIn("run_in_background", providers.get("claude").WAIT_FREE)
+        self.assertIn("Monitor", providers.get("claude").WAIT_FREE)
+        self.assertIn("wait_agent", providers.get("codex").WAIT_FREE)
+        # Codex reports its shell as Bash too, and may send its arguments as a JSON string
+        codex = dict(self.payload("codex", "sleep 30"), tool_name="Bash")
+        self.assertIn("deny", self.run_hook("codex", json.dumps(codex)))
+        codex["tool_input"] = json.dumps({"command": "sleep 30"})
+        self.assertIn("deny", self.run_hook("codex", json.dumps(codex)))
+
+    def test_already_in_the_background_goes_through(self):
+        said = self.run_hook("claude", json.dumps(self.payload("claude", "sleep 60 && tail out.log", run_in_background=True)))
+        self.assertEqual(said, "")
+
+    def test_any_doubt_lets_the_command_through(self):
+        for program, allowed in (("claude", ""), ("codex", "{}")):
+            for raw in ("", "not json", "[1, 2]", "null", json.dumps({"tool_name": "Bash"}),
+                        json.dumps({"tool_name": "Bash", "tool_input": "{broken"}),
+                        json.dumps({"tool_name": "Bash", "tool_input": {"command": 30}}),
+                        json.dumps({"tool_name": "Read", "tool_input": {"command": "sleep 30"}}),
+                        json.dumps({"tool_name": "Monitor", "tool_input": {"command": "sleep 30"}})):
+                with self.subTest(program=program, raw=raw):
+                    self.assertEqual(self.run_hook(program, raw), allowed)
+        self.assertEqual(self.run_hook("someone", json.dumps(self.payload("claude", "sleep 30"))), "")
+        self.assertEqual(self.run_hook(None, json.dumps(self.payload("claude", "sleep 30"))), "")
+
+    def test_the_installed_command_answers_through_the_cli(self):
+        import subprocess, sys
+        from colony import providers
+        for program in ("claude", "codex"):
+            matcher, command = providers.get(program).tool_hooks["PreToolUse"]
+            self.assertEqual(matcher, "Bash")
+            args = [sys.executable, "-m", "colony"] + command.split()[1:]
+            ran = subprocess.run(args, input=json.dumps(self.payload(program, "sleep 60 && tail -5 out.log")),
+                                 capture_output=True, text=True, cwd=Path(__file__).parent.parent, timeout=30)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertEqual(json.loads(ran.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+            ran = subprocess.run(args, input="garbage", capture_output=True, text=True,
+                                 cwd=Path(__file__).parent.parent, timeout=30)
+            self.assertEqual((ran.returncode, ran.stdout.strip()), (0, "{}" if program == "codex" else ""))
+
+    def test_claude_settings_get_the_hook_and_lose_it_with_colonys_others(self):
+        from colony import providers
+        claude = providers.get("claude")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            settings = root / ".claude" / "settings.json"
+            settings.parent.mkdir()
+            mine = {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo mine"}]}
+            settings.write_text(json.dumps({"hooks": {"PreToolUse": [mine]}}))
+            claude.wire(root, "")
+            claude.wire(root, "")                            # again: nothing added twice
+            entries = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+            ours = {"matcher": "Bash", "hooks": [{"type": "command", "command": "colony context --hook wait --console claude"}]}
+            self.assertEqual(entries, [mine, ours])
+            claude._unhook(settings)
+            self.assertEqual(json.loads(settings.read_text())["hooks"], {"PreToolUse": [mine]})
+
+    def test_codex_gets_the_hook_at_launch_and_in_app_access(self):
+        import shlex, tomllib
+        from colony import codex_remote, bench, providers
+        codex = providers.get("codex")
+        ours = {"matcher": "Bash", "hooks": [{"type": "command", "command": "colony context --hook wait --console codex"}]}
+        self.assertIn(ours, providers.hook_entries(codex)["PreToolUse"])
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder), \
+                patch.object(bench, "effective", return_value={}):
+            root = Path(folder) / "project"
+            root.mkdir()
+            board.save_registry({"roots": [], "settings": {"messaging": False}})
+            args = shlex.split(codex.command("plants", {}))
+            hooks = {}
+            for i, arg in enumerate(args[:-1]):
+                if arg == "-c" and args[i + 1].startswith("hooks."):
+                    hooks.update(tomllib.loads(args[i + 1])["hooks"])
+            self.assertIn(ours, hooks["PreToolUse"])
+            config = codex_remote.overrides(root, codex_remote.home_for(root), {"permissions": "ask"})
+            pre = config["hooks.PreToolUse"]
+            self.assertIn(ours, pre)
+            self.assertTrue(any(e.get("matcher") == ".*request_user_input.*" for e in pre),
+                            "the question hook stays beside it")

@@ -2123,6 +2123,11 @@ def cmd_turbo(a):
 
 
 def main(argv=None):
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args[:3] == ["context", "--hook", "wait"]:
+        # before every shell command of every agent: answered before the parser is even built (colony/waiting.py)
+        from . import waiting
+        return waiting.hook(args[4] if args[3:4] == ["--console"] and len(args) > 4 else None)
     ap = argparse.ArgumentParser(prog="colony", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("track"); p.add_argument("path", nargs="?", default=".")

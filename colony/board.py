@@ -141,6 +141,8 @@ steer all of them from one board, and the projects can write to each other.
   one, `colony rule --retire ID "why"`.
 - To check back on something later, `colony wake --in 2h "what to check"` (or `--at HH:MM`, `--every 1d`), never a
   sleeping process or cron: it comes as a note when you're idle in the person's hours (`--list`, `--cancel ID`).
+  Waiting on your own work costs nothing when it wakes you (a background command's notice, a helper finishing);
+  each sleep-and-check re-reads your whole conversation.
 - A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
   `--default "what stands if they skip it"`); where it has clear answers, `--option "..."` for each and `--recommended "..."` for
   yours: they answer with a tap. The answer arrives as a note. A question whose moment is later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`. An open gate stays on their list.

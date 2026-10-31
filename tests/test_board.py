@@ -2665,7 +2665,7 @@ class GlanceTest(BoardBase):
     def test_codex_fresh_and_resumed_commands_supply_guarded_synchronous_hooks(self):
         for resume in (None, "saved-conversation"):
             hooks = self.codex_launch_hooks(resume)
-            self.assertEqual(set(hooks), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact"})
+            self.assertEqual(set(hooks), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact", "PreToolUse"})
             for event, groups in hooks.items():
                 self.assertEqual(groups, providers.hook_entries(providers.get("codex"))[event])
 
@@ -2759,7 +2759,7 @@ class GlanceTest(BoardBase):
         self.assertTrue(codex.wired(worktree))
         self.assertFalse((worktree / ".codex" / "hooks.json").exists(), "launch configuration does not need a file hook")
         self.assertEqual(main_hooks.read_bytes(), before)
-        self.assertEqual(set(self.codex_launch_hooks()), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact"})
+        self.assertEqual(set(self.codex_launch_hooks()), {"SessionStart", "UserPromptSubmit", "Stop", "PreCompact", "PreToolUse"})
 
     def test_a_scratch_session_inheriting_the_console_cannot_claim_its_project(self):
         from colony import context

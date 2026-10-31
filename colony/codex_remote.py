@@ -437,7 +437,8 @@ def overrides(root, home, settings):
         config['hooks.' + event] = entries
     hook = shlex.join(providers.own_module('colony.codex_remote') + ['hook'])
     for event in ('PreToolUse', 'PostToolUse'):
-        config['hooks.' + event] = [{'matcher': '.*request_user_input.*', 'hooks': [{'type': 'command', 'command': hook}]}]
+        config['hooks.' + event] = config.get('hooks.' + event, []) + [
+            {'matcher': '.*request_user_input.*', 'hooks': [{'type': 'command', 'command': hook}]}]
     tiers = bench.effective(project)
     # Immutable helper generations: preparing a pending launch cannot change the
     # overlays still used by an active app turn.

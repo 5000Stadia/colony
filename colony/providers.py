@@ -232,6 +232,10 @@ class Provider:
     models, efforts = (), ()           # suggestions, any value can be typed: models as (id, name) pairs
     aliases, efforts_for = {}, {}      # names it takes for models; the efforts a model takes, where they differ
     reports_cost = True                # whether consult() reports dollars, not only tokens
+    # Waiting costs nothing (colony/waiting.py): a check before each shell command, keyed by event, as (matcher,
+    # command); the tool names that run a shell command, the field saying it already runs in the background, what
+    # the agent is told instead of sleeping, and whether its hooks answer in JSON even when they let a call through.
+    tool_hooks, SHELL_TOOLS, SHELL_BACKGROUND, WAIT_FREE, HOOK_NEEDS_JSON = {}, (), None, "", False
 
     def command(self, label, s, resume=None, root=None):
         """The shell command that starts its interactive agent in tmux with the settings in `s`: provider, model,
@@ -605,6 +609,13 @@ class ClaudeCode(Provider):
     app, reach = "the Claude app", "Remote Control"
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
              "Stop": "colony turn", "PreCompact": "colony context --hook before --console claude"}
+    # PROVIDER: Claude Code's shell tool is Bash; run_in_background runs it without blocking, and its notice wakes the
+    # agent when it finishes.
+    tool_hooks = {"PreToolUse": ("Bash", "colony context --hook wait --console claude")}
+    SHELL_TOOLS, SHELL_BACKGROUND = ("Bash",), "run_in_background"
+    WAIT_FREE = ("colony: this waits by sleeping, and each check re-reads your whole conversation. Run it with "
+                 "run_in_background and end your turn: you're woken when it finishes. For a condition, use the Monitor "
+                 "tool; helpers wake you when they finish. (A pause under 5 s goes through.)")
 
     def gather(self, root, dest):
         """PROVIDER: Claude Code follows directory links at its path-derived project keys."""
@@ -1909,6 +1920,14 @@ class Codex(Provider):
              "UserPromptSubmit": "colony notes --deliver --console codex",
              "Stop": "colony turn --console codex && printf '{}\\n'",
              "PreCompact": "colony context --hook before --console codex"}  # Stop requires JSON output
+    # PROVIDER: Codex matches its shell and unified exec (exec_command) as Bash, the command at tool_input.command
+    # (learn.chatgpt.com/docs/hooks), nested calls from code mode too. Its clock sleep is left alone: one wait that
+    # already ends on new input, not a loop of checks, and the only way it has to wait on time itself.
+    tool_hooks = {"PreToolUse": ("Bash", "colony context --hook wait --console codex")}
+    SHELL_TOOLS, HOOK_NEEDS_JSON = ("Bash", "exec_command", "shell", "shell_command", "local_shell"), True
+    WAIT_FREE = ("colony: this waits by sleeping, and each check re-reads your whole conversation. Start the command "
+                 "and wait on its running cell, or use wait_agent for helpers: both wake you for free. (A pause under "
+                 "5 s goes through.)")
     # colony's permission choices, in Codex's terms
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
@@ -2727,4 +2746,6 @@ def hook_entries(provider):
         if key(provider) == 'codex':
             hook['additionalContextLimit'] = 12_000
         result[event].insert(0, dict(hooks=[hook]))
+    for event, (matcher, command) in provider.tool_hooks.items():
+        result.setdefault(event, []).append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
     return result
