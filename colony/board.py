@@ -2920,6 +2920,9 @@ PLAYER = """
   // words and how far it got; S: the session it is in, what Play or a row asked for and what Auto took up as it landed;
   // back: the line's reading a ▷ under a reply stepped in front of, taken up again after it.
   let N = null, S = null, back = null, playing = false, paused = false, loading = false, via = '', view = null, now = null;
+  // a History tap plays from that reply on to the newest heard (R133, the person: "click to hear from a history item
+  // ONWARD to current"): what of that run is left, and how long it was
+  let rerun = null;
   let startingSound = null;                      // a prepared part, including one whose page or voice is still loading
   let resumeAfterWriting = null;                 // an explicit Play while the box still holds the voice
   let why = null, stopAt = 0, letGo = null, unlocked = false, said = null, saidAt = 0, sent = -1, hidAt = 0;
@@ -3222,6 +3225,9 @@ PLAYER = """
     startingSound = null; resumeAfterWriting = null; byVoice = false;
     follow(null); bridge(); playing = false; paused = false; why = null; now = null; N = null;
     if (waiting) { save(); return changed(); }
+    // a History run goes on to its next reply; after its last, the reading it stepped in front of
+    if (rerun && rerun.rest.length && !wasDocument) { const r = rerun.rest.shift(); save(); again(r.x, r.info, rerun, true); return; }
+    rerun = null;
     if (back) { const b = back; back = null; N = b.N; via = b.via || '';
       N.resumeTime = b.offset || 0;
       if (b.sounding && !heldDocument && (!b.auto || (aloud() && !autoPaused()))) { N.resuming = true; return begin(N.j, N.piece); }
@@ -3524,7 +3530,7 @@ PLAYER = """
     + "<div class='cpvoice' hidden><label class='cpline'>Voice of <select class='cpwhom'></select></label>"
     + "<label class='cpline'>Voice <select class='cpkvoice'></select></label>"
     + "<label class='cpline'>Names said in <select class='cpherald'></select></label></div></div>"
-    + "<div class='cpheard' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>History</div><p>Recent replies played, read or skipped.</p><ol class='cprows cpheardrows'></ol></div></div>";
+    + "<div class='cpheard' hidden><button type='button' class='cpback'>‹ The line</button><div class='cplbl'>History</div><p>Recent replies played, read or skipped. Tap one to hear from there to the newest.</p><ol class='cprows cpheardrows'></ol></div></div>";
   const $ = (s) => bar.querySelector(s), pill = $('.cppill'), sheet = $('.cpsheet'), shade = $('.cpshade'), rows = $('.cpmain .cprows');
   const MODESAY = {both: "Read aloud; while you are in Chat, follow the reply after your interaction pause", audio: 'Read aloud; the page stays where you are',
     text: 'No sound; while you are in Chat, follow each reply, and ⏭ goes on'};
@@ -3578,7 +3584,8 @@ PLAYER = """
     const u = get('lineundo'), live = !!(u && Date.now() - u.at < 600e3);
     $('.cpundo').hidden = !live; if (live) $('.cpundo span').textContent = 'Cleared ' + u.n + (u.n === 1 ? ' reply' : ' replies');
   }
-  const place = () => { if (!S || !N || N.tapped || !S.begun.has(N.id)) return '';
+  const place = () => { if (N && N.seat === 'heard' && rerun) return ' · ' + (rerun.total - rerun.rest.length) + ' of ' + rerun.total;
+    if (!S || !N || N.tapped || !S.begun.has(N.id)) return '';
     const left = visible().filter((x) => S.want.has(id(x)) && !S.begun.has(id(x))).length;
     return ' · ' + S.begun.size + ' of ' + (S.begun.size + left); };
   function drawTextFollow() {
@@ -3652,7 +3659,7 @@ PLAYER = """
   function playFrom(xs, i) {
     if (!xs[i]) return;
     cancelDocument(); cancelClips();
-    opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null; byVoice = false;
+    opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null; byVoice = false; rerun = null;
     S = session(); xs.slice(i).forEach((x) => { S.want.add(id(x)); S.play.add(id(x)); });
     back = null; said = null; shutSheet();
     if (N) { follow(null); hush(true); playing = false; paused = false; N = null; }
@@ -3678,11 +3685,12 @@ PLAYER = """
     if (r && r.ok) u.keys.forEach((k) => marked.delete(k));
     tag = ''; drawnSheet = ''; look();
   }
-  // History: the last twenty heard, seen or skipped replies, oldest at the top, opening at the newest below.
+  // History: the last twenty heard, seen or skipped replies, oldest at the top, opening at the newest below; a tap
+  // plays from that reply down to the newest.
   async function heardList() {
     const got = await fetched('/chat/line?heard=20', 'json'), list = $('.cpheardrows');
     const items = ((got && got.heard) || []).slice().reverse();
-    list.replaceChildren(...items.map((x) => { const info = got.projects[x.p] || {}, li = row(x, info); on(li, 'click', () => again(x, info)); return li; }));
+    list.replaceChildren(...items.map((x, i) => { const li = row(x, got.projects[x.p] || {}); on(li, 'click', () => againFrom(items, i, got.projects)); return li; }));
     if (!items.length) { const li = document.createElement('li'); li.className = 'cpnone'; li.textContent = 'No replies in history yet.'; list.append(li); }
     if (!sheet.hidden && !$('.cpheard').hidden) { list.scrollTop = list.scrollHeight; sheet.scrollTop = sheet.scrollHeight; }
   }
@@ -3690,7 +3698,16 @@ PLAYER = """
   const stepIn = (document = false) => { cancelDocument(); cancelClips(); opening += 1; opened = ''; replaying = null; startingSound = null; resumeAfterWriting = null;
     if (N && !N.document && (!N.tapped || document)) back = {N, sounding: playing && !paused, via, why, auto: N.seat === 'auto', offset: N.kokoro && now && now.s === N.blocks[N.j] ? player.currentTime : 0}; follow(null);
     if (N) { hush(true); playing = false; paused = false; } };
-  async function again(x, info) {
+  // History's run: the reply tapped, then each heard after it in History's order, to the newest
+  function againFrom(xs, i, projects) {
+    if (!xs[i]) return;
+    const rest = xs.slice(i + 1).map((x) => ({x, info: projects[x.p] || {}}));
+    return again(xs[i], projects[xs[i].p] || {}, rest.length ? {total: rest.length + 1, rest} : null);
+  }
+  // one heard reply played again: the first of a run (or one alone) as the person's own choice, the page going to it;
+  // the rest of a run follow as Auto's do, where the page is free to
+  async function again(x, info, run = null, chained = false) {
+    rerun = run;
     shutSheet(); takeUp(); prime();
     const pending = replaying = {opening: ++opening, pause: null, explicitAt: readingFollow.version()}; opened = id(x);
     const got = await fetched('/chat/text?p=' + encodeURIComponent(x.p) + '&t=' + encodeURIComponent(x.t), 'json');
@@ -3699,7 +3716,7 @@ PLAYER = """
     const bs = (got && got.blocks) || []; if (!bs.length) { if (!N) replyDone(); return; }
     stepIn();
     N = {id: id(x), p: x.p, t: x.t, name: info.name || '', href: info.href || '', kvoice: info.voice || 'am_echo', kokoro: !!L.ready,
-      blocks: bs, j: 0, piece: 0, explicitFollow: true, explicitAt: pending.explicitAt, tapped: true, say: true, seat: 'heard'};
+      blocks: bs, j: 0, piece: 0, explicitFollow: !chained, explicitAt: pending.explicitAt, tapped: true, say: true, seat: 'heard'};
     via = '';
     if (pending.pause) { playing = false; paused = true; why = pending.pause; save(); return changed(); }
     begin(0, 0);
@@ -3707,7 +3724,7 @@ PLAYER = """
   async function readDocument(url) {
     const u = new URL(url, location.href);
     if (u.origin !== new URL(location.href).origin || u.pathname !== '/open' || u.searchParams.get('audio') !== '1') return false;
-    prime(); stepIn(true); hush(true); bridge();
+    rerun = null; prime(); stepIn(true); hush(true); bridge();
     const mine = opening, controller = new AbortController(); documentRequest = controller;
     N = {id: 'document:' + mine, p: u.searchParams.get('p'), name: 'Document', document: true, pending: true,
       tapped: true, sections: [], blocks: [], j: 0, piece: 0};
@@ -3867,7 +3884,7 @@ PLAYER = """
     if (!allowing) allowing = new Promise((ok) => { player.src = SILENT;
       player.play().then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
     allowing.then(() => { allowing = null; go(); }); };
-  const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: {...current, explicitFollow: false}, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]},
+  const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: {...current, explicitFollow: false}, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]}, rerun,
     sounding: N && N.document ? !!(back && back.sounding) : playing && !paused, saved: Date.now()} : null); };
   const P = window.colonyPlayer = {
     document: readDocument, documentSection, canFollow, returnToReading, sentence: currentSentence, autoPaused, setAutoPaused,
@@ -3890,7 +3907,7 @@ PLAYER = """
     // ▷ under a reply in Chat: that reply alone, from the page's own words (the person: "sometimes the last message is
     // all I want to hear"); a line's reading it steps in front of goes on after it, and one heard before writes nothing
     read(v, secs) { if (!secs.length) return;
-      prime(); stepIn();
+      rerun = null; prime(); stepIn();
       N = {id: v.key + '|' + secs[0].t, p: String(v.key), t: secs[0].t, name: v.name, href: v.href, kvoice: v.kvoice, kokoro: v.kokoro,
         blocks: secs.map((x) => ({k: x.k, at: x.at, text: x.text})), j: 0, piece: 0, explicitFollow: true, explicitAt: readingFollow.version(), tapped: true, seat: 'chat'};
       via = ''; begin(0, 0); },
@@ -4022,6 +4039,7 @@ PLAYER = """
   try { const was = get('linenow');
     if (was && was.N && Array.isArray(was.N.blocks) && Date.now() - (was.saved || 0) < 12 * 3600e3) { N = was.N;
       if (was.S) S = {want: new Set(was.S.want), play: new Set(was.S.play), auto: new Map(was.S.auto), begun: new Set(was.S.begun)};
+      if (was.rerun && Array.isArray(was.rerun.rest) && N.seat === 'heard') rerun = was.rerun;
       // sounding a moment ago with Auto on (the page refreshed mid-reading): it goes on from the piece it was at, at the
       // first touch where a phone lets a page sound only after one
       if (was.sounding && aloud() && Date.now() - was.saved < 90e3) { const restored = N, mine = opening;

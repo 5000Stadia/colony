@@ -8346,7 +8346,7 @@ class PlayerWritingTest(unittest.TestCase):
         result = subprocess.run([node, str(ROOT / "tests" / "player_writing.js")],
                                 input=board.player_js(), text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 178, result.stdout)
+        self.assertEqual(result.stdout.count("PASS "), 190, result.stdout)
 
 
 class DocumentAudioTest(BoardBase):

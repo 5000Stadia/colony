@@ -33,6 +33,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
     arrivals, start, begin, done, hold, skip, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
     autoPaused: () => autoPaused(), setAutoPaused: yes => setAutoPaused(yes),
     replay(x) { return again(x, L.projects[x.p] || {}); },
+    replayFrom(xs, i) { return againFrom(xs, i, L.projects); },
     read(t) { direct.read({key: '0', name: 'Plants', href: '/plants', kokoro: L.ready}, [{t, k: t, text: t + ' reply. All done.'}]); },
     voice(v) { N.kvoice = v; anew(true); },
     assignedVoice(name, v, key) { voicing.setVoice(name, v, key); },
@@ -815,6 +816,42 @@ const cases = {
     assert.equal(b.api.state().t, null); assert.equal(b.api.target().k, 'A'); const sound = b.sounds.length;
     await b.api.returning(); assert.equal(b.sounds.length, sound); assert.equal(b.api.target().k, 'A');
     next.resolve(); await flush(); assert.equal(b.api.state().t, 'B'); assert.equal(b.api.target().k, 'B');
+  },
+
+  async 'History plays from the tapped reply on to the newest, then the reading it stepped in front of'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); assert.equal(b.api.state().t, 'A');
+    await b.api.replayFrom([b.row('h1'), b.row('h2'), b.row('h3')], 1); await flush();
+    assert.equal(b.api.state().t, 'h2', 'the run starts at the reply tapped, not the oldest'); assert.equal(b.api.state().back, 'A');
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, 'h3', 'on to the next heard reply');
+    b.api.skip(); await flush(); assert.equal(b.api.state().t, 'A', 'after the newest, the line reading it stepped in front of');
+    assert.equal(b.marks.length, 0, 'playing History again marks nothing');
+  },
+  async 'the newest History reply tapped plays alone'(b) {
+    await b.line([]); await b.api.replayFrom([b.row('h1'), b.row('h2')], 1); await flush();
+    assert.equal(b.api.state().t, 'h2'); b.api.done(0); await flush(); assert.equal(b.api.state().t, null);
+  },
+  async 'a History run whose next words cannot be had goes on to the one after'(b) {
+    await b.line([]); const missing = b.replayText('h2');
+    await b.api.replayFrom([b.row('h1'), b.row('h2'), b.row('h3')], 0); await flush();
+    b.api.done(0); await flush(); missing.resolve([]); await flush();
+    assert.equal(b.api.state().t, 'h3');
+  },
+  async 'only the tapped History reply is an explicit page jump; the rest follow as Auto does'(b) {
+    await b.line([]); b.storage.set('automode', 'both');
+    await b.api.replayFrom([b.row('h1'), b.row('h2')], 0); await flush();
+    assert.equal(b.navigations.at(-1).how.automatic, false);
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, 'h2');
+    assert.equal(b.navigations.at(-1).how.automatic, true);
+  },
+  async 'a reply tapped in Chat ends a History run'(b) {
+    await b.line([]); await b.api.replayFrom([b.row('h1'), b.row('h2')], 0); await flush();
+    assert.equal(b.api.state().t, 'h1'); b.api.read('B'); await flush(); assert.equal(b.api.state().t, 'B');
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, null, 'the run does not go on after a reply tapped in Chat');
+  },
+  async 'Play in the line ends a History run'(b) {
+    const xs = await b.line(['A']); await b.api.replayFrom([b.row('h1'), b.row('h2')], 0); await flush();
+    assert.equal(b.api.state().t, 'h1'); b.api.play(xs, 0); await flush(); assert.equal(b.api.state().t, 'A');
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, null, 'the line plays, not the rest of the run');
   },
 
 };
