@@ -45,11 +45,14 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
     clearOnly(ts) { clearOnly = ts; },
     line(xs, kokoro, cache = true) {
       L = {line: xs, projects: {'0': {name: 'Plants', href: '/plants', voice: 'am_echo'}}, ready: kokoro, total: xs.length};
-      armed = Date.now() - 1000; unlocked = true; said = 'Plants'; saidAt = Date.now();
+      armed = Date.now() - 1000; unlocked = true; playerFree = true; said = 'Plants'; saidAt = Date.now();
       S = session(); xs.forEach(x => { S.want.add(id(x)); S.play.add(id(x)); });
       if (cache) xs.forEach(x => words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))));
     },
     state: () => ({document: N && N.document, pending: N && N.pending, voice: N && N.kvoice, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, armed, waiting: visible().length, letGo: letGo && letGo.why}),
+    // the silent element and what the pill reads from (aloud and not able: "Auto · tap to resume")
+    hear: () => ({silence: !hum.paused, able: able(), letGo: letGo && letGo.why, resting: !!resting, story: story.map(x => x[1] + ': ' + x[2])}),
+    SILENT,
   };
 })();`;
 
@@ -82,7 +85,7 @@ function browser(kokoro, restore = '') {
   const clearTimeout = id => timers.delete(id);
   class Audio extends Events {
     get src() { return this._src; }
-    set src(value) { this._src = value; this.currentTime = 0; }
+    set src(value) { this._src = value; this.currentTime = 0; (this.srcs ||= []).push(value); }
     constructor() { super(); audios.push(this); this.src = ''; this.paused = true; this.ended = false; this.loop = false; }
     play() {
       this.paused = false;
@@ -90,7 +93,7 @@ function browser(kokoro, restore = '') {
       this.emit('playing');
       return Promise.resolve();
     }
-    pause() { this.paused = true; this.emit('pause'); }
+    pause() { this.paused = true; this.pauses = (this.pauses || 0) + 1; this.emit('pause'); }
   }
   const speech = new Events();
   Object.assign(speech, {
@@ -137,7 +140,7 @@ function browser(kokoro, restore = '') {
   vm.runInContext(program, context);
   const api = window.testPlayer;
   const row = t => ({p: '0', t, b: [[t, new Date(time).toISOString()]]});
-  return {api, kokoro, sounds, resumed, box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
+  return {api, kokoro, sounds, resumed, player: () => audios[0], hum: () => audios[1], box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
     offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
     captureEnd() { return kokoro ? audios[0].onended : speech.last.onend; },
     voiceRequest(text) { const d = deferred(); requests.set('voice:' + text, d); return d; },
@@ -852,6 +855,102 @@ const cases = {
     const xs = await b.line(['A']); await b.api.replayFrom([b.row('h1'), b.row('h2')], 0); await flush();
     assert.equal(b.api.state().t, 'h1'); b.api.play(xs, 0); await flush(); assert.equal(b.api.state().t, 'A');
     b.api.done(0); await flush(); assert.equal(b.api.state().t, null, 'the line plays, not the rest of the run');
+  },
+
+  // Way G of /lab/lockplay (12 of 12 clips on the person's locked iPhone): a second element loops SILENT from the tap
+  // that starts listening until listening ends; the player plays the replies' clips alone.
+  async 'the silent element starts with Auto and keeps going between replies while Auto waits'(b) {
+    await b.line([]); const hum = b.hum(), player = b.player();
+    assert.equal(b.api.hear().silence, false, 'nothing before listening starts');
+    b.api.auto(true); await flush();
+    // Auto waits in silence where the voice runs on the machine; without it, as before, only a reading keeps one
+    assert.equal(b.api.hear().silence, b.kokoro, 'Auto on starts it within its tap');
+    b.api.append(b.row('A')); b.api.arrivals(); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.hear().silence, true, 'a reading keeps it going');
+    const pauses = hum.pauses || 0;
+    await b.end(); assert.equal(b.api.state().t, null, 'A heard, Auto waiting for the next');
+    if (b.kokoro) {
+      await b.advance(20000);
+      assert.equal(b.api.hear().silence, true, 'still going twenty seconds into the wait');
+      b.api.append(b.row('B')); b.api.arrivals(); await flush();
+      assert.equal(b.api.state().t, 'B', 'the next reply read as it lands'); assert.equal(b.api.hear().silence, true);
+      assert.equal(hum.pauses || 0, pauses, 'never paused from the first reply through the wait to the next');
+    }
+    assert(!player.srcs.includes(b.api.SILENT), 'the player is never given the silence'); assert.equal(player.loop, false);
+  },
+  async 'the silent element holds the gap between two replies a Play started, and stops when the reading does'(b) {
+    const xs = await b.line(['A', 'B'], false); b.api.auto(false); await flush();
+    const hum = b.hum(), player = b.player(), next = b.text('B');
+    b.api.play(xs, 0); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.hear().silence, true, 'Play starts it within its tap, Auto off');
+    const pauses = hum.pauses || 0;
+    for (let n = 0; n < 3 && b.api.state().t === 'A'; n++) await b.end();   // Play names the project first: a clip of its own
+    assert.equal(b.api.state().t, null); assert.equal(b.api.state().opened, '0|B', 'B is opening, its words on the way');
+    await b.advance(15000);
+    assert.equal(b.api.hear().silence, true, 'a fifteen-second wait for the next reply is held in silence');
+    next.resolve(); await flush(); assert.equal(b.api.state().t, 'B');
+    assert.equal(hum.pauses || 0, pauses, 'not paused across the gap');
+    for (let n = 0; n < 3 && b.api.state().t === 'B'; n++) await b.end();
+    assert.equal(b.api.state().t, null);
+    assert.equal(b.api.hear().silence, false, 'the reading over with Auto off: the silence ends and the phone is let go');
+    assert(!player.srcs.includes(b.api.SILENT), 'the player is never given the silence'); assert.equal(player.loop, false);
+  },
+  async 'a pause or the lock screen stop pauses the silent element, and resume sets it going again'(b) {
+    const xs = await b.line(['A', 'B']), player = b.player();
+    b.api.play(xs, 0); await flush(); assert.equal(b.api.hear().silence, true);
+    b.api.hold(true, 'person'); await flush();
+    assert.equal(b.api.state().paused, true); assert.equal(b.api.hear().silence, false, '❚❚ pauses the silence too');
+    b.api.hold(false, 'person'); await flush();
+    assert.equal(b.api.state().paused, false); assert.equal(b.api.hear().silence, true, '▶ sets it going again');
+    b.api.hold(true, 'lock screen'); await flush(); assert.equal(b.api.hear().silence, false, 'the lock screen pause');
+    b.api.hold(false, 'lock screen'); await flush(); assert.equal(b.api.hear().silence, true, 'the lock screen play');
+    b.api.skip(); await flush(); assert.equal(b.api.state().t, 'B');
+    b.api.skip(); await flush(); assert.equal(b.api.state().t, null);
+    assert.equal(b.api.hear().silence, b.kokoro, 'Auto on: it waits for the next in silence');
+    if (b.kokoro) {
+      b.api.hold(true, 'person'); await flush();
+      assert.equal(b.api.hear().letGo, 'paused'); assert.equal(b.api.hear().silence, false, '❚❚ while Auto waits lets it go');
+      b.api.hold(false, 'person'); await flush();
+      assert.equal(b.api.hear().letGo, null); assert.equal(b.api.hear().silence, true, '▶ while Auto waits takes it up');
+    }
+    b.api.auto(false); await flush(); assert.equal(b.api.hear().silence, false, 'Auto off with nothing reading ends it');
+    assert(!player.srcs.includes(b.api.SILENT), 'the player is never given the silence'); assert.equal(player.loop, false);
+  },
+  async 'the phone pausing the silent element is logged and the line says tap to resume'(b) {
+    const tap = () => b.event('pointerdown', {target: {matches: () => false, closest: () => null}});
+    if (b.kokoro) {
+      await b.line([]); b.api.auto(true); await flush(); assert.equal(b.api.hear().silence, true);
+      await b.advance(5000); b.hum().pause(); await flush();        // a call, Siri, another app's audio
+      const h = b.api.hear();
+      assert.equal(h.letGo, 'phone'); assert.equal(h.able, false, 'aloud and not able: the pill says "Auto · tap to resume"');
+      assert(h.story.includes('let go: the phone stopped the silence'), h.story.join(' | '));
+      await b.advance(60000); assert.equal(b.api.hear().silence, false, 'nothing takes it up by itself');
+      await tap();
+      assert.equal(b.api.hear().letGo, null); assert.equal(b.api.hear().silence, true, 'the tap resumes it');
+      assert.equal(b.api.hear().able, true);
+      return;
+    }
+    // the phone's voice: a reading keeps the silence going; stopped by the phone, the reading goes on, and once it is
+    // over, the pill says tap to resume
+    const xs = await b.line(['A']); b.api.play(xs, 0); await flush(); assert.equal(b.api.hear().silence, true);
+    await b.advance(5000); b.hum().pause(); await flush();
+    assert.equal(b.api.hear().letGo, 'phone'); assert(b.api.hear().story.includes('let go: the phone stopped the silence'));
+    assert.equal(b.api.state().playing && !b.api.state().paused, true, 'the reading itself goes on');
+    await b.end(); assert.equal(b.api.state().t, null);
+    assert.equal(b.api.hear().able, false, 'the pill says tap to resume');
+    await tap(); assert.equal(b.api.hear().letGo, null); assert.equal(b.api.hear().able, true);
+  },
+  async 'Text only keeps no silence for Auto, a tapped reply does, and a box being written in holds it'(b) {
+    await b.line([]); b.storage.set('automode', 'text'); b.api.auto(true); await flush();
+    assert.equal(b.api.hear().silence, false, 'Text only: nothing to hear, so no silence held');
+    b.api.read('B'); await flush(); assert.equal(b.api.state().t, 'B');
+    assert.equal(b.api.hear().silence, true, 'a reply tapped is heard, and its tap starts the silence');
+    await b.end(); assert.equal(b.api.state().t, null); assert.equal(b.api.hear().silence, false);
+    b.storage.set('automode', 'audio'); b.api.read('C'); await flush(); assert.equal(b.api.hear().silence, true);
+    await b.focus(); assert.equal(b.api.state().why, 'dictation');
+    assert.equal(b.api.hear().silence, false, 'dictation takes the phone\'s sound: the silence waits');
+    await b.blur(); await b.advance(2200);
+    assert.equal(b.api.state().paused, false); assert.equal(b.api.hear().silence, true, 'after the box lets go, it goes on');
   },
 
 };
