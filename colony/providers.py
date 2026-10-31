@@ -626,8 +626,50 @@ class ClaudeCode(Provider):
                 path.symlink_to(target, target_is_directory=True)
         return dest
 
+    @classmethod
+    def settings_file(cls):
+        """Claude Code's own record of the person's choices (its sign-up, each folder's trust): .claude.json in its
+        config home when CLAUDE_CONFIG_DIR is set, else in the home folder beside .claude."""
+        home = cls.config_home()
+        return home / ".claude.json" if os.environ.get("CLAUDE_CONFIG_DIR") else home.parent / ".claude.json"
+
+    def carry_trust(self, old, new):
+        """PROVIDER: a moved folder keeps the trust the person gave it (Claude Code asks again at a path it hasn't
+        seen, "No, exit" first, and the console waits there). Only that one answer is copied to the new path; the rest
+        of the file stays as Claude Code wrote it. True when it was carried."""
+        path = self.settings_file()
+        try:
+            data = json.loads(path.read_text())
+            folders = data["projects"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        if not isinstance(folders, dict):
+            return False
+        def accepted(place):
+            entry = folders.get(str(place))
+            return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
+        # it keys a folder by its real path; trusting a folder trusts what is inside it, so the old place counts as
+        # trusted through any folder above it
+        olds = dict.fromkeys([Path(old), Path(old).resolve()])
+        key = str(Path(new).resolve())
+        if accepted(key) or not any(accepted(p) for o in olds for p in [o, *o.parents]):
+            return False
+        entry = folders.get(key)
+        folders[key] = {**(entry if isinstance(entry, dict) else {}), "hasTrustDialogAccepted": True}
+        part = path.with_name(path.name + ".colony-part")
+        part.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        os.chmod(part, path.stat().st_mode & 0o777)
+        os.replace(part, path)          # whole or not at all: a running claude reads it at any moment
+        return True
+
     def repoint_history(self, old, new):
-        """PROVIDER: keep the old Claude Code key usable by a console still appending there."""
+        """PROVIDER: keep the old Claude Code key usable by a console still appending there, and the folder's trust."""
+        pairs, said = self._repoint_conversations(old, new)
+        if str(old) != str(new) and self.carry_trust(old, new):
+            said = said + ["Claude Code's trust of the folder carried to the new place"]
+        return pairs, said
+
+    def _repoint_conversations(self, old, new):
         from .migrate import claude_key
         folder = self.config_home() / "projects"
         was, now = folder / claude_key(old), folder / claude_key(new)

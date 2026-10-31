@@ -21,6 +21,7 @@ from . import board, console
 
 WAIT = 60 * 60          # the longest a hand-over waits for work to land, as a restart does (machine.py)
 LOOK = 5                # seconds between looks
+COMING_UP = 15          # how long a moved console is watched as it comes up, for a question it puts to the person
 RESTORE_NOTICE = "This colony was restored from a copy; nothing runs by itself until you check it."
 
 
@@ -307,8 +308,23 @@ def _carry(old, new):
     shutil.move(str(old), str(trash / f"{old.name}-moved-{time.strftime('%Y%m%d-%H%M%S')}"))
 
 
+def asks(name, window=None):
+    """Whether a console just started is asking the person something (its folder's trust, its permission mode): a
+    choice on screen before its box comes up. Looked at until its box is there, it stops, or `window` seconds pass.
+    The question is left on screen for the person, or for the watcher where they let it answer start-up questions."""
+    until = time.time() + (COMING_UP if window is None else window)
+    while console.running(name):
+        if console.asking(name):
+            return True
+        if console.draft(name) is not None or time.time() >= until:
+            return False
+        time.sleep(0.25)
+    return False
+
+
 def move(root, dest, sure=False, wait=WAIT, say=print):
-    """colony move. Returns 0 when moved and resumed; 1 when it stopped short (and says why), nothing lost."""
+    """colony move. Returns 0 when moved and its console started there (resumed, or asking the person something first,
+    and it says which); 1 when it stopped short (and says why), nothing lost."""
     from . import codex_remote, migrate, providers, repoint
     root, dest = Path(root), Path(dest).expanduser()
     if dest.exists():
@@ -360,8 +376,14 @@ def move(root, dest, sure=False, wait=WAIT, say=print):
     if not was_paused:
         board.resume_project(dest)
     console.ensure(dest)
-    say(f"{board.name_of(dest)} moved to {dest}" + (f" ({'; '.join(said)})" if said else "")
-        + (". Its console resumed its conversation there." if found else
-           ". Its console started a fresh conversation." if recorded else ". Its console started there.")
+    if asks(console.session_name(dest)):
+        # not resumed yet: until the question is answered, nothing typed in Chat reaches its agent
+        then = (" Its console is asking you something in its Console tab; answer it once"
+                + (", and it carries on with its conversation." if found else
+                   ", and it starts a fresh conversation." if recorded else "."))
+    else:
+        then = (" Its console resumed its conversation there." if found else
+                " Its console started a fresh conversation." if recorded else " Its console started there.")
+    say(f"{board.name_of(dest)} moved to {dest}" + (f" ({'; '.join(said)})" if said else "") + "." + then
         + (f" Still to fix: {'; '.join(named)}." if named else ""))
     return 0
