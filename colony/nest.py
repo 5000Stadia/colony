@@ -92,6 +92,27 @@ def leave(root):
         return name
 
 
+def rename(old, new, words=""):
+    """A nest's new name: its projects, shared vision, standards and history go with it, and each project hears it."""
+    with _locked():
+        old, new, data = old.strip(), new.strip(), nests()
+        if old not in data:
+            raise ValueError(f"No nest named {old}.")
+        if not new:
+            raise ValueError("A nest needs a name.")
+        if new == old:
+            return False
+        if new in data:
+            raise ValueError(f"There is already a nest named {new}.")
+        data = {(new if k == old else k): v for k, v in data.items()}      # in place, the order of nests kept
+        data[new].setdefault("renamed", []).append({"at": board.now(), "from": old, "words": words.strip()})
+        _save(data)
+    for m in data[new].get("members", []):
+        if Path(m).is_dir():
+            board.add_note(Path(m), None, f"Your nest, {old}, is now called {new}.", author="colony", quiet=True)
+    return True
+
+
 def set_vision(name, text, words="", context=""):
     """The nest's shared vision, agreed with the person; every member hears the change, before and after."""
     with _locked():

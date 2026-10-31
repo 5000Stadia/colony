@@ -1783,6 +1783,16 @@ def cmd_close(a):
 
 def cmd_nest(a):
     from . import board, nest
+    if a.rename:
+        if not a.name:
+            raise SystemExit('colony nest NAME --rename NEW --words "the person\'s words"')
+        try:
+            done = nest.rename(a.name, a.rename, a.words or "")
+        except ValueError as e:
+            print(e)
+            return 1
+        print(f"The {a.name} nest is now {a.rename}; its projects are told" if done else f"It is already called {a.rename}")
+        return 0
     if a.vision:
         if not (a.name and a.file):
             raise SystemExit("colony nest NAME --vision --file PATH --words \"the person's words\" --context \"your reading\"")
@@ -2165,6 +2175,7 @@ def main(argv=None):
     p = sub.add_parser("nest", help="nests: projects that share a purpose, and the shared vision they serve")
     p.add_argument("name", nargs="?"); p.add_argument("projects", nargs="*", help="projects to put in it (default: this one)")
     p.add_argument("--leave", action="store_true", help="take the projects (default: this one) out of their nest")
+    p.add_argument("--rename", metavar="NEW", help="give the nest NAME a new name, as the person asked (--words their words)")
     p.add_argument("--vision", action="store_true", help="set the nest's shared vision, agreed with the person")
     p.add_argument("--file"); p.add_argument("--words"); p.add_argument("--context")
     p.add_argument("--standard", help="(steward) a standard the person stated, in their words, for this nest")

@@ -1419,6 +1419,29 @@ class ChatTest(BoardBase):
             w.stir()
         self.assertEqual(order(), ["kiln", "photonic", self.root.name, "glaze"], "kiln stirred last; the nest after it, whole")
 
+    def test_a_nest_renamed_keeps_its_projects_vision_and_standards_and_tells_them(self):
+        from colony import nest
+        other = Path(self.tmp.name) / "kiln"
+        other.mkdir()
+        board.track(self.root)
+        board.track(other)
+        nest.join(self.root, "Memory")
+        nest.join(other, "Memory")
+        nest.set_vision("Memory", "Agents that remember what matters.", "their words")
+        nest.standard("Memory", "measure before adopting", "kiln")
+        self.assertTrue(nest.rename("Memory", "Q Branch", "rename the nest Q Branch"))
+        n = nest.nests()
+        self.assertNotIn("Memory", n)
+        self.assertEqual(nest.nest_of(other), "Q Branch")
+        self.assertEqual(n["Q Branch"]["vision"], "Agents that remember what matters.")
+        self.assertEqual(n["Q Branch"]["standards"][0]["words"], "measure before adopting")
+        self.assertEqual(len(n["Q Branch"]["history"]), 1, "the vision's history goes with it")
+        self.assertEqual(n["Q Branch"]["renamed"][0]["from"], "Memory")
+        self.assertTrue(any("now called Q Branch" in x["text"] for x in board.notes(other)))
+        with self.assertRaises(ValueError):
+            nest.rename("Memory", "Other")
+        self.assertFalse(nest.rename("Q Branch", "Q Branch"))
+
     def test_a_nest_down_to_one_live_project_shows_the_project_in_the_menu(self):
         # Bookflow's nest held trial projects, since archived: opening the nest to reach its one project was a tap too many
         from colony import nest
