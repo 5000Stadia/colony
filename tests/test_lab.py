@@ -2,6 +2,7 @@
 from http.server import ThreadingHTTPServer
 import http.client
 import json
+import os
 import re
 import threading
 import time
@@ -38,11 +39,19 @@ class LockPlayTest(BoardBase):
             p.start()
             self.addCleanup(p.stop)
         lab._making.update(thread=None, error="")
+        lab._held.clear()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
         self.addCleanup(self.httpd.server_close)
         self.addCleanup(self.httpd.shutdown)
         self.port = self.httpd.server_address[1]
+
+    def tearDown(self):
+        # the base's tearDown points the board back at the real home before the stand-in voice is taken away: a maker
+        # still running then once wrote this file's stand-in clips into the person's real lab (Oct 31)
+        if lab._making["thread"]:
+            lab._making["thread"].join(30)
+        super().tearDown()
 
     def ask(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
@@ -64,7 +73,7 @@ class LockPlayTest(BoardBase):
         page = body.decode()
         for key, name, _ in lab.WAYS:
             self.assertIn(f"data-way='{key}'", page, name)
-        self.assertEqual(len(KEYS), 7, "A to F, and G: the silent loop underneath")
+        self.assertEqual(len(KEYS), 8, "A to F; G, the silent loop underneath; H, the stream fed silence")
         self.assertIn("lock the phone, and wait two minutes", page)
         self.assertIn("navigator.audioSession", page)
         self.assertIn("isTypeSupported", page)
@@ -77,7 +86,7 @@ class LockPlayTest(BoardBase):
         self.assertEqual(lab.text("B", 3).split(".")[0], "Loop trick, clip 3 of 12")
         status, _, body = self.ask("GET", "/lab/lockplay/status")
         got = json.loads(body)
-        self.assertEqual((got["made"], got["total"]), (84, 84))
+        self.assertEqual((got["made"], got["total"]), (96, 96))
         self.assertAlmostEqual(got["durations"]["D"][0], 5 * 0.024, places=3, msg="the summary frame isn't counted")
 
     def test_the_stream_sends_every_clip_back_to_back_without_tags_in_order(self):
@@ -129,7 +138,7 @@ class LockPlayTest(BoardBase):
             return dict(approach=way, run=run, clip=clip, event=event, t=f"2026-10-31T10:00:{clip:02d}Z", vis=vis, **more)
         rows = [row("A-1", "A", 0, "run start")]
         rows += [row("A-1", "A", n, "start", "hidden" if n > 1 else "visible") for n in (1, 2)]
-        rows += [row("A-1", "A", 1, "end"), row("A-1", "A", 2, "stall", "hidden"), row("A-1", "A", 2, "visibility")]
+        rows += [row("A-1", "A", 1, "end"), row("A-1", "A", 2, "stall", "hidden"), row("A-1", "A", 5, "visibility")]
         rows += [row("B-1", "B", n, "start", "hidden" if n > 1 else "visible") for n in range(1, 13)]
         rows += [row("B-1", "B", 12, "end", "hidden"), row("B-1", "B", 12, "finished", "hidden")]
         rows += [row("G-1", "G", 1, "start", main="playing", silent="playing", bytes=1000, requests=2, calls=5,
@@ -152,10 +161,28 @@ class LockPlayTest(BoardBase):
                          (2, 1, False, 1, "2026-10-31T10:00:02Z"), "stopped at its latest clip")
         self.assertEqual((b["reached"], b["hidden"], b["finished"], b["name"]), (12, 11, True, "Loop trick"))
         self.assertEqual((g["reached"], g["silent_paused"]), (2, True), "G says when its silent element was paused")
-        self.assertEqual({k: g[k] for k in lab.MEASURES}, {"bytes": 3000, "requests": 4, "calls": 9, "hidden_calls": 3,
+        self.assertEqual({k: g[k] for k in lab.MEASURES}, {"bytes": 3000, "requests": 4, "calls": 9, "hidden_calls": 3, "silence": 0,
                                                            "playing": 2}, "its cost: the most each measure reached")
         self.assertEqual((a["bytes"], a["held"]), (0, None))
         self.assertEqual([r["run"] for r in json.loads(body)], ["G-1", "B-1", "A-1"], "newest first")
+
+    def test_the_maker_keeps_to_the_home_it_started_in(self):
+        first, elsewhere, gate = board.home(), self.root.parent / "elsewhere", threading.Event()
+        standin = voice.speak
+
+        def slow(text, voice_name=None):
+            gate.wait(5)
+            return standin(text, voice_name)
+        with patch.object(voice, "speak", side_effect=slow):
+            lab.make()
+            os.environ["COLONY_BOARD_HOME"] = str(elsewhere)     # the home changes while it is making
+            try:
+                gate.set()
+                lab._making["thread"].join(10)
+            finally:
+                os.environ["COLONY_BOARD_HOME"] = str(first)
+        self.assertEqual(len(list((first / "lab" / "lockplay" / "clips").glob("*.mp3"))), 12 * len(KEYS))
+        self.assertFalse((elsewhere / "lab").exists(), "nothing made where the home pointed later")
 
     def test_the_lab_needs_only_the_boards_usual_access(self):
         self.assertEqual(self.ask("GET", "/lab/lockplay")[0], 200, "no token, no sign-in: the board's own page access")
@@ -165,3 +192,92 @@ class LockPlayTest(BoardBase):
         self.assertEqual(lab.rows(), [])
         self.assertEqual(self.ask("POST", "/lab/lockplay/log", body="[]")[0], 200)
         self.assertEqual(self.ask("GET", "/lab/elsewhere")[0], 404)
+
+    def test_the_ramp_holds_each_next_clip_back_on_the_board(self):
+        self.made()
+        page = self.ask("GET", "/lab/lockplay")[2].decode()
+        self.assertIn("Wait before each next clip: 2 s, then 4 s, 6 s", page)
+        self.assertIn("buffer may hide the gap", page)
+        self.assertEqual([lab.gap(n) for n in (1, 2, 3, 12)], [0, 2, 4, 22], "2 s before clip 2, 22 s before clip 12")
+        began = time.monotonic()
+        status, _, body = self.ask("GET", "/lab/lockplay/clip?a=A&n=2&wait=1&run=A-ramp-1", headers={"Range": "bytes=0-1"})
+        self.assertEqual(status, 206)
+        self.assertGreaterEqual(time.monotonic() - began, 1, "the board answers only after the wait: the clip is late")
+        began = time.monotonic()
+        self.ask("GET", "/lab/lockplay/clip?a=A&n=2&wait=1&run=A-ramp-1")
+        self.assertLess(time.monotonic() - began, 0.5, "held back once per clip, though Safari asks for it in parts")
+
+    def test_the_ramp_quiets_the_stream_for_each_gap(self):
+        self.made()
+        with patch.object(lab, "GAP", 0.02):
+            status, _, body = self.ask("GET", "/lab/lockplay/stream?run=D-ramp-1&ramp=1")
+            for _ in range(100):
+                if "held" in lab.rows()[-1]:
+                    break
+                time.sleep(0.02)
+        self.assertEqual((status, len(body)), (200, 12 * 5 * 96))
+        sent = [r for r in lab.rows() if r.get("event") == "sent"]
+        self.assertEqual([r["gap"] for r in sent], [0.02 * (n - 1) for n in range(1, 13)])
+        playing, gaps = 11 * 5 * 0.024, 0.02 * sum(range(12))
+        self.assertGreaterEqual(lab.rows()[-1]["held"], round(playing + gaps, 1) - 0.1,
+                                "each clip sent only once due: the sound before it, and every gap so far")
+
+    def test_the_longest_gap_survived_while_hidden(self):
+        def start(run, n, vis):
+            return dict(approach=run[0], run=run, clip=n, event="start", t=f"2026-10-31T10:00:{n:02d}Z", vis=vis,
+                        gap=2 * (n - 1) if "-ramp-" in run else 0)
+        rows = [start("A-ramp-1", 1, "visible"), start("A-ramp-1", 2, "hidden"), start("A-ramp-1", 3, "hidden"),
+                start("A-ramp-1", 4, "visible"), start("F-1", 1, "visible"), start("F-1", 2, "hidden")]
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(rows))[0], 200)
+        runs = {r["run"]: r for r in lab.summary()}
+        self.assertEqual((runs["A-ramp-1"]["ramp"], runs["A-ramp-1"]["longest_gap_hidden"]), (True, 4),
+                         "clip 3 started hidden after 4 s; clip 4's 6 s came with the screen on")
+        self.assertEqual((runs["F-1"]["ramp"], runs["F-1"]["longest_gap_hidden"]), (False, None), "no ramp, no gaps")
+        self.assertIn("Longest gap survived while hidden", lab.SCRIPT)
+
+    def test_h_is_fed_silence_in_the_clips_own_format(self):
+        self.assertEqual(self.ask("GET", "/lab/lockplay/silence")[0], 404, "nothing to match before the clips")
+        self.made()
+        status, headers, body = self.ask("GET", "/lab/lockplay/silence")
+        self.assertEqual((status, headers["Content-Type"]), (200, "audio/mpeg"))
+        size, plays = lab.frame(body, 0)
+        self.assertEqual(len(body) % size, 0)
+        frames = [body[i:i + size] for i in range(0, len(body), size)]
+        self.assertAlmostEqual(len(frames) * plays, 0.5, delta=0.03, msg="half a second a time")
+        clip = lab.sound(lab.clip("H", 1))[0]
+        for f in frames:
+            self.assertEqual(f[1] & 0xFE, clip[1] & 0xFE, "the clips' MPEG version and layer")
+            self.assertEqual(f[2] & 0x0C, clip[2] & 0x0C, "their sample rate")
+            self.assertEqual(f[3] & 0xC0, clip[3] & 0xC0, "their channels")
+            self.assertEqual(f[4:], bytes(size - 4), "side information and sound all zeros: silence")
+        self.assertLess(len(body), 1024, "tiny")
+        self.assertEqual(lab.strip(body * 3)[0], body * 3, "frames a stream takes back to back")
+        self.assertIn("H(c)", lab.SCRIPT)
+        self.assertIn("timestampOffset", lab.SCRIPT, "each clip spliced in over the silence, not after all of it")
+
+    def test_the_silence_fed_is_a_cost(self):
+        rows = [dict(approach="H", run="H-1", clip=n, event="start", t=f"2026-10-31T10:00:{n:02d}Z", vis="visible",
+                     silence=s) for n, s in ((1, 0.5), (2, 3.25), (3, "x"))]
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(rows))[0], 200)
+        self.assertEqual([r["silence"] for r in lab.rows()], [0.5, 3.2, 0], "seconds, to a tenth")
+        self.assertEqual(lab.summary()[0]["silence"], 3.2)
+
+    def test_a_clip_the_phone_held_until_unlock_did_not_survive_its_gap(self):
+        # Kabe's A run with the ramp (Oct 31): clip 4 was sent on time after its 6 s gap but started only when the
+        # phone was unlocked, 44 ms before the page showed again, while still reported hidden
+        def row(n, event, at, vis="hidden"):
+            return dict(approach="A", run="A-ramp-2", clip=n, event=event, t=f"2026-10-31T22:08:{at}Z", vis=vis,
+                        gap=2 * (n - 1) if event == "start" else 0)
+        rows = [row(1, "start", "00.000", "visible"), row(1, "end", "10.000"), row(2, "start", "12.400"),
+                row(2, "end", "25.000"), row(3, "start", "29.650"), row(3, "end", "42.000"),
+                row(4, "start", "58.293"), row(4, "visibility", "58.337", "visible")]
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(rows))[0], 200)
+        run = {r["run"]: r for r in lab.summary()}["A-ramp-2"]
+        self.assertEqual((run["reached"], run["hidden"], run["longest_gap_hidden"]), (4, 2, 4),
+                         "clip 4 started with the unlock: not hidden, and its 6 s gap not survived")
+        late = [dict(r) for r in rows[:6]] + [row(4, "start", "56.000")]     # started hidden, but 8 s past its gap
+        for r in late:
+            r["run"] = "A-ramp-3"
+        self.assertEqual(self.ask("POST", "/lab/lockplay/log", body=json.dumps(late))[0], 200)
+        run = {r["run"]: r for r in lab.summary()}["A-ramp-3"]
+        self.assertEqual((run["hidden"], run["longest_gap_hidden"]), (3, 4), "held up past its gap: not survived")

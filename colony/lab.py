@@ -7,6 +7,7 @@ before it can. Each way below plays the same twelve short clips; the person taps
 reports to the board every clip start, end, error, stall and change of visibility, so the results table shows how far
 each way got with the screen off, without the person having to describe it."""
 import base64
+import datetime
 import hashlib
 import io
 import json
@@ -20,6 +21,9 @@ from . import board
 
 COUNT = 12                # clips per way
 LEAD = 20                 # seconds the server stream keeps ahead of playback, as internet radio does
+GAP = 2                   # the ramp: seconds the board holds back clip 2, and how much longer each next one waits
+UNLOCK = 1.0              # a "hidden" start this close before the page shows again was the unlock starting it
+LATE = 3.0                # a clip starting this long after its gap ended was held up by the phone, not the board
 LOG_MOST = 256 * 1024     # one batch of report rows, at most
 WAYS = (
     ("A", "Today's way", "One audio element; when a clip ends, the next is set on it and played (as colony's player does now)."),
@@ -29,6 +33,7 @@ WAYS = (
     ("E", "Loop trick, playback session", "The loop trick, with Safari told this page plays media (navigator.audioSession)."),
     ("F", "Silent bridge", "Today's way, with colony's looping silence playing while the next clip is fetched and set."),
     ("G", "Silent loop underneath", "Today's way, with a second element looping colony's silence the whole run, so sound never stops between clips."),
+    ("H", "Stream fed silence", "One continuous stream built in the page, as C, but each clip is asked for only when the last has played; while it waits, silence is fed in, so the sound never stops."),
 )
 NAMES = {k: name for k, name, _ in WAYS}
 # what each way is expected to cost the phone, so the person can weigh the ways that keep playing
@@ -40,11 +45,19 @@ COST = {
     "E": "As B; only Safari's audio session setting differs.",
     "F": "As A, plus a short silent loop decoded during each fetch and a second download of each clip (the fetch).",
     "G": "As A, plus a second element decoding a silent loop continuously for the whole run.",
+    "H": "One element, as C, fed a little silence from JavaScript during each wait: a tiny download once, appends every half second while waiting.",
 }
-MEASURES = ("bytes", "requests", "calls", "hidden_calls", "playing")
+MEASURES = ("bytes", "requests", "calls", "hidden_calls", "playing", "silence")
+
+
+def gap(n):
+    """How long the ramp holds clip n back: nothing before the first, then GAP, 2 GAP, ... as when colony's voice is
+    still making the next clip."""
+    return GAP * (n - 1) if n > 1 else 0
 _making = {"thread": None, "error": ""}
 _writing = threading.Lock()
 _frames = {}              # an MP3's sound without its tags, and how long it plays, by path and change time
+_held = set()             # each run's clips already held back once: Safari asks for one clip in several requests
 
 
 def folder():
@@ -60,9 +73,9 @@ def text(key, n):
                f"If you can hear this with the screen off, this way is still going, and clip {n + 1} comes next."))
 
 
-def clip(key, n):
+def clip(key, n, base=None):
     words = text(key, n)
-    return folder() / "clips" / f"{key}-{n:02d}-{hashlib.sha1(words.encode()).hexdigest()[:8]}.mp3"
+    return (base or folder()) / "clips" / f"{key}-{n:02d}-{hashlib.sha1(words.encode()).hexdigest()[:8]}.mp3"
 
 
 def ready(key):
@@ -87,9 +100,10 @@ def _make():
     if not voice.ready():
         _making["error"] = "Colony's voice isn't set up on this machine (colony voice --setup), so no clips can be made."
         return
+    base = folder()                                # the home it started in, kept to the end of the run
     for key in NAMES:
         for n in range(1, COUNT + 1):
-            out = clip(key, n)
+            out = clip(key, n, base)
             if out.exists():
                 continue
             got = voice.speak(text(key, n))
@@ -178,6 +192,17 @@ def silence():
     return "data:audio/wav;base64," + base64.b64encode(raw.getvalue()).decode()
 
 
+def quiet(path, seconds=0.5):
+    """Silent MP3 frames in a clip's own format (MPEG version, sample rate, channels), at the lowest bitrate: each
+    frame's side information and sound all zeros, which decodes to silence. H feeds them while a clip is late."""
+    head = sound(path)[0][:4]
+    if not frame(head, 0):
+        return b""
+    head = bytes([0xFF, head[1] | 1, 1 << 4 | head[2] & 0x0C, head[3] & 0xC0])   # no CRC, the lowest bitrate, no padding
+    size, plays = frame(head, 0)
+    return (head + bytes(size - 4)) * max(1, round(seconds / plays))
+
+
 def write(row):
     row = dict(row, at=board.now())
     with _writing:
@@ -193,9 +218,9 @@ def take(rows):
         if not isinstance(r, dict):
             continue
         row = {k: str(r.get(k, ""))[:200] for k in ("approach", "run", "event", "t", "vis", "why", "session", "main", "silent")}
-        for k in ("clip",) + MEASURES:
-            try:
-                row[k] = int(r.get(k) or 0)
+        for k in ("clip", "gap") + MEASURES:
+            try:                                   # whole numbers, but for the seconds of silence fed
+                row[k] = round(float(r.get(k) or 0), 1) if k == "silence" else int(r.get(k) or 0)
             except (TypeError, ValueError):
                 row[k] = 0
         write(dict(row, source="page"))
@@ -217,6 +242,14 @@ def rows():
     return out
 
 
+def _seconds(when):
+    """A report row's time as seconds, or None when it can't be read."""
+    try:
+        return datetime.datetime.fromisoformat(str(when).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def summary():
     """Each run, newest first: how far it got, how much of that with the screen off, and when it stopped."""
     runs = {}
@@ -227,7 +260,9 @@ def summary():
         s = runs.setdefault(run, {"run": run, "approach": r.get("approach", ""), "began": "", "reached": 0,
                                   "hidden": 0, "last": "", "finished": False, "sent": 0, "errors": 0, "stalls": 0,
                                   "silent_paused": False, "server_bytes": 0, "server_requests": 0, "held": None,
-                                  **{k: 0 for k in MEASURES}, "_hidden": set(), "_order": len(runs)})
+                                  "ramp": "-ramp-" in run, "longest_gap_hidden": None,
+                                  **{k: 0 for k in MEASURES}, "_starts": [], "_ends": {}, "_shown": [],
+                                  "_order": len(runs)})
         when = r.get("t") or r.get("at", "")
         if r.get("source") == "server":
             if r.get("event") == "sent":
@@ -246,11 +281,13 @@ def summary():
             s["silent_paused"] = True
         if event == "start":
             s["reached"] = max(s["reached"], r.get("clip", 0))
-            if r.get("vis") == "hidden":
-                s["_hidden"].add(r.get("clip", 0))
+            s["_starts"].append((r.get("clip", 0), _seconds(when), r.get("vis"), r.get("gap") or 0))
             s["last"] = max(s["last"], when)
         elif event == "end":
+            s["_ends"][r.get("clip", 0)] = _seconds(when)
             s["last"] = max(s["last"], when)
+        elif event == "visibility" and r.get("vis") == "visible":
+            s["_shown"].append(_seconds(when))
         elif event == "finished":
             s["finished"], s["last"] = True, max(s["last"], when)
         elif event == "error":
@@ -259,15 +296,25 @@ def summary():
             s["stalls"] += 1
     out = sorted(runs.values(), key=lambda s: s["_order"], reverse=True)
     for s in out:
-        s["hidden"] = len(s.pop("_hidden"))
+        hidden, ends, shown = set(), s.pop("_ends"), [t for t in s.pop("_shown") if t is not None]
+        for n, t, vis, wait in s.pop("_starts"):
+            if vis != "hidden" or (t is not None and any(0 <= v - t <= UNLOCK for v in shown)):
+                continue                    # with the screen on, or started by the unlock itself
+            hidden.add(n)
+            before = ends.get(n - 1)
+            if s["ramp"] and n > 1 and (t is None or before is None or t - before <= wait + LATE):
+                s["longest_gap_hidden"] = max(s["longest_gap_hidden"] or 0, wait)   # it started, hidden, after its gap
+        s["hidden"] = len(hidden)
         s.pop("_order")
         s["name"] = NAMES.get(s["approach"], s["approach"])
     return out[:40]
 
 
-def stream(handler, run):
+def stream(handler, run, ramp=False):
     """Every clip's sound back to back in one chunked response, paced to stay LEAD seconds ahead of playback as
-    internet radio is, so each clip sent (written to the log with its time) shows the phone still taking it."""
+    internet radio is, so each clip sent (written to the log with its time) shows the phone still taking it. With the
+    ramp, each clip is sent only once it would be ready, its gap after the last one's end: the stream goes quiet, as
+    it would for a clip still being made."""
     clips = [sound(clip("D", n)) for n in range(1, COUNT + 1)]
     if not all(c[0] for c in clips):
         return send(handler, 503, b"The clips aren't made yet.", "text/plain; charset=utf-8")
@@ -278,20 +325,23 @@ def stream(handler, run):
     handler.send_header("Transfer-Encoding", "chunked")
     handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
-    began, ahead, sent = time.monotonic(), 0.0, 0
+    began, ahead, sent, gaps = time.monotonic(), 0.0, 0, 0
     write({"source": "server", "approach": "D", "run": run, "event": "stream asked", "clip": 0,
            "why": handler.headers.get("Range", "")})
     n = 0
     try:
         for n, (body, seconds) in enumerate(clips, 1):
-            while time.monotonic() - began < ahead - LEAD:
-                time.sleep(min(0.5, ahead - LEAD - (time.monotonic() - began)))
+            gaps += gap(n) if ramp else 0
+            due = ahead + gaps if ramp else ahead - LEAD
+            while time.monotonic() - began < due:
+                time.sleep(min(0.5, due - (time.monotonic() - began)))
             for at in range(0, len(body), 16384):
                 part = body[at:at + 16384]
                 handler.wfile.write(b"%X\r\n%s\r\n" % (len(part), part))
                 sent += len(part)
             handler.wfile.flush()
-            write({"source": "server", "approach": "D", "run": run, "event": "sent", "clip": n})
+            write({"source": "server", "approach": "D", "run": run, "event": "sent", "clip": n,
+                   "gap": gap(n) if ramp else 0})
             ahead += seconds
         handler.wfile.write(b"0\r\n\r\n")
         handler.wfile.flush()
@@ -343,6 +393,11 @@ def get(handler, path, q):
     if path == "/lab/lockplay/status":
         make()
         return send(handler, 200, json.dumps(status()).encode(), "application/json")
+    if path == "/lab/lockplay/silence":
+        body = quiet(clip("H", 1)) if clip("H", 1).exists() else b""
+        if not body:
+            return send(handler, 404, b"no clips to match yet", "text/plain; charset=utf-8")
+        return send(handler, 200, body, "audio/mpeg", (("Cache-Control", "private, max-age=86400"),))
     if path == "/lab/lockplay/results":
         return send(handler, 200, json.dumps(summary()).encode(), "application/json")
     if path == "/lab/lockplay/clip":
@@ -351,6 +406,14 @@ def get(handler, path, q):
             return send(handler, 404, b"no such clip", "text/plain; charset=utf-8")
         f = clip(key, int(n))
         body = sound(f)[0] if one("bare") else f.read_bytes()
+        wait = int(one("wait")) if one("wait").isdigit() else 0
+        if wait:                                   # the ramp: the clip is late, as when the voice is still making it
+            first = (one("run"), key, n)
+            with _writing:
+                late = first not in _held or not one("run")
+                _held.add(first)
+            if late:
+                time.sleep(min(wait, 60))
         sent = send_audio(handler, body)
         if re.fullmatch(r"[A-Za-z0-9-]{1,60}", one("run")):        # a run's clip requests, counted for its cost
             write({"source": "server", "approach": key, "run": one("run"), "event": "served", "clip": int(n), "bytes": sent})
@@ -359,7 +422,7 @@ def get(handler, path, q):
         run = one("run")
         if not re.fullmatch(r"[A-Za-z0-9-]{1,60}", run):
             return send(handler, 400, b"a run, please", "text/plain; charset=utf-8")
-        return stream(handler, run)
+        return stream(handler, run, ramp=bool(one("ramp")))
     return send(handler, 404, b"nothing here", "text/plain; charset=utf-8")
 
 
@@ -391,6 +454,9 @@ def page():
         "<p>Tap one way below, lock the phone, and wait two minutes.<br>"
         "Then unlock and read the table at the bottom: it shows how far each way got with the screen off.</p>"
         "<p id='making' class='muted'>Checking the clips…</p>"
+        "<p><label><input type='checkbox' id='ramp'> Wait before each next clip: 2 s, then 4 s, 6 s… (the board holds "
+        "the next clip back, as when colony is still making it)</label><br><span class='muted'>With the wait on, C still "
+        "fetches ahead, so its buffer may hide the gap; D's stream goes quiet for it.</span></p>"
         f"<div class='ways'>{ways}</div>"
         "<p><button id='stop' disabled>Stop</button> <span id='now' class='muted'>Nothing playing.</span></p>"
         "<p id='silentnote'></p>"
@@ -445,7 +511,9 @@ SCRIPT = r"""
     keep(); flush();
   };
   // each run's requests carry its ID: the board counts them, the page finds them among its resource timings
-  const url = (key, n, bare) => `/lab/lockplay/clip?a=${key}&n=${n}${bare ? '&bare=1' : ''}&run=${cur ? encodeURIComponent(cur.run) : ''}`;
+  const gap = (n) => (cur && cur.ramp && n > 1 ? 2 * (n - 1) : 0);   // the ramp: the board holds clip n back this long
+  const url = (key, n, bare) => `/lab/lockplay/clip?a=${key}&n=${n}${bare ? '&bare=1' : ''}` +
+    `${gap(n) ? '&wait=' + gap(n) : ''}&run=${cur ? encodeURIComponent(cur.run) : ''}`;
   // what a run costs, as far as a page can see: the bytes and requests it fetched, how often its own code ran (all and
   // while hidden), and how many of its elements are playing now
   const measures = (c) => {
@@ -453,7 +521,7 @@ SCRIPT = r"""
     try { performance.getEntriesByType('resource').forEach((e) => {
       if (e.name.includes(`run=${encodeURIComponent(c.run)}`)) { bytes += e.transferSize || 0; requests += 1; } }); } catch (e) {}
     return {bytes, requests, calls: c.calls, hidden_calls: c.callsHidden,
-      playing: [c.audio, c.silent].filter((x) => x && !x.paused).length};
+      playing: [c.audio, c.silent].filter((x) => x && !x.paused).length, silence: Math.round((c.silenceFed || 0) * 10) / 10};
   };
   const counted = (c, fn) => function (...args) {
     if (c === cur) { c.calls += 1; if (document.visibilityState === 'hidden') c.callsHidden += 1; }
@@ -470,7 +538,7 @@ SCRIPT = r"""
     set('play', counted(c, () => c.audio && c.audio.play())); set('pause', counted(c, () => c.audio && c.audio.pause()));
     if (skips) { set('seekbackward', null); set('seekforward', null); } };
   // where a clip starts, ends and the run finishes, as each way sees it
-  const reached = (c, n) => { if (c.stopped || c.heard === n) return; c.heard = n; c.clip = n; meta(c, n); log('start', c.both ? c.both() : {});
+  const reached = (c, n) => { if (c.stopped || c.heard === n) return; c.heard = n; c.clip = n; meta(c, n); log('start', Object.assign({gap: gap(n)}, c.both ? c.both() : {}));
     show(`Playing ${NAME[c.key]}, clip ${n} of ${COUNT}.`); };
   const ended = (c, n) => { if (c.stopped || c.ends.has(n)) return; c.ends.add(n); log('end', {clip: n}); if (n === COUNT) finish(c); };
   const finish = (c) => { if (c.done) return; c.done = true; if (c.silent) c.silent.pause(); c.clip = COUNT; log('finished'); show(`${NAME[c.key]} played all ${COUNT}.`); stopped(); };
@@ -549,7 +617,7 @@ SCRIPT = r"""
         for (let n = 1; n <= COUNT; n++) if (t < (ends[n] || Infinity)) { if (c.heard && n > c.heard) ended(c, c.heard); reached(c, n); break; } });
       a.addEventListener('playing', () => handlers(c, false));
       a.onended = () => ended(c, COUNT);
-      c.clip = 1; a.src = `/lab/lockplay/stream?run=${encodeURIComponent(c.run)}`; go(c, a); },
+      c.clip = 1; a.src = `/lab/lockplay/stream?run=${encodeURIComponent(c.run)}${c.ramp ? '&ramp=1' : ''}`; go(c, a); },
     // E: the loop trick, with Safari told this page plays media
     E(c) { ways.B(c); },
     // F: today's way, colony's looping silence playing while the next clip is fetched and set
@@ -573,6 +641,65 @@ SCRIPT = r"""
       const play = (n) => { c.clip = n; a.src = url(c.key, n); go(c, a); };
       a.onended = () => { ended(c, c.clip); if (c.clip < COUNT) play(c.clip + 1); };
       play(1); },
+    // H: one continuous source, as C, but each clip asked for only once the last has played (with the ramp's wait,
+    // as A sees it). Silence is kept LEAD seconds ahead of what plays, since on iOS a stream that runs dry while
+    // locked never recovers, and a hidden page's code may run late; each clip, when it comes, is spliced in a moment
+    // after what plays now, over the silence there, so the lead adds no delay
+    H(c) { const MS = window.ManagedMediaSource || window.MediaSource, type = 'audio/mpeg';
+      if (!MS || !MS.isTypeSupported(type)) { log('error', {why: MS ? 'audio/mpeg not supported by MediaSource' : 'no MediaSource here'});
+        show('This browser\'s MediaSource cannot play MP3 (audio/mpeg): H cannot run here.'); return stopped(); }
+      const a = element(c, false), src = count(c, new MS()), starts = [], ends = [];
+      a.disableRemotePlayback = true;                   // Safari's ManagedMediaSource opens only with this set
+      const LEAD = 5, lengths = (status && status.durations.H) || [];
+      let sb = null, quiet = null, chain = Promise.resolve(), asked = 0, last = 0, feeding = false, closed = false;
+      let splice = 'overwrite';                         // falls back to 'remove' if an overlapping append leaves a hole
+      c.silenceFed = 0;
+      const tail = () => { const b = sb.buffered; return b.length ? b.end(b.length - 1) : 0; };
+      const append = (buf) => new Promise((ok) => {
+        const tryIt = (again) => {
+          try { sb.appendBuffer(buf); sb.addEventListener('updateend', () => ok(true), {once: true}); }
+          catch (err) {
+            if (err.name === 'QuotaExceededError' && again && a.currentTime > 3) {
+              sb.addEventListener('updateend', () => tryIt(false), {once: true}); sb.remove(0, a.currentTime - 2); return; }
+            log('error', {why: `append: ${err.name}`}); ok(false);
+          } };
+        tryIt(true); });
+      // every append waits its turn, so a clip that arrives goes in after the silence already there
+      const queue = (job) => (chain = chain.then(() => (c.stopped ? null : job())).catch(() => {}));
+      const feed = () => {
+        if (!sb || !quiet || feeding || closed || c.stopped || last >= COUNT || tail() - a.currentTime >= LEAD) return;
+        feeding = true;
+        queue(async () => { const from = tail(); if (await append(quiet)) c.silenceFed += tail() - from; })
+          .then(() => { feeding = false; feed(); });
+      };
+      const ask = (n) => { asked = n;
+        fetch(url(c.key, n, true)).then(counted(c, (r) => r.arrayBuffer())).then(counted(c, (buf) => queue(async () => {
+          const at = Math.min(a.currentTime + 0.3, tail()), plays = lengths[n - 1] || 0;
+          if (splice === 'remove' && tail() > at) await new Promise((ok) => {
+            sb.addEventListener('updateend', ok, {once: true}); sb.remove(at, Infinity); });
+          sb.timestampOffset = at;                      // in sequence mode, where the next sound goes
+          if (await append(buf)) {
+            starts[n] = at; ends[n] = plays ? at + plays : tail(); last = n;
+            const b = sb.buffered, whole = b.length === 1 && b.start(0) <= a.currentTime + 0.05 && b.end(0) >= ends[n] - 0.05;
+            log('splice', {clip: n, why: `${splice}${whole ? '' : ', left a hole'}`});
+            if (!whole && splice === 'overwrite') splice = 'remove';
+          }
+          if (n === COUNT) { try { src.endOfStream(); } catch (e) {} closed = true; }
+        }))).catch((err) => log('error', {why: `fetch: ${err}`}));
+      };
+      src.addEventListener('sourceopen', () => { sb = count(c, src.addSourceBuffer(type)); sb.mode = 'sequence';
+        fetch('/lab/lockplay/silence').then(counted(c, (r) => r.arrayBuffer())).then(counted(c, (buf) => {
+          quiet = buf; ask(1); feed(); })).catch((err) => log('error', {why: `silence: ${err}`})); }, {once: true});
+      src.addEventListener('startstreaming', feed);
+      a.addEventListener('waiting', feed);
+      a.addEventListener('timeupdate', () => {
+        const t = a.currentTime;
+        for (let n = 1; n <= last; n++) if (t >= starts[n] && t < ends[n]) { reached(c, n); break; }
+        if (last && t >= ends[last] && !c.ends.has(last)) { ended(c, last); if (last < COUNT && asked === last) ask(last + 1); }
+        feed(); });
+      a.addEventListener('playing', () => handlers(c, false));
+      a.onended = () => ended(c, COUNT);
+      c.clip = 1; a.src = URL.createObjectURL(src); go(c, a); },
   };
 
   const buttons = [...document.querySelectorAll('[data-way]')];
@@ -584,11 +711,12 @@ SCRIPT = r"""
     const kind = key === 'E' ? 'playback' : 'auto';
     session(kind);
     try { performance.clearResourceTimings(); performance.setResourceTimingBufferSize(2000); } catch (e) {}
-    cur = {key, run: `${key}-${Date.now().toString(36)}`, clip: 0, heard: 0, ends: new Set(), stopped: false, done: false,
+    const ramp = $('ramp').checked;
+    cur = {key, ramp, run: `${key}-${ramp ? 'ramp-' : ''}${Date.now().toString(36)}`, clip: 0, heard: 0, ends: new Set(), stopped: false, done: false,
       calls: 0, callsHidden: 0};
     log('run start', {session: navigator.audioSession ? kind : 'none'});
     buttons.forEach((b) => b.classList.toggle('on', b.dataset.way === key)); $('stop').disabled = false;
-    show(`Starting ${NAME[key]}…`); meta(cur, 1); handlers(cur, false);
+    show(`Starting ${NAME[key]}${ramp ? ', with the ramp' : ''}…`); meta(cur, 1); handlers(cur, false);
     ways[key](cur);
   };
   buttons.forEach((b) => b.addEventListener('click', () => start(b.dataset.way)));
@@ -613,15 +741,16 @@ SCRIPT = r"""
     if (!runs.length) { $('results').textContent = 'No runs yet.'; return; }
     const kb = (n) => n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
     $('results').innerHTML = '<table><tr><th>Way</th><th>Started</th><th>Clips reached</th><th>While hidden</th><th>Stopped</th>' +
-      '<th>Bytes (page / board)</th><th>Requests (page / board)</th><th>Code ran (all / hidden)</th><th>Playing at once</th><th>Held open</th></tr>' +
-      runs.map((r) => `<tr><td>${esc(r.approach)}. ${esc(r.name)}</td><td>${clock(r.began)}</td><td>${r.reached} of ${COUNT}</td>` +
+      '<th>Bytes (page / board)</th><th>Requests (page / board)</th><th>Code ran (all / hidden)</th><th>Playing at once</th><th>Held open</th><th>Silence fed</th><th>Longest gap survived while hidden</th></tr>' +
+      runs.map((r) => `<tr><td>${esc(r.approach)}. ${esc(r.name)}${r.ramp ? ' <b>ramp</b>' : ''}</td><td>${clock(r.began)}</td><td>${r.reached} of ${COUNT}</td>` +
         `<td>${r.hidden}</td><td>${r.finished ? 'finished, ' + clock(r.last) : r.reached ? 'after clip ' + r.reached + ', ' + clock(r.last) : 'never started'}` +
         `${r.approach === 'D' ? ` <span class="muted">(board sent ${r.sent})</span>` : ''}` +
         `${r.errors ? ` <span class="muted">${r.errors} error${r.errors > 1 ? 's' : ''}</span>` : ''}` +
         `${r.stalls ? ` <span class="muted">${r.stalls} stall${r.stalls > 1 ? 's' : ''}</span>` : ''}` +
         `${r.approach === 'G' ? ` <span class="muted">(silent element ${r.silent_paused ? 'got paused' : 'kept playing'})</span>` : ''}</td>` +
         `<td>${kb(r.bytes)} / ${kb(r.server_bytes)}</td><td>${r.requests} / ${r.server_requests}</td>` +
-        `<td>${r.calls} / ${r.hidden_calls}</td><td>${r.playing}</td><td>${r.held === null ? '' : r.held + ' s'}</td></tr>`).join('') + '</table>';
+        `<td>${r.calls} / ${r.hidden_calls}</td><td>${r.playing}</td><td>${r.held === null ? '' : r.held + ' s'}</td><td>${r.silence ? r.silence + ' s' : ''}</td>` +
+        `<td>${r.longest_gap_hidden === null ? '' : r.longest_gap_hidden + ' s'}</td></tr>`).join('') + '</table>';
   }).catch(() => {});
 
   const making = () => fetch('/lab/lockplay/status', {cache: 'no-store'}).then((r) => r.json()).then((s) => {
