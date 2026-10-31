@@ -18,6 +18,9 @@ from . import board
 from .codex_transfer import atomic_json
 
 
+IN_FLIGHT = ('working', 'handback', 'testing', 'landing', 'deploying')    # an assignment not yet landed
+
+
 def location():
     return board.home() / 'leads.json'
 

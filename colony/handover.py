@@ -1,9 +1,9 @@
 """The hand-over (R127): stilling colony, or one project, before anything under it moves.
 
-`colony stop --still`: every project lands its work as a pause does (R134), helpers included; once each is still, the
-Codex app hosts stop and the sessions end, and only then is the clean-stop mark written, so a copy of the folder taken
-after it carries no half-written minute. An ordinary start resumes what it paused; a restored copy waits for the
-person to check it.
+`colony stop --still`: every project lands its work as a pause does (R134), helpers and the lead's items in flight
+included; once each is still, the Codex app hosts and a Codex check stop, the sessions end, and only once every program
+they ran has exited is the clean-stop mark written, so a copy of the folder taken after it carries no half-written
+minute. An ordinary start resumes what it paused; a restored copy waits for the person to check it.
 
 `colony move NAME`: one project, the same way: what outside it names its folder is shown first, then it lands its
 work, its console and Codex host stop, the folder moves, everything colony keeps about it is re-pointed
@@ -24,11 +24,39 @@ LOOK = 5                # seconds between looks
 RESTORE_NOTICE = "This colony was restored from a copy; nothing runs by itself until you check it."
 
 
+def in_flight(root):
+    """The lead's items a helper is still on that concern this project (its own, or in the plan it holds), not yet
+    landed: a helper's item worktree may hold work not yet committed. The lead's own item is its console's work."""
+    from . import lead
+    try:
+        g = lead.group(root)
+    except (OSError, ValueError):
+        return []
+    here = str(Path(root).resolve())
+    return sorted(item for item, a in (g or {}).get("assignments", {}).items()
+                  if a.get("state") in lead.IN_FLIGHT and a.get("owner") != g.get("lead")
+                  and here in (a.get("owner"), g.get("canonical")))
+
+
 def still(root):
-    """Nothing of the project's is running: its screen not mid-turn, and no helper or background command behind it."""
+    """Nothing of the project's is running: its screen not mid-turn, no helper or background command behind it, and
+    no item of the lead's in flight."""
+    if in_flight(root):
+        return False
     if not console.running(console.session_name(root)):
         return True
     return board.seen(console.snapshot(root, lines=4))["state"] != "working"
+
+
+def busy_names(roots):
+    """The projects not yet still, each with the lead's items it waits on."""
+    return ", ".join(board.name_of(r) + (f" ({', '.join(items)} in flight)" if (items := in_flight(r)) else "")
+                     for r in roots)
+
+
+def stilled():
+    """Colony is still, or being stilled, for a copy: nothing of its own starts until it is started again."""
+    return bool(_mark().get("still")) or any(row.get("by") == "still" for row in board.paused_projects().values())
 
 
 def settle(roots, by, wait=WAIT, say=print, clock=time.monotonic, nap=time.sleep):
@@ -40,7 +68,7 @@ def settle(roots, by, wait=WAIT, say=print, clock=time.monotonic, nap=time.sleep
     while busy and clock() < deadline:
         busy = [r for r in busy if not still(r)]
         if busy and clock() - told >= 60:
-            say(f"waiting for {', '.join(board.name_of(r) for r in busy)} to land its work…")
+            say(f"waiting for {busy_names(busy)} to land its work…")
             told = clock()
         if busy:
             nap(LOOK)
@@ -85,21 +113,83 @@ def hold_restore(why):
         board.save_json(board.home() / "restore-hold.json", {"why": why, "since": board.now()})
 
 
-def stop_still(stop_sessions, wait=WAIT, say=print):
-    """colony stop --still. Returns 0 once still and stopped, 1 if work hadn't landed in time (nothing stopped)."""
+def _start(pid):
+    """A process's start time (with its number, what tells it from a later one given the same number), or None once
+    it has exited (a zombie has)."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return None if fields[0] in ("Z", "X") else fields[19]
+    except (OSError, IndexError):
+        return None
+
+
+def _command_of(pid):
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace").strip()
+    except OSError:
+        return ""
+
+
+def programs(sessions):
+    """Every process the named tmux sessions run, each pane's whole tree: {pid: (start, session, command)}. Not this
+    process or what it runs under, where the stop was typed in one of them."""
+    mine, pid = set(), os.getpid()
+    while pid > 1 and pid not in mine:
+        mine.add(pid)
+        try:
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+    out = {}
+    for name in sessions:
+        panes = subprocess.run(["tmux", "list-panes", "-s", "-t", name, "-F", "#{pane_pid}"], capture_output=True,
+                               text=True).stdout.split()
+        for pane in panes:
+            for pid in console._descendants(int(pane)) if pane.isdigit() else ():
+                if pid not in mine and pid not in out and (start := _start(pid)):
+                    out[pid] = (start, name, _command_of(pid))
+    return out
+
+
+def outlived(held, wait=WAIT, clock=time.monotonic, nap=time.sleep):
+    """Wait, up to `wait` seconds, for each of these processes to exit; returns those still running then. A program
+    lets go of its files only as it exits (Claude Code a second or so after its session ends)."""
+    deadline = clock() + wait
+    while True:
+        left = {pid: row for pid, row in held.items() if _start(pid) == row[0]}
+        if not left or clock() >= deadline:
+            return left
+        nap(0.2)
+
+
+def stop_still(stop_sessions, wait=WAIT, say=print, sessions=()):
+    """colony stop --still. Returns 0 once still and stopped, 1 if work hadn't landed in time (nothing stopped) or
+    something of colony's outlived the stop (nothing marked)."""
+    from . import codex_remote
     roots = [p for p in board.projects(board.registry()) if p.exists() and not board.paused(p)]
     busy = settle(roots, "still", wait, say)
     if busy:
         for root in roots:
             board.resume_project(root)
-        say(f"not stopped: {', '.join(board.name_of(r) for r in busy)} hadn't landed its work within "
-            f"{wait // 60} minutes; everything carries on as it was")
+        say(f"not stopped: {busy_names(busy)} hadn't landed its work within {wait // 60} minutes; nothing was stopped "
+            "and everything carries on as it was")
         return 1
     held = [board.name_of(p) for p in board.projects(board.registry()) if p.exists() and not _codex_stop(p)]
     if held:
         say(f"not stopped: the Codex app host of {', '.join(held)} didn't stop; everything stays paused, so try again")
         return 1
+    if left := codex_remote.stop_check():
+        say(f"not stopped: colony's check of a new Codex didn't stop (process {', '.join(map(str, left))}); everything "
+            "stays paused, so try again")
+        return 1
+    running = programs(sessions)
     stop_sessions()
+    if left := outlived(running, wait):
+        say("not marked still: the sessions ended, but these programs they ran were still running "
+            f"{wait // 60} minute(s) later: "
+            + "; ".join(f"{pid} in {row[1]} ({row[2][:80]})" for pid, row in sorted(left.items()))
+            + ". A copy taken now isn't a clean one: once they have exited, colony stop --still again marks it")
+        return 1
     generation = (_generation(_mark().get("generation")) or 0) + 1
     _save_mark({"at": board.now(), "still": True, "generation": generation})
     board.save_json(board.machine_state() / "generation", generation)
@@ -220,7 +310,7 @@ def move(root, dest, sure=False, wait=WAIT, say=print):
     if busy:
         if not was_paused:
             board.resume_project(root)
-        say(f"not moved: {board.name_of(root)} hadn't landed its work within {wait // 60} minutes; it carries on as it was")
+        say(f"not moved: {busy_names(busy)} hadn't landed its work within {wait // 60} minutes; it carries on as it was")
         return 1
     console.stop(root)
     if codex_remote.alive(codex_remote.home_for(root)) and not _codex_stop(root):

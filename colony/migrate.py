@@ -96,6 +96,7 @@ def keep_project_keys(root, say=print):
         if path.is_symlink():
             # Existing external links already keep keys out of a portable copy.
             if not path.resolve().is_relative_to(root.resolve()):
+                board.exclude_local(root, path.relative_to(root).as_posix())
                 continue
         if path.exists() and path.is_symlink():
             raise ValueError(f"{path} links to a key inside the project; move that key outside before retrying")
@@ -104,6 +105,8 @@ def keep_project_keys(root, say=print):
         if not path.is_symlink():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.symlink_to(dest, target_is_directory=dest.is_dir())
+        # The link names this machine's key folder: a .gitignore's `secrets/` matches only a folder, not this link.
+        board.exclude_local(root, path.relative_to(root).as_posix())
         say(f"Key kept on this machine: {path.relative_to(root)} ({dest})")
 
 
@@ -140,6 +143,29 @@ def _projects(reg):
     out = [(kind, root.name, root) for kind, roots in (("project", on), ("archived", shelf)) for root in roots]
     return out + [(kind, f"{root.name}'s folder", board.workdir(root)) for kind, _, root in out
                   if board.workdir(root) != root]
+
+
+def linked_worktrees(folder):
+    """The linked worktrees of the repository a folder holds, by git's own list: [(path, there)], `there` false where
+    git still lists one whose folder has gone. Not the folder's own checkout."""
+    got = subprocess.run(["git", "-C", str(folder), "worktree", "list", "--porcelain"], capture_output=True, text=True)
+    if got.returncode or not (Path(folder) / ".git").is_dir():       # a worktree itself lists its main's
+        return []
+    trees = [Path(line[len("worktree "):]) for line in got.stdout.splitlines() if line.startswith("worktree ")]
+    return [(tree, (tree / ".git").is_file()) for tree in trees[1:]]
+
+
+def outside_worktrees(reg=None):
+    """Each project's linked worktrees kept outside its folder: [(project, path, there)]. Inside, a worktree is packed
+    with its project; outside, it is a part of its own, or, where its folder has gone, named as not carried."""
+    reg = reg or board.registry()
+    folders = _projects(reg)
+    out = []
+    for _, name, folder in folders:
+        for tree, there in linked_worktrees(folder):
+            if not any(tree == p or _under(tree, p) for _, _, p in folders):
+                out.append((name, tree, there))
+    return out
 
 
 def _units():
@@ -191,6 +217,9 @@ def parts(reg=None):
     folders = _projects(reg)
     for kind, name, path in folders:
         add(kind, name, path)
+    for name, tree, there in outside_worktrees(reg):     # one inside colony's folder (an item's) is packed with it
+        if there and not any(_under(tree, p["path"]) for p in out):
+            add("worktree", f"{name}'s worktree {tree.name}", tree)
     # Claude Code keeps a folder's conversations under its own name for it, and those of each folder inside it (a
     # helper's worktree, a run in a subfolder) under a longer one that begins the same; each is named for the folder
     # it belongs to most nearly
@@ -477,7 +506,25 @@ def manifest(plan, reg=None):
             "files": plan.files, "bytes": plan.bytes,
             "left_out": {"remade": plan.left, "sign_ins_and_keys": plan.kept_out + _outside(plan),
                          "unreadable": plan.unreadable, "sockets_and_pipes": plan.special},
-            "keylike_packed": plan.keylike, "machine": settings, "outside_but_run": _strays(plan, settings)}
+            "keylike_packed": plan.keylike, "machine": settings, "outside_but_run": _strays(plan, settings),
+            "worktrees_not_carried": _uncarried(reg), "first_run": _first_run(plan)}
+
+
+def _first_run(plan):
+    """Each program's own first-run answers (no sign-in, no key), for the folders packed, so its consoles on the new
+    machine don't stop at screens the person answered already: {provider: state}."""
+    from . import providers
+    folders = [p["path"] for p in plan.parts if p["kind"] not in ("claude", "conversation", "service")]
+    out = {}
+    for key, provider in providers.PROVIDERS.items():
+        if state := provider.first_run(folders):
+            out[key] = state
+    return out
+
+
+def _uncarried(reg=None):
+    """Linked worktrees git lists outside their project whose folder has gone: named, as nothing of them can travel."""
+    return [{"project": name, "path": str(tree)} for name, tree, there in outside_worktrees(reg) if not there]
 
 
 def report(plan, say=print):
@@ -488,6 +535,8 @@ def report(plan, say=print):
     say("What colony migrate --pack takes, before compression:")
     for title, kinds in (("colony", ("home", "program")), ("Projects on the board", ("project",)),
                          ("Archived projects, off the board (they come back from its Archived shelf)", ("archived",)),
+                         ("Projects' linked worktrees kept outside their folders (back in place, repaired)",
+                          ("worktree",)),
                          ("Conversations, Claude Code's (Codex's are in colony's home, codex-remote)", ("claude",)),
                          ("Conversations recorded elsewhere", ("conversation",)),
                          ("Services projects set up for themselves (back in place unpacked, not started)", ("service",))):
@@ -520,6 +569,9 @@ def report(plan, say=print):
             + ", ".join(short(p) for p in plan.keylike[:4]) + (", …" if len(plan.keylike) > 4 else "") + ")")
     if plan.unreadable:
         say(f"Couldn't be read, so not packed: {len(plan.unreadable)} folder(s) ({', '.join(plan.unreadable[:3])})")
+    if gone := _uncarried():
+        say("Linked worktrees git still lists whose folder has gone, so nothing of them travels (git worktree prune "
+            "forgets them): " + ", ".join(f"{row['project']}'s {short(row['path'])}" for row in gone))
 
 
 def _cron(m):
@@ -925,7 +977,15 @@ def unpack(archive, force=False, say=print):
     kinds = [p["kind"] for p in note["parts"]]
     say(f"Unpacked: colony's home, {kinds.count('project')} project folder(s) on the board and {kinds.count('archived')} "
         f"archived, {kinds.count('claude')} folder(s) of Claude Code's conversations"
+        + (f", {kinds.count('worktree')} linked worktree(s) kept outside their project" if "worktree" in kinds else "")
         + (", and the colony program" if "program" in kinds else "") + ".")
+    if note.get("worktrees_not_carried"):
+        say("Not in the archive, as their folders had gone before the pack: "
+            + ", ".join(f"{row['project']}'s linked worktree {row['path']}" for row in note["worktrees_not_carried"]))
+    from . import providers
+    for key, state in (note.get("first_run") or {}).items():
+        if said := providers.get(key).restore_first_run(state):
+            say(said)
     remake(note, say=say)
     return note
 
@@ -981,8 +1041,12 @@ def _follow(note, begun, journal, say):
         for main in dict.fromkeys(mains):
             if not (main / ".git").is_dir():
                 continue
-            linked = [str(tree) for link in sorted((main / ".git" / "worktrees").glob("*/gitdir"))
-                      if ((tree := Path(_place(link.read_text().strip(), pairs)).parent) / ".git").is_file()]
+            trees = [Path(_place(link.read_text().strip(), pairs)).parent
+                     for link in sorted((main / ".git" / "worktrees").glob("*/gitdir"))]
+            linked = [str(tree) for tree in trees if (tree / ".git").is_file()]
+            if gone := [str(tree) for tree in trees if not (tree / ".git").is_file()]:
+                say(f"Not found here, so not repaired: {main.name}'s linked worktree {', '.join(gone)} (git worktree "
+                    "prune forgets it, once nothing in it is wanted)")
             fixed = subprocess.run(["git", "-C", str(main), "worktree", "repair", *linked], capture_output=True, text=True)
             if fixed.returncode:
                 raise ValueError(f"git worktree repair failed for {main}: {fixed.stderr.strip()}")

@@ -903,12 +903,18 @@ def ident(root, make=True):
 
 def _exclude_id(root):
     """.board/id stays out of git even where a project commits its .board/: a clone elsewhere is another project."""
+    exclude_local(root, ".board/id")
+
+
+def exclude_local(root, name):
+    """One of the project's paths (relative to its folder) in the repository's own exclude list, which is never
+    committed, so `git add -A` leaves it out; nothing where the folder isn't in a git repository."""
     found = subprocess.run(["git", "-C", str(root), "rev-parse", "--path-format=absolute", "--git-path", "info/exclude",
                             "--show-prefix"], capture_output=True, text=True)
     if found.returncode:
         return
     path, prefix = (found.stdout.splitlines() + ["", ""])[:2]
-    line, path = f"/{prefix}.board/id", Path(path)
+    line, path = f"/{prefix}{name}", Path(path)
     have = path.read_text() if path.exists() else ""
     if line not in have.splitlines():
         path.parent.mkdir(parents=True, exist_ok=True)

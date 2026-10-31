@@ -4,6 +4,7 @@ Only launch() changes lifecycle. Rendering commands, fingerprints and settings
 does not start a daemon. SIGHUP drains admitted turns and never forces shutdown.
 """
 import argparse
+from contextlib import suppress
 import hashlib
 import json
 import os
@@ -67,7 +68,7 @@ def check_version(version=None):
     version = version if version is not None else providers.get('codex').version()
     number = release(version)
     tests = Path(__file__).resolve().parent.parent / 'tests' / 'test_codex_remote.py'
-    if not number or supported_version(version) or number in checked() or not tests.exists():
+    if not number or supported_version(version) or number in checked() or not tests.exists() or held():
         return None
     board.home().mkdir(parents=True, exist_ok=True)
     with (board.home() / 'codex-check.lock').open('a+') as lock:
@@ -75,25 +76,88 @@ def check_version(version=None):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return None
-        if number in checked():
+        if number in checked() or held():
             return None
+        process = subprocess.Popen([sys.executable, '-c', CHECK, number], cwd=tests.parent.parent, text=True,
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _record_check('check', process.pid)
         try:
-            r = subprocess.run([sys.executable, '-c', CHECK, number], cwd=tests.parent.parent, capture_output=True,
-                               text=True, timeout=1800)
-            passed, detail = r.returncode == 0, (r.stderr or r.stdout)[-600:]
+            out, err = process.communicate(timeout=1800)
+            if process.returncode < 0:
+                return None                 # stopped (colony stop --still): checked again once colony runs
+            passed, detail = process.returncode == 0, (err or out)[-600:]
         except subprocess.TimeoutExpired:
+            _stop_tree(process.pid, process_start(process.pid))
+            process.communicate()
             passed, detail = False, 'the checks did not finish in 30 minutes'
+        finally:
+            _record_check('check', None)
         record = dict(at=board.now(), passed=passed, detail=detail)
         atomic_json(board.home() / 'codex-checked.json', dict(checked(), **{number: record}))
         return record
 
 
+def held():
+    """Colony is still, being stilled, or a restored copy waiting for the person's check: no check starts then."""
+    from . import board, handover
+    return board.restore_held() or handover.stilled()
+
+
+def _check_path():
+    from . import board
+    return board.home() / 'codex-check.json'
+
+
+def _record_check(role, pid):
+    """What a check runs, kept by its process (the detached starter, the checks themselves) so a still stop can end
+    it with all it started: it runs Codex app hosts of its own, in sessions of their own, that no project home names."""
+    with suppress(OSError):
+        rows = read_json(_check_path())
+        if pid is None:
+            rows.pop(role, None)
+        else:
+            rows[role] = dict(pid=pid, start=process_start(pid))
+        atomic_json(_check_path(), rows)
+
+
+def _stop_tree(pid, start, timeout=15):
+    """End a process and everything under it (by parent links, which a new session keeps); returns those left."""
+    from . import console
+    if not start or process_start(pid) != start:
+        return []
+    tree = {p: process_start(p) for p in console._descendants(pid)}
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for p, began in tree.items():
+            if began and process_start(p) == began:
+                with suppress(OSError):
+                    os.kill(p, sig)
+        deadline = time.time() + timeout
+        while time.time() < deadline and any(b and process_start(p) == b for p, b in tree.items()):
+            time.sleep(0.1)
+    return [p for p, b in tree.items() if b and process_start(p) == b]
+
+
+def stop_check():
+    """End a running check of a new Codex and what it started; returns the processes that didn't stop."""
+    left = []
+    for row in read_json(_check_path()).values():
+        if isinstance(row, dict) and row.get('pid'):
+            left += _stop_tree(int(row['pid']), row.get('start'))
+    if not left:
+        _check_path().unlink(missing_ok=True)
+    return left
+
+
 def start_check():
     """check_version in the background, detached, so a console starting meanwhile isn't held up: it comes up local,
-    and reloads onto app access at its next idle moment once the check passes (Codex.stale)."""
+    and reloads onto app access at its next idle moment once the check passes (Codex.stale). Not while colony is
+    still or waiting for the person's check."""
     from . import providers
-    subprocess.Popen(providers.own_module('colony.codex_remote') + ['check'], stdin=subprocess.DEVNULL,
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    if held():
+        return
+    process = subprocess.Popen(providers.own_module('colony.codex_remote') + ['check'], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    _record_check('detached', process.pid)
 
 
 def home_for(root):
@@ -723,7 +787,11 @@ def main():
     if args.action == 'hook':
         return hook()
     if args.action == 'check':
-        record = check_version()
+        try:
+            record = check_version()
+        finally:
+            if read_json(_check_path()).get('detached', {}).get('pid') == os.getpid():
+                _record_check('detached', None)
         return 0 if record is None or record['passed'] else 1
     import fcntl
     home = home_for(args.project)
