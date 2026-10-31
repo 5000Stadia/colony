@@ -588,15 +588,22 @@ class ContextTest(unittest.TestCase):
 
 
 class WaitingTest(unittest.TestCase):
-    """R137: a check before each shell command turns back a sleep-and-check, for both programs."""
-    TURNED_BACK = ["sleep 30", "sleep 5s", "sleep 1m", "sleep 7.5", "sleep 1 2 3", "sleep infinity",
-                   "while ! test -f x; do sleep 10; done", "sleep 60 && tail -5 out.log",
-                   "until curl -s localhost:8790/healthz; do sleep 1; done", "for i in 1 2 3; do sleep 1; ls; done",
-                   "(sleep 10; ls)", "x=$(sleep 6; date)", "cd x &&\nsleep 20\ncat log"]
+    """R137: a check before each shell command turns back waiting on a clock, for both programs; a loop inside one
+    command waits on its condition in a single step and goes through."""
+    TURNED_BACK = ["sleep 30", "sleep 5s", "sleep 1m", "sleep 7.5", "sleep 1 2 3", "sleep infinity", "sleep 120",
+                   "sleep 60 && tail -5 out.log", "sleep 45; grep -c ERROR out.log", "sleep 45 && grep -q ok log",
+                   "(sleep 10; ls)", "x=$(sleep 6; date)", "cd x &&\nsleep 20\ncat log",
+                   "for f in *.log; do echo $f; done; sleep 30; ls",
+                   "while true; do for i in 1 2; do ls; done; done; sleep 60"]
     LET_THROUGH = ["sleep 3; curl -s http://127.0.0.1:8790/healthz", "sleep 2; pgrep -af colony", "sleep 2; curl -s x",
                    "cd x && sleep 4.9", "for f in *.log; do echo $f; done; sleep 2", "echo sleep 30",
                    "grep -n 'sleep 30' f", "sleep 30 &", "sleep $N", "python3 -c 'import time; time.sleep(30)'",
-                   "cat > f <<EOF\nsleep 30\nEOF\nls", "git status", ""]
+                   "cat > f <<EOF\nsleep 30\nEOF\nls", "git status", "",
+                   "while ! test -f x; do sleep 10; done",
+                   "timeout 400 bash -c 'until curl -sf localhost:8790/healthz; do sleep 3; done'",
+                   "for i in 1 2 3; do curl -s localhost:8790/healthz; sleep 1; done",
+                   "until curl -s x; do sleep 30; done; tail -5 out.log",
+                   "while true; do for i in 1 2; do ls; done; sleep 60; done"]
 
     def payload(self, program, command, **extra):
         tool = "Bash" if program == "claude" else "exec_command"
@@ -624,9 +631,10 @@ class WaitingTest(unittest.TestCase):
                 with self.subTest(program=program, command=command):
                     said = self.run_hook(program, json.dumps(self.payload(program, command)))
                     self.assertEqual(said, "{}" if program == "codex" else "")
-        self.assertIn("run_in_background", providers.get("claude").WAIT_FREE)
-        self.assertIn("Monitor", providers.get("claude").WAIT_FREE)
+        self.assertIn("background", providers.get("claude").WAIT_FREE)
+        self.assertIn("until <check>", providers.get("claude").WAIT_FREE)
         self.assertIn("wait_agent", providers.get("codex").WAIT_FREE)
+        self.assertIn("long sleep", providers.get("codex").WAIT_FREE)
         # Codex reports its shell as Bash too, and may send its arguments as a JSON string
         codex = dict(self.payload("codex", "sleep 30"), tool_name="Bash")
         self.assertIn("deny", self.run_hook("codex", json.dumps(codex)))

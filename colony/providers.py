@@ -613,9 +613,9 @@ class ClaudeCode(Provider):
     # agent when it finishes.
     tool_hooks = {"PreToolUse": ("Bash", "colony context --hook wait --console claude")}
     SHELL_TOOLS, SHELL_BACKGROUND = ("Bash",), "run_in_background"
-    WAIT_FREE = ("colony: this waits by sleeping, and each check re-reads your whole conversation. Run it with "
-                 "run_in_background and end your turn: you're woken when it finishes. For a condition, use the Monitor "
-                 "tool; helpers wake you when they finish. (A pause under 5 s goes through.)")
+    WAIT_FREE = ("Waiting on a clock means coming back to check. Run it in the background and end your turn, and "
+                 "you're woken when it finishes. Or wait inside one command until it's true: "
+                 "`until <check>; do sleep 2; done`.")
 
     def gather(self, root, dest):
         """PROVIDER: Claude Code follows directory links at its path-derived project keys."""
@@ -1921,13 +1921,13 @@ class Codex(Provider):
              "Stop": "colony turn --console codex && printf '{}\\n'",
              "PreCompact": "colony context --hook before --console codex"}  # Stop requires JSON output
     # PROVIDER: Codex matches its shell and unified exec (exec_command) as Bash, the command at tool_input.command
-    # (learn.chatgpt.com/docs/hooks), nested calls from code mode too. Its clock sleep is left alone: one wait that
-    # already ends on new input, not a loop of checks, and the only way it has to wait on time itself.
+    # (learn.chatgpt.com/docs/hooks), nested calls from code mode too. Its sleep tool is left alone: it ends when news
+    # arrives, so a long one is a free wait; the guidance asks for one long sleep rather than short ones.
     tool_hooks = {"PreToolUse": ("Bash", "colony context --hook wait --console codex")}
     SHELL_TOOLS, HOOK_NEEDS_JSON = ("Bash", "exec_command", "shell", "shell_command", "local_shell"), True
-    WAIT_FREE = ("colony: this waits by sleeping, and each check re-reads your whole conversation. Start the command "
-                 "and wait on its running cell, or use wait_agent for helpers: both wake you for free. (A pause under "
-                 "5 s goes through.)")
+    WAIT_FREE = ("Waiting on a clock means coming back to check. Start the command and wait on its running cell, or "
+                 "use one long sleep or wait_agent with a long timeout: both end when news arrives. Or wait inside one "
+                 "command until it's true: `until <check>; do sleep 2; done`.")
     # colony's permission choices, in Codex's terms
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
