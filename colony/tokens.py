@@ -199,7 +199,7 @@ def sources():
     found = []
     from . import providers as pv
     bases = [(Path(pv.get("claude").config_home()) / "projects", "claude"), (Path(pv.get("codex").config_home()) / "sessions", "codex")]
-    bases += [(d / "sessions", "codex") for d in (board.home() / "codex-remote").glob("*")]   # the remote sessions colony keeps
+    bases += [(d / "sessions", "codex") for d in board.codex_homes().glob("*")]   # the remote sessions colony keeps
     for base, prog in bases:
         if base.exists():
             for f in base.rglob("*.jsonl"):
@@ -309,7 +309,7 @@ def _owner(cwd, roots, steward):
         return ("colony", ASKS.get(cwd[7:], "Other asks"))
     if cwd == str(steward) or cwd.startswith(str(steward) + "/"):
         return ("colony", "Steward")
-    twin = re.match(re.escape(str(board.home() / "agents")) + r"/([^/]+?)(?:-codex)?(?:/|$)", cwd)
+    twin = re.match(re.escape(str(board.agents_home())) + r"/([^/]+?)(?:-codex)?(?:/|$)", cwd)
     if twin:                                            # a project's agent from the other program, kept in colony's folder
         mine = [r for r in roots if Path(r).name == twin[1]]
         return ("project", twin[1]) if mine else ("colony", "Other asks")

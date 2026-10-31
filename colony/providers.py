@@ -1622,7 +1622,7 @@ class Codex(Provider):
         paths = [source / 'models_cache.json']
         # Only hosts sharing this sign-in may supply this account's catalog. Prefer
         # the newer client, then its freshest snapshot; never union removed models.
-        for host in (board.home() / 'codex-remote').glob('*'):
+        for host in board.codex_homes().glob('*'):
             auth = host / 'auth.json'
             if auth.is_symlink() and auth.resolve() == (source / 'auth.json').resolve():
                 paths.append(host / 'models_cache.json')
@@ -2193,7 +2193,7 @@ class Codex(Provider):
         from . import board
         here = str(board.workdir(root).resolve())
         turns, open_ = {}, {}
-        for home in [self.config_home(), *(board.home() / "codex-remote").glob("*")]:
+        for home in [self.config_home(), *board.codex_homes().glob("*")]:
             if not (home / "state_5.sqlite").exists():
                 continue
             try:

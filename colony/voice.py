@@ -35,7 +35,7 @@ _lock, _worker = threading.Lock(), {}
 
 
 def folder():
-    return board.home() / "voice"
+    return board.cache() / "voice"
 
 
 def python():

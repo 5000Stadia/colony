@@ -216,8 +216,45 @@ SKELETON = """# Roadmap
 
 # ---------------------------------------------------------------- registry (the board's own memory)
 
+def colony_folder():
+    """The portable folder, once marked. A separate test board never adopts the person's layout."""
+    folder = Path.home() / "Colony"
+    override = os.environ.get("COLONY_BOARD_HOME")
+    if override and Path(override).expanduser().absolute() != folder / "home":
+        return None
+    return folder if (folder / "COLONY.json").is_file() else None
+
+
 def home():
-    return Path(os.environ.get("COLONY_BOARD_HOME", Path.home() / ".config" / "colony"))
+    folder = colony_folder()
+    return Path(os.environ.get("COLONY_BOARD_HOME", folder / "home" if folder else Path.home() / ".config" / "colony"))
+
+
+def cache():
+    """Things colony can make again stay on this machine after the layout changes over."""
+    if colony_folder():
+        return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "colony"
+    return home()
+
+
+def codex_homes():
+    """Per-project program homes stay on this machine, apart from the portable colony."""
+    return machine_state() / "codex" if colony_folder() else home() / "codex-remote"
+
+
+def agents_home():
+    folder = colony_folder()
+    return folder / "projects" / ".agents" if folder else home() / "agents"
+
+
+def items_home():
+    folder = colony_folder()
+    return folder / "projects" / ".items" if folder else home() / "items"
+
+
+def projects_home():
+    folder = colony_folder()
+    return folder / "projects" if folder else PACKAGE_PROJECTS
 
 
 # Colony-owned secrets, relative to secrets(): also the archive's exclusion list. Provider-owned sign-ins stay
@@ -255,7 +292,7 @@ def _move_secret(old, new):
 
 def secrets(*, create=True):
     """Machine-local keys. A test board gets its own sibling folder; listing an archive must not create or move it."""
-    default = home().with_name(home().name + "-secrets") if "COLONY_BOARD_HOME" in os.environ else \
+    default = home().with_name(home().name + "-secrets") if "COLONY_BOARD_HOME" in os.environ and not colony_folder() else \
         Path.home() / ".config" / "colony"
     folder = Path(os.environ.get("COLONY_SECRETS_HOME", default)).expanduser()
     if create:
@@ -276,7 +313,7 @@ def secrets(*, create=True):
 
 def machine_state():
     """State that stays on this machine when colony's home is copied. Test boards keep theirs beside their home."""
-    if "COLONY_BOARD_HOME" in os.environ:
+    if "COLONY_BOARD_HOME" in os.environ and not colony_folder():
         path = home().resolve()
         return path.with_name(path.name + "-machine")
     return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "colony"
@@ -291,7 +328,7 @@ def scoped(base):
     """A tmux session name for this board: plain for the person's own board, suffixed for any other home,
     so a second board (a test, a demo) never touches the first one's sessions."""
     default = Path.home() / ".config" / "colony"
-    return base if home() == default else f"{base}-{hashlib.sha1(str(home()).encode()).hexdigest()[:6]}"
+    return base if home() == default or colony_folder() else f"{base}-{hashlib.sha1(str(home()).encode()).hexdigest()[:6]}"
 
 
 PACKAGE_PROJECTS = Path(__file__).resolve().parent.parent / "projects"
@@ -302,8 +339,9 @@ def registry():
     reg = json.loads(path.read_text()) if path.exists() else {}
     reg.setdefault("projects", [])                     # added one by one, anywhere
     reg.setdefault("seen", {})
-    reg.setdefault("roots", [str(PACKAGE_PROJECTS)])  # folders whose every subfolder is a project
-    reg.setdefault("new_root", reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS))
+    reg.setdefault("roots", [str(projects_home())])  # folders whose every subfolder is a project
+    reg.setdefault("new_root", str(projects_home()) if colony_folder() else
+                   reg["roots"][0] if reg["roots"] else str(projects_home()))
     reg.setdefault("hidden", [])                       # subfolders of project folders taken off the board
     old = reg.get("settings", {})
     if "usage_pause" in old:                           # its name before "safe pause"
@@ -764,7 +802,7 @@ def sharing(path, name, chosen, role='helper'):
     work = Path(path).expanduser().resolve()
     if not work.is_dir():
         raise ValueError(f"no folder {path}")
-    root = home() / "agents" / name
+    root = agents_home() / name
     if any(p.name == name for p in projects()):
         raise ValueError(f"a project named {name} is already on the board")
     mine = providers.get(chosen.get("provider") or registry()["settings"]["provider"])
@@ -4996,7 +5034,7 @@ def _feed_file(root, st, since):
     if (st.get("offset") == stat.st_size and st.get("identity") == [stat.st_dev, stat.st_ino]
             and st.get("stamp") == [stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]):
         return
-    scratch = home() / "line-scratch" / (hashlib.sha1(str(root).encode()).hexdigest()[:12] + ".jsonl")
+    scratch = cache() / "line-scratch" / (hashlib.sha1(str(root).encode()).hexdigest()[:12] + ".jsonl")
     with open(path, "rb") as fh:
         stat = os.fstat(fh.fileno())
         size, identity = stat.st_size, [stat.st_dev, stat.st_ino]
@@ -10550,7 +10588,7 @@ class Handler(BaseHTTPRequestHandler):
                 if form.get("remove") in reg["roots"]:
                     reg["roots"].remove(form["remove"])
                     if reg["new_root"] == form["remove"]:
-                        reg["new_root"] = reg["roots"][0] if reg["roots"] else str(PACKAGE_PROJECTS)
+                        reg["new_root"] = reg["roots"][0] if reg["roots"] else str(projects_home())
                 if form.get("default") in reg["roots"]:
                     reg["new_root"] = form["default"]
                 if form.get("untrack") in reg["projects"]:

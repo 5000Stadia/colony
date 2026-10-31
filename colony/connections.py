@@ -289,7 +289,7 @@ def discover_chatgpt():
     if not providers.usable(providers.get("codex")):
         return None
     apps = None
-    for sock in sorted(board.home().glob("codex-remote/*/app-server-control/app-server-control.sock")):
+    for sock in sorted(board.codex_homes().glob("*/app-server-control/app-server-control.sock")):
         try:
             with Client(sock, timeout=40) as c:
                 apps = c.call("app/list", {}).get("data") or []

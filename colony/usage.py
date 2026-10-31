@@ -49,7 +49,7 @@ _live = {}
 def _codex_live():
     from . import codex_remote
     from .codex_rpc import Client, RPCError
-    for home in sorted((h for h in (board.home() / "codex-remote").glob("*") if h.is_dir()),
+    for home in sorted((h for h in board.codex_homes().glob("*") if h.is_dir()),
                        key=lambda h: h.stat().st_mtime, reverse=True):
         if not codex_remote.alive(home):
             continue
@@ -73,7 +73,7 @@ def codex(home=None):
     end is read, since sessions grow large."""
     from .providers import get
     homes = [Path(home)] if home else [Path(get("codex").config_home()),
-                                        *(h for h in (board.home() / "codex-remote").glob("*") if h.is_dir())]
+                                        *(h for h in board.codex_homes().glob("*") if h.is_dir())]
     files = [f for h in homes if (h / "sessions").exists() for f in (h / "sessions").glob("*/*/*/*.jsonl")]
     for f in sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:8]:
         try:

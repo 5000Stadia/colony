@@ -123,7 +123,7 @@ def _text(content):
 
 def transcript(s):
     """PROVIDER: incrementally read exact prose and last-request usage, not lifetime spend."""
-    cache_file = board.home() / 'context-cache' / (hashlib.sha256((s['provider'] + s['path']).encode()).hexdigest() + '.json')
+    cache_file = board.cache() / 'context-cache' / (hashlib.sha256((s['provider'] + s['path']).encode()).hexdigest() + '.json')
     cache_file.parent.mkdir(parents=True, exist_ok=True)
     with cache_file.with_suffix('.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)

@@ -99,7 +99,7 @@ def start_check():
 def home_for(root):
     from . import board
     key = 'steward' if context.is_monitor(root) else hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:12]
-    return board.home() / 'codex-remote' / key
+    return board.codex_homes() / key
 
 
 def workdir(root):
@@ -150,7 +150,7 @@ def status(root):
 def statuses():
     from . import board
     result = []
-    for home in sorted((board.home() / 'codex-remote').glob('*')):
+    for home in sorted(board.codex_homes().glob('*')):
         if not home.is_dir():
             continue
         value = dict(read_json(home / 'colony-status.json'), running=alive(home), home=str(home))
@@ -452,7 +452,7 @@ def hosts(keep):
     """The pids of the running app hosts whose projects are in `keep`."""
     from . import board
     out = set()
-    for home in (board.home() / 'codex-remote').glob('*'):
+    for home in board.codex_homes().glob('*'):
         record = read_json(home / 'colony-daemon.json')
         if record.get('project') and str(Path(record['project']).resolve()) in keep and alive(home):
             out.add(int(record['pid']))
@@ -465,7 +465,7 @@ def let_go(keep):
     idle, so a turn the ChatGPT app is running finishes; one that answers nothing is stopped. The projects let go."""
     from . import board
     out = []
-    for home in sorted((board.home() / 'codex-remote').glob('*')):
+    for home in sorted(board.codex_homes().glob('*')):
         project = read_json(home / 'colony-daemon.json').get('project')
         if not project or not alive(home) or str(Path(project).resolve()) in keep:
             continue

@@ -377,7 +377,7 @@ def start_item(root, item, *, actor=None):
     workspace = board.workdir(Path(responsible))
     branch = None
     if responsible != g['lead'] and base:
-        workspace = board.home() / 'items' / g['id'] / (item + '-' + str(g['generation']))
+        workspace = board.items_home() / g['id'] / (item + '-' + str(g['generation']))
         branch = 'colony-item/' + g['id'] + '/' + item + '-' + str(g['generation'])
         if workspace.exists():
             if not old or old['state'] != 'integrated' or not clean(workspace):
@@ -747,7 +747,7 @@ def integrate(root, item, tests, *, actor=None, deploy='', push=False):
             if value['branch'] and 'ROADMAP.md' in git(workspace, 'diff', '--name-only',
                                                         value['base'] + '...' + value['commit']).splitlines():
                 raise ValueError('A helper changed a roadmap copy. Propose that change to the lead.')
-            bench = board.home() / 'items' / g['id'] / 'integration'
+            bench = board.items_home() / g['id'] / 'integration'
             if not (bench / '.git').exists():
                 shutil.rmtree(bench, ignore_errors=True)
                 git(source, 'worktree', 'prune', check=False)
