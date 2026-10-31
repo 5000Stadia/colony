@@ -7,17 +7,20 @@ migration".
     colony migrate --list            what a pack takes, part by part, with sizes, and what it leaves out; writes nothing
     colony migrate --pack DIR        one archive (.tar.zst; .tar.gz where zstd is missing) and its manifest into DIR,
                                      with the program to unpack it with (colony.pyz); the archive is then read back whole
-    colony migrate --unpack ARCHIVE  on the new machine: everything back at its own path, then what belongs to the
-                                     machine made again, and what to sign in to
+    colony migrate --unpack ARCHIVE  on the new machine: everything back at its own path (under this home folder,
+                                     where it was packed under another), then what belongs to the machine made again,
+                                     and what to sign in to
 
 A pack takes colony's home, every project folder on the board and on its Archived shelf (they come back from there),
 each one's conversations (Claude Code's folders of them, the steward's too; Codex's are in colony's home), and the
 colony program's own checkout with its git history. It leaves out what the new machine makes again (a Python
 environment, node_modules, caches, the voice's model) and every sign-in and key, which the person enters again there.
 An archive and not loose files: the disk it goes on may keep neither permissions nor links (NTFS). Paths are kept
-whole, so the same username unpacks everything in place; another home folder is refused for now (re-pointing comes
-with the one-folder layout).
+whole, so the same username unpacks everything in place. Under another home folder, what was under the old one comes
+back at the same place under this one, and everything colony keeps is re-pointed from the old paths to the new in one
+journaled pass: its records, each project's program histories, the folders named by a hash of a path, git worktrees.
 """
+import copy
 import io
 import json
 import os
@@ -450,12 +453,25 @@ def _strays(plan, machine):
     return sorted(found)
 
 
+def _project_keys(reg):
+    """The keys projects keep on this machine (keep_project_keys), never packed: [{project, folder, files}], by name
+    only, so the new machine can say which to enter again and where each project's links expect them."""
+    keys = board.secrets(create=False) / "project-keys"
+    names = {value: Path(path).name for value, path in (reg.get("ids") or {}).items()}
+    out = []
+    for folder in sorted(keys.iterdir()) if keys.is_dir() else ():
+        files = sorted(str(p.relative_to(folder)) for p in folder.rglob("*") if p.is_file() and not p.is_symlink())
+        if folder.is_dir() and files:
+            out.append({"project": names.get(folder.name, folder.name), "folder": str(folder), "files": files})
+    return out
+
+
 def manifest(plan, reg=None):
     """What the archive holds and leaves out, for the person and for the unpack: of a key, only its name."""
     settings = machine(reg)
     return {"colony_migrate": FORMAT, "made": board.now(), "machine_name": socket.gethostname(),
             "user": os.environ.get("USER", ""), "home": str(Path.home()), "colony_home": str(board.home()),
-            "program": str(program()) if program() else None,
+            "program": str(program()) if program() else None, "project_keys": _project_keys(reg or board.registry()),
             "parts": [{"kind": p["kind"], "name": p["name"], "path": str(p["path"]), "inside": p["inside"],
                        "files": p["files"], "bytes": p["bytes"]} for p in plan.parts],
             "files": plan.files, "bytes": plan.bytes,
@@ -758,10 +774,11 @@ def pack(dest, say=print):
 
 # ---------------------------------------------------------------- unpacking
 
-def _guard(note):
+def _guard(note, pairs=()):
     """The extraction filter: tar's own (no device files, nothing outside its destination, no setuid bits), and besides,
     each member only inside a part the manifest names, never written through a link the archive itself made.
-    Permissions stay as they were packed (tar's own filter would take away group write)."""
+    Permissions stay as they were packed (tar's own filter would take away group write). Under another home (pairs),
+    each member goes to its place here, and a link naming a path under the old home names the same place here."""
     roots = [p["path"].lstrip("/") for p in note["parts"]]
     links = set()
 
@@ -774,6 +791,13 @@ def _guard(note):
             raise ValueError(f"/{name} would be written through a link in the archive")
         if member.issym():
             links.add(name)
+        if pairs:
+            member = copy.copy(member)
+            member.name = _place("/" + name, pairs).lstrip("/")
+            if member.issym() and member.linkname.startswith("/"):
+                member.linkname = _place(member.linkname, pairs)
+            elif member.islnk():                             # a hard link names another member
+                member.linkname = _place("/" + member.linkname.lstrip("/"), pairs).lstrip("/")
         if hasattr(tarfile, "tar_filter"):
             member = tarfile.tar_filter(member, dest).replace(mode=member.mode & 0o777, deep=False)
         return member
@@ -785,11 +809,64 @@ def _board_running():
                           capture_output=True).returncode == 0
 
 
+def _place(path, pairs):
+    """Where a path of the machine that packed the archive is on this one."""
+    from .repoint import swap
+    return swap(str(path), [tuple(p) for p in pairs])
+
+
+def _moves(note):
+    """How the archive's paths move here, as [(old, new)] prefixes, most particular first: colony's home, where it
+    lands somewhere other than the home folder's move puts it (a board given its own home), then the old home folder
+    to this one. Empty under the same home: everything back at its own path, as packed."""
+    old_home, here = note["home"], str(Path.home())
+    by_home = _place(note["colony_home"], [(old_home, here)])
+    colony = str(board.home()) if "COLONY_BOARD_HOME" in os.environ else by_home
+    pairs = [(note["colony_home"], colony)] if colony != by_home else []
+    return pairs + ([(old_home, here)] if old_home != here else [])
+
+
+def _unwritable(note, pairs):
+    """The parts kept outside the old home, which come back at their own path, that can't be written there."""
+    out = []
+    for p in note["parts"]:
+        if p["inside"] or _place(p["path"], pairs) != p["path"]:
+            continue
+        probe = Path(p["path"])
+        while not (probe.exists() or probe.is_symlink()) and probe != probe.parent:
+            probe = probe.parent
+        if not os.access(probe if probe.is_dir() else probe.parent, os.W_OK):
+            out.append(p["path"])
+    return out
+
+
+def _journal():
+    """The record of an unpack under another home still being re-pointed: on this machine, outside what was unpacked."""
+    return board.machine_state() / "unpack.json"
+
+
+def _save_journal(path, value):
+    board.save_json(path, value)
+    with open(path, "rb") as stream:
+        os.fsync(stream.fileno())
+
+
 def unpack(archive, force=False, say=print):
-    """colony migrate --unpack ARCHIVE: everything back at its own path, then what belongs to this machine made again."""
+    """colony migrate --unpack ARCHIVE: everything back at its own path (or its place under this home folder, then
+    re-pointed), then what belongs to this machine made again."""
     archive = Path(archive).expanduser().resolve()
     if not archive.is_file():
         raise SystemExit(f"colony: no archive at {archive}")
+    journal = _journal()
+    try:
+        begun = json.loads(journal.read_text())
+    except (OSError, ValueError):
+        begun = None
+    if begun and begun.get("archive") != str(archive):
+        if not force:
+            raise SystemExit(f"colony: unpacking {begun.get('archive')} here hasn't finished: colony migrate --unpack "
+                             "that archive again finishes it (--force unpacks this one instead)")
+        begun = None
     with _Reading(archive) as r:
         first = r.tar.next()
         if first is None or first.name != MANIFEST:
@@ -798,38 +875,162 @@ def unpack(archive, force=False, say=print):
         if note.get("colony_migrate") != FORMAT:
             raise SystemExit(f"colony: {archive} was made by another version of colony migrate: unpack it with the "
                              "colony.pyz packed beside it")
-        if note["home"] != str(Path.home()) or note["colony_home"] != str(board.home()):
-            raise SystemExit(f"colony: this archive was made for the home folder {note['home']} (colony's in "
-                             f"{note['colony_home']}), and here it is {Path.home()} (colony's in {board.home()}). Unpack "
-                             "it signed in with the same username; moving colony to another home folder comes later.")
-        if board.home().exists() and any(board.home().iterdir()) and not force:
-            raise SystemExit(f"colony: {board.home()} already holds a colony, which unpacking would write over: --force "
-                             "does, if that's what you want")
+        pairs = [tuple(p) for p in begun["pairs"]] if begun else _moves(note)
+        if not begun:
+            target = Path(_place(note["colony_home"], pairs))
+            for home in dict.fromkeys([board.home(), target]):
+                if home.exists() and any(home.iterdir()) and not force:
+                    raise SystemExit(f"colony: {home} already holds a colony, which unpacking would write over: --force "
+                                     "does, if that's what you want")
         if shutil.which("tmux") and _board_running():
             raise SystemExit("colony: colony is running here: colony stop first, then unpack")
-        free = shutil.disk_usage(Path.home()).free
-        if free < note["bytes"]:
-            raise SystemExit(f"colony: the archive holds {size(note['bytes'])}, and {Path.home()} has {size(free)} free")
-        try:
-            made = time.strftime("%Y-%m-%d %H:%M", time.localtime(board.epoch(note["made"])))
-        except (KeyError, ValueError):
-            made = "at an unknown time"
-        say(f"Unpacking colony from {note['machine_name']}, packed {made}: {note['files']:,} files, "
-            f"{size(note['bytes'])}, each to its own path…")
-        try:
-            r.tar.extractall("/", members=r.members(), filter=_guard(note))
-        except (OSError, ValueError, tarfile.TarError) as err:      # a member refused, or one that couldn't be written
-            raise SystemExit(f"colony: unpacking stopped: {err}. What was unpacked before it stays; once that's put "
-                             "right, --force unpacks it all again")
-        r.whole = True
+        if not (begun and "extract" in begun["done"]):
+            free = shutil.disk_usage(Path.home()).free
+            if free < note["bytes"]:
+                raise SystemExit(f"colony: the archive holds {size(note['bytes'])}, and {Path.home()} has {size(free)} free")
+            stuck = _unwritable(note, pairs) if pairs else []
+            if stuck:
+                raise SystemExit("colony: nothing unpacked: these were kept outside the home folder there and come back "
+                                 f"at their own path, which can't be written here: {', '.join(stuck)}. Make each "
+                                 "writable for this user (or its folder), then unpack again")
+            try:
+                made = time.strftime("%Y-%m-%d %H:%M", time.localtime(board.epoch(note["made"])))
+            except (KeyError, ValueError):
+                made = "at an unknown time"
+            say(f"Unpacking colony from {note['machine_name']}, packed {made}: {note['files']:,} files, "
+                f"{size(note['bytes'])}, each to its own path"
+                + (f" (what was under {note['home']} to its place under {Path.home()})" if pairs else "") + "…")
+            if pairs and not begun:
+                begun = {"archive": str(archive), "pairs": pairs, "done": []}
+                _save_journal(journal, begun)
+            try:
+                r.tar.extractall("/", members=r.members(), filter=_guard(note, pairs))
+            except (OSError, ValueError, tarfile.TarError) as err:      # a member refused, or one that couldn't be written
+                raise SystemExit(f"colony: unpacking stopped: {err}. What was unpacked before it stays; once that's put "
+                                 "right, --force unpacks it all again")
+            r.whole = True
+            if begun:
+                begun["done"].append("extract")
+                _save_journal(journal, begun)
     from . import handover
     handover.hold_restore("This colony was unpacked from an archive.")
+    if begun:
+        try:
+            _follow(note, begun, journal, say)
+        except (OSError, ValueError) as err:
+            raise SystemExit(f"colony: unpacked, but re-pointing it to this home folder stopped: {err}. Once that's put "
+                             f"right, colony migrate --unpack {archive} again finishes it from where it stopped")
+        from .repoint import swap
+        note = swap(note, pairs)                         # what remake names, at its place here
     kinds = [p["kind"] for p in note["parts"]]
     say(f"Unpacked: colony's home, {kinds.count('project')} project folder(s) on the board and {kinds.count('archived')} "
         f"archived, {kinds.count('claude')} folder(s) of Claude Code's conversations"
         + (", and the colony program" if "program" in kinds else "") + ".")
     remake(note, say=say)
     return note
+
+
+def _folders(note):
+    """The project folders the archive and the board name: on the board and its shelf, by path and by identity."""
+    reg = board.registry()
+    olds = [p["path"] for p in note["parts"] if p["kind"] in ("project", "archived")]
+    return list(dict.fromkeys(olds + [*reg["projects"], *(reg.get("ids") or {}).values()]))
+
+
+def _roots(note, pairs):
+    """The folders whose .board/ may name a path from before (each at its place here): the projects on the board and
+    its shelf, second agents, and the lead's item worktrees."""
+    roots = [Path(_place(p, pairs)) for p in _folders(note)]
+    for base in (board.items_home(), board.agents_home()):
+        roots += [b.parent for b in [*base.glob("*/.board"), *base.glob("*/*/.board")]]
+    return list(dict.fromkeys(roots))
+
+
+def _codex_home(home, old, new):
+    """PROVIDER: the paths inside one of colony's stopped Codex homes that name `old` (a folder, or under it) say `new`.
+    The Codex adapter's re-point for a moved project does this, so it is borrowed: for the call the home takes the name
+    `new` would give it, where the adapter finds it and rewrites what it holds (rollouts, databases, config and
+    records), then it takes its own name back. A pass interrupted between the two names puts it back first."""
+    from . import codex_remote, providers
+    stand = codex_remote.home_for(new)
+    if (stand.exists() or stand.is_symlink()) and not home.exists():
+        stand.rename(home)
+    if not home.is_dir():
+        return
+    if stand.exists() or stand.is_symlink():
+        raise ValueError(f"{stand} is in the way of re-pointing {home}")
+    home.rename(stand)
+    try:
+        providers.get("codex").repoint_history(old, new)
+    finally:
+        stand.rename(home)
+
+
+def _follow(note, begun, journal, say):
+    """After unpacking under another home: everything colony keeps re-pointed from the old paths to the new, in one
+    pass of steps, each written to the journal as done, so a pass interrupted anywhere finishes when run again and
+    nothing is done twice. Colony's records first, then what each Codex home holds, the git worktrees, then each
+    project by repoint (its program histories, the folders and keys named by a hash of its path), and the steward's."""
+    from . import console, monitor, providers, repoint
+    pairs = [tuple(p) for p in begun["pairs"]]
+    done = begun["done"]
+
+    def step(name, action):
+        if name not in done:
+            action()
+            done.append(name)
+            _save_journal(journal, begun)
+
+    if "plan" not in begun:                               # read before the records say the new paths
+        codex = board.codex_homes()
+        begun["plan"] = {"projects": [[o, _place(o, pairs)] for o in _folders(note) if _place(o, pairs) != o],
+                         "codex": sorted(d.name for d in codex.iterdir() if d.is_dir() and not d.name.startswith("."))
+                         if codex.is_dir() else []}
+        _save_journal(journal, begun)
+    moved = [(Path(o), Path(n)) for o, n in begun["plan"]["projects"]]
+
+    def records(changes=pairs):
+        for path in sorted(set(repoint.records(_roots(note, pairs)))):
+            repoint.rewrite(path, changes)
+    step("records", records)
+    for name in begun["plan"]["codex"]:
+        step(f"codex:{name}", lambda name=name: [_codex_home(board.codex_homes() / name, old, new) for old, new in pairs])
+
+    def worktrees():
+        mains = [n for _, n in moved] + [Path(_place(p["path"], pairs)) for p in note["parts"] if not p["inside"]]
+        for main in dict.fromkeys(mains):
+            if not (main / ".git").is_dir():
+                continue
+            linked = [str(tree) for link in sorted((main / ".git" / "worktrees").glob("*/gitdir"))
+                      if ((tree := Path(_place(link.read_text().strip(), pairs)).parent) / ".git").is_file()]
+            fixed = subprocess.run(["git", "-C", str(main), "worktree", "repair", *linked], capture_output=True, text=True)
+            if fixed.returncode:
+                raise ValueError(f"git worktree repair failed for {main}: {fixed.stderr.strip()}")
+    step("worktrees", worktrees)
+
+    def history(old, new):
+        """A folder without colony's identity (a second agent's shared folder, an old shelf entry): its histories."""
+        changes = []
+        for name in ("claude", "codex"):
+            changes += providers.get(name).repoint_history(str(old), str(new))[0]
+        if changes:
+            records(changes)
+
+    def project(old, new):
+        if new.is_dir():
+            repoint.repoint(old, new) if board.ident(new, make=False) else history(old, new)
+
+    for old, new in moved:
+        step(f"project:{new}", lambda old=old, new=new: project(old, new))
+    steward = Path(note["colony_home"]) / "monitor", monitor.home()
+    if steward[0] != steward[1]:
+        step("steward", lambda: history(*steward))
+    journal.unlink()
+    lost = [board.name_of(n) for _, n in moved if n.is_dir() and console.saved_conversation(n)
+            and not providers.of(n).verify_history(n)]
+    say(f"Re-pointed from {note['home']} to {Path.home()}: colony's records, {len(moved)} project folder(s) and their "
+        "conversations, git worktrees" + (f". Not found again by its program: {', '.join(lost)}'s conversation (each "
+                                         "starts a fresh one)" if lost else ""))
 
 
 def remake(note, say=print):
@@ -881,7 +1082,9 @@ def remake(note, say=print):
                     + (["Codex (codex login)"] if "codex" in m["providers"] else [])))
     later = (["colony's long-lived Claude sign-in (claude setup-token, pasted in Settings)"] if m["claude_token"] else []) \
         + ([f"the keys of {', '.join(m['connection_keys'])} (the Connections page)"] if m["connection_keys"] else []) \
-        + (["the Artificial Analysis key (colony bench key)"] if m["aa_key"] else [])
+        + (["the Artificial Analysis key (colony bench key)"] if m["aa_key"] else []) \
+        + [f"{row['project']}'s own keys, {', '.join(row['files'])}, into {row['folder']} (where its links expect them)"
+           for row in note.get("project_keys") or []]
     if later:
         say("Then enter again: " + "; ".join(later))
     say("Then start colony: colony board. Nothing runs by itself until you check the restored copy. "
