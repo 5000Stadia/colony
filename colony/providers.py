@@ -247,6 +247,18 @@ class Provider:
         """End a detached host when the person explicitly stops its console."""
         pass
 
+    def gather(self, root, dest):
+        """Put history in dest, leaving pointers the program follows. Caller stops its writers first."""
+        raise NotImplementedError
+
+    def repoint_history(self, old, new):
+        """Return (path replacements, report lines) after moving this program's history."""
+        return [], []
+
+    def verify_history(self, root):
+        """Whether the program can find the bookmarked conversation at its current working folder."""
+        return False
+
     def wire(self, root, protocol, private=False):
         """Put the colony protocol where the CLI reads project instructions, and arrange for `colony notes --deliver`
         output to reach the agent at session start (`--session`) and before each turn typed to it. Rewritten when it
@@ -583,6 +595,54 @@ class ClaudeCode(Provider):
     app, reach = "the Claude app", "Remote Control"
     hooks = {"SessionStart": "colony notes --deliver --session", "UserPromptSubmit": "colony notes --deliver",
              "Stop": "colony turn", "PreCompact": "colony context --hook before --console claude"}
+
+    def gather(self, root, dest):
+        """PROVIDER: Claude Code follows directory links at its path-derived project keys."""
+        from .migrate import claude_key
+        dest = Path(dest).resolve()
+        folder, prefix = self.config_home() / "projects", claude_key(root)
+        paths = [p for p in folder.iterdir() if p.is_dir() and (p.name == prefix or p.name.startswith(prefix + "-"))] if folder.is_dir() else []
+        for path in paths:
+            target = dest / path.name
+            if path.is_symlink() and path.resolve().is_relative_to(dest):
+                continue
+            if path.is_symlink() or target.exists():
+                raise ValueError(f"Claude Code history already exists elsewhere: {path.name}")
+        dest.mkdir(parents=True, exist_ok=True)
+        for path in paths:
+            if not path.is_symlink():
+                target = dest / path.name
+                path.rename(target)
+                path.symlink_to(target, target_is_directory=True)
+        return dest
+
+    def repoint_history(self, old, new):
+        """PROVIDER: keep the old Claude Code key usable by a console still appending there."""
+        from .migrate import claude_key
+        folder = self.config_home() / "projects"
+        was, now = folder / claude_key(old), folder / claude_key(new)
+        if was == now or not was.is_dir():
+            return [], []
+        if now.exists():
+            if was.resolve() != now.resolve():
+                raise ValueError("the destination already has Claude Code history")
+            return [(str(was), str(now))], []
+        if was.is_symlink():
+            now.symlink_to(was.resolve(), target_is_directory=True)
+        else:
+            was.rename(now)
+            was.symlink_to(now, target_is_directory=True)
+        return [(str(was), str(now))], [f"Claude Code's conversations moved to {now.name}"]
+
+    def verify_history(self, root):
+        """PROVIDER: Claude Code's resume lookup is a session file under the cwd's key."""
+        from . import board, console
+        from .migrate import claude_key
+        saved = console.saved_conversation(root, 'claude')
+        if not saved:
+            return False
+        path = self.config_home() / 'projects' / claude_key(board.workdir(root)) / (saved['conversation'] + '.jsonl')
+        return path.is_file() and path.resolve() == Path(saved['transcript']).resolve()
 
     def command(self, label, s, resume=None, root=None):
         """The person's own `claude` with the project's choices: permissions, Remote Control, model, effort;
@@ -1366,6 +1426,21 @@ class Codex(Provider):
     def config_home():
         import os
         return Path(os.environ.get("COLONY_CODEX_SOURCE_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+    def gather(self, root, dest):
+        """PROVIDER: Codex follows linked sessions and SQLite databases in its owned home."""
+        from . import codex_history
+        return codex_history.gather(root, dest)
+
+    def repoint_history(self, old, new):
+        """PROVIDER: Codex's indexed cwd, rollout paths and persisted runtime settings."""
+        from . import codex_history
+        return codex_history.repoint(old, new)
+
+    def verify_history(self, root):
+        """PROVIDER: verify Codex's own index and rollout without spending a turn."""
+        from . import codex_history
+        return codex_history.verify(root)
 
     def version(self):
         return _run([self.program, "--version"])

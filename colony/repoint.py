@@ -129,30 +129,23 @@ def refusal(old, new):
 def repoint(old, new, backup=None):
     """Everything colony keeps about the project at `old` now says `new`. Returns what changed, as lines; raises
     ValueError, changing nothing, when it can't yet (refusal)."""
-    from . import codex_remote, connections, measures, migrate, providers
+    from . import connections, measures, providers
     old, new = str(old), str(new)
     why = refusal(old, new)
     if why:
         raise ValueError(f"Can't re-point {old} to {new} yet: {why}.")
     said, pairs = [], [(old, new)]
-    # Claude Code's history for the folder (PROVIDER: it keys a folder's conversations by its path): moved, with a
-    # link left at the old name so a console that is still running keeps appending where it can be found
-    claude = Path(providers.get("claude").config_home()) / "projects"
-    was, now = claude / migrate.claude_key(old), claude / migrate.claude_key(new)
-    if was.is_dir() and not was.is_symlink() and not now.exists():
-        was.rename(now)
-        was.symlink_to(now, target_is_directory=True)
-        pairs.append((str(was), str(now)))
-        said.append(f"Claude Code's conversations moved to {now.name}")
-    # the folders and keys colony names by a hash of the folder
-    for before, after, what in ((codex_remote.home_for(old), codex_remote.home_for(new), "its Codex home"),
-                                (measures.folder(old), measures.folder(new), "its measures")):
-        if before != after:
-            pairs.append((str(before), str(after)))
-        if before.exists() and not after.exists():
-            after.parent.mkdir(parents=True, exist_ok=True)
-            before.rename(after)
-            said.append(f"{what} renamed")
+    for provider in (providers.get("claude"), providers.get("codex")):
+        replacements, lines = provider.repoint_history(old, new)
+        pairs.extend(replacements)
+        said.extend(lines)
+    before, after = measures.folder(old), measures.folder(new)
+    if before != after:
+        pairs.append((str(before), str(after)))
+    if before.exists() and not after.exists():
+        after.parent.mkdir(parents=True, exist_ok=True)
+        before.rename(after)
+        said.append("its measures renamed")
     for folder in (connections.keys_dir().iterdir() if connections.keys_dir().is_dir() else ()):
         before = folder / (_h(str(Path(old).resolve())) + ".env")
         after = folder / (_h(str(Path(new).resolve())) + ".env")

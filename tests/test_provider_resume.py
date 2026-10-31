@@ -209,3 +209,221 @@ class ProviderResumeTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ProviderHistoryTest(unittest.TestCase):
+    """R127: native paths follow a move, while messages and unrelated database values do not."""
+    def setUp(self):
+        import sqlite3
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.root = self.base / 'before'
+        (self.root / '.board').mkdir(parents=True)
+        self.env = patch.dict(os.environ, COLONY_BOARD_HOME=str(self.base / 'board'),
+                              CLAUDE_CONFIG_DIR=str(self.base / 'claude'), CODEX_HOME=str(self.base / 'personal'))
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        board.save_registry({'projects': [str(self.root)], 'roots': [], 'settings': {'provider': 'codex', 'messaging': False}})
+        board.ident(self.root)
+        from colony import codex_remote
+        self.home = codex_remote.home_for(self.root)
+        self.home.mkdir(parents=True)
+        self.tid = '01930000-0000-7000-8000-000000000001'
+        self.rollout = self.home / 'sessions' / '2026' / '10' / '31' / ('rollout-' + self.tid + '.jsonl')
+        self.rollout.parent.mkdir(parents=True)
+        cwd = str(self.root)
+        rows = [dict(type='session_meta', payload=dict(id=self.tid, cwd=cwd, runtime_workspace_roots=[cwd])),
+                dict(type='turn_context', payload=dict(cwd=cwd, sandbox_policy=dict(type='workspace-write', writable_roots=[cwd + '/src']))),
+                dict(type='world_state', payload=dict(state=dict(environments=dict(local=dict(cwd=cwd))))),
+                dict(type='event_msg', payload=dict(type='thread_settings_applied', thread_settings=dict(cwd=cwd, runtime_workspace_roots=[cwd]))),
+                dict(type='response_item', payload=dict(type='message', role='user', content=[dict(text=cwd + ' café')]))]
+        lines = [(json.dumps(row, ensure_ascii=False) + '\n').encode() for row in rows]
+        self.rollout.write_bytes(b''.join(lines))
+        self.message = lines[-1]
+        self.turn_offset = sum(map(len, lines[:-1]))
+        self.db = sqlite3.connect(self.home / 'state_5.sqlite')
+        self.db.executescript('''CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, rollout_path TEXT NOT NULL,
+            sandbox_policy TEXT NOT NULL, title TEXT, updated_at INTEGER, archived INTEGER, agent_path TEXT);
+            CREATE TABLE project_roots (project_id TEXT, position INTEGER, path TEXT, PRIMARY KEY(project_id,position));
+            CREATE TABLE rollout_migration_skipped_rollouts (migration_id TEXT, rollout_path TEXT, skip_reason TEXT,
+                PRIMARY KEY(migration_id,rollout_path));
+            CREATE TABLE unrelated (value TEXT);''')
+        self.db.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?)',
+                        (self.tid, cwd, str(self.rollout), json.dumps(dict(type='workspace-write', writable_roots=[cwd + '/src'])), cwd, 73, 0, 'root/agent'))
+        self.db.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?)',
+                        ('01930000-0000-7000-8000-000000000002', cwd + '-other', '/elsewhere/rollout.jsonl', '{}', 'unrelated', 91, 1, None))
+        self.db.execute('INSERT INTO project_roots VALUES (?,?,?)', ('project', 0, cwd))
+        self.db.execute('INSERT INTO rollout_migration_skipped_rollouts VALUES (?,?,?)', ('migration', str(self.rollout), cwd))
+        self.db.execute('INSERT INTO unrelated VALUES (?)', (cwd,))
+        self.db.commit()
+        self.before = list(self.db.iterdump())
+        self.db.close()
+        with sqlite3.connect(self.home / 'thread_history_1.sqlite') as db:
+            db.executescript('''CREATE TABLE thread_turns (thread_id TEXT, rollout_byte_offset INTEGER, rollout_end_byte_offset INTEGER);
+                CREATE TABLE thread_history_projection_state (thread_id TEXT, next_rollout_byte_offset INTEGER);''')
+            db.execute('INSERT INTO thread_turns VALUES (?,?,?)', (self.tid, self.turn_offset, sum(map(len, lines))))
+            db.execute('INSERT INTO thread_history_projection_state VALUES (?,?)', (self.tid, sum(map(len, lines))))
+        db.close()
+        (self.home / 'config.toml').write_text('sqlite_home=' + json.dumps(str(self.home)) + '\n')
+        (self.home / 'colony-thread.json').write_text(json.dumps(dict(thread=self.tid, cwd=cwd)))
+        console.remember(self.root, self.tid, str(self.rollout))
+        self.provider = providers.get('codex')
+
+    def move(self):
+        from colony import repoint, codex_remote
+        old = self.root
+        self.root = self.base / 'a-longer-new-project'
+        old.rename(self.root)
+        said = repoint.repoint(old, self.root)
+        self.home = codex_remote.home_for(self.root)
+        return old, said
+
+    def test_native_paths_move_without_changing_messages_or_other_columns(self):
+        import sqlite3
+        from contextlib import closing
+        from colony import codex_remote, repoint
+        old, said = self.move()
+        self.assertTrue(self.provider.verify_history(self.root))
+        self.assertTrue(any('Codex' in line for line in said))
+        with closing(sqlite3.connect(self.home / 'state_5.sqlite')) as db:
+            rows = list(db.execute('SELECT * FROM threads ORDER BY id'))
+            self.assertEqual(rows[0][1], str(self.root))
+            rollout = Path(rows[0][2])
+            self.assertTrue(rollout.is_file())
+            self.assertEqual(json.loads(rows[0][3])['writable_roots'], [str(self.root / 'src')])
+            self.assertEqual(rows[0][4:], (str(old), 73, 0, 'root/agent'))
+            self.assertEqual(rows[1][1:], (str(old) + '-other', '/elsewhere/rollout.jsonl', '{}', 'unrelated', 91, 1, None))
+            self.assertEqual(db.execute('SELECT value FROM unrelated').fetchone()[0], str(old))
+            self.assertEqual(db.execute('SELECT path FROM project_roots').fetchone()[0], str(self.root))
+            self.assertEqual(db.execute('SELECT rollout_path,skip_reason FROM rollout_migration_skipped_rollouts').fetchone(),
+                             (str(rollout), str(old)))
+        lines = rollout.read_bytes().splitlines(keepends=True)
+        self.assertEqual(lines[-1], self.message)
+        self.assertNotIn(str(old).encode(), b''.join(lines[:-1]))
+        with closing(sqlite3.connect(self.home / 'thread_history_1.sqlite')) as db:
+            start, end = db.execute('SELECT rollout_byte_offset,rollout_end_byte_offset FROM thread_turns').fetchone()
+            self.assertEqual(rollout.read_bytes()[start:end], self.message)
+            self.assertEqual(db.execute('SELECT next_rollout_byte_offset FROM thread_history_projection_state').fetchone()[0], end)
+        self.assertEqual(codex_remote.user_config(self.home)['sqlite_home'], str(self.home))
+        self.assertEqual(console.saved_conversation(self.root)['transcript'], str(rollout))
+        before = {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+        self.assertEqual(repoint.repoint(old, self.root), [])
+        self.assertEqual(before, {str(p): p.read_bytes() for p in self.home.rglob('*') if p.is_file()})
+
+    def test_gather_keeps_history_linked_through_a_move(self):
+        dest = self.base / 'histories' / 'codex'
+        auth = self.base / 'auth.json'
+        auth.write_text('dummy sign-in')
+        (self.home / 'auth.json').symlink_to(auth)
+        self.provider.gather(self.root, dest)
+        self.provider.gather(self.root, dest)
+        self.assertTrue((self.home / 'sessions').is_symlink())
+        self.assertTrue((self.home / 'state_5.sqlite').is_symlink())
+        self.assertTrue((self.home / 'thread_history_1.sqlite').is_symlink())
+        self.assertFalse((dest / 'auth.json').exists())
+        self.move()
+        self.assertTrue(self.provider.verify_history(self.root))
+        self.assertTrue((self.home / 'state_5.sqlite').is_symlink())
+
+    def test_live_host_and_native_writer_refuse_before_any_history_changes(self):
+        import fcntl
+        from colony import codex_remote
+        before = self.rollout.read_bytes()
+        with patch.object(codex_remote, 'alive', return_value=True):
+            with self.assertRaisesRegex(ValueError, 'still running'):
+                self.provider.repoint_history(self.root, self.base / 'new')
+            with self.assertRaisesRegex(ValueError, 'still running'):
+                self.provider.gather(self.root, self.base / 'history')
+        locks = self.home / 'thread-writer-locks'
+        locks.mkdir(exist_ok=True)
+        with (locks / (self.tid + '.lock')).open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with self.assertRaisesRegex(RuntimeError, 'Codex writer'):
+                self.provider.repoint_history(self.root, self.base / 'new')
+        self.assertEqual(self.rollout.read_bytes(), before)
+        self.assertTrue(self.home.is_dir())
+
+    def test_verification_rejects_a_missing_or_wrong_native_thread(self):
+        import sqlite3
+        self.assertTrue(self.provider.verify_history(self.root))
+        with sqlite3.connect(self.home / 'state_5.sqlite') as db:
+            db.execute('UPDATE threads SET cwd=? WHERE id=?', (str(self.base / 'wrong'), self.tid))
+        db.close()
+        self.assertFalse(self.provider.verify_history(self.root))
+        self.rollout.unlink()
+        self.assertFalse(self.provider.verify_history(self.root))
+
+    def test_claude_gather_and_repeated_moves_keep_resume_lookup_and_old_links(self):
+        from colony.migrate import claude_key
+        claude = providers.get('claude')
+        path = claude.config_home() / 'projects' / claude_key(self.root)
+        path.mkdir(parents=True)
+        (path / 's1.jsonl').write_text('{"type":"user","message":{"content":"hello"}}\n')
+        console.remember(self.root, 's1', str(path / 's1.jsonl'))
+        claude.gather(self.root, self.base / 'histories' / 'claude')
+        old, _ = self.move()
+        self.assertTrue(path.is_symlink())
+        self.assertTrue(claude.verify_history(self.root))
+        claude.gather(self.root, self.base / 'histories' / 'claude')
+        pairs, said = claude.repoint_history(old, self.root)
+        self.assertEqual(said, [])
+        self.assertTrue(pairs)
+
+    def test_move_verifies_before_launch_and_discards_only_the_failed_bookmark(self):
+        from colony import handover
+        dest = self.base / 'moved'
+        events, said = [], []
+        other = self.base / 'claude-session.jsonl'
+        other.write_text('{"type":"user","message":{"content":"keep me"}}\n')
+        console.remember(self.root, 'claude-session', str(other))
+        def verify(root):
+            events.append('verify')
+            return False
+        def ensure(root):
+            events.append('ensure')
+            self.assertIsNone(console.saved_conversation(root, 'codex'))
+            self.assertEqual(console.saved_conversation(root, 'claude')['conversation'], 'claude-session')
+        with patch.object(handover, 'outside', return_value=[]), patch.object(handover, 'settle', return_value=[]), \
+                patch.object(console, 'stop'), patch.object(console, 'ensure', side_effect=ensure), \
+                patch.object(self.provider, 'verify_history', side_effect=verify), patch.object(board, 'resume_project'):
+            self.assertEqual(handover.move(self.root, dest, say=said.append), 0)
+        self.assertEqual(events, ['verify', 'ensure'])
+        self.assertIn("can't find", ' '.join(said))
+        self.assertIn('fresh conversation', said[-1])
+        self.assertTrue(dest.is_dir())
+
+    def test_invalid_configuration_leaves_native_history_unchanged(self):
+        (self.home / 'config.toml').write_text('broken = [')
+        before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+        with self.assertRaises(ValueError):
+            self.provider.repoint_history(self.root, self.base / 'new')
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data, str(path))
+
+    def test_a_failed_history_edit_restores_rollouts_and_both_databases(self):
+        from colony import codex_history
+        before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+        real_offsets = codex_history._offsets
+        def fail_after_offsets(*args):
+            real_offsets(*args)
+            raise OSError('injected failure after history offsets were changed')
+        with patch.object(codex_history, '_offsets', side_effect=fail_after_offsets):
+            with self.assertRaisesRegex(OSError, 'injected failure'):
+                self.provider.repoint_history(self.root, self.base / 'new')
+        for path, data in before.items():
+            self.assertEqual(path.read_bytes(), data, str(path))
+        self.assertTrue(self.provider.verify_history(self.root))
+
+    def test_an_archived_thread_is_not_offered_for_resume(self):
+        import sqlite3
+        with sqlite3.connect(self.home / 'state_5.sqlite') as db:
+            db.execute('UPDATE threads SET archived=1 WHERE id=?', (self.tid,))
+        db.close()
+        self.assertFalse(self.provider.verify_history(self.root))
+
+    def test_malformed_rollout_metadata_fails_verification(self):
+        for value in ([], dict(type='session_meta', payload=[]), dict(type='session_meta', payload=None)):
+            with self.subTest(value=value):
+                self.rollout.write_text(json.dumps(value) + '\n')
+                self.assertFalse(self.provider.verify_history(self.root))

@@ -202,7 +202,7 @@ def _carry(old, new):
 
 def move(root, dest, sure=False, wait=WAIT, say=print):
     """colony move. Returns 0 when moved and resumed; 1 when it stopped short (and says why), nothing lost."""
-    from . import codex_remote, migrate, repoint
+    from . import codex_remote, migrate, providers, repoint
     root, dest = Path(root), Path(dest).expanduser()
     if dest.exists():
         say(f"{dest} already exists; pick a new place")
@@ -240,9 +240,21 @@ def move(root, dest, sure=False, wait=WAIT, say=print):
             board.resume_project(root)
         say(f"not moved: re-pointing failed ({err}); the folder is back where it was")
         return 1
+    provider = providers.of(dest)
+    recorded = console.saved_conversation(dest, providers.key(provider)) is not None
+    try:
+        found = recorded and provider.verify_history(dest)
+    except (OSError, ValueError):
+        found = False
+    if recorded and not found:
+        console.forget_conversation(dest, providers.key(provider))
+        say(f"{provider.label} can't find the recorded conversation at {dest}. The move completed; "
+            "its console will start a fresh conversation. Existing history files are kept.")
     if not was_paused:
         board.resume_project(dest)
     console.ensure(dest)
     say(f"{board.name_of(dest)} moved to {dest}" + (f" ({'; '.join(said)})" if said else "")
-        + ". Its console resumed its conversation there." + (f" Still to fix: {'; '.join(named)}." if named else ""))
+        + (". Its console resumed its conversation there." if found else
+           ". Its console started a fresh conversation." if recorded else ". Its console started there.")
+        + (f" Still to fix: {'; '.join(named)}." if named else ""))
     return 0
