@@ -6,13 +6,15 @@ The roadmap is your plan (the file your instructions name).
 
 Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and Later waits for them. The
 person is the compass: they shape the vision and the path, and can say where quality or direction seems off and
-steer it.
+steer it. Foresee the decisions an item will need and ask them together, each with a default where the choice is
+reversible. Each item's check and the roadmap as a whole trace to the acceptance criteria, and a criterion no item
+serves is a gap in the path.
 
 ## Its format
 
 Milestones `## M1 — name`, items `- [ ] R1 text`; `[~]` in progress, `[x]` done, `[?]` only for what the person asked
 to sign off, then `colony ready R4 "what's ready" --check "how to see it"`. Work outside the milestone's purpose goes
-under `## Later`. Commit each finished piece.
+under `## Later`.
 
 A milestone may name its kind after its title (`## M4 — Concepts · menu`): `menu` (options in any order), `lanes`
 (roads side by side; each item says `(lane: name)`), `findings` (questions answered by experiment), `sections` (the

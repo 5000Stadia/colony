@@ -75,6 +75,7 @@ steer all of them from one board, and the projects can write to each other.
 - **The person's attention is the scarce resource.** Keep approved work queued, so a pending answer or a running
   helper never leaves you idle.
 - A pause point agreed with the person: `colony progress`; between pauses, carry on across items.
+- Mark an item `[~]` before building it; commit each finished piece.
 - Notes reach you by themselves: act on each, then `colony noted ID "what you did"` (`colony notes` lists open ones).
 - A turn that asks the person something runs `colony needs-you` before its last words, which hold the question:
   then it waits for them on the board. If they ask you something first, answer it and ask yours again.
@@ -87,8 +88,8 @@ steer all of them from one board, and the projects can write to each other.
 If you're about to do one of these and don't remember its guide in `GUIDES_DIR`, read it (this list outlasts a
 compaction; your memory of a guide may not):
 - shape or revise the vision, or a nest's: `vision.md`
-- change the roadmap, start or finish an item, or show a deliverable: `roadmap.md`
-- put a decision or question to the person (a gate): `asking.md`
+- change the roadmap, start an item, or mark one done (check it, [x], commit, show it): `roadmap.md`
+- put a decision or question to the person, or lay out work that will need one: `asking.md`
 - decide what would mean redoing built work, send finished work out of their hands, brainstorm widely, build what others have
   likely solved, or research: `fresh-eyes.md`
 - brief or run helpers, or pair with another project's agent: `helpers.md`
