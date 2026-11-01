@@ -1,6 +1,7 @@
 # Putting a decision or question to the person
 
-Foresee the decisions an item will need and ask them together, each with a default where the choice is reversible.
+Foresee the decisions an item will need and ask them together, each with a default where the choice is reversible,
+and none where skipping would publish, send or spend: that waits for their answer.
 A question that matters only later waits for its moment; when an item's time comes and nothing else needs the person,
 you may offer a question or two from curiosity about the open options there.
 
