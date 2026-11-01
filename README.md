@@ -320,6 +320,6 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 
 ## More
 
-Tests: `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_attachment tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_send tests.test_polling tests.test_chat_cache tests.test_repair tests.test_repair_board tests.test_input_ledger` (they start no real agent).
+Tests: `python3 tests/run.py` runs the whole suite in parallel, in under two minutes (`python3 -m unittest` with the modules listed in CLAUDE.md runs the same tests one after another). They start no real agent.
 
 MIT licensed: see [LICENSE](LICENSE).
