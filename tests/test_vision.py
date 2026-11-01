@@ -340,13 +340,15 @@ class VisionTest(BoardBase):
         self.assertEqual(board.open_notes(joined), [])
 
     def test_protocol_preserves_revision_prompt_and_scopes_local_details(self):
-        self.assertIn("or the work shows the vision differently, propose a revision", " ".join(board.PROTOCOL.split()))
-        for text in (board.PROTOCOL, vision.MIGRATION, monitor.ROLE):
+        guide = (board.GUIDES / 'vision.md').read_text()
+        self.assertIn("shape or revise the vision, or a nest's: `vision.md`", ' '.join(board.PROTOCOL.split()))
+        self.assertIn("or the work shows the vision differently, propose a revision", " ".join(guide.split()))
+        for text in (guide, vision.MIGRATION, monitor.ROLE):
             self.assertIn('brainstorming', text)
         for text in (vision.MIGRATION, monitor.ROLE):
             self.assertIn('specifications', text)
-        self.assertIn('detail that matters to a few items lives in those items', ' '.join(board.PROTOCOL.split()))
-        flat = ' '.join(board.PROTOCOL.split())
+        self.assertIn('detail that matters to a few items lives in those items', ' '.join(guide.split()))
+        flat = ' '.join(guide.split())
         self.assertIn("draw its arc with the person, in this order: its end", flat, "a venture's arc: end, peak, climb, foothold")
         self.assertIn("person paints themselves, in their own words", flat, "the peak is theirs to paint, no draft offered")
         self.assertIn("never becomes tasks of yours, and stays in this project", flat, "their life explains the work, nothing more")

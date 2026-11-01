@@ -451,7 +451,7 @@ class FourthTierTest(BoardBase):
         with patch.object(board, 'root_of', return_value=self.root), contextlib.redirect_stdout(out):
             cli.cmd_models(argparse.Namespace(what=None, args=[], why=None))
         self.assertEqual([line.split()[0] for line in out.getvalue().splitlines()[:4]], ['routine', 'step-up', 'chores', 'rote'])
-        self.assertIn('Helpers run at four tiers (routine, step-up, chores, rote)', ' '.join(board.PROTOCOL.split()))
+        self.assertIn('Helpers run at four tiers (routine, step-up, chores, rote)', ' '.join((board.GUIDES / 'helpers.md').read_text().split()))
 
     def test_turbo_leaves_rote_and_chores_unboosted(self):
         from colony import intelligence, turbo
