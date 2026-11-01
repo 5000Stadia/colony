@@ -300,6 +300,8 @@ class UnpackElsewhereTest(unittest.TestCase):
                                          "projects": {"/a": {"hasTrustDialogAccepted": True},
                                                       "/b": {"hasTrustDialogAccepted": True}}})
         self.assertIn("first-run answers", said)
+        self.assertNotIn("theme", said, "this machine's theme stands, so none was added")
+        self.assertIn("(onboarding, bypass-permissions acceptance and trust in 1 of the archive's folders)", said)
         got = json.loads(config.read_text())
         self.assertEqual(json.loads((config.parent / "settings.json").read_text()),
                          {"theme": "light", "skipDangerousModePermissionPrompt": True}, "an answer given here stands")

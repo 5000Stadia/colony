@@ -20,6 +20,7 @@ whole, so the same username unpacks everything in place. Under another home fold
 back at the same place under this one, and everything colony keeps is re-pointed from the old paths to the new in one
 journaled pass: its records, each project's program histories, the folders named by a hash of a path, git worktrees.
 """
+import calendar
 import copy
 import io
 import json
@@ -44,7 +45,8 @@ CACHE_TAG = b"Signature: 8a477f597d28d172789f06886806bc55"   # a folder that say
 # person knows the archive holds them. Seen: Kernos's .env, credentials.json and secrets/*.key.
 KEYLIKE = re.compile(r"^(\.env(\.(?!example$|sample$|template$).+)?|.+\.(pem|key|p12|pfx)|credentials.*\.json"
                      r"|id_(rsa|ed25519|ecdsa)|\.netrc|\.pgpass)$")
-CODEX_CACHES = ("cache", "tmp", "shell_snapshots")   # in each of colony's Codex homes: Codex fetches or makes them again
+CODEX_CACHES = ("cache", "tmp", ".tmp", "shell_snapshots")   # in each of colony's Codex homes: Codex fetches or makes
+                                                             # them again (.tmp: its ~100 MB plugin clone)
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"     # how a zstd stream begins, whatever its file is called
 PROGRESS = 30                        # seconds between the lines a long pack says how far it has got
 
@@ -619,12 +621,28 @@ class _Exactly:
         return data
 
 
+def _still_since():
+    """When colony was last marked still (epoch seconds), while it still is: None once it runs again."""
+    from . import handover
+    mark = handover._mark()
+    if not mark.get("still"):
+        return None
+    try:
+        return calendar.timegm(time.strptime(mark["at"], "%Y-%m-%dT%H:%M:%SZ"))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _at_work(plan):
-    """Projects mid-work now: as the steward's watch saw them, or with a conversation written in the last two minutes."""
+    """Projects mid-work now: as the steward's watch saw them, or with a conversation written in the last two minutes.
+    A conversation last written before a still stop's mark ended before it: a clean stop's turns aren't mid-work. The
+    mark is written after every session has ended, to the second, so a write within its second came before it."""
     busy = set(board.at_work_now())
+    still = _still_since()
     for root, transcript in _recorded([p["path"] for p in plan.parts if p["kind"] in ("project", "archived")]):
         try:
-            if time.time() - transcript.stat().st_mtime < 120:
+            written = transcript.stat().st_mtime
+            if time.time() - written < 120 and (still is None or written >= still + 1):
                 busy.add(str(Path(root).resolve()))
         except OSError:
             pass

@@ -7216,6 +7216,21 @@ class HandoverTest(BoardBase):
         board.save_json(lead.location(), {"g": group})
         self.assertTrue(handover.still(self.root), "landed: still")
 
+    def test_the_refusal_names_several_projects_in_the_plural(self):
+        from colony import handover
+        other = Path(self.tmp.name) / "other"
+        other.mkdir()
+        said = []
+        with patch.object(handover, "settle", return_value=[self.root, other]), \
+                patch.object(handover, "_items_only", return_value=True):
+            self.assertEqual(handover.stop_still(lambda: None, say=said.append), 1)
+        self.assertIn("other have items of the lead's in flight", said[-1])
+        self.assertIn("land them or hand them back", said[-1])
+        with patch.object(handover, "settle", return_value=[self.root, other]), \
+                patch.object(handover, "_items_only", return_value=False):
+            self.assertEqual(handover.stop_still(lambda: None, wait=120, say=said.append), 1)
+        self.assertIn("hadn't landed their work within 2 minutes", said[-1])
+
     def test_a_codex_check_and_all_it_started_end_with_a_still_stop(self):
         """Finding 1b: the detached check of a new Codex runs Codex app hosts in sessions of their own that no project
         home names; a still stop ends it and everything under it."""
@@ -11001,6 +11016,7 @@ class MigrateTest(BoardBase):
             "colony/codex-remote/abc123/config.toml": "model = 'x'\n",
             "colony/codex-remote/abc123/cache/catalog.json": "{}",
             "colony/codex-remote/abc123/tmp/arg0": "", "colony/codex-remote/abc123/shell_snapshots/s.sh": "",
+            "colony/codex-remote/abc123/.tmp/plugins/README.md": "Codex's plugin clone",
             "stray/rollout-9.jsonl": '{"type":"session_meta"}\n',
             # Claude Code: the board's conversations, the steward's, a helper's worktree's, and someone else's
             f".claude/projects/{migrate.claude_key(k / 'Projects' / 'alpha')}/s1.jsonl":
@@ -11077,6 +11093,7 @@ class MigrateTest(BoardBase):
                 home / "voice" / "voices-v1.0.bin", home / "voice" / "cache", home / "voice" / "samples",
                 home / "context-cache", home / "line-scratch", home / "codex-remote" / "abc123" / "cache",
                 home / "codex-remote" / "abc123" / "tmp", home / "codex-remote" / "abc123" / "shell_snapshots",
+                home / "codex-remote" / "abc123" / ".tmp",
                 k / ".claude" / "settings.json", k / ".claude" / "projects" / self.migrate.claude_key(k / "Projects" / "zeta"),
                 self.units / autostart.unit_name(), self.units / "default.target.wants"]:
             self.assertFalse({g for g in got if g == str(left) or g.startswith(str(left) + "/")}, left)
@@ -11268,6 +11285,23 @@ class MigrateTest(BoardBase):
         board.save_json(self.k / "colony" / "working.json", {"at": time.time() - 600, "roots": [str(self.alpha)]})
         _, said = self.pack()
         self.assertIn("Mid-work now: JOB. Packing goes on", said, "a watch ten minutes old isn't believed")
+
+    def test_a_pack_after_a_clean_still_stop_trusts_its_mark(self):
+        """PROOF-3 finding 2: a conversation last written before the still mark ended before the stop."""
+        from colony import handover
+        talk = self.k / "stray" / "rollout-9.jsonl"                          # JOB's conversation
+        handover._save_mark({"at": board.now(), "still": True, "generation": 1})
+        os.utime(talk, (time.time() - 30, time.time() - 30))                 # its last turn, before the stop
+        _, said = self.pack()
+        self.assertNotIn("Mid-work now", said)
+        handover._save_mark({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60)), "still": True,
+                             "generation": 1})
+        os.utime(talk)                                                        # written after the mark: at work
+        _, said = self.pack()
+        self.assertIn("Mid-work now: JOB. Packing goes on", said)
+        handover._save_mark({"at": board.now(), "still": False, "generation": 1})
+        _, said = self.pack()
+        self.assertIn("Mid-work now: JOB", said, "colony running again: the mark says nothing")
 
     def test_remake_makes_the_machine_again_and_says_what_is_left_to_the_person(self):
         from colony import autostart, tailscale, voice

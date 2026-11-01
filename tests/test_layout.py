@@ -1,6 +1,8 @@
 """The portable layout, exercised without reaching the person's home or starting an agent."""
+import getpass
 import json
 import os
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -487,8 +489,12 @@ class LayoutTest(unittest.TestCase):
         marker = json.loads(marker_path.read_text())
         self.assertFalse(handover.started())
         self.assertFalse(json.loads(marker_path.read_text())["still"])
+        board.save_json(marker_path, dict(json.loads(marker_path.read_text()),
+                                          written_by={"machine": "old-box", "user": "migrator"}))
         self.stop_still()
         self.assertEqual(json.loads(marker_path.read_text())["generation"], marker["generation"] + 1)
+        self.assertEqual(json.loads(marker_path.read_text())["written_by"],
+                         {"machine": socket.gethostname(), "user": getpass.getuser()}, "the last writer: this machine")
         board.save_json(marker_path, marker)
         self.assertTrue(handover.started(), "an older portable marker triggers the restore hold")
 

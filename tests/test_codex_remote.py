@@ -600,6 +600,78 @@ class ConsoleConfigTest(unittest.TestCase):
             local.assert_called_once()
 
 
+class CheckWantedTest(unittest.TestCase):
+    """PROOF-3 finding 1: a new Codex is checked (its checks run Codex with --remote-control) only when something here
+    needs app access: the project being launched has remote on, or the repair connection is on Codex. No Codex runs."""
+
+    def setUp(self):
+        from colony import providers
+        self.home = own_home(self)
+        self.codex = providers.get('codex')
+        board.save_registry({'roots': [], 'settings': {'providers': ['codex'], 'repair_provider': ''}})
+        for name, value in (('version', 'codex-cli 9.9.7'),):
+            stand_in = patch.object(self.codex, name, return_value=value)
+            stand_in.start()
+            self.addCleanup(stand_in.stop)
+        self.root = self.home / 'project'
+        self.root.mkdir()
+
+    def launch(self, remote_on):
+        with patch.object(remote, 'start_check') as start, patch.object(remote, 'local', return_value=0), \
+                patch.object(remote.sys, 'platform', 'linux'), \
+                patch.object(self.codex, 'config_home', return_value=self.home / 'source'):
+            self.assertEqual(remote.launch(self.root, {'remote': remote_on}), 0)
+        return start.called
+
+    def repair_on(self):
+        reg = board.registry()
+        reg['settings']['repair_provider'] = 'codex'
+        board.save_registry(reg)
+
+    def test_an_untested_codex_is_checked_only_when_a_launch_or_the_repair_connection_wants_it(self):
+        self.assertFalse(self.launch(False), 'remote off and repair access elsewhere: nothing needs the check')
+        self.assertTrue(self.launch(True), 'this project has remote on')
+        self.repair_on()
+        self.assertTrue(self.launch(False), 'the repair connection is on Codex')
+        remote.atomic_json(self.home / 'codex-checked.json', {'9.9.7': {'at': board.now(), 'passed': False}})
+        self.assertFalse(self.launch(True), 'checked once already: not again')
+
+    def test_the_daily_look_checks_only_when_a_codex_project_or_the_repair_connection_wants_it(self):
+        from colony import providers
+        self.assertFalse(remote.check_wanted())
+        with patch.object(board, 'projects', return_value=[self.root]), \
+                patch.object(providers, 'of', return_value=self.codex):
+            board.project_settings(self.root, {'remote': 'off'})
+            self.assertFalse(remote.check_wanted(), 'its one Codex project has remote off')
+            board.project_settings(self.root, {'remote': 'on'})
+            self.assertTrue(remote.check_wanted())
+        self.repair_on()
+        self.assertTrue(remote.check_wanted())
+        self.assertTrue(remote.check_wanted(False), 'a launch with remote off still checks for the repair connection')
+
+    def test_repair_start_checks_an_unchecked_codex_and_says_so(self):
+        repair_home = self.home / 'repair' / 'codex'
+        with patch.object(remote, 'alive', return_value=False), patch.object(remote, 'start_check') as start, \
+                patch.object(remote, 'checking', return_value=True), patch.object(remote.sys, 'platform', 'linux'):
+            self.assertEqual(self.codex.repair_start(repair_home, {})['state'], 'checking')
+            start.assert_called_once()
+        remote.atomic_json(self.home / 'codex-checked.json', {'9.9.7': {'at': board.now(), 'passed': False}})
+        with patch.object(remote, 'alive', return_value=False), patch.object(remote, 'start_check') as start, \
+                patch.object(remote.sys, 'platform', 'linux'):
+            self.assertEqual(self.codex.repair_start(repair_home, {})['state'], 'unavailable', 'it failed: unavailable')
+            start.assert_not_called()
+
+    def test_a_check_already_running_is_not_started_twice(self):
+        remote._record_check('check', os.getpid())
+        self.addCleanup(remote._check_path().unlink, missing_ok=True)
+        self.assertTrue(remote.checking())
+        with patch.object(remote, 'subprocess') as run:
+            remote.start_check()
+        run.Popen.assert_not_called()
+        remote._record_check('check', None)
+        self.assertFalse(remote.checking())
+
+
 class PairingTest(unittest.TestCase):
     def test_first_connection_offers_once_through_claude_monitor_without_creating_code(self):
         with tempfile.TemporaryDirectory() as folder, \
