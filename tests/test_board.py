@@ -4306,7 +4306,8 @@ class FirstHalfHourTest(BoardBase):
         first = board.render(board.registry(), 0)
         self.assertNotIn("Since you were last here", first, "never here: nothing to be 'since'")
         self.commit("work after their first look")
-        tomorrow = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 86400))
+        # the next day's start, not 24 hours on: the day the clocks go back has 25 hours
+        tomorrow = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(hours.next_day(time.time()) + 3600))
         with patch.object(board, "now", return_value=tomorrow):
             again = board.render(board.registry(), 0)
         self.assertIn("Since you were last here", again, "the next day, from their first look")
