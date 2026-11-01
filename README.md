@@ -137,8 +137,12 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   agent nothing. A page in a project can send back what you did on it (`colony.send`) as a note to the agent.
 - **The shared vision**, above the roadmap: what the finished work is, and also why you want it, where it
   lands (who uses it, how many, how they find it, on what terms), the edge you bring, and what using it should
-  feel like. It directs the work, with you as its guide: a request that drifts from it is named, and one that
-  sharpens it updates it. Its depth fits the project: the agent first asks whether it's a one-off or part of
+  feel like. It directs the work, with you as its guide, and it moves with you: when you redefine it, however far,
+  the agent rewrites it in your words, reshapes the roadmap to match and deletes abandoned paths. Beyond your own
+  decisions, the agent asks only to realign: when what it finds shows something the vision didn't picture, or your
+  taste decides something you haven't seen. The first time an answer of yours shows how you want a kind of decision
+  made, it asks once (ask each time, its judgement, or its judgement by your rule) and keeps the answer as a standing
+  rule. Its depth fits the project: the agent first asks whether it's a one-off or part of
   something bigger, so a quick report gets a few questions and a long venture the whole conversation, and every
   vision ends in acceptance criteria that test what the work is for. Edit it on the project page or shape it with
   the agent in conversation. Saving tells the agent what changed so it can adjust the work. Details for a few
