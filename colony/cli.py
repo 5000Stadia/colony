@@ -1553,29 +1553,42 @@ def cmd_new(a):
 
 
 def cmd_settings(a):
+    """The settings; with a key and a value, that one set first. A key alone shows that one and changes nothing:
+    `colony settings autostart`, typed to look, once turned starting with the machine off."""
     from . import board
+    looking = a.key and a.value is None
     if a.project:
         root = _project(a.project)
         try:
-            merged, own = board.project_settings(root, {a.key: a.value or ""} if a.key else None)
+            merged, own = board.project_settings(root, {a.key: a.value} if a.key and not looking else None)
         except KeyError:
             raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
+        if looking and a.key not in board.PROJECT_KEYS:
+            raise SystemExit(f"a project can set: {', '.join(board.PROJECT_KEYS)}")
         for k in board.PROJECT_KEYS:
+            if looking and k != a.key:
+                continue
             v = merged.get(k, "green" if k == "color" else "")      # a colour is the project's alone: the board's green else
             shown = ("on" if v else "off") if isinstance(v, bool) else str(v) or ("(none)" if k in board.TURBO else "(colony Auto)")
             print(f"{k:14} {shown:24} {'set for this project' if k in own else 'default' if k in board.TURBO or k == 'color' else 'global'}")
         return 0
-    if a.key:
+    names = [board.SETTING_NAMES.get(k, k) for k in board.DEFAULT_SETTINGS] + ["autostart", "new-folder"]
+    if a.key and board.SETTING_NAMES.get(board.SETTING_ALIASES.get(a.key, a.key), a.key) not in names + ["folders"]:
+        raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(names)}")
+    if a.key and not looking:
         try:
-            board.set_setting(a.key, a.value or "")
+            board.set_setting(a.key, a.value)
         except KeyError:
-            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(board.SETTING_NAMES.get(k, k) for k in board.DEFAULT_SETTINGS)}, autostart, new-folder")
+            raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(names)}")
         except ValueError as err:                     # a setting that says what reads (active_hours)
             raise SystemExit(f"colony: {err}")
         _settle_reach(a.key)
+    only = board.SETTING_NAMES.get(board.SETTING_ALIASES.get(a.key, a.key), a.key) if looking else None
     reg = board.registry()
     from . import providers
     for k in board.DEFAULT_SETTINGS:
+        if only and board.SETTING_NAMES.get(k, k) != only:
+            continue
         v = reg["settings"][k]
         shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
@@ -1583,10 +1596,12 @@ def cmd_settings(a):
                  if k == "turbo_by" else board.steward_name() if k == "steward_name" else v or "(colony Auto)")
         print(f"{board.SETTING_NAMES.get(k, k):14} {str(shown):28} {board.setting_help(k)}")
     from . import autostart
-    if autostart.available():                         # kept by systemd: shown as it holds there
+    if autostart.available() and only in (None, "autostart"):    # kept by systemd: shown as it holds there
         print(f"{'autostart':14} {'on' if autostart.on() else 'off':28} {board.SETTING_HELP['autostart']}")
-    print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
-    print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
+    if only in (None, "new-folder"):
+        print(f"{'new-folder':14} {reg['new_root']:28} where new projects are created")
+    if only in (None, "new-folder", "folders"):
+        print(f"{'folders':14} {', '.join(reg['roots']) or '(none)'}")
     return 0
 
 

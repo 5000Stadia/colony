@@ -74,9 +74,25 @@ class Responses(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+def own_home(test):
+    """A colony home of the test's own, for the length of it."""
+    folder = tempfile.TemporaryDirectory(prefix='colony-remote-home-')
+    test.addCleanup(folder.cleanup)
+    env = patch.dict(os.environ, COLONY_BOARD_HOME=folder.name)
+    env.start()
+    test.addCleanup(env.stop)
+    return Path(folder.name)
+
+
 def installed():
-    return shutil.which('codex') and remote.supported_version(subprocess.run(
-        ['codex', '--version'], capture_output=True, text=True).stdout)
+    # Which Codex versions passed here is the person's own record: read once, as the module loads, and never written.
+    forbids = os.environ.pop('COLONY_TEST_FORBIDS', None)
+    try:
+        return shutil.which('codex') and remote.supported_version(subprocess.run(
+            ['codex', '--version'], capture_output=True, text=True).stdout)
+    finally:
+        if forbids:
+            os.environ['COLONY_TEST_FORBIDS'] = forbids
 
 
 @unittest.skipUnless(installed(), 'native checks require a tested Codex: ' + ', '.join(remote.TESTED_VERSIONS))
@@ -494,6 +510,7 @@ class ConsoleConfigTest(unittest.TestCase):
                     self.assertFalse(any(k.startswith('sandbox_workspace_write.') for k in resumed))
 
     def test_remote_version_gate_allows_only_checked_releases(self):
+        own_home(self)
         self.assertTrue(remote.supported_version('codex-cli 0.160.0'))
         self.assertTrue(remote.supported_version('codex-cli 0.159.3'))
         self.assertTrue(remote.supported_version('codex-cli 0.163.0'))
@@ -629,6 +646,7 @@ class PairingTest(unittest.TestCase):
             rpc.call.assert_called_once_with('remoteControl/pairing/status', {'manualPairingCode': 'TEST-CODE'})
 
     def test_unstarted_host_and_bad_results_do_not_create_a_daemon_or_leak_native_errors(self):
+        own_home(self)
         with patch.object(remote, 'alive', return_value=False), patch.object(remote, 'Client') as client:
             with self.assertRaisesRegex(remote.RemoteError, 'Open this project'):
                 remote.pair('/project')

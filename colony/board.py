@@ -235,7 +235,13 @@ def colony_folder():
 
 def home():
     folder = colony_folder()
-    return Path(os.environ.get("COLONY_BOARD_HOME", folder / "home" if folder else Path.home() / ".config" / "colony"))
+    path = Path(os.environ.get("COLONY_BOARD_HOME", folder / "home" if folder else Path.home() / ".config" / "colony"))
+    if os.environ.get("COLONY_TEST_FORBIDS") == str(path):
+        # The test suite names the person's own home as it starts (tests/__init__.py). On Oct 31 a thread left running
+        # by one test read another test's registry and, once that test's home was unset, wrote it over theirs: their
+        # projects list and settings. Reaching it from a test is now an error, never a write.
+        raise RuntimeError(f"a test reached the person's own colony home ({path}); give it COLONY_BOARD_HOME")
+    return path
 
 
 def cache():

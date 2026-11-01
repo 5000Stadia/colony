@@ -3798,6 +3798,24 @@ class MonitorTest(BoardBase):
         self.assertRegex(out.getvalue(), r"(?m)^steward +on +the steward session runs with the board")
         self.assertIn("steward_model", out.getvalue())
 
+    def test_a_setting_named_alone_is_shown_and_never_changed(self):
+        # Oct 31: the steward typed `colony settings autostart` to look, and starting with the machine was turned off
+        from colony import autostart, cli
+        board.set_setting("messaging", "on")
+        out = io.StringIO()
+        with redirect_stdout(out), patch.object(autostart, "turn") as turn:
+            cli.main(["settings", "messaging"])
+            cli.main(["settings", "steward"])
+            cli.main(["settings", "autostart"])
+        turn.assert_not_called()
+        self.assertTrue(board.registry()["settings"]["messaging"])
+        self.assertTrue(board.registry()["settings"]["monitor"])
+        self.assertRegex(out.getvalue(), r"(?m)^messaging +on ")
+        self.assertNotIn("providers", out.getvalue(), "only the one asked for")
+        with redirect_stdout(io.StringIO()):
+            cli.main(["settings", "messaging", "off"])                  # with a value, it is set as before
+        self.assertFalse(board.registry()["settings"]["messaging"])
+
     def test_a_record_stored_as_from_the_monitor_is_shown_as_from_the_steward(self):
         board.add_note(self.root, None, "keep to V1.5", author="monitor")
         note = next(n for n in board.notes(self.root) if n["author"] == "monitor")
@@ -8046,6 +8064,13 @@ class ConsultationGateTest(BoardBase):
 
 class ConsultCallTest(unittest.TestCase):
     """Each program's consultation: fresh, read-only, priced, and never cut short."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(prefix='colony-consult-home-')     # its token is looked for in a home of its own
+        self.addCleanup(folder.cleanup)
+        env = patch.dict(os.environ, COLONY_BOARD_HOME=folder.name)
+        env.start()
+        self.addCleanup(env.stop)
 
     def test_its_streamed_usage_is_priced_and_the_run_is_never_cut_short(self):
         import io
