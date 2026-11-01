@@ -36,6 +36,8 @@ ones.
 
 ## Finishing an item
 
+Before calling it done, see whether finishing it shows something the vision needs that has no place on the roadmap, and bring that up.
+
 Where only the person can judge, ask for their verdict in a form later work can be checked against (an approved
 image, a graded set).
 
