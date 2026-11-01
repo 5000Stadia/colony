@@ -9281,6 +9281,64 @@ class PhonePageTest(HoursBase):
         self.assertLess(row.index("Ship it?"), row.index("action='/clear'"))
 
 
+class ItemNamesTest(BoardBase):
+    """An item's number in an agent's words reaches the person with its short name beside it, once per message, linked
+    to its page. The person, 2026-11-01: "R127 not sure what I'm oking"."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "ROADMAP.md").write_text(ROADMAP + "- [ ] R4 Migrate and go: move every project over to the new "
+                                              "board and retire the old one, with the person's sign-off first\n")
+        self.q = board.project_query(self.root)
+
+    def link(self, iid, name):
+        return (f"<a class='itemref' href='/item?{self.q}&id={iid}' title='{iid} · {name}'>{iid}"
+                f"<span class='muted'> · {name}</span></a>")
+
+    def test_a_reply_names_each_item_once_and_leaves_numbers_not_on_the_roadmap(self):
+        shown = board.chat_prose("R2 is half done. Next R2 gets reminders, and R99 waits.", "0", self.root)
+        self.assertIn(self.link("R2", "water log"), shown)
+        self.assertEqual(shown.count("itemref"), 1, "later mentions stay bare")
+        self.assertIn("Next R2 gets", shown)
+        self.assertIn("and R99 waits", shown)
+        self.assertNotIn("id=R99", shown)
+
+    def test_short_names_stay_short(self):
+        name = board.item_names(self.root)["R4"]
+        self.assertEqual(name, "Migrate and go")
+        long = board.lead_clause("x" * 80, 40)
+        self.assertLessEqual(len(long), 40)
+
+    def test_code_and_links_are_left_as_written(self):
+        text = "Run `colony done R2` now.\n\n```\nR2 stays raw\n```\n\nSee [R2 notes](https://x.org/R2) and R3."
+        shown = board.chat_prose(text, "0", self.root)
+        self.assertIn("<code>colony done R2</code>", shown)
+        self.assertIn("<pre>R2 stays raw</pre>", shown)
+        self.assertIn(">R2 notes</a>", shown)
+        self.assertIn(self.link("R3", "reminders"), shown)
+        self.assertNotIn("id=R2", shown, "the only R2 mentions are in code or a link")
+
+    def test_a_gate_question_shows_the_item_name_and_its_stored_text_is_unchanged(self):
+        g = board.add_gate(self.root, "OK to ship R4 tonight?", item="R4", why="R4 retires the old board.")
+        g = next(x for x in board.gates(self.root) if x["id"] == g["id"])
+        shown = board.gate_body(self.root, 0, g, "/")
+        self.assertIn("<b>OK to ship " + self.link("R4", "Migrate and go") + " tonight?</b>", shown)
+        self.assertIn("<p class='muted'>R4 retires the old board.</p>", shown, "once per question and its why")
+        board.track(self.root)
+        page = board.waiting_html(0, self.root)
+        self.assertIn(self.link("R4", "Migrate and go"), page, "the gate card in Waiting on you")
+        self.assertEqual(next(x for x in board.gates(self.root) if x["id"] == g["id"])["question"], "OK to ship R4 tonight?")
+        stored = (self.root / ".board" / "gates.jsonl").read_text()
+        self.assertIn("OK to ship R4 tonight?", stored)
+        self.assertNotIn("itemref", stored)
+
+    def test_a_question_asked_in_the_console_names_the_item(self):
+        a = board.record_ask(self.root, "t1", "Shall I start R3 next?", explicit=True)
+        self.assertIn(self.link("R3", "reminders"), board.ask_html(a["text"], self.root))
+        self.assertEqual(board.asks(self.root)[0]["text"], "Shall I start R3 next?")
+        self.assertNotIn("itemref", board.ask_html(a["text"]), "without a project, as written")
+
+
 if __name__ == "__main__":
     unittest.main()
 
