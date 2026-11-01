@@ -3545,17 +3545,46 @@ PLAYER = """
       if (N.resumeTime) { try { player.currentTime = N.resumeTime; } catch (e) {} delete N.resumeTime; }
       n += 1;
       // refused for want of a tap on this page: held there, tap to resume; cut short by a pause, a skip or the next clip
-      // is no refusal, and nothing is read again; a clip that failed is read by the phone's own voice
+      // is no refusal, and nothing is read again; a clip that failed goes to clipFailed
       player.play().then(() => { unlocked = true; }).catch((err) => { if (err && err.name === 'AbortError') return;
         if (err && err.name === 'NotAllowedError' && mine()) { N.piece = n - 1; return refused('play', 'a clip'); }
-        if (mine() && now && now.at === n - 1) { hush(); sayPhone(N.j, parts, n - 1); } });
+        if (mine() && now && now.at === n - 1) clipFailed(j, parts, n - 1, 'error ' + ((err && err.name) || 'play')); });
     };
     player.onended = next;
-    player.onerror = () => { const err = player.error;                  // the phone's voice then, for a clip that failed
+    player.onerror = () => { const err = player.error;
       if (!err || err.code === 1 || !mine()) return;   // 1: stopped on purpose, nothing failed
-      hush(); sayPhone(N.j, parts, Math.max(0, n - 1)); };
+      clipFailed(j, parts, Math.max(0, n - 1), 'error ' + err.code + (err.message ? ' ' + err.message : '')); };
     next();
   };
+  // A clip that failed, its cause logged first (the voice log keeps the hidden time beside it). Shown, the phone's own
+  // voice reads it. Hidden, never: a locked iPhone always refuses a page's speechSynthesis, and that refusal stopped the
+  // read-aloud (the person's phone log, 2026-11-01: three replies, 197 s, 75 s and 27 s hidden). There the silent element
+  // goes on, the clip is made again a few times with a short backoff and played from the page's own copy; not had, the
+  // reading is held at that piece, and coming back to the page (or ▶) takes it up there.
+  const CLIP_TRIES = 4;
+  const clipFailed = (j, parts, at, cause) => {
+    log('clip', cause, false);
+    if (!hidAt) { hush(); return sayPhone(j, parts, at); }
+    hush();
+    const s = N.blocks[j], v = N.kvoice, key = keyOf(abs(clip(parts[at], v)));
+    const old = kept.get(key); if (old) { URL.revokeObjectURL(old); kept.delete(key); ready.delete(key); }
+    N.piece = at; loading = true; save(); changed();
+    const pending = startingSound = {reply: N, ready: false, go: () => {
+      if (startingSound !== pending || !reading(s)) return;
+      startingSound = null; sayK(j, parts, at); }};
+    let tries = 0;
+    const again = () => { if (startingSound !== pending) return;
+      failed.delete(key);
+      make(parts[at], v).then(() => { if (startingSound !== pending) return;
+        if (kept.has(key)) { log('clip', 'made again', true); pending.ready = true; return pending.go(); }
+        if (++tries < CLIP_TRIES) return after(again, 1000 * 2 ** (tries - 1));
+        pending.ready = true;
+        if (!hidAt) { startingSound = null; log('clip', 'not had', false); if (reading(s)) { hush(); sayPhone(j, parts, at); } return; }
+        log('clip', 'held: not had while hidden', false);
+        if (!reading(s)) return;   // a pause meanwhile holds it already; its ▶ plays the clip as it can
+        paused = true; why = 'phone'; loading = false; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
+        humSync(); save(); changed(); }); };
+    again(); };
   const sayPhone = (j, parts, from) => {
     if (!talk) { playing = false; changed(); return; }
     playing = true; changed();
