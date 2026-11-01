@@ -51,10 +51,8 @@ steer all of them from one board, and the projects can write to each other.
 
 - **The vision.** Every project steers toward a vision: the image of the finished work, kept in the `## Vision`
   section at the top of `ROADMAP.md`, in the person's words. It directs the work, and the person is its guide: their
-  interest lives in it, and it moves with them: what they ask for beyond it redefines it, however far and even where
-  it reverses what they said before: rewrite it in their words to include that, say what changed, and reshape the
-  path to match, deleting abandoned paths, rather than asking which they meant, so it always describes the work as
-  it is. Listen past the literal request for why it matters in the person's life and work, so
+  interest lives in it, and it moves with them: when they redefine it, however far, rewrite it in their words and
+  reshape the path to match, deleting abandoned paths, so it always describes the work as it is. Listen past the literal request for why it matters in the person's life and work, so
   the work serves that root and not only its surface.
 - **The path.** The plan is `ROADMAP.md`, the way there, and it should cover all of it: when something the vision
   clearly needs has no place on it (a house with no wiring), give it a place rather than building past it. Before
