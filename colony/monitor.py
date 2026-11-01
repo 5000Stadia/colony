@@ -609,6 +609,7 @@ class Watcher:
         self.updating = False                # an update being made: its digests come from a small model
         self.signin_observed = self.discovered
         self.worked = set()                  # projects seen working since the last supports check
+        self.reads_kept = time.time()        # what sessions read, first kept two minutes in (cleanup.update)
         path = board.home() / "announced.json"
         self.announced = json.loads(path.read_text()) if path.exists() else {}
 
@@ -623,6 +624,8 @@ class Watcher:
                 measures.check(p)               # its measures, taken by colony at each push and milestone finished
                 from . import hints
                 hints.check(p)                  # a milestone finished: the plan's shape hints, once, quietly
+                from . import cleanup
+                cleanup.check(p)                # an item finished: a cleanup pass that clearly pays, said once (R139)
                 from . import weakened
                 weakened.check(p)               # a commit that weakens its tests without saying why, put to its agent
             except Exception:
@@ -1161,6 +1164,11 @@ class Watcher:
         # the tokens spent, kept current for the Usage page, steward or not: a helper's session is filed under the
         # project that started it while it still runs, so a look every few seconds catches even short ones
         threading.Thread(target=tokens.update, daemon=True).start()
+        if time.time() - getattr(self, "reads_kept", time.time()) > 120:
+            self.reads_kept = time.time()
+            from . import cleanup
+            # what each project's sessions read, kept as their transcripts grow, for the cleanup check (R139)
+            threading.Thread(target=cleanup.update, daemon=True).start()
         if not self.enabled or muted():
             self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:

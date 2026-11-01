@@ -69,6 +69,10 @@ class BoardBase(unittest.TestCase):
         counting = patch.object(tokens, 'update')                  # never reads the machine's real transcripts
         counting.start()
         self.addCleanup(counting.stop)
+        from colony import cleanup
+        reading = patch.object(cleanup, 'update')                  # nor for what their sessions read
+        reading.start()
+        self.addCleanup(reading.stop)
         from colony import digests
         digesting = patch.object(digests, 'all_since', return_value={})   # never asks a real model for a digest
         digesting.start()

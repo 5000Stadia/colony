@@ -529,7 +529,14 @@ class Provider:
         person (None: it can't tell)."""
         return None
 
-    api_host = None                    # a host its requests go to: when it takes a connection again, the network is back
+    def transcript_steps(self, path, state):
+        """What one of its transcripts gained since state["at"] (bytes), state moved on, for the cleanup check
+        (cleanup.py): ("cwd", folder), ("call", ts, input tokens the model took in), and ("tool", ts, kind, what,
+        chars returned), kind "read" (what: a file), "search" (a folder or file, "" for the session's) or "shell" (a
+        command). [] for a program whose transcripts it can't read."""
+        return []
+
+    api_host = None                   # a host its requests go to: when it takes a connection again, the network is back
 
     def network_stop(self, path):
         """What a network drop stopped, from its transcript: when its last turn ended on a network error its retries
@@ -563,6 +570,55 @@ class Provider:
 
 
 REQUIRED = ("program", "site", "label", "instructions", "models", "efforts", "command", "wire", "wired", "classify")
+
+
+def _read_on(path, state, each):
+    """Each complete line a transcript gained since state["at"], parsed, through each(row, state, out); a line still
+    being written waits for the next look, and a transcript rewritten shorter is read afresh."""
+    out = []
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return out
+    if size < state.get("at", 0):
+        state.clear()
+    if size == state.get("at", 0):
+        return out
+    state.setdefault("at", 0)
+    with open(path, "rb") as fh:
+        fh.seek(state["at"])
+        while True:
+            line, complete = read_line(fh, limit=8_000_000)
+            if not complete:
+                break
+            state["at"] = fh.tell()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                each(row, state, out)
+    return out
+
+
+def _chars(content):
+    """How much a tool's output put in front of the model, in characters (an image as about 1.5k tokens)."""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(6000 if "image" in str(b.get("type")) else len(b.get("text") or "")
+                   for b in content if isinstance(b, dict))
+    return len(json.dumps(content)) if content else 0
+
+
+def _stamp_of(row):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(row.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def supplies(provider, shape):
@@ -1243,6 +1299,39 @@ class ClaudeCode(Provider):
 
     IDLE_GAP = 60 * 60          # a step can run long (a helper, a long test); a session resumed later is hours or days on
     _turns = {}                                   # transcript -> (bytes read, ms of turns ended, open turn's start, its latest)
+
+    def transcript_steps(self, path, state):
+        """PROVIDER: Claude Code's transcript: a reply's usage (input + cache read + cache write) is written on each of
+        its parts, counted once by message id; a tool's call (Read, Grep, Glob, Bash) is matched to its result by id."""
+        return _read_on(path, state, self._step)
+
+    @staticmethod
+    def _step(row, st, out):
+        if row.get("cwd") and row["cwd"] != st.get("cwd"):
+            st["cwd"] = row["cwd"]
+            out.append(("cwd", row["cwd"]))
+        m = row.get("message") or {}
+        if row.get("type") == "assistant":
+            u, mid = m.get("usage"), m.get("id")
+            if u and mid and mid not in st.setdefault("seen", []) and m.get("model") != "<synthetic>":
+                st["seen"] = (st["seen"] + [mid])[-20:]
+                out.append(("call", _stamp_of(row), (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
+                            + (u.get("cache_creation_input_tokens") or 0)))
+            for b in m.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in ("Read", "Grep", "Glob", "Bash"):
+                    i = b.get("input") or {}
+                    kind, what = {"Read": ("read", i.get("file_path")), "Bash": ("shell", i.get("command"))}.get(
+                        b["name"], ("search", i.get("path") or ""))
+                    pending = st.setdefault("pending", {})
+                    pending[b.get("id")] = [kind, what or ""]
+                    while len(pending) > 50:                  # a call whose result never came
+                        pending.pop(next(iter(pending)))
+        elif row.get("type") == "user" and isinstance(m.get("content"), list):
+            for b in m["content"]:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    got = (st.get("pending") or {}).pop(b.get("tool_use_id"), None)
+                    if got:
+                        out.append(("tool", _stamp_of(row), got[0], got[1], _chars(b.get("content"))))
 
     def history_text(self, root, limit=200_000):
         """The session's conversation as plain text, for reading and copying on a phone: the person's
@@ -2530,6 +2619,66 @@ class Codex(Provider):
         return ms, (opened[0], opened[1], open_) if last is not None else (None, 0, 0.0)
 
     _turns = {}
+
+    def transcript_steps(self, path, state):
+        """PROVIDER: a Codex rollout: each model call's input is its token_count's last_token_usage (cached included);
+        a shell call (exec, exec_command, shell) names its command in its input, matched to its output by call id. A
+        forked helper's rollout first repeats its parent's history: that is skipped until the line announcing the
+        child, so the parent's work isn't counted twice."""
+        return _read_on(path, state, self._step)
+
+    _CMD = re.compile(r'cmd\s*:\s*"((?:[^"\\]|\\.)*)"|"cmd"\s*:\s*"((?:[^"\\]|\\.)*)"|cmd\s*:\s*`([^`]*)`')
+
+    @classmethod
+    def _commands(cls, body):
+        out = []
+        for a, b, c in cls._CMD.findall(body or ""):
+            try:
+                out.append(json.loads(f'"{a or b}"') if (a or b) else c)
+            except ValueError:
+                out.append(a or b)
+        if not out and body:
+            try:
+                j = json.loads(body)
+                cm = (j.get("command") or j.get("cmd")) if isinstance(j, dict) else None
+                if cm:
+                    out.append(" ".join(cm) if isinstance(cm, list) else cm)
+            except ValueError:
+                pass
+        return out
+
+    @classmethod
+    def _step(cls, row, st, out):
+        kind, p = row.get("type"), row.get("payload") or {}
+        if kind == "session_meta" and "cwd" not in st:
+            st["cwd"] = p.get("cwd") or ""
+            st["inherited"] = bool(p.get("forked_from_id"))
+            out.append(("cwd", st["cwd"]))
+            return
+        if kind == "event_msg" and p.get("type") == "token_count":
+            u = (p.get("info") or {}).get("last_token_usage") or {}
+            if u.get("input_tokens") and not st.get("inherited"):
+                out.append(("call", _stamp_of(row), u["input_tokens"]))
+            return
+        if kind != "response_item":
+            return
+        t = p.get("type")
+        if st.get("inherited"):
+            if t == "message" and p.get("role") == "developer" and "newly spawned child agent" in json.dumps(p.get("content")):
+                st["inherited"] = False
+            return
+        if t in ("custom_tool_call", "function_call") and p.get("name") in ("exec", "shell", "exec_command", "local_shell"):
+            pending = st.setdefault("pending", {})
+            pending[p.get("call_id")] = cls._commands(p.get("input") or p.get("arguments") or "")
+            while len(pending) > 50:
+                pending.pop(next(iter(pending)))
+        elif t in ("custom_tool_call_output", "function_call_output"):
+            cmds = (st.get("pending") or {}).pop(p.get("call_id"), None)
+            if cmds:
+                o = p.get("output")
+                n = _chars(o) if isinstance(o, (str, list)) else len(json.dumps(o)) if o else 0
+                for c in cmds:
+                    out.append(("tool", _stamp_of(row), "shell", c, n / len(cmds)))
 
     @classmethod
     def _turn_open(cls, rollout):
