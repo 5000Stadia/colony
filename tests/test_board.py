@@ -3135,11 +3135,14 @@ class GlanceTest(BoardBase):
         self.assertIn("model: claude-opus-5-5\neffort: low", chores)
         self.assertIn("effort: max", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
         claude_md = (self.root / "CLAUDE.md").read_text()
-        self.assertIn("four tiers (routine, step-up, chores, rote)", " ".join(claude_md.split()))
-        self.assertIn("it reports as it goes rather than waiting", " ".join(claude_md.split()),
+        self.assertIn(f"`{board.GUIDES}/`", claude_md, "the guides' folder reaches the agent as an absolute path")
+        self.assertIn("brief or run helpers, or pair with another project's agent: `helpers.md`", " ".join(claude_md.split()))
+        helpers = " ".join((board.GUIDES / "helpers.md").read_text().split())
+        self.assertIn("four tiers (routine, step-up, chores, rote)", helpers)
+        self.assertIn("it reports as it goes rather than waiting", helpers,
                       "helpers keep their assigner aware of the shape of their work")
-        self.assertIn("talk at hand-offs", claude_md, "paired projects: roles, not running updates")
-        self.assertIn("what it owns and where it ends", " ".join(claude_md.split()), "an unsized job gets an end")
+        self.assertIn("talk at hand-offs", helpers, "paired projects: roles, not running updates")
+        self.assertIn("what it owns and where it ends", helpers, "an unsized job gets an end")
         # the project's own choice for a tier, and back to the default
         self.cli("models", "set", "routine", "claude-opus-5-5", "high")
         self.assertIn("effort: high", (self.root / ".claude" / "agents" / "colony-routine.md").read_text())
@@ -3582,6 +3585,24 @@ class MonitorTest(BoardBase):
     def test_a_new_colony_lets_its_projects_work_freely_and_delete_safely(self):
         self.assertEqual(board.DEFAULT_SETTINGS["permissions"], "all", "the person's word: free in their own folder")
         self.assertIn('rm -rf "${OUT:?}"/*', board.protocol(self.root), "the form Claude Code's rm guard accepts")
+
+    def test_each_moment_points_to_a_guide_that_exists_and_every_guide_is_pointed_to(self):
+        text = board.protocol(self.root)
+        for placeholder in ("GUIDES_DIR", "GUIDE_PATH"):
+            self.assertNotIn(placeholder, text, "no placeholder left unsubstituted")
+        self.assertIn(f"`{board.GUIDES}/`", text)
+        self.assertIn("this list outlasts a compaction", " ".join(text.split()), "a guide is re-read once forgotten")
+        named = set(re.findall(r": `([a-z-]+\.md)`", text))
+        self.assertEqual(named, {p.name for p in board.GUIDES.glob("*.md")})
+        for name in named:
+            guide = (board.GUIDES / name).read_text()
+            self.assertNotIn("ROADMAP.md", guide, "a guide is generic: the project's own plan is named in its file")
+        self.assertLess(len(text.split()), 1000, "the always-on part stays short (R140)")
+        self.assertIn("Mark an item `[~]` when you begin building it; commit each finished piece.", text,
+                      "the blind test: marked before a gate and left uncommitted, finished work uncommitted")
+        self.assertIn("put them to the person together as gates (`asking.md`)",
+                      " ".join((board.GUIDES / "roadmap.md").read_text().split()),
+                      "the blind test: laying out a roadmap asked in prose instead of `colony gate`")
 
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
@@ -5738,7 +5759,8 @@ class PinTest(BoardBase):
             self.assertIn("The far windows flicker", page)
             for gone in ("/showcase/rate", "class='star", "★", "Rate or comment"):
                 self.assertNotIn(gone, page)
-            self.assertNotIn("rating", board.PROTOCOL, "the agent's instructions no longer mention one")
+            for text in (board.PROTOCOL, (board.GUIDES / "roadmap.md").read_text()):
+                self.assertNotIn("rating", text, "the agent's instructions no longer mention one")
             self.assertNotIn("rate", run("show", "A still", "--what", "a frame").stdout)
         finally:
             httpd.shutdown()
@@ -6338,7 +6360,9 @@ class ConsultTest(BoardBase):
     def test_every_project_is_told_the_rule_and_the_board_shows_each_round_and_its_cost(self):
         for words in ("redoing built work", "different model families", "colony consult R4", "your plan left out",
                       "only points that would fundamentally change the approach"):
-            self.assertIn(words, " ".join(board.PROTOCOL.split()))
+            self.assertIn(words, " ".join((board.GUIDES / "fresh-eyes.md").read_text().split()))
+        self.assertIn("decide what would mean redoing built work", " ".join(board.PROTOCOL.split()),
+                      "every project is pointed to the rule before such a decision")
         rec = self.consult.run(self.root, "R3", "How should reminders work?", "d")
         self.consult.adopt(self.root, rec["id"], "keep them local")
         board.track(self.root)
@@ -8752,7 +8776,8 @@ class DailyPageTest(HoursBase):
         helped = " ".join(self.cli("gate", "--help").stdout.split())
         self.assertIn("only for a reversible choice", helped)
         self.assertIn("a costly or irreversible decision has no default", helped)
-        self.assertIn('(if reversible, `--default "what stands if they skip it"`)', " ".join(board.PROTOCOL.split()))
+        self.assertIn('(if reversible, `--default "what stands if they skip it"`)', " ".join((board.GUIDES / "asking.md").read_text().split()))
+        self.assertIn("put a decision or question to the person, or lay out work that will need one: `asking.md`", " ".join(board.PROTOCOL.split()))
         with self.assertRaisesRegex(ValueError, "consultant points has no default"):
             board.add_gate(self.root, "Which changes?", consultation="c1", points=[{"text": "x", "consultants": [1]}],
                            default="none of them")
