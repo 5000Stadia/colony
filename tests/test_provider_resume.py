@@ -1,6 +1,7 @@
 """Provider switches keep their own bookmarks and never resume a foreign conversation."""
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -205,6 +206,9 @@ class ProviderResumeTest(unittest.TestCase):
         part = lambda f: (here / f).read_text().split('## This project is part of a colony')[0]
         self.assertEqual(part('AGENTS.md'), part('CLAUDE.md'), "Codex works on colony by the same project rules as Claude")
         self.assertIn('tests.test_provider_resume', part('AGENTS.md'))
+        listed = set(re.findall(r'tests\.test_\w+', part('AGENTS.md').split('python3 -m unittest')[1].split('`')[0]))
+        self.assertEqual(listed, {f'tests.{p.stem}' for p in (here / 'tests').glob('test_*.py')},
+                         "tests/run.py runs every tests/test_*.py: the plain command lists the same modules")
 
 
 if __name__ == '__main__':
