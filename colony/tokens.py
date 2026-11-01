@@ -193,9 +193,9 @@ def _codex(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
                      cached, u.get("cache_write_input_tokens"), u.get("output_tokens"))
 
 
-def sources():
-    """Every transcript written to in the kept week: Claude Code's (subagents' too) and Codex's rollouts."""
-    since = time.time() - KEEP
+def sources(keep=KEEP):
+    """Every transcript written to in the kept week (or `keep` seconds): Claude Code's (subagents' too) and Codex's rollouts."""
+    since = time.time() - keep
     found = []
     from . import providers as pv
     bases = [(Path(pv.get("claude").config_home()) / "projects", "claude"), (Path(pv.get("codex").config_home()) / "sessions", "codex")]

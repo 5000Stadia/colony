@@ -1,7 +1,7 @@
 # Colony
 
 This repository is colony: the board (colony/board.py), its consoles, the steward, and `GUIDE.md`, the
-guidance it deploys. Tests: `python3 tests/run.py` runs in parallel, in under two minutes, the same suite as `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_layout tests.test_project_links tests.test_setup_links tests.test_attachment tests.test_chat_cache tests.test_input_ledger tests.test_polling tests.test_repair tests.test_repair_board tests.test_send tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_unpack tests.test_lab`.
+guidance it deploys. Tests: `python3 tests/run.py` runs in parallel, in under two minutes, the same suite as `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_layout tests.test_project_links tests.test_setup_links tests.test_attachment tests.test_chat_cache tests.test_input_ledger tests.test_polling tests.test_repair tests.test_repair_board tests.test_send tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_unpack tests.test_lab tests.test_cleanup`.
 
 ## Building the board you run on
 
