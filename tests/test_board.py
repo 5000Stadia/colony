@@ -3798,6 +3798,32 @@ class MonitorTest(BoardBase):
         self.assertRegex(out.getvalue(), r"(?m)^steward +on +the steward session runs with the board")
         self.assertIn("steward_model", out.getvalue())
 
+    def test_each_registry_save_keeps_the_version_it_replaces_and_a_flood_cannot_push_out_the_days_first(self):
+        # Oct 31: a stray test wrote over the person's projects and settings, and no copy existed
+        copies = board.home() / "backups" / "board"
+        good = dict(board.registry(), projects=["/home/someone/real"])
+        # (the fixture's own threads may save alongside, so each check holds whatever else is kept)
+        board.save_registry(good)
+        board.save_registry(dict(good, projects=["/tmp/stand-in"]))
+        after = sorted(copies.glob("board-*.json"))
+        self.assertIn(["/home/someone/real"], [json.loads(f.read_text()).get("projects") for f in after], "the good one, kept")
+        first = after[0]
+        with patch.object(board, "REGISTRY_COPIES", 5):
+            for n in range(12):
+                board.save_registry(dict(good, projects=[f"/tmp/flood-{n}"]))
+        left = sorted(copies.glob("board-*.json"))
+        self.assertLessEqual(len(left), 6, "the last five, and the day's first")
+        self.assertIn(first, left, "a flood can't push out the day's first")
+        self.assertEqual(list(board.home().glob(".board.json.*")), [], "written whole, no half file left")
+
+    def test_saving_the_same_registry_again_keeps_no_copy(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder):
+            board.save_registry({"projects": ["/a"]})
+            board.save_registry({"projects": ["/a"]})
+            self.assertFalse((Path(folder) / "backups" / "board").exists(), "nothing replaced, nothing kept")
+            board.save_registry({"projects": ["/b"]})
+            self.assertEqual(len(list((Path(folder) / "backups" / "board").glob("board-*.json"))), 1)
+
     def test_a_setting_named_alone_is_shown_and_never_changed(self):
         # Oct 31: the steward typed `colony settings autostart` to look, and starting with the machine was turned off
         from colony import autostart, cli

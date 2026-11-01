@@ -787,9 +787,40 @@ def project_url(project):
     return "/?" + project_query(project)
 
 
+REGISTRY_COPIES, REGISTRY_DAYS = 40, 30
+
+
 def save_registry(reg):
+    """The board's projects and the person's settings, written whole (never half a file), with the version it replaces
+    kept: on Oct 31 a stray test wrote over theirs, no copy existed, and it was rebuilt by hand from the day's records.
+    The last REGISTRY_COPIES versions stay, and each day's first for REGISTRY_DAYS days, so a flood of bad writes
+    can't push out the good ones. Restoring is copying one back as board.json."""
+    path, text = home() / "board.json", json.dumps(reg, indent=2)
     home().mkdir(parents=True, exist_ok=True)
-    (home() / "board.json").write_text(json.dumps(reg, indent=2))
+    try:
+        before = path.read_text()
+    except OSError:
+        before = ""
+    if before.strip() and before != text:
+        copies = home() / "backups" / "board"
+        copies.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S") + f".{int(time.time() * 1e6) % 1000000:06d}"
+        (copies / f"board-{stamp}.json").write_text(before)
+        _prune_registry_copies(copies)
+    tmp = path.with_name(f".board.json.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def _prune_registry_copies(copies):
+    kept = sorted(copies.glob("board-*.json"))
+    days, keep = {}, set(kept[-REGISTRY_COPIES:])
+    for f in kept:
+        days.setdefault(f.name[6:14], f)                     # each day's first
+    keep.update(sorted(days.values())[-REGISTRY_DAYS:])
+    for f in kept:
+        if f not in keep:
+            f.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------- a project's files
