@@ -8793,7 +8793,7 @@ class DailyPageTest(HoursBase):
         self.assertIn("only for a reversible choice", helped)
         self.assertIn("a costly or irreversible decision has no default", helped)
         self.assertIn('(if reversible, `--default "what stands if they skip it"`)', " ".join((board.GUIDES / "asking.md").read_text().split()))
-        self.assertIn("put a decision or question to the person, or lay out work that will need one: `asking.md`", " ".join(board.PROTOCOL.split()))
+        self.assertIn("put a decision or question to the person, lay out work that will need one, or get an answer that leaves a kind of choice to you: `asking.md`", " ".join(board.PROTOCOL.split()))
         with self.assertRaisesRegex(ValueError, "consultant points has no default"):
             board.add_gate(self.root, "Which changes?", consultation="c1", points=[{"text": "x", "consultants": [1]}],
                            default="none of them")

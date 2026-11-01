@@ -2,8 +2,7 @@
 
 Foresee the decisions an item will need and ask them together, each with a default where the choice is reversible,
 and none where skipping would publish, send or spend: that waits for their answer.
-A question that matters only later waits for its moment; when an item's time comes and nothing else needs the person,
-you may offer a question or two from curiosity about the open options there.
+A question that matters only later waits for its moment.
 
 A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
 `--default "what stands if they skip it"`); where it has clear answers, `--option "..."` for each and
@@ -11,3 +10,7 @@ A decision for the person: `colony gate "the question" --item R4 --why "what dep
 later: `--when R12` keeps it off their list until R12 starts. Settled in conversation: `colony gate --answered ID
 "their words" --context "your reading"`; no longer applying (superseded, moot): `colony gate --withdraw ID "why"`.
 An open gate stays on their list.
+
+When an answer first shows how they want a kind of decision made ("your call", or overruling one), ask once how it
+should be decided from then on (ask each time, your judgement, or your judgement by their rule) and keep their
+answer, in their words, with `colony rule`.

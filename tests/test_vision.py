@@ -343,7 +343,8 @@ class VisionTest(BoardBase):
         guide = (board.GUIDES / 'vision.md').read_text()
         self.assertIn("shape or revise the vision, or a nest's: `vision.md`", ' '.join(board.PROTOCOL.split()))
         self.assertIn("or the work shows the vision differently, propose a revision", " ".join(guide.split()))
-        for text in (guide, vision.MIGRATION, monitor.ROLE):
+        # the guide's "brainstorming never changes it" went in R141 (blind-tested: floating ideas handled alike without it)
+        for text in (vision.MIGRATION, monitor.ROLE):
             self.assertIn('brainstorming', text)
         for text in (vision.MIGRATION, monitor.ROLE):
             self.assertIn('specifications', text)

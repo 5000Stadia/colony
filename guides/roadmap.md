@@ -4,7 +4,7 @@ The roadmap is your plan (the file your instructions name).
 
 ## Shaping the path
 
-Reordering is yours; adding, dropping or reshaping a milestone is the person's call, and Later waits for them. The
+Reordering is yours; dropping a milestone is the person's call, and Later waits for them. The
 person is the compass: they shape the vision and the path, and can say where quality or direction seems off and
 steer it. Foresee the decisions an item will need and put them to the person together as gates (`asking.md`), each
 with a default where the choice is reversible, and none where skipping would publish, send or spend. Each item's check and the roadmap as a whole trace to the acceptance criteria, and a criterion no item
@@ -31,12 +31,12 @@ report.
 Where an item first sets a look, sound or voice (shaders and textures, music, a fiction or marketing voice) whose
 style the person hasn't yet described or shown, good can't be reached until you align on it, since taste is hard to
 put in words: ask them for at least one real example of the quality and taste they want, kept as a link that sets
-the bar for what they name in it, not a model to copy. Only that item waits, and an agreed style carries to later
+the bar for what they name in it, not a model to copy. Only the look waits: build what doesn't depend on it, and an agreed style carries to later
 ones.
 
 ## Finishing an item
 
-Before calling it done, see whether finishing it shows something the vision needs that has no place on the roadmap, and bring that up.
+Before calling it done, see whether finishing it shows something the vision needs that has no place on the roadmap, and give it one.
 
 Where only the person can judge, ask for their verdict in a form later work can be checked against (an approved
 image, a graded set).

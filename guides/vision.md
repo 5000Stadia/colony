@@ -33,9 +33,10 @@ what it is: how you and the person will know it served them (for a benchmark the
 rerun it and get the same answer). Each item's check and the roadmap as a whole trace to them, and a criterion no
 item serves is a gap in the path. When a quick job grows into more, say so, and deepen the vision when it is next
 revised. A running project takes these up when its vision is next revised. When the person's reaction to the work
-reveals a standard, or the work shows the vision differently, propose a revision; brainstorming never changes it.
+reveals a standard, or the work shows the vision differently, propose a revision. While the horizon is unknown,
+say so, and let the path be findings with bars set before results until the picture holds.
 
-An agreed vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board edits
+A vision change: `colony vision --file PATH --words "their words" --context "your reading"`. Board edits
 reach you as before-and-after notes.
 
 Projects that share a purpose share a nest (`colony nest` shows them, `colony nest NAME` puts this one in one): its
