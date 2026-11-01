@@ -3598,6 +3598,11 @@ class MonitorTest(BoardBase):
             guide = (board.GUIDES / name).read_text()
             self.assertNotIn("ROADMAP.md", guide, "a guide is generic: the project's own plan is named in its file")
         self.assertLess(len(text.split()), 1000, "the always-on part stays short (R140)")
+        self.assertIn("Mark an item `[~]` when you begin building it; commit each finished piece.", text,
+                      "the blind test: marked before a gate and left uncommitted, finished work uncommitted")
+        self.assertIn("put them to the person together as gates (`asking.md`)",
+                      " ".join((board.GUIDES / "roadmap.md").read_text().split()),
+                      "the blind test: laying out a roadmap asked in prose instead of `colony gate`")
 
     def test_what_was_answered_while_the_monitor_was_busy_is_not_brought_to_it(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
