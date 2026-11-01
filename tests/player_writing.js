@@ -60,7 +60,8 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
 function browser(kokoro, restore = '') {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
-  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [], navigations = []; let gestureVersion = 0;
+  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [], navigations = [], spoken = []; let gestureVersion = 0;
+  let failing = false, voicePlan = null;      // clips fetched over the network that fail to play; /voice answers
   class Events {
     constructor() { this.listeners = new Map(); }
     addEventListener(type, listener) { const xs = this.listeners.get(type) || []; xs.push(listener); this.listeners.set(type, xs); }
@@ -88,7 +89,10 @@ function browser(kokoro, restore = '') {
     set src(value) { this._src = value; this.currentTime = 0; (this.srcs ||= []).push(value); }
     constructor() { super(); audios.push(this); this.src = ''; this.paused = true; this.ended = false; this.loop = false; }
     play() {
-      this.paused = false;
+      if (failing && this.src && !this.src.startsWith('data:') && !this.src.startsWith('blob:')) {
+        this.error = {code: 2}; Promise.resolve().then(() => this.onerror && this.onerror());
+        return Promise.reject(Object.assign(new Error('network'), {name: 'NotSupportedError'})); }
+      this.error = null; this.paused = false;
       if (this.src && !this.src.startsWith('data:')) sounds.push(this.src);
       this.emit('playing');
       return Promise.resolve();
@@ -98,7 +102,7 @@ function browser(kokoro, restore = '') {
   const speech = new Events();
   Object.assign(speech, {
     getVoices: () => [], speaking: false, paused: false,
-    speak(u) { this.last = u; if (u.text) sounds.push(u.text); this.speaking = true; if (u.onstart) u.onstart(); },
+    speak(u) { this.last = u; spoken.push(u.text); if (u.text) sounds.push(u.text); this.speaking = true; if (u.onstart) u.onstart(); },
     pause() { this.paused = true; }, resume() { this.paused = false; resumed.push('speech'); },
     cancel() { this.paused = this.speaking = false; },
   });
@@ -127,6 +131,8 @@ function browser(kokoro, restore = '') {
       if (u.pathname === '/voice') {
         const req = requests.get('voice:' + u.searchParams.get('t'));
         if (req) { req.signal = options.signal; return req.promise; }
+        if (voicePlan) { voicePlan.count++;
+          return voicePlan.count <= voicePlan.fails ? {ok: false} : {ok: true, blob: async () => new Blob(['clip ' + voicePlan.count])}; }
       }
       if (u.pathname === '/open') {
         const request = requests.get('document:' + u.searchParams.get('f'));
@@ -140,7 +146,9 @@ function browser(kokoro, restore = '') {
   vm.runInContext(program, context);
   const api = window.testPlayer;
   const row = t => ({p: '0', t, b: [[t, new Date(time).toISOString()]]});
-  return {api, kokoro, sounds, resumed, player: () => audios[0], hum: () => audios[1], box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
+  return {api, kokoro, sounds, resumed, spoken,
+    failClips(yes) { failing = yes; }, voiceFails(n) { voicePlan = {fails: n, count: 0}; },
+    async hide(yes) { document.hidden = yes; document.emit('visibilitychange'); await flush(); }, player: () => audios[0], hum: () => audios[1], box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
     offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
     captureEnd() { return kokoro ? audios[0].onended : speech.last.onend; },
     voiceRequest(text) { const d = deferred(); requests.set('voice:' + text, d); return d; },
@@ -952,7 +960,40 @@ const cases = {
     await b.blur(); await b.advance(2200);
     assert.equal(b.api.state().paused, false); assert.equal(b.api.hear().silence, true, 'after the box lets go, it goes on');
   },
-
+  async 'hidden, a clip that fails is made again and played from the page\'s copy, never the phone\'s voice'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']); await b.hide(true); b.failClips(true); b.voiceFails(1);
+    b.api.play(xs, 0); await flush(); await b.advance(10000);
+    assert.deepEqual(b.spoken.filter(Boolean), [], 'speechSynthesis is never asked while hidden');
+    assert(b.fetches.filter(u => u.pathname === '/voice').length >= 2, 'the clip is fetched again');
+    const h = b.api.hear();
+    assert(h.story.some(x => /^clip: error /.test(x)), h.story.join(' | '));
+    assert(h.story.includes('clip: made again'), h.story.join(' | '));
+    assert(b.sounds.some(x => x.startsWith('blob:')), 'played from the page\'s own copy: ' + b.sounds.join(', '));
+    assert.equal(h.silence, true, 'the silent element went on throughout');
+    assert.equal(b.api.state().playing, true); assert.equal(b.api.state().paused, false);
+  },
+  async 'hidden, a clip that cannot be had holds the reading there and coming back takes it up'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']); await b.hide(true); b.failClips(true); b.voiceFails(Infinity);
+    b.api.play(xs, 0); await flush(); await b.advance(30000);
+    assert.deepEqual(b.spoken.filter(Boolean), [], 'speechSynthesis is never asked while hidden');
+    assert(b.fetches.filter(u => u.pathname === '/voice').length >= 4, 'a few tries');
+    const st = b.api.state(), h = b.api.hear();
+    assert.equal(st.t, 'A'); assert.equal(st.piece, 0); assert.equal(st.paused, true); assert.equal(st.why, 'phone');
+    assert.equal(st.letGo, 'refused'); assert(h.story.includes('clip: held: not had while hidden'), h.story.join(' | '));
+    assert.equal(b.marks.length, 0, 'nothing marked heard');
+    b.failClips(false); b.voiceFails(0); await b.hide(false); await flush();
+    assert.equal(b.api.state().paused, false); assert.equal(b.api.state().playing, true);
+    assert(b.sounds.length > 0, 'coming back plays the held piece'); assert.deepEqual(b.spoken.filter(Boolean), []);
+  },
+  async 'shown, a clip that fails is read by the phone\'s voice as before'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']); b.failClips(true); b.voiceFails(Infinity);
+    b.api.play(xs, 0); await flush(); await b.advance(1000);
+    assert(b.spoken.some(x => /A reply/.test(x)), 'the phone\'s voice reads it: ' + b.spoken.join(', '));
+    assert(b.api.hear().story.some(x => /^clip: error /.test(x)), b.api.hear().story.join(' | '));
+  },
 };
 (async () => {
   let failures = 0;
