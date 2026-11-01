@@ -37,6 +37,13 @@ class RepairTest(unittest.TestCase):
         reg['settings']['repair_provider'] = key
         board.save_registry(reg)
 
+    def test_a_codex_being_checked_shows_as_checking_not_offline(self):
+        self.choose()
+        with patch.object(self.codex, 'repair_start', return_value={'state': 'checking', 'paired': False}):
+            repair._refresh(force=True)
+        self.assertEqual(repair.state()['state'], 'checking')
+        self.assertIn('checking the installed Codex', repair.state()['message'])
+
     def test_off_and_cached_reads_never_contact_native(self):
         with patch.object(self.codex, 'repair_start') as start, patch.object(self.codex, 'repair_status') as status:
             self.assertEqual(repair.state()['state'], 'off')

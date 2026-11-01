@@ -25,6 +25,8 @@ _MESSAGES = {
     'offline': 'The repair host could not connect. Check Codex sign-in and connectivity; Colony will retry.',
     'needs-signin': 'Sign in with Codex before enabling repair access.',
     'unavailable': 'This provider or installed version cannot provide repair access.',
+    'checking': 'Colony is checking the installed Codex for repair access (a few minutes, no tokens); '
+                'the connection starts once it passes.',
     'stopping': 'Repair access is turning off after active work finishes.',
 }
 

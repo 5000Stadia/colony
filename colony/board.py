@@ -8939,7 +8939,8 @@ REPAIR_JS = r"""
   const draw = () => {
     const labels = {off:'Off', starting:'Starting repair access…', connecting:'Connecting…',
       unpaired:'Ready to pair', ready:'Connected for repairs', offline:'Repair access is offline',
-      'needs-signin':'Provider sign-in needed', unavailable:'Repair access unavailable', stopping:'Turning off…'};
+      'needs-signin':'Provider sign-in needed', unavailable:'Repair access unavailable', stopping:'Turning off…',
+      checking:'Checking the installed Codex…'};
     status.textContent = labels[current.state] || 'Status unconfirmed'; message.textContent = current.message || '';
     area.querySelector('.repair-enable').hidden = !!current.enabled;
     area.querySelector('[data-repair-action=disable]').hidden = !current.enabled && current.state !== 'stopping';

@@ -148,12 +148,46 @@ def stop_check():
     return left
 
 
+def repair_wanted():
+    """The person has the installation's repair connection on Codex: it needs a Codex colony has checked."""
+    from . import board
+    return board.registry()['settings'].get('repair_provider') == 'codex'
+
+
+def check_wanted(remote=None):
+    """Whether anything here needs app access, so a check of a new Codex is worth running: the project being
+    launched has remote on (remote given), any Codex project does (remote None), or the repair connection is on
+    Codex. With every project's remote off and repair access elsewhere, nothing runs Codex's remote checks."""
+    if remote or repair_wanted():
+        return True
+    if remote is not None:
+        return False
+    from . import board, providers
+    with suppress(Exception):
+        return any(providers.key(providers.of(p)) == 'codex' and board.project_settings(p)[0].get('remote', True)
+                   for p in board.projects(adopt=False))
+    return False
+
+
+def needs_check(version):
+    """An installed Codex release on Linux that colony has neither listed as tested nor checked yet."""
+    number = release(version)
+    return (sys.platform.startswith('linux') and bool(number) and not supported_version(version)
+            and number not in checked())
+
+
+def checking():
+    """A check of a new Codex is running now (its starter or the checks themselves)."""
+    return any(isinstance(row, dict) and row.get('pid') and row.get('start')
+               and process_start(int(row['pid'])) == row['start'] for row in read_json(_check_path()).values())
+
+
 def start_check():
     """check_version in the background, detached, so a console starting meanwhile isn't held up: it comes up local,
     and reloads onto app access at its next idle moment once the check passes (Codex.stale). Not while colony is
-    still or waiting for the person's check."""
+    still or waiting for the person's check, nor while one already runs."""
     from . import providers
-    if held():
+    if held() or checking():
         return
     process = subprocess.Popen(providers.own_module('colony.codex_remote') + ['check'], stdin=subprocess.DEVNULL,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -647,7 +681,7 @@ def launch(root, settings, resume=None):
     remote = settings.get('remote', True)
     if not sys.platform.startswith('linux') or not supported_version(provider.version()):
         report(home, root, 'local', UNTESTED + ', '.join(TESTED_VERSIONS))
-        if sys.platform.startswith('linux') and release(provider.version()) not in checked():
+        if needs_check(provider.version()) and check_wanted(remote):
             start_check()
         return local(root, settings, resume, home if owned else source)
     if not remote and not alive(home):

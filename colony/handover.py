@@ -10,9 +10,11 @@ work, its console and Codex host stop, the folder moves, everything colony keeps
 (repoint.repoint, its worktrees repaired), and its console resumes its conversation in the new folder. A failure
 after the folder moved puts it back.
 """
+import getpass
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -85,7 +87,7 @@ def settle(roots, by, wait=WAIT, say=print, clock=time.monotonic, nap=time.sleep
         if idle >= IDLE_LOOKS:
             break
         if busy and clock() - told >= 60:
-            say(f"waiting for {busy_names(busy)} to land its work…")
+            say(f"waiting for {busy_names(busy)} to land {'its' if len(busy) == 1 else 'their'} work…")
             told = clock()
         if busy:
             nap(LOOK)
@@ -188,8 +190,11 @@ def stop_still(stop_sessions, wait=WAIT, say=print, sessions=()):
     if busy:
         for root in roots:
             board.resume_project(root)
-        why = ("has an item of the lead's in flight, which a paused project can't land: land it or hand it back, then "
-               "stop again" if all(_items_only(r) for r in busy) else f"hadn't landed its work within {wait // 60} minutes")
+        one = len(busy) == 1
+        why = (("has an item" if one else "have items") + " of the lead's in flight, which a paused project can't land: "
+               + ("land it or hand it back" if one else "land them or hand them back") + ", then stop again"
+               if all(_items_only(r) for r in busy)
+               else f"hadn't landed {'its' if one else 'their'} work within {wait // 60} minutes")
         say(f"not stopped: {busy_names(busy)} {why}; nothing was stopped and everything carries on as it was")
         return 1
     held = [board.name_of(p) for p in board.projects(board.registry()) if p.exists() and not _codex_stop(p)]
@@ -220,7 +225,9 @@ def _save_mark(mark):
     board.save_json(mark_path(), mark)
     if folder := board.colony_folder():
         current = json.loads((folder / "COLONY.json").read_text())
-        board.save_json(folder / "COLONY.json", dict(current, **mark))
+        # The marker names the machine and user that wrote it last, a restored copy's own stops included.
+        writer = {"machine": socket.gethostname(), "user": getpass.getuser()}
+        board.save_json(folder / "COLONY.json", dict(current, **dict(mark, written_by=writer)))
 
 
 def started():

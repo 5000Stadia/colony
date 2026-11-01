@@ -1008,8 +1008,9 @@ class Watcher:
                 if providers.usable(p):
                     p.update()                          # installed beside the running version: consoles move over when idle
         from . import codex_remote
-        if providers.usable(providers.get("codex")):
-            codex_remote.check_version()                # a new Codex, checked for app access with no tokens
+        if providers.usable(providers.get("codex")) and codex_remote.check_wanted():
+            codex_remote.check_version()                # a new Codex, checked for app access with no tokens, when
+                                                        # a project's remote or the repair connection needs it
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
         if bench.aa_key() and bench.days_since_fetch() >= 0.9:

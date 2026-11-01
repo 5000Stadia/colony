@@ -744,19 +744,22 @@ class ClaudeCode(Provider):
             return f"{path} couldn't be read, so Claude Code's first-run answers weren't added to it"
         if not isinstance(config, dict):
             return None
-        added = 0
+        added, trusted, told = 0, 0, []
         for k in self.FIRST_RUN:
             if k in state and k not in config:
                 config[k], added = state[k], added + 1
+        if added:
+            told.append("onboarding")
         had = "projects" in config
         projects = config.setdefault("projects", {})
         for folder, row in (state.get("projects") or {}).items() if isinstance(projects, dict) else ():
             here = projects.setdefault(folder, {})
             if not isinstance(here, dict):
                 continue
-            for k in self.FOLDER_TRUST:
-                if k in row and k not in here:
-                    here[k], added = row[k], added + 1
+            gained = [k for k in self.FOLDER_TRUST if k in row and k not in here]
+            for k in gained:
+                here[k], added = row[k], added + 1
+            trusted += bool(gained)
         if not projects and not had:
             config.pop("projects")
         if added:
@@ -770,12 +773,16 @@ class ClaudeCode(Provider):
             for k, v in (state.get("settings") or {}).items():
                 if k in self.FIRST_RUN_SETTINGS and k not in settings:
                     settings[k], chosen = v, chosen + 1
+                    told.append({"theme": "theme", "skipDangerousModePermissionPrompt":
+                                 "bypass-permissions acceptance"}[k])
             if chosen:
                 self._write_private(spath, settings)
         if not added and not chosen:
             return None
-        return (f"Claude Code's first-run answers (its theme, onboarding and bypass-permissions acceptance, and trust in "
-                f"{len(state.get('projects') or {})} of the archive's folders) added, keeping those already here")
+        if trusted:
+            told.append(f"trust in {trusted} of the archive's folders")
+        listed = told[0] if len(told) == 1 else ", ".join(told[:-1]) + " and " + told[-1]
+        return f"Claude Code's first-run answers ({listed}) added, keeping those already here"
 
     @staticmethod
     def _write_private(path, data):
@@ -1649,7 +1656,14 @@ class Codex(Provider):
         from .codex_rpc import Client
         started = not r.alive(home)
         if started:
-            if not r.supported_version(self.version()):
+            version = self.version()
+            if not r.supported_version(version):
+                # A Codex colony hasn't checked yet: the repair connection wants it, so check it now (in the
+                # background, no tokens) and say so; it starts at a later refresh once the check passes.
+                if r.needs_check(version):
+                    r.start_check()
+                    if r.checking():
+                        return dict(state='checking', paired=False)
                 return dict(state='unavailable', paired=False)
             source = self.config_home().resolve()
             if not (source / 'auth.json').is_file():
