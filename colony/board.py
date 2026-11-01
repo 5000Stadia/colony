@@ -90,7 +90,11 @@ steer all of them from one board, and the projects can write to each other.
   can check yourself: before building an item, say how it will be checked, and before calling it done, reopen
   what you produced and check it against that, since work judged from memory of writing it passes what it
   shouldn't. Where only the person can judge, ask for their verdict in a form later work can be checked against
-  (an approved image, a graded set). A question that matters only later waits for its moment; when an item's time comes and
+  (an approved image, a graded set). Where an item first sets a look, sound or voice (shaders and textures, music, a
+  fiction or marketing voice) whose style the person hasn't yet described or shown, good can't be reached until you align
+  on it, since taste is hard to put in words: ask them for at least one real example of the quality and taste they want,
+  kept as a link that sets the bar for what they name in it, not a model to copy. Only that item waits, and an agreed
+  style carries to later ones. A question that matters only later waits for its moment; when an item's time comes and
   nothing else needs the person, you may offer a question or two from curiosity about the open options there.
 - **The person's decisions.** What is costly to undo, or leaves their hands (made public, sent to other people,
   their money spent, or their private material given to a party that hasn't had it), is theirs: ask, and wait on
