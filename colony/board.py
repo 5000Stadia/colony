@@ -4825,7 +4825,8 @@ def chat_prose(text, key=None, root=None):
         return f"<a href='{m.group(2)}' target='_blank' rel='noopener'>{m.group(1)}</a>"
     page = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", picture, page)
     page = re.sub(r"(?<!!)\[([^\]]+)\]\(((?:https?://|/)[^)\s]+|[^)\s]+\.(?:pdf|png|jpe?g|gif|webp|heic|svg))\)", link, page, flags=re.I)
-    return re.sub(r"<div class='mdtable'><table>.*?</table></div>", lambda m: media.table(m[0]), page, flags=re.S)
+    page = re.sub(r"<div class='mdtable'><table>.*?</table></div>", lambda m: media.table(m[0]), page, flags=re.S)
+    return name_items(page, root)
 
 
 NOTE_FROM = {"monitor": "The person's steward", "suggestion": "The steward suggests", "colony": "Colony",
@@ -7008,6 +7009,62 @@ def lead_clause(text, n=70):
     return short(head, n)
 
 
+_ITEM_NAMES = {}             # a plan's text -> {item id: its short name}, so a page reads each plan once
+ITEM_REF = re.compile(r"(?<![\w/#=&?-])(R\d+)\b(?!-)")
+_SKIP_TAGS = re.compile(r"<(/?)(a|pre|code|summary|button|textarea|script|style)\b", re.I)
+
+
+def item_names(root):
+    """The short name of each item on a project's roadmap, read once for each version of its text."""
+    try:
+        from . import lead
+        path = lead.plan_path(root)
+        text = path.read_text() if path.exists() else ""
+    except (OSError, TypeError, ValueError, KeyError):
+        return {}
+    if not text:
+        return {}
+    got = _ITEM_NAMES.get(text)
+    if got is None:
+        try:
+            its = items(roadmap(root, text))
+        except Exception:                                # a plan that won't read names nothing; the words still show
+            its = {}
+        got = _ITEM_NAMES[text] = {iid: lead_clause(i["text"], 40) for iid, i in its.items()}
+        while len(_ITEM_NAMES) > 50:
+            _ITEM_NAMES.pop(next(iter(_ITEM_NAMES)))
+    return got
+
+
+def name_items(page, root):
+    """An agent's words as rendered HTML, with the first mention of each roadmap item named beside its number and
+    linked to its page (R127 · Migrate and go), so a bare number never stands alone before the person. The person,
+    2026-11-01: "R127 unknown what this item is R139 unknown what this is as well". Text in tags, code, and links
+    stays as it is; a number not on the roadmap stays bare; later mentions stay bare. Rendering only, never the text."""
+    if not root or not page or "R" not in page:
+        return page
+    names = item_names(root)
+    if not names:
+        return page
+    q, seen, depth, out = project_query(root), set(), 0, []
+
+    def named(m):
+        iid = m.group(1)
+        if iid not in names or iid in seen:
+            return m.group(0)
+        seen.add(iid)
+        return (f"<a class='itemref' href='/item?{q}&id={e(iid)}' title='{e(iid)} · {e(names[iid])}'>{e(iid)}"
+                f"<span class='muted'> · {e(names[iid])}</span></a>")
+    for part in re.split(r"(<[^>]*>)", page):
+        if part.startswith("<"):
+            if t := _SKIP_TAGS.match(part):
+                depth = max(0, depth + (-1 if t.group(1) else 1))
+            out.append(part)
+        else:
+            out.append(part if depth else ITEM_REF.sub(named, part))
+    return "".join(out)
+
+
 def journey_html(road, times=None, inside=None, live="", pid=0):
     """The roadmap as one list down the page, in the plan's order: the path to the vision (P3; it replaces R32's cards,
     latest started first, which listed every open milestone a second time). What's finished shows as medals; each
@@ -7262,9 +7319,9 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail=""):
              + "".join(f"<details class='round'><summary>You asked: {e(short(a or '…', 90))}</summary>{exchange(a, t)}</details>"
                        for a, t in rounds[:-1])
              + f"<div class='round now'>{exchange(*rounds[-1])}</div>") if first else "")
-    body += (f"<span class='num'>{e(number)}</span> " if number else "") + f"<b>{e(gate['question'])}</b>"
-    if gate.get("why"):
-        body += f"<p class='muted'>{e(gate['why'])}</p>"
+    # the question and its why as one message: an item it names shows its name once (rendering only)
+    body += (f"<span class='num'>{e(number)}</span> " if number else "") + name_items(
+        f"<b>{e(gate['question'])}</b>" + (f"<p class='muted'>{e(gate['why'])}</p>" if gate.get("why") else ""), root)
     if gate.get("default") and not gate["answer"]:
         when = "" if gate.get("waits_for") else stands_at(root, gate)
         when = when and (f" · stands {hours.at_day(when)}" if when > epoch(now()) else " · waits while you answer it")
@@ -8380,7 +8437,7 @@ def reply_form(pid, hidden, ask_id, keys):
 ASK_WHOLE = 320          # characters: a turn this short shows whole, its question already in sight
 
 
-def ask_html(text):
+def ask_html(text, root=None):
     """A turn that asked the person something: its questions first, as written, and the whole turn beneath them,
     open (a question can lean on what came before it; Fold puts it away), as a page shows prose. With no sentence that reads as a question, its last paragraph leads (where an agent
     leaves what it asks of the person). A short turn shows whole."""
@@ -8389,10 +8446,10 @@ def ask_html(text):
     # a link written in it, to a board page or https, is one tap, as in Chat
     links = lambda h: re.sub(r"(?<!!)\[([^\]]+)\]\(((?:/(?!/)|https://)[^)\s]+)\)", r"<a href='\2'>\1</a>", h)
     if len(text) <= ASK_WHOLE or (not asked and len(blocks) < 2):
-        return f"<div class='asktext'>{links(prose(text))}</div>"
+        return name_items(f"<div class='asktext'>{links(prose(text))}</div>", root)
     lead = "".join(f"<p><b>{_inline(q)}</b></p>" for q in asked) if asked else prose(blocks[-1])
-    return (f"<div class='asked'>{links(lead)}</div>"
-            f"<details class='full' open><summary>Full message</summary><div class='asktext'>{links(prose(text))}</div></details>")
+    return name_items(f"<div class='asked'>{links(lead)}</div>"
+                      f"<details class='full' open><summary>Full message</summary><div class='asktext'>{links(prose(text))}</div></details>", root)
 
 
 def waiting_on(pid, p, back, label=True, with_gates=True):
@@ -8458,7 +8515,7 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
             # its own way to write an answer, or to talk it over, is the message box: a message sent now answers it
             shown = [o for o in w["options"] if not re.match(r"(?:[☐☑] )?(?:type something|chat about this)", o, re.I)]
             rows.append(f"<div class='need'>{who('asking in its console')}"
-                        + "".join(f"<div>{e(q)}</div>" for q in w["question"])
+                        + name_items("".join(f"<div>{e(q)}</div>" for q in w["question"]), p)
                         + "<div class='choices'>" + "".join(
                             f"<form method='post' action='/choose'>{hidden}<input type='hidden' name='option' value='{e(o)}'>"
                             f"<button class='quiet'>{e(o)}</button></form>" for o in shown) + "</div>"
@@ -8470,7 +8527,7 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
         elif w["kind"] == "ask":
             a = w["ask"]
             rows.append(f"<div class='need'>{who('asked in its console · ' + said_at(a['at']))}"
-                        f"{ask_html(a['text'])}{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
+                        f"{ask_html(a['text'], p)}{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
         else:                                         # items ready for the person's OK, with no question beside them
             rows.append(f"<div class='need'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}{foot}</div>")
     return decided, box, others
@@ -8504,7 +8561,7 @@ def held_html(pid, root, back=None):
                 f"{' on ' + e(g['item']) if g.get('item') else ''} · held until {until(g)}</span></div>"
                 f"{gate_body(root, pid, g, back)}{foot('gate:' + g['id'], 'Clear without an answer')}</div>" for g in later) + "".join(
                 f"<div class='need held'><div class='who'><span class='kind'>asked in its console · "
-                f"held until {until(a)}</span></div>{ask_html(a['text'])}{reply_form(pid, hidden, a['id'], 'ask:' + a['id'])}</div>"
+                f"held until {until(a)}</span></div>{ask_html(a['text'], root)}{reply_form(pid, hidden, a['id'], 'ask:' + a['id'])}</div>"
                 for a in asked))
 
 
@@ -11242,6 +11299,7 @@ nav .proj.on { background:var(--sunk); font-weight:600 } main { flex:1; min-widt
 header h1 { margin:14px 0 4px; font-size:21px } header p { margin:0 0 4px }
 h2 { font-size:14px; margin:26px 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em }
 h3 { margin:0 0 8px; font-size:15px } a { color:var(--accent) } a:visited { color:var(--accent) } code { font-family:ui-monospace,Menlo,monospace; font-size:.9em }
+a.itemref { text-decoration:none; white-space:nowrap } a.itemref .muted { font-weight:normal; font-size:.92em }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px; margin-bottom:12px; padding:14px 16px }
 .pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:8px 0 }
 .card.gate { background:var(--flag-bg); border-color:transparent } .muted { color:var(--muted) }
