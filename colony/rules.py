@@ -53,14 +53,15 @@ def retire(root, rid, why, by="agent"):
 
 
 def session_text(root):
-    """What an agent is handed as each session starts."""
+    """What an agent is handed as each session starts: each rule and the reading of what it asks in practice. Their
+    words and why stay in the record (the Overview, `colony rule`), out of every step's context: blind-tested (R141),
+    text with its practice held full adherence at about half the tokens, while text alone lost what lives in the
+    practice (a push under the person's own email, not the noreply address)."""
     found = rules(root)
     if not found:
         return ""
     def one(r):
-        said = f" Their words: \"{r['words']}\"" + (f" ({r['given']})" if r.get("given") else "") + "."
-        return (f"- [{r['id']}] {r['text']}{said}" + (f" Why: {r['why']}" if r.get("why") else "")
-                + (f" In practice: {r['context']}" if r.get("context") else "") + "\n")
+        return f"- [{r['id']}] {r['text']}" + (f" In practice: {r['context']}" if r.get("context") else "") + "\n"
     return ("The person's standing rules for this project, kept by colony (they hold until the person lifts them; "
             "`colony rule --retire ID \"why\"` when they do; a new one: `colony rule \"the rule\" --words \"their words\" "
             "--why \"what led to it\"`):\n" + "".join(one(r) for r in found)).rstrip()
