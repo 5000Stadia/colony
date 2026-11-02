@@ -216,7 +216,9 @@ class SigninTest(unittest.TestCase):
 
     def test_expiry_kills_process_and_new_session_has_a_new_id(self):
         self.provider.mode = 'wait'
-        with patch.object(signin, 'SESSION_SECONDS', .3):
+        # long enough for the stand-in to show its code on a loaded machine before the session expires: at .3 s the
+        # session sometimes expired first and the code never came (three suite failures, 2026-11-01)
+        with patch.object(signin, 'SESSION_SECONDS', 3):
             before = signin.start('fake')
         self.waiting()
         worker = signin._slot('fake')['worker']
