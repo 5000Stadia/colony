@@ -757,6 +757,33 @@ class BoardTest(BoardBase):
         self.assertIn("<script>", page[page.index("Completed"):], "timers count on in the page")
         self.assertEqual([board.took(x) for x in (30, 60 * 12, 60 * 130, 86400 + 3 * 3600)], ["<1m", "12m", "2h 10m", "1d 3h"])
 
+    def test_an_items_details_file_is_its_full_text_on_the_board(self):
+        """R143: the line is the item's title; roadmap/R#.md beside the plan holds its full text, shown as Markdown."""
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3 reminders", "- [ ] R3 reminders (related: R1, R2)")
+                                              .replace("- [~] R2 water log", "- [~] R2 water log\n  kept daily"))
+        board.track(self.root)
+        road = board.roadmap(self.root)
+        r3 = board.items(road)["R3"]
+        self.assertEqual((r3["text"], r3["related"], r3["after"]), ("reminders", ["R1", "R2"], ["R2"]),
+                         "related names others to read; nothing waits on them")
+        page = board.render_item(board.registry(), 0, "R3")
+        self.assertIn("No description yet", page, "without a details file nothing changes")
+        self.assertIn("Related: <a href='/item?n=plants&id=R1'>R1 add plants</a>, "
+                      "<a href='/item?n=plants&id=R2'>R2 water log</a>", page)
+        (self.root / "roadmap").mkdir()
+        (self.root / "roadmap" / "R3.md").write_text("# Reminders\n\nThe person: **weekly** is plenty.\n\n- check: after R1\n")
+        page = board.render_item(board.registry(), 0, "R3")
+        self.assertIn("<h1>R3 — reminders</h1>", page, "the short line stays the title")
+        self.assertIn("The person: <strong>weekly</strong> is plenty.", page)
+        self.assertIn("<li>check: after <a class='itemref' href='/item?n=plants&id=R1'", page, "its item numbers named and linked")
+        self.assertNotIn("No description yet", page)
+        self.assertIn("kept daily", board.render_item(board.registry(), 0, "R2"), "an indented description still shows")
+        listing = board.render(board.registry(), 0, "roadmap")
+        self.assertIn("The person: <strong>weekly</strong> is plenty.", listing, "the roadmap's item fold shows it too")
+        self.assertIn("weekly", board.item_full(self.root, r3))
+        (self.root / "roadmap" / "R3.md").write_text("Changed: daily after all.\n")
+        self.assertIn("Changed: daily after all.", board.render_item(board.registry(), 0, "R3"), "read again when it changes")
+
     def test_timers_start_from_the_roadmaps_own_history(self):
         board.track(self.root)                                      # R2 already under way in the first version
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [ ] R3", "- [~] R3"))

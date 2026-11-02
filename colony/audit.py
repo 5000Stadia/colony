@@ -240,8 +240,9 @@ def brief(name, c, root, folder, about, marks, hosts):
     # the items that speak of this service or the projects it is for come first: a big plan's need may sit deep in it
     words = [w.lower() for w in (name, c.get("title") or "", c.get("service") or "", *on) if len(w) > 2]
     opened = [i for m in (road or {}).get("milestones", []) for i in m["items"] if i["state"] in ("doing", "todo")]
-    opened.sort(key=lambda i: not any(w in (i["text"] + " " + i.get("desc", "")).lower() for w in words))
-    doing = [f"{i['id']} {i['text'][:600]}" for i in opened[:12]]
+    full = {i["id"]: board.item_full(root, i) for i in opened}      # an item's details file, where its line is short
+    opened.sort(key=lambda i: not any(w in (i["text"] + " " + full[i["id"]]).lower() for w in words))
+    doing = [f"{i['id']} {(i['text'] + ('. ' + full[i['id']] if full[i['id']] else ''))[:600]}" for i in opened[:12]]
     lines = [ROLE, "", f"The connection: {name} ({c.get('title') or name})", f"Its command: {' '.join(c.get('command') or [])}",
              f"Keys it is given: {', '.join(c.get('keys') or []) or 'none'}", f"Stated purpose: {c.get('about') or '(none given)'}",
              "Colony runs it behind its own proxy, which the agent reaches it through: "

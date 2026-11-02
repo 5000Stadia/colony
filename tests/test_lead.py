@@ -156,6 +156,44 @@ class LeadTest(unittest.TestCase):
         self.assertEqual(lead.git(root, 'ls-files', '--', 'ROADMAP.md', '.board'), '')
         self.assertEqual(lead.git(root, 'log', '--format=%B'), 'Public foundation')
 
+    def test_plan_commit_carries_item_details_added_changed_and_removed(self):
+        """R143: each item's full text lives in roadmap/R#.md beside the plan; the lead's plan commit carries them."""
+        plain = lead.revision(self.root)
+        self.assertEqual(plain, __import__('hashlib').sha256((self.root / 'ROADMAP.md').read_bytes()).hexdigest(),
+                         'with no details files the revision is the roadmap\'s own hash, as before')
+        folder = self.root / 'roadmap'; folder.mkdir()
+        (folder / 'R2.md').write_text('The water log, in full.\n')
+        (folder / 'R3.md').write_text('Reminders, in full.\n')
+        (folder / 'notes.txt').write_text('not a details file\n')
+        (self.root / 'file.txt').write_text('unrelated work in progress\n')
+        self.assertNotEqual(lead.revision(self.root), plain, 'the details are part of the plan\'s identity')
+        first = lead.commit_plan(self.root, 'Plan with details', actor=self.root)
+        self.assertEqual(sorted(lead.git(self.root, 'show', '--name-only', '--format=', first).splitlines()),
+                         ['roadmap/R2.md', 'roadmap/R3.md'])
+        (folder / 'R2.md').write_text('The water log, revised.\n')
+        (folder / 'R3.md').unlink()
+        (folder / 'R4.md').write_text('Sharing, in full.\n')
+        path = self.root / 'ROADMAP.md'
+        path.write_text(path.read_text().replace('[ ] R2', '[~] R2'))
+        second = lead.commit_plan(self.root, 'Plan moves', actor=self.root)
+        self.assertEqual(lead.git(self.root, 'show', '--name-status', '--format=', second).splitlines(),
+                         ['M\tROADMAP.md', 'M\troadmap/R2.md', 'D\troadmap/R3.md', 'A\troadmap/R4.md'])
+        self.assertEqual(lead.git(self.root, 'show', second + ':roadmap/R2.md'), 'The water log, revised.')
+        status = lead.git(self.root, 'status', '--porcelain')
+        self.assertIn('file.txt', status, 'other work stays out of the plan commit')
+        self.assertIn('roadmap/notes.txt', status, 'only R#.md files are details')
+        self.assertNotIn('R2.md', status)
+
+    def test_private_plan_record_keeps_item_details(self):
+        (self.root / '.board/settings.json').write_text(json.dumps({'private': True}))
+        (self.root / 'roadmap').mkdir()
+        (self.root / 'roadmap' / 'R2.md').write_text('Private details of the water log.\n')
+        self.assertIsNone(lead.commit_plan(self.root, 'Private details', actor=self.root))
+        [record] = board.read(self.root, 'plan.jsonl')
+        self.assertEqual(record['details'], {'R2': 'Private details of the water log.\n'})
+        self.assertEqual(record['revision'], lead.revision(self.root))
+        self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), self.initial)
+
     def test_private_own_plan_record_credits_only_the_previously_seen_revision(self):
         self.pair()
         lead.start_item(self.root, 'R2', actor=self.root)

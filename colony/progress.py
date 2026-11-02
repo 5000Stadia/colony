@@ -268,6 +268,7 @@ def _decide(root, candidate, action, *, text='', next_checkpoint=None, source=No
 def approve_plan(root, c, source):
     path = lead.plan_path(root)
     old_bytes = path.read_bytes()
+    files = lead.details(root)                  # the items' details are part of the plan's revision (R143)
     old = old_bytes.decode('utf-8')
     lines = []
     for line in old.splitlines(keepends=True):
@@ -283,12 +284,12 @@ def approve_plan(root, c, source):
         return
     try:
         lead.commit_plan(root, 'Approve ' + c['id'] + ' completed version', source=source,
-                         before_revision=hashlib.sha256(old_bytes).hexdigest(),
-                         expected_revision=hashlib.sha256(approved.encode('utf-8')).hexdigest())
+                         before_revision=lead.revision_of(old_bytes, files),
+                         expected_revision=lead.revision_of(approved.encode('utf-8'), files))
     except ValueError:
         # A plan left dirty would block integration and the handoff that interrupted it.
         path.write_bytes(old_bytes)
-        lead.git(path.parent, 'reset', '-q', '--', 'ROADMAP.md', check=False)
+        lead.git(path.parent, 'reset', '-q', '--', 'ROADMAP.md', *files, check=False)
         raise
 
 
