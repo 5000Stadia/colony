@@ -36,6 +36,8 @@ STATE = {" ": "todo", "~": "doing", "?": "verify", "x": "done", "X": "done"}
 KINDS = ("sequence", "menu", "lanes", "findings", "sections")
 KIND = re.compile(r"^(.*?)\s*·\s*(" + "|".join(KINDS) + r")\s*$", re.I)
 LANE = re.compile(r"\s*\(lane:\s*([^)]+?)\s*\)")
+# An item may name the 0-3 others that bear on it, before any `(after ...)`: `(related: R5, R9)`. Nothing waits on them.
+RELATED = re.compile(r"\s*\(related:\s*(R\d+(?:\s*,\s*R\d+)*)\s*\)")
 LABEL = {"todo": "todo", "doing": "doing", "verify": "to verify", "done": "done"}
 
 # Every project's instructions file carries only what holds on any turn, and one pointer per moment to a guide here,
@@ -1070,9 +1072,10 @@ def _roadmap(text, shared):
             links = re.findall(r"R\d+", m.group(4) or "")
             seq = current.get("kind", "sequence") == "sequence"
             after = links or ([prev] if prev and seq else [])
-            lane = LANE.search(m.group(3))
-            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": LANE.sub("", m.group(3)).strip(), "after": after,
-                    "links": links, "desc": "", "milestone": current["id"], "lane": lane.group(1) if lane else None}
+            lane, related = LANE.search(m.group(3)), RELATED.search(m.group(3))
+            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": RELATED.sub("", LANE.sub("", m.group(3))).strip(),
+                    "after": after, "links": links, "desc": "", "milestone": current["id"], "lane": lane.group(1) if lane else None,
+                    "related": re.findall(r"R\d+", related.group(1)) if related else []}
             if shared:
                 last['owner'] = shared['owners'].get(last['id']) or shared['lead']
             current["items"].append(last)
@@ -1084,6 +1087,34 @@ def _roadmap(text, shared):
         else:
             last = None
     return {"goal": goal, "vision": part['text'], "milestones": milestones}
+
+
+_DETAILS = {}                 # an item's details file as read, kept until it changes: (path) -> (stamp, text)
+
+
+def item_details(root, iid):
+    """The item's full text from its details file beside the plan (roadmap/R1.md), or "" without one (R143)."""
+    from . import lead
+    try:
+        path = lead.details_path(root, iid)
+        st = path.stat()
+    except (OSError, TypeError, ValueError, KeyError):
+        return ""
+    stamp = (st.st_mtime_ns, st.st_size)
+    got = _DETAILS.get(str(path))
+    if got is None or got[0] != stamp:
+        try:
+            got = _DETAILS[str(path)] = (stamp, path.read_text(errors="replace").strip())
+        except OSError:
+            return ""
+        while len(_DETAILS) > 2000:
+            _DETAILS.pop(next(iter(_DETAILS)))
+    return got[1]
+
+
+def item_full(root, it):
+    """What an item says beyond its line, as plain text for a reader: its details file, else its indented lines."""
+    return item_details(root, it["id"]) or it.get("desc", "")
 
 
 def item_times(root):
@@ -6622,7 +6653,7 @@ def render(reg, pid, view="overview", show_all=""):
             branched = any(it["links"] for it in its.values())          # only what the plan says waits on what
             if branched:                   # the map only where the plan itself says what waits on what
                 out.append(f"<details class='mapbox'><summary>Map of the roadmap"
-                       f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs)}</details>")
+                       f"{' (it branches)' if branched else ''}</summary>{roadmap_map(road, pid, all_notes, gs, root)}</details>")
             # One list in the plan's order (journey_html), every milestone loading folded. Opened, a milestone's items
             # as its card drew them: what is in progress (newest first), what's to come, what's done (newest first),
             # each with its steering, notes, decisions waiting and time.
@@ -6648,7 +6679,7 @@ def render(reg, pid, view="overview", show_all=""):
                         + (f" {timer(times[it['id']])}" if it["id"] in times else "")
                         + f"</summary><div class='body'>{steer_row(pid, it)}"
                         + (f"<p>{e(it['text'])}</p>" if lead_clause(it['text'], 90) != it['text'] else "")
-                        + f"<p>{e(it['desc'] or ('' if lead_clause(it['text'], 90) != it['text'] else 'No description yet.'))}</p>"
+                        + item_body(root, it, (it['desc'] or ('' if lead_clause(it['text'], 90) != it['text'] else 'No description yet.')))
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"{project_url(root)}&view=roadmap")
@@ -7224,7 +7255,16 @@ def part_body(m, drawn):
                 if len(done) > 6 else head("Done", done) + rows(done)) if done else ""))
 
 
-def roadmap_map(road, pid, all_notes, gs):
+def item_body(root, it, fallback):
+    """An item's full text on the board: its details file as Markdown, its other item numbers named and linked, when
+    it has one (R143); otherwise what the line's indented description (or the fallback) says, as before."""
+    full = item_details(root, it["id"])
+    if full:
+        return f"<div class='details'>{name_items(prose(full), root)}</div>"
+    return f"<p>{e(fallback)}</p>" if fallback is not None else ""
+
+
+def roadmap_map(road, pid, all_notes, gs, root=None):
     """The roadmap as a map: left to right in the order items build on each other, branches where an
     item says `(after ...)`. Hover for a card; click for the item's page."""
     its, pos = items(road), layout(road)
@@ -7251,7 +7291,7 @@ def roadmap_map(road, pid, all_notes, gs):
             f"<span class='nid'>{e(iid)} · {e(it['milestone'])}</span><span class='ntext'>{e(it['text'])}</span>"
             f"{'<span class=dot></span>' if n_gates else ''}"
             f"<span class='pop'><b>{e(iid)} — {e(it['text'])}</b><span class='st {it['state']}'>{LABEL[it['state']]}</span>"
-            f"<span>{e(it['desc'] or 'No description yet.')}</span>{flags}</span></a>")
+            f"<span>{e(short(' '.join(item_full(root, it).split()), 240) or 'No description yet.')}</span>{flags}</span></a>")
     legend = " · ".join(f"<b>{e(m['id'])}</b> {e(m['title'])}" for m in road["milestones"])
     return (f"<div class='card mapcard'><div class='legend'>{legend}</div><div class='mapwrap'><div class='map' "
             f"style='width:{width}px;height:{height}px'><svg width='{width}' height='{height}'>{''.join(edges)}</svg>"
@@ -7279,9 +7319,11 @@ def render_item(reg, pid, iid):
         body.append(f"<form class='card' method='post' action='/item/owner'><input type='hidden' name='p' value='{pid}'>"
                     f"<input type='hidden' name='item' value='{e(iid)}'><label>Item primary <select name='member'>{opts}</select></label>"
                     "<button class='quiet'>Assign primary</button></form>")
-    body.append(f"<div class='card'><p>{e(it['desc'] or 'No description yet: direct it below and the agent will pick it up.')}</p>"
+    related = [r for r in it.get("related", []) if r != iid]
+    body.append(f"<div class='card'>{item_body(root, it, it['desc'] or 'No description yet: direct it below and the agent will pick it up.')}"
                 f"<p class='muted'>Builds on: {', '.join(link(a) for a in it['after']) or 'nothing'}"
-                f"<br>Unlocks: {', '.join(link(u) for u in unlocks) or 'nothing yet'}</p></div>")
+                f"<br>Unlocks: {', '.join(link(u) for u in unlocks) or 'nothing yet'}"
+                + (f"<br>Related: {', '.join(link(r) for r in related)}" if related else "") + "</p></div>")
     gs = [g for g in gates(root) if g.get("item") == iid]
     if gs:
         body.append("<h2>Gates</h2>")

@@ -132,7 +132,8 @@ def brief(root, decision, question, digest, plan=None, rnd=1, choices=None):
     subject = 'vision' if road['vision'] else 'goal'
     words = [f"The project's {subject}, in the person's words: {road['goal']}"] if road["goal"] else []
     if item:
-        words.append(f"The decision concerns roadmap item {decision}: {item['text']}" + (f" ({item['desc']})" if item["desc"] else ""))
+        full = board.item_full(root, item)                    # its details file, where the line is only its title
+        words.append(f"The decision concerns roadmap item {decision}: {item['text']}" + (f" ({full})" if full else ""))
     for n in board.notes(root):
         if (n["anchor"] or {}).get("item") == decision and n.get("author") in ("person", "monitor"):
             words.append(f"The person's note on it: {n['text']}")

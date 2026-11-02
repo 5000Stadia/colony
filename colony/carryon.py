@@ -40,7 +40,7 @@ def startable(root):
         for it in m["items"]:
             if it["state"] not in ("todo", "doing") or it["id"] in open_gates:
                 continue
-            if PARKED.search(it["text"] + " " + it["desc"]):
+            if PARKED.search(it["text"] + " " + board.item_full(root, it)):
                 continue
             if shared and Path(lead.owner(root, it["id"])).resolve() != Path(root).resolve():
                 continue

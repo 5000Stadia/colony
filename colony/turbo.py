@@ -361,7 +361,7 @@ def advice_brief(root):
     plan = "\n\n".join("\n".join([m["id"] + (f" — {m['title']}" if m["title"] else "")]
                                  + [f"- {i['id']} ({STATES[i['state']]}) {cut(i['text'])}" for i in m["items"]])
                        for m in road["milestones"])
-    open_ = [f"- {i['id']} ({STATES[i['state']]}) {i['text']}" + (f": {i['desc']}" if i["desc"] else "")
+    open_ = [f"- {i['id']} ({STATES[i['state']]}) {i['text']}" + (f": {full}" if (full := board.item_full(root, i)) else "")
              for i in board.items(road).values() if i["state"] in ("todo", "doing")]
     commits = [f"- {c}" for c in board.git(work, "log", "-n", "20", "--no-merges", "--format=%s").splitlines() if c.strip()]
     opts = options(root)

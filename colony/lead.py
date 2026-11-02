@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import json
 from pathlib import Path
+import re
 import secrets
 import shlex
 import shutil
@@ -65,6 +66,44 @@ def plan_path(root):
     return plan_root(root) / 'ROADMAP.md'
 
 
+DETAILS = 'roadmap'                       # each item's full text, beside the plan: roadmap/R1.md (R143)
+DETAILS_FILE = re.compile(r'R\d+\.md')
+
+
+def details_path(root, item):
+    return plan_path(root).parent / DETAILS / (item + '.md')
+
+
+def details(root):
+    """The plan's item details files as they stand: {'roadmap/R1.md': bytes}."""
+    folder = plan_path(root).parent / DETAILS
+    try:
+        names = sorted(p.name for p in folder.iterdir() if DETAILS_FILE.fullmatch(p.name) and p.is_file())
+    except OSError:
+        return {}
+    out = {}
+    for name in names:
+        try:
+            out[DETAILS + '/' + name] = (folder / name).read_bytes()
+        except OSError:
+            continue
+    return out
+
+
+def is_details(path):
+    """A repository path that is one of the plan's item details files."""
+    path = Path(path)
+    return path.parent.as_posix() == DETAILS and bool(DETAILS_FILE.fullmatch(path.name))
+
+
+def revision_of(plan, files):
+    """The plan's identity: its roadmap and its items' details. With no details files, the roadmap's own hash."""
+    digest = hashlib.sha256(plan)
+    for name in sorted(files):
+        digest.update(b'\0' + name.encode() + b'\0' + hashlib.sha256(files[name]).digest())
+    return digest.hexdigest()
+
+
 def workspaces(root, *, active=True):
     g = info(root)
     mine = str(Path(root).resolve())
@@ -91,18 +130,27 @@ def commit_plan(root, message, *, actor=None, source=None, before_revision=None,
     g = require_lead(root, actor)
     canonical = Path(g['canonical'])
     commit = None
+    files = details(canonical)
     if board.is_private(canonical):
         plan = (canonical / 'ROADMAP.md').read_bytes()
-        recorded_revision = hashlib.sha256(plan).hexdigest()
-        board.append(canonical, 'plan.jsonl', dict(at=board.now(), revision=recorded_revision,
-                     text=plan.decode('utf-8'), message=message, source=str(Path(source).resolve()) if source else None))
+        recorded_revision = revision_of(plan, files)
+        entry = dict(at=board.now(), revision=recorded_revision, text=plan.decode('utf-8'), message=message,
+                     source=str(Path(source).resolve()) if source else None)
+        if files:                          # the details are the plan's text too: the record keeps them with it
+            entry['details'] = {Path(name).stem: body.decode('utf-8') for name, body in files.items()}
+        board.append(canonical, 'plan.jsonl', entry)
         recorded = recorded_revision == revision(root)
     else:
-        git(canonical, 'add', '--', 'ROADMAP.md')
+        # The roadmap with its items' details files, added, changed and removed together.
+        tracked = [p for p in git(canonical, 'ls-files', '--', DETAILS + '/', check=False).splitlines() if is_details(p)]
+        paths = ['ROADMAP.md'] + sorted(set(files) | set(tracked))
+        git(canonical, 'add', '-A', '--', *paths)
         git(canonical, 'commit', '--only', '--no-verify', '-m', message,
-            '--trailer', 'Colony-Agent: ' + Path(g['lead']).name, '--', 'ROADMAP.md')
+            '--trailer', 'Colony-Agent: ' + Path(g['lead']).name, '--', *paths)
         commit = git(canonical, 'rev-parse', 'HEAD')
-        recorded = git(canonical, 'hash-object', 'ROADMAP.md') == git(canonical, 'rev-parse', commit + ':ROADMAP.md')
+        recorded = all(git(canonical, 'hash-object', p) == git(canonical, 'rev-parse', commit + ':' + p)
+                       if (canonical / p).exists() else not git(canonical, 'ls-tree', '--name-only', commit, '--', p, check=False)
+                       for p in paths)
     # A stamped commit alone is not proof the agent knew the previous content:
     # an outside edit may already have been present before its own mutation.
     if (source is not None and str(Path(source).resolve()) == g['lead'] and before_revision
@@ -119,7 +167,7 @@ def commit_plan(root, message, *, actor=None, source=None, before_revision=None,
 
 def revision(root):
     path = plan_path(root)
-    return hashlib.sha256(path.read_bytes() if path.exists() else b'').hexdigest()
+    return revision_of(path.read_bytes() if path.exists() else b'', details(root))
 
 
 def update(root, change, *, generation=None):
@@ -232,7 +280,9 @@ def assign(root, item, member=None, *, actor=None):
         else:
             g['owners'].pop(item, None)
     value = update(root, change, generation=g['generation'])
-    notify(value, f"{item} primary: {owner(root, item).name}. Read {plan_path(root)} at item start; "
+    more = details_path(root, item)
+    notify(value, f"{item} primary: {owner(root, item).name}. Read {plan_path(root)}"
+                  + (f" and {more}" if more.exists() else '') + " at item start; "
                   'sync the item workspace before starting and before handback.')
     return value
 
@@ -390,7 +440,7 @@ def start_item(root, item, *, actor=None):
             workspace.parent.mkdir(parents=True, exist_ok=True)
             git(source, 'worktree', 'add', '-b', branch, str(workspace), base)
             # Helpers have no working-file copy of the roadmap or its Vision.
-            git(workspace, 'sparse-checkout', 'set', '--no-cone', '/*', '!/ROADMAP.md')
+            git(workspace, 'sparse-checkout', 'set', '--no-cone', '/*', '!/ROADMAP.md', '!/' + DETAILS + '/R*.md')
     elif responsible != g['lead']:
         workspace = source
         if any(a['state'] in ('working', 'handback') for a in g['assignments'].values()):
@@ -534,7 +584,7 @@ def checkpoint(workspace, message, member):
     blocked = {'.board', 'ROADMAP.md', '.codex', '.claude', 'AGENTS.md', 'CLAUDE.md'}
     changed = names('ls-files', '--modified', '--deleted', '--others', '--exclude-standard', '-z')
     changed += names('diff', '--cached', '--name-only', '-z')
-    eligible = sorted({p for p in changed if Path(p).parts[0] not in blocked})
+    eligible = sorted({p for p in changed if Path(p).parts[0] not in blocked and not is_details(p)})
     if not eligible:
         return
     # Force only this explicit list: ignored new files never enter it unless
@@ -747,8 +797,8 @@ def integrate(root, item, tests, *, actor=None, deploy='', push=False):
             value = sync_item(root, item, actor=actor)
             workspace = Path(value['workspace'])
             value['commit'] = git(workspace, 'rev-parse', 'HEAD', check=False) or tip
-            if value['branch'] and 'ROADMAP.md' in git(workspace, 'diff', '--name-only',
-                                                        value['base'] + '...' + value['commit']).splitlines():
+            if value['branch'] and any(p == 'ROADMAP.md' or is_details(p) for p in git(
+                    workspace, 'diff', '--name-only', value['base'] + '...' + value['commit']).splitlines()):
                 raise ValueError('A helper changed a roadmap copy. Propose that change to the lead.')
             bench = board.items_home() / g['id'] / 'integration'
             if not (bench / '.git').exists():
