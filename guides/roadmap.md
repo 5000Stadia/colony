@@ -16,6 +16,10 @@ Milestones `## M1 — name`, items `- [ ] R1 text`; `[~]` in progress, `[x]` don
 to sign off, then `colony ready R4 "what's ready" --check "how to see it"`. Work outside the milestone's purpose goes
 under `## Later`.
 
+The roadmap stays small: a finished item is its terse title; an open one is its title, one line of why, and
+`(related: R5, R9)` for the 0-3 items that bear on it. Everything else about an item (the person's words, readings,
+checks, findings) goes in `roadmap/R#.md`, written when the item is laid out and kept as it changes.
+
 A milestone may name its kind after its title (`## M4 — Concepts · menu`): `menu` (options in any order), `lanes`
 (roads side by side; each item says `(lane: name)`), `findings` (questions answered by experiment), `sections` (the
 pieces of one whole); unnamed, it is a sequence, done in order.
@@ -27,6 +31,8 @@ separate model reads it); colony takes it at each push and finished milestone an
 report.
 
 ## Starting an item
+
+First decide the item's brief: its details file and its related items' — read those, nothing more.
 
 Where an item first sets a look, sound or voice (shaders and textures, music, a fiction or marketing voice) whose
 style the person hasn't yet described or shown, good can't be reached until you align on it, since taste is hard to

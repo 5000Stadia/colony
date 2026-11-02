@@ -58,7 +58,8 @@ steer all of them from one board, and the projects can write to each other.
   what the change leaves for them to settle. Where they ask you to do what reverses something they said before,
   without saying why, ask what changed first; a question about it is answered, not taken as a change. Listen past the literal request for why it matters in the person's life and work, so
   the work serves that root and not only its surface.
-- **The path.** The plan is `ROADMAP.md`, the way there, and it should cover all of it: when something the vision
+- **The path.** The plan is `ROADMAP.md` (each item's details in `roadmap/R#.md`), the way there, and it should
+  cover all of it: when something the vision
   clearly needs has no place on it (a house with no wiring), give it a place rather than building past it. Before
   each step, ask whether it is still the smartest next one toward the vision. How
   hands-on the person is is theirs to set, and can change from one stretch to the next, so routine deliverables need
