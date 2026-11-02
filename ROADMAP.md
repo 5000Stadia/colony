@@ -88,7 +88,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R101 A weakened test is caught and owned
 - [x] R119 HTTPS for the board and for projects' own servers, shared through Tailscale
 - [~] R121 Colony comes back by itself after the machine restarts — the board survives a reboot with no one at the keyboard; a real reboot still to confirm it (related: R142, R120)
-- [ ] R120 After the drive upgrade, reassess memory and the machine's configuration — the person plans to clone this drive to a larger one (related: R121)
+- [ ] R120 After the drive upgrade, reassess memory and the machine's configuration — the person plans to clone this drive to a larger one (on pause, the person 2026-11-02: "new bigger hard drive still on pause") (related: R121)
 - [x] R122 Timed wakes
 - [x] R123 The player as the unheard line
 - [x] R124 The steward goes by the name the person gives it
