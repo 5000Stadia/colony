@@ -9338,9 +9338,23 @@ class ItemNamesTest(BoardBase):
         self.assertEqual(board.asks(self.root)[0]["text"], "Shall I start R3 next?")
         self.assertNotIn("itemref", board.ask_html(a["text"]), "without a project, as written")
 
+    def test_the_voice_hears_an_item_named_once_a_reply(self):
+        """Read aloud, a bare item number tells the person nothing: the first mention in a reply carries its whole title,
+        across the reply's parts, and the stored words keep the number for the page to name."""
+        root = self.root
+        (root / "ROADMAP.md").write_text("# Plan\n\n## M1 — First\n\n- [ ] R2 Keep a water log: each watering noted\n"
+                                         "- [ ] R3 A very long title that the page would cut short for its width, said whole\n")
+        named = []
+        first = board.speak_items("R2 is done, R2 again, R9 isn't ours.", root, named)
+        self.assertEqual(first, "R2 (Keep a water log) is done, R2 again, R9 isn't ours.")
+        self.assertEqual(board.speak_items("Next, R2 and R3.", root, named),
+                         "Next, R2 and R3 (A very long title that the page would cut short for its width, said whole).")
+        self.assertNotIn("\u2026", board.speak_items("R3", root, []))
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 class RemoteTest(BoardBase):

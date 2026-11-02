@@ -5160,7 +5160,7 @@ def _feed_file(root, st, since):
                     try:
                         # Each batch fits the native Chat reader's tail and entry limits. Its turn continues in st.
                         evs = chat.events(st["provider"], scratch)
-                        rows = _parts_of(evs, st, since, known, [])
+                        rows = _parts_of(evs, st, since, known, [], root)
                         if rows:
                             append_rows(root, "line.jsonl", rows)
                             known.update(r["k"] for r in rows)
@@ -5195,7 +5195,7 @@ def _feed_file(root, st, since):
             scratch.unlink(missing_ok=True)
 
 
-def _parts_of(evs, st, since, known, fresh):
+def _parts_of(evs, st, since, known, fresh, root=None):
     """A transcript's new events, as the line's rows: its prose part by part with the keys and times Chat gives them (a
     turn begun by the person's message, colony's or a compaction, its items counted in order), going on from the turn
     the last look ended in. What colony's notices carried over a refresh is never read aloud."""
@@ -5216,6 +5216,8 @@ def _parts_of(evs, st, since, known, fresh):
         if kind != "say" or t.get("carry") or not t["at"] or k in known or k in have or iso_epoch(when) < since:
             continue
         if words := spoken_text(text):
+            if root is not None:
+                words = speak_items(words, root, t.setdefault("named", []))
             out.append({"k": k, "t": t["at"], "at": when, "text": words,
                         **({"colony": int(iso_epoch(t["at"]) // WIDE)} if t["from"] == "colony" else {})})
             have.add(k)
@@ -7014,8 +7016,9 @@ ITEM_REF = re.compile(r"(?<![\w/#=&?-])(R\d+)\b(?!-)")
 _SKIP_TAGS = re.compile(r"<(/?)(a|pre|code|summary|button|textarea|script|style)\b", re.I)
 
 
-def item_names(root):
-    """The short name of each item on a project's roadmap, read once for each version of its text."""
+def item_names(root, n=40):
+    """The short name of each item on a project's roadmap (at most n characters), read once for each version of its
+    text."""
     try:
         from . import lead
         path = lead.plan_path(root)
@@ -7024,16 +7027,35 @@ def item_names(root):
         return {}
     if not text:
         return {}
-    got = _ITEM_NAMES.get(text)
+    got = _ITEM_NAMES.get((text, n))
     if got is None:
         try:
             its = items(roadmap(root, text))
         except Exception:                                # a plan that won't read names nothing; the words still show
             its = {}
-        got = _ITEM_NAMES[text] = {iid: lead_clause(i["text"], 40) for iid, i in its.items()}
+        got = _ITEM_NAMES[(text, n)] = {iid: lead_clause(i["text"], n) for iid, i in its.items()}
         while len(_ITEM_NAMES) > 50:
             _ITEM_NAMES.pop(next(iter(_ITEM_NAMES)))
     return got
+
+
+def speak_items(words, root, named):
+    """A reply's words as the voice reads them, the first mention of each roadmap item in the reply (named: the items
+    already named in it, kept across its parts) followed by its short name, as the page shows it: a bare "R127" read
+    aloud tells the person nothing (2026-11-01: "Audio voice isnt getting the roadmap title injections")."""
+    names = item_names(root, 80)                         # the ear gets the whole title the page shortens
+    if not names:
+        return words
+    def one(m):
+        iid = m.group(0)
+        if iid not in names or iid in named:
+            return iid
+        named.append(iid)
+        name = names[iid]
+        if name.endswith("\u2026"):                       # cut short for the page: end on a whole word for the ear
+            name = name[:-1].rsplit(" ", 1)[0]
+        return f"{iid} ({name})"
+    return re.sub(r"\bR\d+\b", one, words)
 
 
 def name_items(page, root):
