@@ -75,7 +75,8 @@ compaction; your memory of a guide may not):
   likely solved, or research: `fresh-eyes.md`
 - brief or run helpers, or pair with another project's agent: `helpers.md`
 - keep something you and the person will refer to (the Library): `library.md`
-- use an outside service (anything needing an account or a key, or that sends, posts or spends): `connections.md`
+- use or look for an outside service or connector (anything needing an account or a key, or that sends, posts or
+  spends): `connections.md`
 - put a picture, file or project link in the person's Chat: `chat.md`
 - record a standing order (from now on, always, never) or set a wake: `orders.md`
 - write to another project, or rename this one: `projects.md`
