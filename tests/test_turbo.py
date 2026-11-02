@@ -545,8 +545,8 @@ class AdviceTest(TurboBase):
 
     def test_once_a_turbo_day_as_a_report_and_a_quiet_note_with_nothing_typed_and_the_monitor_never_asked(self):
         board.project_settings(self.root, {"turbo_deeper": "off"})            # stronger models only: turbo types nothing
-        monitor.muted(True)                                                    # the monitor's mute is beside the point
         monitor.queue("a word from the person's board")
+        monitor.muted(True)                                                    # the monitor's mute is beside the point
         self.assertIn((self.root, "research advice"), turbo.tick(self.now))
         self.assertEqual(len(self.consulted), 1)
         [n] = self.advice_notes()
@@ -759,14 +759,26 @@ class StrongerModelsTest(TurboBase):
         turbo.tick(self.now + 120)
         self.assertEqual(self.seats(), self.base, "at most one change an episode")
 
-    def test_with_the_monitor_off_turbo_stands_down_and_its_models_go_at_the_next_reload(self):
+    def test_turbo_runs_in_the_watcher_with_the_steward_off_or_muted(self):
+        # Turbo is colony's own code in the watcher's minute, never the steward's session: starting with the steward
+        # off once stood it down, ending its episode for nothing until the next minute began another.
         turbo.tick(self.now)
+        up = self.seats()
+        self.assertNotEqual(up, self.base)
         console._started(self.name, console.fingerprint(self.root))           # reloaded onto them
         with patch.object(monitor.threading, "Thread"):                        # no watcher thread in a test
             monitor.start(enabled=False)
-        self.assertEqual(self.seats(), self.base, "nothing keeps turbo current: it stands down")
-        self.assertTrue(console.stale(self.root), "back at its next reload")
-        self.assertIn("turbo isn't running (the steward is off, and turbo runs with it)", turbo.line("claude"))
+        self.assertEqual(self.seats(), up, "the steward off: turbo goes on")
+        self.assertIsNone(console.stale(self.root), "nothing to reload")
+        self.assertNotIn("isn't running", turbo.line("claude"))
+        for enabled in (False, True):
+            monitor.muted(enabled)                                             # off, or muted: the same
+            w = monitor.Watcher(enabled=enabled)
+            with patch.object(turbo, "tick", wraps=turbo.tick) as ticked:
+                w.usage_checked = 0
+                w.usage()
+            ticked.assert_called_once()
+        self.assertEqual(self.seats(), up)
 
     def test_lasting_trouble_stands_it_down_and_a_new_turn_reloads_nothing_the_console_already_runs(self):
         turbo.tick(self.now)

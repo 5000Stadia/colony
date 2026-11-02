@@ -15,7 +15,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from colony import board, cli, console, consult, lead, monitor, vision
-from tests.test_board import BoardBase, ROADMAP
+from tests.test_board import BoardBase, ROADMAP, legacy_helm
 
 
 class VisionTest(BoardBase):
@@ -729,7 +729,7 @@ class StewardPageTest(BoardBase):
         self.assertIn("2 of 2", page)
         monitor.set_posture(other, steward=False)
         self.assertFalse(monitor.involved(other))
-        monitor.helm(True)
+        legacy_helm(self)
         self.assertFalse(monitor.helm_for(other), "left out: no wakes for it")
         self.assertTrue(monitor.helm_for(self.root))
         page = board.monitor_page(board.registry())
