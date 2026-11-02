@@ -1126,8 +1126,8 @@ class Watcher:
                    "provider sign-in reconnected" if refresh_signin else console.stale(root, nm, label))
             if connect and not why:
                 # its agent switched a connector and the console now runs with it: told in one line, it carries on
-                if console.type_into(nm, connections.notice(connect)):
-                    connections.settled(root, connect)
+                if not any(connect.values()) or console.type_into(nm, connections.notice(connect)):
+                    connections.settled(root, connect)      # one switched off needs no word: nothing is waiting on it
                 continue
             if not why or reloaded or not console.room() or console.busy(root, nm, label):
                 continue

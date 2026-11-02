@@ -627,10 +627,11 @@ class ConnectorsOffTest(BoardBase):
         lines = out.read_text().splitlines()
         self.assertEqual(lines[:3], ["blender: off - the person's running Blender",
                                      "Chrome: off - the person's Chrome browser", "Gmail: on - the person's Gmail"])
-        self.assertIn("Notion: off - the person's Notion (needs the person's sign-in)", lines)
+        self.assertIn("Off, and needing the person's sign-in first: Notion, plugin:productivity:slack.", lines,
+                      "one line for those it can't use yet")
         self.assertIn("plugin:gitkraken:gitkraken: off - git and GitHub, through GitKraken", lines)
         self.assertTrue(lines[-1].startswith("Switch one on here: colony connect --on NAME"))
-        self.assertEqual(len(lines), 8)
+        self.assertEqual(len(lines), 7)
         self.assertLess(len(out.read_text()), 600, "almost nothing to read")
 
     def test_switching_one_on_reloads_the_idle_console_and_tells_its_agent_in_a_line(self):
@@ -674,6 +675,13 @@ class ConnectorsOffTest(BoardBase):
             w.current()
             self.assertEqual(len(typed), 1, "told once")
             reload.assert_called_once()
+            # switched off: the reload alone, no word to its agent (nothing waits on it)
+            connections.switch(self.root, "plugin:gitkraken:gitkraken", False)
+            stale["why"] = "its settings or helper tiers changed"
+            w.current(); w.current()
+            self.assertEqual(reload.call_count, 2)
+            self.assertEqual(len(typed), 1, "no notice for one switched off")
+            self.assertEqual(connections.pending(self.root), {})
         self.assertEqual(connections.pending(), {})
         self.assertEqual(connections.notice({"Gmail": True, "Chrome": True, "blender": False}),
                          "[colony] Gmail and Chrome are now connected, their tools loaded; blender is now disconnected. "

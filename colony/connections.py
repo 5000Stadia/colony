@@ -570,10 +570,15 @@ def listing(root):
     """The agent's list, as short as it can be: each connector its console could load, on or off here, what it
     reaches; then how to switch one on."""
     group, data, through = _group(root), load(), _through(root)
-    lines = []
+    lines, unsigned = [], []
     for n, c in sorted(data[group].items(), key=lambda kv: kv[0].lower()):
-        lines.append(f"{n}: {'on' if _loaded(group, n, c, root, through) else 'off'} - {reach(n, c)}"
-                     + (" (needs the person's sign-in)" if c.get("signin") else ""))
+        on = _loaded(group, n, c, root, through)
+        if c.get("signin") and not on:                    # usable only once the person signs in: named, one line
+            unsigned.append(n)
+            continue
+        lines.append(f"{n}: {'on' if on else 'off'} - {reach(n, c)}" + (" (needs the person's sign-in)" if c.get("signin") else ""))
+    if unsigned:
+        lines.append("Off, and needing the person's sign-in first: " + ", ".join(unsigned) + ".")
     have = granted(root)
     for n, c in sorted(data["connections"].items()):
         state = "on" if n in have else "waiting for the person" if is_on(c, root) else "off"

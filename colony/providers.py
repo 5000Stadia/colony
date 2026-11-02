@@ -1170,6 +1170,7 @@ class ClaudeCode(Provider):
         import tempfile
         here = tempfile.mkdtemp(prefix="colony-consult-")
         cmd = [self.program, "-p", "--model", model, "--effort", effort, "--setting-sources", "", "--output-format", "json",
+               "--strict-mcp-config",       # none of the person's connectors: it reads the project, and they cost every step
                "--add-dir", str(project), "--allowedTools", "Read,Grep,Glob",
                "--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent"]
         try:
