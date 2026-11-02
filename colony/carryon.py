@@ -106,6 +106,12 @@ def tick(now=None):
         if now - first < IDLE:
             continue
         try:
+            if running:
+                from . import chat, lingering
+                # its helpers or background work tell it when they end: a nudge meanwhile wakes it for nothing (Bookflow's
+                # lead, two weeks to 2026-11-01: 80 nudges, 69 ending within three steps while its helpers still ran)
+                if chat.helpers(console.snapshot(root, lines=4, name=name)) or lingering.commands(root, name):
+                    continue
             sig = signature(root)
             if woke(root) == list(sig) or not wanted(root):
                 continue

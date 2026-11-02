@@ -2205,6 +2205,31 @@ class HintTest(BoardBase):
 
 
 class CarryOnTest(BoardBase):
+    def test_no_nudge_while_its_helpers_or_background_work_run(self):
+        """Its helpers tell it when they end: a carry-on nudge meanwhile only wakes it for nothing."""
+        from colony import carryon, chat, lingering
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text("## Vision\nPlants.\n\n## M1 — Build\n- [ ] R2 b\n")
+        carryon._idle.clear()
+        typed, helping, commands = [], [True], [["sleep 600"]]
+        with patch.object(carryon.board, "projects", return_value=[self.root]), \
+                patch.object(carryon.console, "running", return_value=True), \
+                patch.object(carryon.console, "snapshot", return_value={"state": "idle", "lines": []}), \
+                patch.object(carryon.console, "drafting", return_value=False), \
+                patch.object(carryon.console, "attached", return_value=False), \
+                patch.object(chat, "helpers", side_effect=lambda snap: helping[0]), \
+                patch.object(lingering, "commands", side_effect=lambda root, name: commands[0]), \
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True), \
+                patch("colony.hours.active", return_value=True):
+            carryon.tick(now=1000); carryon.tick(now=1000 + carryon.IDLE + 1)
+            self.assertEqual(typed, [], "a helper still runs")
+            helping[0] = False
+            carryon.tick(now=1000 + carryon.IDLE + 2)
+            self.assertEqual(typed, [], "a background command still runs")
+            commands[0] = []
+            carryon.tick(now=1000 + carryon.IDLE + 3)
+            self.assertEqual(len(typed), 1, "nothing of its own running: told it can carry on")
+
     def test_an_idle_agent_with_work_it_can_start_is_told_once_until_something_changes(self):
         from colony import carryon
         board.track(self.root)
@@ -4038,7 +4063,8 @@ class MonitorTest(BoardBase):
                 board.save_registry(dict(good, projects=[f"/tmp/flood-{n}"]))
         left = sorted(copies.glob("board-*.json"))
         self.assertLessEqual(len(left), 6, "the last five, and the day's first")
-        self.assertIn(first, left, "a flood can't push out the day's first")
+        # the day's first survives: a fixture thread's save racing ours may have become it (an earlier name), never later
+        self.assertLessEqual(min(left).name, first.name, "a flood can't push out the day's first")
         self.assertEqual(list(board.home().glob(".board.json.*")), [], "written whole, no half file left")
 
     def test_saving_the_same_registry_again_keeps_no_copy(self):
@@ -9561,6 +9587,30 @@ class ItemNamesTest(BoardBase):
         self.assertEqual(board.speak_items("Next, R2 and R3.", root, named),
                          "Next, R2 and R3 (A very long title that the page would cut short for its width, said whole).")
         self.assertNotIn("\u2026", board.speak_items("R3", root, []))
+
+class HelperCacheTest(BoardBase):
+    """Claude consoles start with the 1-hour prompt cache for their helpers (2026-11-01): Bookflow's helpers waiting on
+    ~10-minute test loops rewrote their whole context at each resume under the 5-minute cache; Codex consoles get nothing."""
+    def started(self, prog):
+        seen = []
+        def run(args, *a, **k):
+            seen.append(list(args) if isinstance(args, (list, tuple)) else args)
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with patch.object(console, "running", return_value=False), patch.object(providers, "installed", return_value=True), \
+                patch.object(providers, "of", return_value=providers.get(prog)), patch.object(console, "command", return_value="true"), \
+                patch.object(console, "lingers", side_effect=lambda c: c), patch.object(console, "contained", side_effect=lambda c, n: c), \
+                patch.object(console.subprocess, "run", side_effect=run), patch.object(console.time, "sleep"):
+            try:
+                console.ensure(self.root)
+            except Exception:
+                pass                                # what follows the start (settling) isn't this test's business
+        return next(a for a in seen if isinstance(a, list) and "new-session" in a)
+
+    def test_claude_helpers_get_the_hour_cache_and_codex_nothing(self):
+        claude = self.started("claude")
+        self.assertIn("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h", claude)
+        self.assertEqual(claude[claude.index("CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h") - 1], "-e")
+        self.assertFalse(any("PROMPT_CACHE_TTL" in str(a) for a in self.started("codex")))
 
 
 if __name__ == "__main__":

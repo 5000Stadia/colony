@@ -331,8 +331,9 @@ def ensure(root, name=None, label=None, settle=0):
         began = time.time()
         # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
+        extra = [a for k, v in providers.of(None if label else root).console_env.items() for a in ("-e", f"{k}={v}")]
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
-                        "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}",
+                        "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}", *extra,
                         contained(lingers(command(label or Path(root).name, None if label else root, folder=root if label else None)), name),
                         # in the same breath, before the program can end: if it does, its screen stays to be read
                         ";", "set-option", "-w", "-t", name, "remain-on-exit", "on"],

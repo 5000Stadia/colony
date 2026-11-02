@@ -233,6 +233,7 @@ class Provider:
     aliases, efforts_for = {}, {}      # names it takes for models; the efforts a model takes, where they differ
     reports_cost = True                # whether consult() reports dollars, not only tokens
     steward_model = None               # the steward's model when the person picked none (None: its Auto pick)
+    console_env = {}                   # environment a console of this program starts with (PROVIDER:)
     # Waiting costs nothing (colony/waiting.py): a check before each shell command, keyed by event, as (matcher,
     # command); the tool names that run a shell command, the field saying it already runs in the background, what
     # the agent is told instead of sleeping, and whether its hooks answer in JSON even when they let a call through.
@@ -663,6 +664,11 @@ class ClaudeCode(Provider):
     aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
     # PROVIDER: the steward only advises and relays (the person, 2026-11-01), so a cheaper model serves it.
     steward_model = "claude-sonnet-5-5"
+    # PROVIDER: Claude Code gives a session's helpers a 5-minute prompt cache unless told otherwise; helpers waiting
+    # on long test runs (Bookflow's ~10-minute wait loops) rewrote their whole context at every resume. The 1-hour
+    # cache, measured on two weeks of every project's transcripts (2026-11-01), nets about 11% of all colony spend;
+    # projects whose helpers rarely wait lose 0.1-0.2% each. Leads already have the 1-hour cache.
+    console_env = {"CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL": "1h"}
     efforts = ["low", "medium", "high", "xhigh", "max"]
     mark = "❯"                                  # how it marks the highlighted option of a choice
     instructions = "CLAUDE.md"                  # the file it reads a project's instructions from
