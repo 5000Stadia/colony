@@ -251,6 +251,12 @@ class Provider:
         """End a detached host when the person explicitly stops its console."""
         pass
 
+    def hibernate(self, root):
+        """Before an idle console sleeps (colony/hibernate.py, R142), let go of what the program keeps for it beyond
+        the console itself; False to keep it awake (that won't stop now). Its console resumes the conversation colony
+        remembers for it (command(resume=)) when it wakes."""
+        return True
+
     def gather(self, root, dest):
         """Put history in dest, leaving pointers the program follows. Caller stops its writers first."""
         raise NotImplementedError
@@ -2133,6 +2139,22 @@ class Codex(Provider):
     def stop_console_host(self, root):
         from . import codex_remote
         return codex_remote.stop_host(root)
+
+    def hibernate(self, root):
+        """Its app host sleeps with its console: it holds the conversation in memory, and the ChatGPT app reaches the
+        project through it, which a sleeping project can't be reached by anyway. Drained only gracefully, while every
+        thread it has is at rest; one that won't drain keeps the console awake. Waking, launch() starts a fresh host and
+        attaches it to the same thread (codex_remote.attach, thread/resume). The installation's repair host
+        (colony/repair.py) has its own home and is never touched here."""
+        from . import codex_remote
+        from .codex_rpc import RPCError
+        home = codex_remote.home_for(root)
+        if not codex_remote.alive(home):
+            return True
+        try:
+            return codex_remote.drain(home)
+        except (OSError, RPCError, ValueError):
+            return False
 
     def command(self, label, s, resume=None, root=None):
         if root:

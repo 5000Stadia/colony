@@ -341,6 +341,8 @@ def ensure(root, name=None, label=None, settle=0):
         _started(name, fingerprint(root, label), providers.key(providers_of(root, label)), at=began)
         scrollable(name, providers_of(root, label))
         if not label:
+            from . import hibernate
+            hibernate.clear(root)                   # started again for whatever reached it: awake (R142)
             try:
                 catch_up(root)
             except Exception:
@@ -1025,6 +1027,7 @@ def type_into(name, text, wait=0, *, _purpose='system'):
     (R134); theirs do."""
     if _purpose == 'system' and held(name):
         return False
+    wait = _woken(name, wait, person=_purpose == 'person')
     if not running(name) or ready(name, wait) is None or asking(name):   # a choice on screen is the person's: colony's word waits
         return False
     with _typing(name) as mine:
@@ -1046,6 +1049,19 @@ def type_into(name, text, wait=0, *, _purpose='system'):
             return False
 
 
+def _woken(name, wait, person=False):
+    """A sleeping project's console (R142) started again before anything is typed into it, in its own conversation:
+    the wait for its box, long enough for one just started. Every path that types into a console comes through here."""
+    from . import hibernate
+    root = hibernate.root_of(name)
+    if root is not None and not running(name):
+        ensure(root, settle=2)
+        return max(wait, hibernate.WAKE_WAIT)
+    # the person's message to one woken a moment ago by an ensure() of its own (Chat, a reply): it reads its conversation
+    # back first, so their words wait for its box; colony's own just wait for its next turn (the watcher nudges again)
+    return max(wait, hibernate.WAKE_WAIT) if person and hibernate.woke_recently(name) else wait
+
+
 def held(name):
     """Whether this session is the console of a project the person paused: colony types nothing of its own there."""
     from . import board
@@ -1059,6 +1075,7 @@ def paste_into(name, text, answer=False, wait=0):
     person writing in Chat while it asks) the choice is put away and the message goes as their answer, a start-up
     question excepted; otherwise, or where it can't be put away, False. As type_into, True only once the message
     has left the box."""
+    wait = _woken(name, wait, person=True)
     if not running(name):
         return False
     ready(name, wait)
@@ -1150,7 +1167,10 @@ def snapshot(root, lines=6, name=None):
     asked for than the screen holds."""
     name = name or session_name(root)
     if not running(name):
-        from . import providers
+        from . import hibernate, providers
+        asleep = hibernate.asleep(root)
+        if asleep:                                  # off, as far as what reaches it is concerned; the board says asleep
+            return {"state": "off", "asleep": asleep.get("since") or True, "lines": [hibernate.line(asleep)]}
         p = providers.of(root)
         if not providers.installed(p):
             return {"state": "off", "lines": [providers.missing(p)]}
@@ -1181,6 +1201,37 @@ def snapshot(root, lines=6, name=None):
 
 def accept(key):
     return base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+
+
+def _asleep_until_touched(sock, root, name=None):
+    """While the project's console sleeps (R142), its page says so and waits: looking doesn't wake it, the first key
+    pressed there does. None when it isn't asleep; the terminal's last size [cols, rows] once a key wakes it (or True
+    with none sent); False once the page has gone."""
+    from . import hibernate
+    row = hibernate.asleep(root)
+    if not row or running(name or session_name(root)):
+        return None
+    size = True
+    try:
+        send_frame(sock, ("\r\n  " + hibernate.line(row) + "\r\n\r\n  Press any key to wake it.\r\n").encode())
+        while True:
+            opcode, data = recv_frame(sock)
+            if opcode == 8:
+                return False
+            if opcode == 9:
+                send_frame(sock, data, opcode=10)
+                continue
+            try:
+                msg = json.loads(data.decode("utf-8", "replace"))
+            except ValueError:
+                continue
+            if "r" in msg:
+                size = msg["r"]
+            elif "i" in msg:
+                send_frame(sock, b"\r\n  Waking it in its own conversation...\r\n")
+                return size
+    except (ConnectionError, OSError, ValueError):
+        return False
 
 
 def send_frame(sock, data, opcode=2):
@@ -1214,7 +1265,10 @@ def recv_frame(sock):
 
 def bridge(sock, root, name=None, label=None):
     """Attach a terminal to the session and pass bytes both ways until either side leaves. Leaving
-    detaches; the session keeps running."""
+    detaches; the session keeps running. A sleeping project's (R142) is woken by a key pressed there, not by a look."""
+    size = None if label else _asleep_until_touched(sock, root, name)
+    if size is False:
+        return
     name = ensure(root, name, label)
     inline, up = providers_of(root, label).scrolls_in_tmux, False
     scrollable(name, providers_of(root, label))                 # a session started before it took the mouse too
@@ -1222,6 +1276,8 @@ def bridge(sock, root, name=None, label=None):
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
         os.execvp("tmux", ["tmux", "attach-session", "-t", name])
+    if isinstance(size, list) and len(size) == 2:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", int(size[1]), int(size[0]), 0, 0))
     try:
         while True:
             ready, _, _ = select.select([sock, fd], [], [])

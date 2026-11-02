@@ -109,7 +109,9 @@ def tick(root):
             or board.asks(root)):
         return None
     name = console.session_name(root)
-    if console.snapshot(root, lines=1)["state"] != "idle" or console.drafting(name):
+    from . import hibernate
+    # asleep (R142) it is idle for this: the nudge wakes it in its own conversation (console.type_into)
+    if not hibernate.asleep(root) and (console.snapshot(root, lines=1)["state"] != "idle" or console.drafting(name)):
         return None
     # A nudge whose turn the network stopped again, with no reply since, waits before the next: longer each time.
     streak = mine.get("streak", 0) if found["ok_at"] <= mine.get("at", 0) else 0
