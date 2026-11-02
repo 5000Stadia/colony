@@ -3465,7 +3465,8 @@ PLAYER = """
   // Ahead of what is heard, the next AHEAD clips are made, through this reply and into the next once its words are
   // here (the machine makes them back to back with no idle time), topped up as each clip starts. While the clip about to
   // be heard is still being made over the network it waits, so that one comes first. A clip that failed isn't asked
-  // for again (the phone's voice reads it). A writing hold keeps this bounded preparation running in silence.
+  // for again here: at its turn the player asks for it, and clipFailed waits for it. A writing hold keeps this bounded
+  // preparation running in silence.
   const AHEAD = 5;
   let warming = false;
   const upcoming = () => {
@@ -3569,7 +3570,7 @@ PLAYER = """
   // has played once, given one moment of silence within it (a phone lets an element sound by itself only after a tap
   // has played it); from then on this page may sound by itself
   const prime = () => { if (writing()) return;
-    if (talk && !unlocked) talk.speak(new SpeechSynthesisUtterance(''));
+    if (talk && !unlocked && !L.ready) talk.speak(new SpeechSynthesisUtterance(''));   // the phone's voice reads only where colony has none
     humSync('a tap', true);
     if ((N && playing) || playerFree) return;
     player.src = SILENT;
@@ -3601,15 +3602,15 @@ PLAYER = """
       clipFailed(j, parts, Math.max(0, n - 1), 'error ' + err.code + (err.message ? ' ' + err.message : '')); };
     next();
   };
-  // A clip that failed, its cause logged first (the voice log keeps the hidden time beside it). Shown, the phone's own
-  // voice reads it. Hidden, never: a locked iPhone always refuses a page's speechSynthesis, and that refusal stopped the
-  // read-aloud (the person's phone log, 2026-11-01: three replies, 197 s, 75 s and 27 s hidden). There the silent element
-  // goes on, the clip is made again a few times with a short backoff and played from the page's own copy; not had, the
-  // reading is held at that piece, and coming back to the page (or ▶) takes it up there.
-  const CLIP_TRIES = 4;
+  // A clip that failed (a board restart drops one), its cause logged first (the voice log keeps the hidden time beside
+  // it). Colony's voice is waited for, shown or hidden: the phone's own voice never stands in (the person, 2026-11-01:
+  // "We'll just wait for the good voice"; and a locked iPhone refuses a page's speechSynthesis, which stopped the
+  // read-aloud: three replies, 197 s, 75 s and 27 s hidden). The silent element goes on, the clip is made again with a
+  // backoff for up to CLIP_WAIT and played from the page's own copy; not had, the reading is held at that piece, and
+  // coming back to the page (or ▶) takes it up there.
+  const CLIP_WAIT = 120e3;
   const clipFailed = (j, parts, at, cause) => {
     log('clip', cause, false);
-    if (!hidAt) { hush(); return sayPhone(j, parts, at); }
     hush();
     const s = N.blocks[j], v = N.kvoice, key = keyOf(abs(clip(parts[at], v)));
     const old = kept.get(key); if (old) { URL.revokeObjectURL(old); kept.delete(key); ready.delete(key); }
@@ -3617,15 +3618,15 @@ PLAYER = """
     const pending = startingSound = {reply: N, ready: false, go: () => {
       if (startingSound !== pending || !reading(s)) return;
       startingSound = null; sayK(j, parts, at); }};
-    let tries = 0;
+    let tries = 0; const began = Date.now();
     const again = () => { if (startingSound !== pending) return;
       failed.delete(key);
       make(parts[at], v).then(() => { if (startingSound !== pending) return;
         if (kept.has(key)) { log('clip', 'made again', true); pending.ready = true; return pending.go(); }
-        if (++tries < CLIP_TRIES) return after(again, 1000 * 2 ** (tries - 1));
+        const wait = Math.min(15e3, 1000 * 2 ** tries++);
+        if (Date.now() + wait - began <= CLIP_WAIT) return after(again, wait);
         pending.ready = true;
-        if (!hidAt) { startingSound = null; log('clip', 'not had', false); if (reading(s)) { hush(); sayPhone(j, parts, at); } return; }
-        log('clip', 'held: not had while hidden', false);
+        log('clip', 'held: not had', false);
         if (!reading(s)) return;   // a pause meanwhile holds it already; its ▶ plays the clip as it can
         paused = true; why = 'phone'; loading = false; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
         humSync(); save(); changed(); }); };

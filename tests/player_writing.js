@@ -49,7 +49,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
       S = session(); xs.forEach(x => { S.want.add(id(x)); S.play.add(id(x)); });
       if (cache) xs.forEach(x => words.set(id(x), x.b.map(([k, at]) => ({k, at, text: k + ' reply. All done.'}))));
     },
-    state: () => ({document: N && N.document, pending: N && N.pending, voice: N && N.kvoice, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, armed, waiting: visible().length, letGo: letGo && letGo.why}),
+    state: () => ({document: N && N.document, pending: N && N.pending, voice: N && N.kvoice, piece: N && N.piece, section: N && N.sections && N.sections.findIndex(s => s.start <= N.j && N.j < s.end), back: back && back.N.t, t: N && N.t, j: N && N.j, playing, paused, why, opened, armed, waiting: visible().length, letGo: letGo && letGo.why, loading}),
     // the silent element and what the pill reads from (aloud and not able: "Auto · tap to resume")
     hear: () => ({silence: !hum.paused, able: able(), letGo: letGo && letGo.why, resting: !!resting, story: story.map(x => x[1] + ': ' + x[2])}),
     SILENT,
@@ -986,22 +986,42 @@ const cases = {
     if (!b.kokoro) return;
     const xs = await b.line(['A']); await b.hide(true); b.failClips(true); b.voiceFails(Infinity);
     b.api.play(xs, 0); await flush(); await b.advance(30000);
+    assert.equal(b.api.state().paused, false, 'still waiting for the clip at 30 s');
+    await b.advance(120000);
     assert.deepEqual(b.spoken.filter(Boolean), [], 'speechSynthesis is never asked while hidden');
     assert(b.fetches.filter(u => u.pathname === '/voice').length >= 4, 'a few tries');
     const st = b.api.state(), h = b.api.hear();
     assert.equal(st.t, 'A'); assert.equal(st.piece, 0); assert.equal(st.paused, true); assert.equal(st.why, 'phone');
-    assert.equal(st.letGo, 'refused'); assert(h.story.includes('clip: held: not had while hidden'), h.story.join(' | '));
+    assert.equal(st.letGo, 'refused'); assert(h.story.includes('clip: held: not had'), h.story.join(' | '));
     assert.equal(b.marks.length, 0, 'nothing marked heard');
     b.failClips(false); b.voiceFails(0); await b.hide(false); await flush();
     assert.equal(b.api.state().paused, false); assert.equal(b.api.state().playing, true);
     assert(b.sounds.length > 0, 'coming back plays the held piece'); assert.deepEqual(b.spoken.filter(Boolean), []);
   },
-  async 'shown, a clip that fails is read by the phone\'s voice as before'(b) {
+  async 'shown, a clip slow to come (the board restarting) is waited for, never read by the phone\'s voice'(b) {
+    if (!b.kokoro) return;
+    const xs = await b.line(['A']); b.failClips(true); b.voiceFails(5);
+    b.api.play(xs, 0); await flush(); await b.advance(1000);
+    assert.equal(b.api.state().loading, true, 'the bar shows it waiting');
+    await b.advance(60000);
+    assert.deepEqual(b.spoken.filter(Boolean), [], 'the phone\'s voice never stands in: ' + b.spoken.join(', '));
+    const h = b.api.hear();
+    assert(h.story.some(x => /^clip: error /.test(x)), h.story.join(' | '));
+    assert(h.story.includes('clip: made again'), h.story.join(' | '));
+    assert(b.sounds.some(x => x.startsWith('blob:')), 'colony\'s voice plays it: ' + b.sounds.join(', '));
+    assert.equal(b.api.state().playing, true); assert.equal(b.api.state().paused, false);
+  },
+  async 'shown, a clip that cannot be had holds the reading there and ▶ takes it up in colony\'s voice'(b) {
     if (!b.kokoro) return;
     const xs = await b.line(['A']); b.failClips(true); b.voiceFails(Infinity);
-    b.api.play(xs, 0); await flush(); await b.advance(1000);
-    assert(b.spoken.some(x => /A reply/.test(x)), 'the phone\'s voice reads it: ' + b.spoken.join(', '));
-    assert(b.api.hear().story.some(x => /^clip: error /.test(x)), b.api.hear().story.join(' | '));
+    b.api.play(xs, 0); await flush(); await b.advance(150000);
+    assert.deepEqual(b.spoken.filter(Boolean), [], 'the phone\'s voice never stands in');
+    const st = b.api.state();
+    assert.equal(st.t, 'A'); assert.equal(st.piece, 0); assert.equal(st.paused, true); assert.equal(st.why, 'phone');
+    assert(b.api.hear().story.includes('clip: held: not had'), b.api.hear().story.join(' | '));
+    b.failClips(false); b.voiceFails(0); b.api.hold(false, 'person'); await flush();
+    assert.equal(b.api.state().paused, false); assert.equal(b.api.state().playing, true);
+    assert(b.sounds.length > 0, '▶ plays the held piece'); assert.deepEqual(b.spoken.filter(Boolean), []);
   },
 };
 (async () => {
