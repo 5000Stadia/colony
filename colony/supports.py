@@ -282,10 +282,12 @@ def text(project=None):
 
 
 def check_now():
-    """Make every project's check come due now, over its own last period (one set to never stays never)."""
+    """Make every project's check come due now, over its own last period (one set to never stays never), and ask for
+    it: the watcher scouts only on request."""
     import time
     from . import monitor
     clock = {str(p): time.time() - monitor.posture(p)["scout"] * 3600 for p in board.projects() if monitor.posture(p)["scout"]}
     board.home().mkdir(parents=True, exist_ok=True)
     (board.home() / "scout.json").write_text(json.dumps(clock))
+    (board.home() / "scout-asked").write_text(board.now())
     return "a supports check runs within seconds for projects worked on in their last period, once the steward is idle"

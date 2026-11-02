@@ -38,6 +38,24 @@ A tool for my plants.
 """
 
 
+def legacy_helm(test):
+    """The helm held, as it could be before the steward became an advisor (the person, 2026-11-01): it can't be turned
+    on any more, but the code that reads it is kept working, so its tests hold it this way. monitor.helm(False)
+    still lets it go."""
+    held = [True]
+
+    def helm(value=None):
+        if value is not None:
+            held[0] = bool(value)
+        return held[0]
+    if not isinstance(monitor.helm, unittest.mock.Mock):
+        p = unittest.mock.patch.object(monitor, "helm", side_effect=helm)
+        p.start()
+        test.addCleanup(p.stop)
+    else:
+        monitor.helm.side_effect = helm
+
+
 def hearing(into):
     """A stand-in console that records what is typed; the monitor's inbox line brings its inbox over, as its hook
     does, recorded as one message the way it once was typed."""
@@ -262,6 +280,7 @@ class BoardTest(BoardBase):
         watcher.restore_waiting = False
         for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
             setattr(watcher, step, lambda *a: [])
+        watcher.keep = monitor.muted                  # off while muted, without touching a console
         watcher.updates = lambda: called.append(1)
         called = []
         with patch.object(monitor, 'snapshot', return_value={'state': 'working'}), \
@@ -282,30 +301,91 @@ class BoardTest(BoardBase):
             self.assertFalse(cli._persons(made), made)
         self.assertFalse(cli._persons(""))
 
-    def test_a_muted_monitor_is_never_woken_and_cannot_be_muted_holding_the_helm(self):
-        monitor.helm(False)
-        monitor.muted(True)
-        self.assertTrue(monitor.muted())
+    def muted_watcher(self, ran):
         watcher = monitor.Watcher.__new__(monitor.Watcher)
         watcher.enabled, watcher.pending = True, ['something']
         watcher.restore_waiting = False
-        for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events'):
+        for step in ('signin', 'freshen', 'models', 'usage', 'current', 'mail', 'tell', 'scout', 'events', 'updates'):
             def stub(*a, step=step):
-                if step in ('tell', 'scout', 'events'):
-                    raise AssertionError(step + ' ran while muted')
+                ran.append(step)
                 return []
             setattr(watcher, step, stub)
-        with patch.object(monitor, 'snapshot', return_value={'state': 'idle'}), \
+        return watcher
+
+    def test_muted_the_steward_is_off_its_console_stopped_and_unmuting_starts_it(self):
+        """Muted means fully off (the person, 2026-11-01): the watcher stops its console once its turn has ended,
+        nothing starts it, nothing reaches it; colony's own work goes on; unmuting starts it again."""
+        monitor.muted(True)
+        ran, running, state = [], {"on": True}, {"state": "working"}
+        watcher = self.muted_watcher(ran)
+        with patch.object(monitor, 'snapshot', side_effect=lambda: dict(state)), \
+                patch.object(monitor.console, 'running', side_effect=lambda nm: running["on"]), \
+                patch.object(monitor, 'stop', side_effect=lambda: running.update(on=False)) as stopped, \
+                patch.object(monitor.console, 'ensure') as started, \
                 patch('colony.vision.observe_all'), patch('colony.continuation.tick_all'), \
                 patch.object(monitor.console, 'type_into') as typed:
             watcher.tick()
+            stopped.assert_not_called()                          # its last turn (the reply to "mute") ends first
+            state["state"] = "idle"
+            watcher.tick()
+            stopped.assert_called_once()
+            self.assertFalse(running["on"])
+            self.assertEqual(monitor.ensure(), monitor.name(), "ensure, from the page or a chat, starts nothing")
+            monitor.queue("a word for it")
+            self.assertEqual(monitor.inbox(), [], "nothing piles up to reach it later")
+            started.assert_not_called()
             typed.assert_not_called()
-        self.assertEqual(watcher.pending, [])
-        monitor.helm(True)
-        self.assertFalse(monitor.muted(), 'giving it the helm wakes it')
-        with self.assertRaises(ValueError):
-            monitor.muted(True)
+            self.assertEqual(watcher.pending, [])
+            for step in ('usage', 'models', 'current', 'mail', 'events'):
+                self.assertIn(step, ran, step + " is colony's own work: it runs muted")
+            for step in ('updates', 'scout', 'tell'):
+                self.assertNotIn(step, ran, step + " is the steward's: not while it is off")
+            watcher.tick()
+            stopped.assert_called_once()                         # stopped once; nothing to stop again
+            monitor.muted(False)
+            watcher.tick()
+            started.assert_called_once()                         # unmuted: started again
+            self.assertIn('updates', ran)
+            watcher.tick()
+            started.assert_called_once()
+
+    def test_a_steward_working_on_past_the_grace_is_stopped_anyway(self):
+        monitor.muted(True)
+        watcher = self.muted_watcher([])
+        watcher.muted_at = time.time() - monitor.MUTE_GRACE - 1
+        with patch.object(monitor, 'snapshot', return_value={'state': 'working'}), \
+                patch.object(monitor.console, 'running', return_value=True), \
+                patch.object(monitor, 'stop') as stopped, \
+                patch('colony.vision.observe_all'), patch('colony.continuation.tick_all'):
+            watcher.tick()
+        stopped.assert_called_once()
+
+    def test_muted_the_safe_pause_its_waking_at_the_reset_and_turbo_still_run(self):
+        from colony import turbo, usage
+        monitor.muted(True)
+        watcher = self.muted_watcher([])
+        del watcher.usage                                       # the real one: the safe pause, the reset, turbo
+        watcher.usage_checked = 0
+        with patch.object(monitor.console, 'running', return_value=False), \
+                patch.object(usage, 'check', return_value=[]) as paused, patch.object(usage, 'cut_off') as reset, \
+                patch.object(turbo, 'tick') as ticked, patch.object(turbo, 'stand_down') as stood_down, \
+                patch('colony.vision.observe_all'), patch('colony.continuation.tick_all'):
+            watcher.tick()
+        paused.assert_called_once()
+        reset.assert_called_once()
+        ticked.assert_called_once()
+        stood_down.assert_not_called()
+
+    def test_the_steward_holds_no_helm_and_muting_needs_none_given_back(self):
+        with self.assertRaisesRegex(ValueError, "advisor"):
+            monitor.helm(True)
+        (board.home() / "helm").write_text("on")                # an old "on" left in the home counts for nothing
+        self.assertFalse(monitor.helm())
+        self.assertFalse(monitor.helm_for(self.root))
+        monitor.muted(True)
+        self.assertTrue(monitor.muted())
         monitor.helm(False)
+        self.assertTrue(monitor.muted(), "taking back a helm it never holds changes nothing")
 
     def test_a_watcher_stops_once_its_boards_home_changes(self):
         # one a test's serve() started would otherwise act on the person's own board once the test's home is popped
@@ -3254,7 +3334,7 @@ class MonitorTest(BoardBase):
         sent = []
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         for _ in range(7):
             w.tick()
@@ -3282,7 +3362,7 @@ class MonitorTest(BoardBase):
         sent, me = [], {"state": "working", "lines": []}
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: me
-        monitor.helm(True)
+        legacy_helm(self)
         clock = board.home() / "updates.json"
         said = lambda: " ".join(sent).count("plants R3: reminders")
         board.set_setting("updates", "off")                              # no update to rescue it
@@ -3323,7 +3403,7 @@ class MonitorTest(BoardBase):
     def test_a_completion_claimed_concurrently_by_an_update_and_a_wake_is_said_once(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         monitor.snapshot = lambda: {"state": "working", "lines": []}
-        monitor.helm(True)
+        legacy_helm(self)
         board.set_setting("updates", "off")
         watcher = monitor.Watcher()
         watcher.tick()
@@ -3521,7 +3601,7 @@ class MonitorTest(BoardBase):
         sent = []
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         for _ in range(7):
             w.tick()
@@ -3536,7 +3616,7 @@ class MonitorTest(BoardBase):
         sent = []
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         w.tick()
         board.record_ask(self.root, "t1", "Which format do you want?")      # the turn ends asking
@@ -3613,7 +3693,7 @@ class MonitorTest(BoardBase):
         sent, busy = [], {"state": "working", "lines": []}
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: busy
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         board.record_ask(self.root, "t1", "Which format do you want?")
         w.tick()
@@ -3627,7 +3707,7 @@ class MonitorTest(BoardBase):
         sent = []
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
-        monitor.helm(True)
+        legacy_helm(self)
         board.add_note(self.root, None, "Yes, CSV.", author="monitor")     # `colony tell`, while the turn ran
         board.record_ask(self.root, "t1", "Which format do you want?")
         w = monitor.Watcher()
@@ -3643,7 +3723,7 @@ class MonitorTest(BoardBase):
         sent = []
         console.type_into = hearing(sent)
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
-        monitor.helm(True)
+        legacy_helm(self)
         board.add_note(self.root, None, "Safe pause over. Carry on where you stopped.", author="colony")
         board.record_ask(self.root, "t1", "Which format do you want?")
         monitor.Watcher().tick()
@@ -3667,7 +3747,7 @@ class MonitorTest(BoardBase):
         w.tick()
         self.assertEqual(sent, [], "helm off: no wake, no tokens")
         monitor.set_posture(self.root, helm=False)
-        monitor.helm(True)
+        legacy_helm(self)
         w.tick()
         self.assertEqual(sent, [], "a project left out of the helm isn't woken for, even with the helm given")
         monitor.set_posture(self.root, helm=True)
@@ -3686,7 +3766,7 @@ class MonitorTest(BoardBase):
         w.tick()
         self.assertEqual(sent, [], "the monitor is busy: the event waits")
         busy["state"] = "idle"
-        monitor.helm(True)
+        legacy_helm(self)
         w.tick()
         self.assertEqual(len(sent), 1)
         self.assertIn("opened a gate: Ship it?", sent[0])
@@ -3699,7 +3779,7 @@ class MonitorTest(BoardBase):
         monitor.snapshot = lambda: {"state": "idle", "lines": []}
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
         board.record_ask(self.root, "t1", "Which format do you want?")
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         w.tick()
         self.assertEqual(len(sent), 1)
@@ -3728,7 +3808,11 @@ class MonitorTest(BoardBase):
         self.assertIn("included in the helm, which is with the person", run("helm", "--project", "plants").stdout)
         run("helm", "off", "--project", "shop")
         self.assertIn("left out of the helm", run("helm", "--project", "shop").stdout)
-        run("helm", "on")
+        refused = run("helm", "on")
+        self.assertNotEqual(refused.returncode, 0, "an advisor only (the person, 2026-11-01)")
+        self.assertIn("advisor", refused.stderr)
+        self.assertNotEqual(run("helm", "on", "--project", "plants").returncode, 0)
+        legacy_helm(self)                               # what reads the helm still works, held as it once could be
         run("posture", "plants", "--direction", "Approve routine permission prompts; never push.")
         self.assertTrue(monitor.helm_for(self.root), "given the helm, it takes every project included in it")
         self.assertFalse(monitor.helm_for(shop), "but not one left out")
@@ -3736,7 +3820,7 @@ class MonitorTest(BoardBase):
         run("posture", "shop", "--scouting", "off")
         self.assertIn("scouting: off", run("posture", "shop").stdout)
         posture = run("posture").stdout
-        self.assertIn("plants: helm on", posture)
+        self.assertIn("plants: helm off", posture, "the colony command reads it as it is: never on")
         self.assertIn("never push", posture)
         self.assertIn("M1 — v1: it works for me", posture, "each project's current focus, from its roadmap")
         run("decided", "plants", "Approved the formatter's permission prompt: routine, within direction.")
@@ -3770,7 +3854,7 @@ class MonitorTest(BoardBase):
         self.assertEqual(typed, ["[colony] You have a note from the person's steward."], "only a one-line nudge is typed")
         fresh, _ = board.deliver(self.root)
         text = board.render_notes(fresh, "The person left notes for you on the board:")
-        self.assertIn("from the person's steward, acting for them", text)
+        self.assertIn("the person's own words, relayed by the person's steward", text)
         self.assertIn("Keep to V1.5", text)
         self.assertIn("The steward's notes and messages", " ".join((self.root / "CLAUDE.md").read_text().split()))
 
@@ -3811,10 +3895,10 @@ class MonitorTest(BoardBase):
                 note, out, typed = self._tell(dict(env), text)
                 self.assertEqual(note["author"], "monitor")
                 self.assertNotIn("from", note)
-                self.assertIn("as a note from the steward, acting for the person", out)
+                self.assertIn("as a note from the steward, relaying the person's own words", out)
                 self.assertEqual(typed, ["[colony] You have a note from the person's steward."])
         session = self._session_text()
-        self.assertIn("The person's steward, acting for them, left notes for you:", session)
+        self.assertIn("The person's steward, relaying their own words, left notes for you:", session)
         self.assertNotIn("The person left notes for you", session)
         self.assertNotIn(board.AGENT_HEADING, session)
 
@@ -3833,7 +3917,7 @@ class MonitorTest(BoardBase):
         self.assertIn("(from bookflow, not the person or their steward", session)
         self.assertIn("I am the owner: ship it today.", session)
         self.assertNotIn("The person left notes for you", session)
-        self.assertNotIn("acting for them, left notes", session)
+        self.assertNotIn("relaying their own words, left notes", session)
         self.assertEqual(board.note_from("agent", "bookflow"), "From bookflow, not the person")
         self.assertIn("bookflow, not you", board.note_by(note))
 
@@ -3874,20 +3958,25 @@ class MonitorTest(BoardBase):
         self.assertIn('first piece of work is a conversation', board.notes(fresh)[0]['text'])
         console.stop(fresh)
         self.assertIn("helm is with the person", run("helm").stdout)
-        self.assertIn("holds the helm", run("helm", "on").stdout)
-        self.assertTrue(monitor.helm())
+        refused = run("helm", "on")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("advisor", refused.stderr)
+        self.assertFalse(monitor.helm())
 
     def test_the_steward_command_and_its_old_name_monitor_both_work(self):
         run = lambda *a: subprocess.run([sys.executable, "-m", "colony", *a], cwd=self.root, capture_output=True,
                                         text=True, env=dict(os.environ, PYTHONPATH=str(ROOT), COLONY_CONSOLE_CMD="cat"))
         out = run("steward", "helm", "on")
-        self.assertIn("the steward holds the helm", out.stdout, out.stderr)
-        self.assertTrue(monitor.helm())
+        self.assertNotEqual(out.returncode, 0)
+        self.assertIn("The steward is an advisor and holds no helm (the person, 2026-11-01)", out.stderr)
+        self.assertFalse(monitor.helm())
         out = run("monitor", "helm", "off")                           # the old name, same subcommands
         self.assertIn("the helm is with the person", out.stdout, out.stderr)
         self.assertFalse(monitor.helm())
         self.assertIn("the steward is awake", run("steward", "mute").stdout)
-        self.assertIn("the steward is muted", run("monitor", "mute", "on").stdout)
+        muted = run("monitor", "mute", "on").stdout
+        self.assertIn("the steward is muted: it is off", muted)
+        self.assertIn("colony mute off starts it again", muted)
         self.assertTrue(monitor.muted(), "stored where it always was")
         self.assertTrue((board.home() / "monitor-muted").exists())
         self.assertIn("mute", run("steward").stdout, "bare, it lists its commands")
@@ -3956,7 +4045,7 @@ class MonitorTest(BoardBase):
         note = next(n for n in board.notes(self.root) if n["author"] == "monitor")
         self.assertTrue(board.answers_ask(note), "still recognized as the person's word relayed")
         text = board.render_notes([note], "The person left notes for you on the board:")
-        self.assertIn("from the person's steward, acting for them", text)
+        self.assertIn("the person's own words, relayed by the person's steward", text)
         self.assertNotIn("monitor", text)
         self.assertIn("the steward, for you", board.thread([note]))
         self.assertEqual(mail.shown("monitor"), "steward")
@@ -4227,7 +4316,7 @@ class StewardNameTest(BoardBase):
         self.assertIn("the steward suggests", p["thread"])
         self.assertIn("<span class='sttl'>Steward</span>", p["settings"])
         self.assertIn("name='steward_name' value=''", p["settings"])
-        self.assertIn("from the person's steward, acting for them", board.render_notes(
+        self.assertIn("the person's own words, relayed by the person's steward", board.render_notes(
             [{"id": "n1", "author": "monitor", "anchor": None, "text": "Go large."}], "Notes:"))
         monitor.brief()
         self.assertTrue(monitor.brief_path().read_text().startswith("# You are `steward · every project on this board"))
@@ -4264,7 +4353,7 @@ class StewardNameTest(BoardBase):
         notes = board.render_notes([{"id": "n1", "author": "monitor", "anchor": None, "text": "Go large."},
                                     {"id": "n2", "author": "suggestion", "anchor": None, "text": "A log.", "kind": "idea"},
                                     {"id": "n3", "author": "suggestion", "anchor": None, "text": "A tool."}], "Notes:")
-        self.assertIn("(from Jarvis, the person's steward, acting for them;", notes)
+        self.assertIn("(the person's own words, relayed by Jarvis, the person's steward;", notes)
         self.assertIn("(Jarvis's own suggestion, as the person's steward, not an instruction", notes)
         self.assertIn("(a suggestion from Jarvis, the person's steward, not an instruction", notes)
         self.assertEqual(mail.shown("monitor"), "Jarvis (the person's steward)")
@@ -4415,8 +4504,13 @@ class FirstHalfHourTest(BoardBase):
         for gone in ("Asleep", "helm with you", "holds the helm"):
             self.assertNotIn(gone, helm + board.monitor_page(board.registry(), "overview"))
         monitor.muted(True)
-        self.assertEqual(where()[:2], ("idle · you decide · muted",) * 2)
-        monitor.helm(True)
+        self.assertEqual(where()[:2], ("off · muted: unmute starts it",) * 2, "muted, it is off, whatever it was doing")
+        self.assertIn("Unmute starts it again", where()[2])
+        self.assertIn("Unmute (starts it)", board.monitor_page(board.registry(), "overview"))
+        monitor.muted(False)
+        self.assertIn("Mute (turns it off)", board.monitor_page(board.registry(), "overview"))
+        self.assertNotIn("Give it the helm", board.monitor_page(board.registry(), "overview"), "an advisor: no helm to give")
+        legacy_helm(self)
         menu, badge, helm = where()
         self.assertEqual((menu, badge), ("idle · steward decides", "idle · steward decides"))
         self.assertIn(">steward decides</span></div>", helm, "each project's card, the same words")
@@ -5349,18 +5443,23 @@ class SupportsTest(BoardBase):
         console.snapshot, console.type_into, monitor.snapshot = self.saved
         super().tearDown()
 
-    def due(self, hours_ago):
+    def due(self, hours_ago, asked=True):
         (board.home() / "scout.json").write_text(json.dumps({str(self.root): time.time() - hours_ago * 3600}))
+        if asked:
+            (board.home() / "scout-asked").write_text(board.now())
 
-    def test_the_check_comes_every_so_many_hours_and_only_for_projects_worked_on_since(self):
+    def test_the_check_comes_only_on_request_for_projects_due_and_worked_on_since(self):
         from colony import supports
         monitor.set_posture(self.root, scout="48", scout_note="faster test runs")
         w = monitor.Watcher()
         w.tick()
-        self.assertEqual(self.sent, [], "the clock starts; nothing is checked at once")
+        self.due(49, asked=False)
+        w.tick()
+        self.assertEqual(self.sent, [], "never on a timer: the person asks for scouting (2026-11-01)")
         self.due(47)
         w.tick()
         self.assertEqual(self.sent, [], "not yet due")
+        self.assertFalse((board.home() / "scout-asked").exists(), "the request is used up")
         self.due(49)
         w.tick()
         self.assertEqual(len(self.sent), 1)
@@ -5434,7 +5533,7 @@ class SupportsTest(BoardBase):
         self.assertIn("Check it against what you know of that work", told)
         self.assertIn("not a new task", told, "it must not start an improvement loop")
         self.assertIn("45% cheaper", told, "it carries its proof")
-        self.assertNotIn("acting for them", told)
+        self.assertNotIn("relayed by", told)
 
     def test_a_reference_needs_no_trial_but_must_have_been_read(self):
         r = self.cli("supports", "add", "tidy-importer", "--reference", "--for", "a tangled CSV importer",
@@ -5569,6 +5668,7 @@ class SupportsTest(BoardBase):
         monitor.set_posture(shop, scout="0")
         self.commit("work")
         (board.home() / "scout.json").write_text(json.dumps({str(self.root): time.time() - 73 * 3600}))
+        (board.home() / "scout-asked").write_text(board.now())        # scouting runs only when asked for
         monitor.Watcher().tick()
         self.assertEqual(len(self.sent), 1)
         self.assertIn("plants", self.sent[0])
@@ -5659,7 +5759,7 @@ class SelfHostTest(BoardBase):
         brief = (monitor.home() / "CLAUDE.md").read_text()
         self.assertNotIn("never change its code", brief)
         self.assertIn(f"Colony's source is itself a project on this board, `{ROOT.name}`", brief)
-        self.assertIn(f"colony tell {ROOT.name}", brief)
+        self.assertIn(f"colony suggest {ROOT.name}", brief, "its own findings go as its suggestion, never as the person's word")
 
     def test_a_project_inside_colonys_folder_skips_colonys_own_instructions_and_keeps_its_settings(self):
         """Claude Code loads the CLAUDE.md of every folder above a project: one in colony's projects/ skips colony's
@@ -7528,19 +7628,19 @@ class RestoreTest(BoardBase):
                         watcher.tick()
             ensure.assert_called_once()
 
-    def test_resume_with_steward_disabled_keeps_it_off_and_stands_turbo_down(self):
+    def test_resume_with_steward_disabled_keeps_it_off_and_turbo_running(self):
+        # turbo runs in the watcher, not in the steward's session: the steward off leaves it be
         from colony import turbo
         self.handover.hold_restore("test copy")
         with patch.object(monitor.threading, "Thread"), patch.object(monitor, "ensure") as ensure, \
                 patch.object(turbo, "stand_down") as stand_down:
             watcher = monitor.start(enabled=False)
-            stand_down.assert_not_called()
             self.handover.resume_restored()
             with patch.object(console, "expire_inputs", side_effect=RuntimeError("first job")):
                 with self.assertRaisesRegex(RuntimeError, "first job"):
                     watcher.tick()
             ensure.assert_not_called()
-            stand_down.assert_called_once()
+            stand_down.assert_not_called()
 
     def test_banner_and_checked_button_and_direct_chat_while_held(self):
         self.handover.hold_restore("test copy")
@@ -8560,7 +8660,7 @@ class ActiveHoursTest(HoursBase):
         self.assertIn("nothing wakes you just to relay to them", " ".join(monitor.ROLE.split()))
 
     def test_a_gate_opened_at_3_am_waits_off_the_persons_list_until_7_30_then_reaches_them_once(self):
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         with self.clock(3):
             said, tick = self.gate("Which reminders first?", "--item", "R3", "--why", "R3 starts with one")
@@ -8606,7 +8706,7 @@ class ActiveHoursTest(HoursBase):
                              "already theirs: night changes nothing")
 
     def test_at_night_the_monitor_hears_nothing_for_the_person_and_hears_it_together_at_the_start(self):
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         with self.clock(2):
             board.add_gate(self.root, "Email or SMS?")
@@ -8702,7 +8802,7 @@ class ActiveHoursTest(HoursBase):
 
 
     def test_completions_wait_for_the_persons_hours(self):
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         with self.clock(3):
             w.tick()
@@ -8744,8 +8844,7 @@ class LaterOffersTest(HoursBase):
             board.add_gate(self.root, "Which pot size?")
             w.events()
             w.events()
-        self.assertEqual(self.queued().count("Offer them the helm once"), 1, "the first question for the person: once")
-        self.assertFalse(monitor.offer("helm"), "already raised")
+        self.assertNotIn("helm", self.queued(), "an advisor only (the person, 2026-11-01): the helm is never offered")
 
 
 class PauseTest(HoursBase):
@@ -9034,7 +9133,7 @@ class DailyPageTest(HoursBase):
             self.assertIn(f"<a class='dayline' href='/?n={name}'>{name} →</a>", html)
 
     def test_a_question_asked_in_the_console_at_night_waits_for_the_hours_like_a_gate(self):
-        monitor.helm(True)
+        legacy_helm(self)
         w = monitor.Watcher()
         with self.clock(3):
             ask = board.record_ask(self.root, "t1", "Shall I index the log?")
@@ -9164,7 +9263,7 @@ class PhonePageTest(HoursBase):
             with patch.object(monitor, "ensure"):
                 page = board.monitor_page(board.registry())
             needs = board.needs_page(board.registry())
-        self.assertIn("you decide · muted</span>", page, "its state in the menu's words beside its name")
+        self.assertIn("off · muted: unmute starts it</span>", page, "its state in the menu's words beside its name")
         self.assertNotIn("<p class='muted'>Muted:", page, "not four lines on what that means")
         own = page.split("<main", 1)[1]                      # the page itself, past the sidebar's own list of projects
         self.assertIn("<a href='/needs-you'>6 waiting →</a>", own, "how much waits, a tap from Needs you")

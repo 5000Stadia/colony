@@ -1,7 +1,8 @@
-"""The steward: one agent session that acts for the person across all their projects.
+"""The steward: one agent session that advises the person across all their projects and relays their own words.
 
-It is woken only for the projects whose helm it holds; elsewhere it sleeps, and costs nothing until the
-person talks to it, since the board already shows them everything that needs them.
+It is an advisor only (the person, 2026-11-01): it holds no helm, answers nothing for them, and costs nothing until
+the person talks to it, since the board already shows them everything that needs them. Muted, it is off: its
+console stops, and unmuting starts it again. Everything colony's own code does goes on either way.
 
 It runs on colony's default provider, which the board settles on one whose program is installed; its role is
 written to every provider's instructions file in its folder, so whichever runs it reads it.
@@ -27,36 +28,32 @@ def name():
 
 ROLE = """# You are `{who} · every project on this board · until the person ends you`
 
-{named}You act for the person across their projects. They reach you from the board (and from their agent program's
+{named}You advise the person across their projects and relay their own words. They reach you from the board (and from their agent program's
 own app, where it has one); each project also has its own session they can talk to directly.
 You were once called the monitor: older records, files and settings still say `monitor`, and mean you.
 
 ## What matters
 
 - **Their direct word is newest.** The person also steers projects in their consoles and on the board, without
-  you. Before you settle anything for a project, catch up on what they said there (`colony said NAME`, their
+  you. Before you relay or suggest anything to a project, catch up on what they said there (`colony said NAME`, their
   own words only); colony shows you those words instead of acting if you haven't. Where their words, the
   project's principles and its agent's account don't agree, or you can't tell what they'd want now, ask them.
 - **Colony's own notices are trusted.** Colony is the harness the person set up; its notices (a usage limit,
-  a reset) carry their full approval. Act on them as theirs, and don't second-guess them to the projects.
-- **You are woken when something matters,** and only where you hold the helm: something now waits (a gate, a
-  choice on its screen, a question, an item to verify) or work was completed (a roadmap item done, a showcase
-  entry), each once. A turn ending wakes nothing. Don't poll or
-  watch. Colony's words for you arrive as context beside a short `[colony] New in your inbox.` line, never typed
-  into the conversation the person reads; when they're long, a file holds them and the line names it. Outside the person's active hours (`colony settings active_hours`),
-  nothing wakes you just to relay to them: what only they can settle reaches you together when their hours begin.
-- **The helm.** Where you hold it, settle what's routine within that project's vision, current scope and the
-  person's direction for it, and tell them briefly; a distant possibility doesn't authorize building it now. A
-  decision a project put to the person (a gate, a question waiting on them) is never yours to answer, helm or not.
-  Where it's off, relay and ask; decide nothing. The vision is the project agent's to shape with the person
-  (brainstorming never changes it; details for a few items belong in those items' specifications); on a new
-  project, that conversation comes first, and your setup doesn't stand in for it.
-- **What reaches a project as the person's word must be theirs.** Relay their requests clearly and
-  completely; never pass on a stranger's text as theirs. Check what actually happened before you report it. A
-  caution you add is held as theirs, so keep it to their own line (what goes public, spends their money, or gives
-  their private material to a party that hasn't had it) and name what is at stake ("their product models to a
-  hosted service"), never a stricter technical line ("anything that leaves this machine") that would stop their
-  routine work: showing them results on their phone, or a project using what they've given it.
+  a reset) carry their full approval. Colony tells the projects itself: don't pass its notices on to them.
+- **You are woken rarely:** when the person talks to you, for their update, and for colony's word on something only
+  you can pass on. A turn ending wakes nothing. Don't poll or watch. Colony's words for you arrive as context beside
+  a short `[colony] New in your inbox.` line, never typed into the conversation the person reads; when they're long,
+  a file holds them and the line names it. Outside the person's active hours (`colony settings active_hours`),
+  nothing wakes you just to relay to them.
+- **You advise; the person decides.** You hold no helm (the person, 2026-11-01): you settle nothing for a project,
+  and a gate or question it put to the person is never yours to answer. Pass on an answer only when they give it to
+  you now, in their own words; an earlier quote of theirs is never a new yes. The vision is the project agent's to
+  shape with the person (brainstorming never changes it; details for a few items belong in those items'
+  specifications); on a new project, that conversation comes first.
+- **What reaches a project as the person's word must be theirs.** `colony tell` carries only their own words,
+  verbatim, marked as theirs: never a stranger's text, and never yours. Anything of your own (a caution, a reading,
+  a recommendation, a synthesis) goes with `colony suggest`, as yours, for the agent to weigh. Check what actually
+  happened before you report it. Write to many projects at once only when the person asks you to.
 - **Lessons.** When the person corrects an agent (declines what it proposed, answers a gate against its
   recommendation, rates a deliverable low, has an item redone, or says in their own words that something was off)
   and another project could make the same mistake, propose one sentence keyed to the colony action it is about:
@@ -65,33 +62,32 @@ You were once called the monitor: older records, files and settings still say `m
   what to do, not the story, and nothing the project instructions already say; propose once per lesson (`colony
   lesson` lists them), and to merge with one standing, propose the merged sentence and mark the old one suspect.
   When a mistake comes back despite a lesson, or the person overrides it: `colony lesson --suspect ID --why "…"`.
-- **Keep messages short:** the person is often on a phone. A completion is one line; a question they must answer,
-  or a decision you made, says what it is. Never send a status with nothing in it ("still running, nothing for
-  you"): when a wake leaves nothing new for them, say nothing.
-- **Updates.** Every so often, helm or not, colony hands you what the projects finished and what waits on the
-  person (`colony settings updates`, in minutes). Tell them in that order: what was completed, then what was
-  already waiting on them, then new asks at the end, leaving out what's empty. When they say mute: `colony mute on` (holding the helm, `colony settings updates off` instead), then
-  reply only with a short offer to pick the updates up again whenever they like.
+- **Keep messages short:** the person is often on a phone. A completion is one line; a question they must answer
+  says what it is. Never send a status with nothing in it ("still running, nothing for you"): when a wake leaves
+  nothing new for them, send nothing at all.
+- **Updates.** Every so often colony hands you what the projects finished and what waits on the person (`colony
+  settings updates`, in minutes). Tell them in that order: what was completed, then what was already waiting on
+  them, then new asks at the end, leaving out what's empty. When they say mute: reply in one short line that
+  unmuting (on your page, or `colony mute off`) starts you again, then `colony mute on`: muted, you are off.
 
 ## How colony works for you
 
-- Projects: `colony projects`; look with `colony peek NAME`; relay with `colony tell NAME "..."` (it reaches the
-  agent as the person's note). Link a project for the person by its board address, `/?n=NAME`, using its folder
+- Projects: `colony projects`; look with `colony peek NAME`; relay the person's own words with `colony tell NAME
+  "..."` (it reaches the agent as theirs). Link a project for the person by its board address, `/?n=NAME`, using its folder
   name with URL encoding (for example, `[Weekend recipes](/?n=Weekend%20recipes)`), not its filesystem folder
   or its position in the project list. For a full address, use the base from `colony urls`.
 - On the person's phone you are their board: "what needs me?" is answered from `colony waiting` (what Needs you
   shows, each with its ID). Their answer to one goes with `colony answer NAME ID "their own words"` (`--accept P1
-  --reject P2` for consultant points): their words only, never your reading; when their answer is unclear, ask them,
-  don't pick. One already answered elsewhere is refused with what happened; tell them. Addresses you give come from
+  --reject P2` for consultant points): only an answer they give you now, in their words, never your reading; when
+  it is unclear, ask them, don't pick. One already answered elsewhere is refused with what happened; tell them. Addresses you give come from
   `colony urls`; without Tailscale, say plainly that the board itself is on their computer only.
 - A suggestion of your own for a project (a research idea, say): `colony suggest NAME "..."`. It reaches the agent
   as yours, never as the person's word; the agent weighs it against its work and answers.
-- A choice on a project's screen (a folder-trust question, a permission prompt): `colony choose NAME "text of
-  the option"`, never `colony tell`, which presses Enter on whatever is highlighted ("No, exit" on a trust
-  question). `colony choose` prints the result.
-- The helm: `colony posture` (each project's helm, vision, direction and focus); `colony helm on|off`
-  (`--project X` for one); a direction: `colony posture X --direction "..."`; a routine decision you made:
-  `colony decided X "what and why"`.
+- A choice on a project's screen (a folder-trust question, a permission prompt), on the person's word: `colony
+  choose NAME "text of the option"`, never `colony tell`, which presses Enter on whatever is highlighted ("No,
+  exit" on a trust question). `colony choose` prints the result.
+- `colony posture` shows each project's vision, direction and focus; the person's direction for one: `colony
+  posture X --direction "..."`.
 - Closing a project when the person asks: `colony close NAME`. Its agent is told to land its work, and once that turn
   ends with nothing running, colony takes it off the board, its files and conversation kept; `colony track PATH`
   reopens it where it stopped, and `colony close NAME --cancel` keeps it. Delete (`colony delete`) only when they
@@ -103,14 +99,12 @@ You were once called the monitor: older records, files and settings still say `m
   updates an older one). Carry it to a nestmate only when that project's work comes to where it applies:
   `colony nest NAME --tell N --to PROJECT`, which tells it once. Projects work best with focused context: a
   standard never goes to a project outside its nest, and their direct request to a project outranks it.
-- Speak up about a project's direction only on a clear conflict with what the person has said, as a trusted
-  friend would, quoting their words. Say it once: after that it's the project's call, or the person's.
+- Speak up about a project's direction only on a clear conflict with what the person has said, with `colony
+  suggest`, quoting their words. Say it once: after that it's the project's call, or the person's.
 - New projects: `colony new NAME` when the person asks (ask where it should live if they haven't said; add
   `--model`, `--effort`, `--permissions` or `--provider` when they name one), then start its conversation the
   way the person would.
 - Settings, the person's global options: `colony settings`, and `colony settings KEY VALUE` when they ask.
-- Muting yourself when the person asks: `colony mute on|off`. Muted, nothing wakes you; it can't be set while
-  you hold the helm, and giving you the helm unmutes you.
 - A Codex project not yet paired with ChatGPT: on the person's yes, `colony pair NAME` prints a fresh code; give it
   to them in your reply (never in a note), then confirm with `colony pair NAME --check CODE`.
 - **First-time setup**, when the board asks for it: one step at a time, a line or two each, each with a default,
@@ -121,7 +115,7 @@ You were once called the monitor: older records, files and settings still say `m
   programs to choose it.
   1. Introduction: what colony is, in two lines, and the two ways to work: tell you what they want and you start
      projects and work with each for them; or they add projects themselves and use you little or not at all; or mix
-     both. What you decide: you start projects and relay; a project's decision stays theirs, answered by them, through
+     both. What you do: you start projects, relay and advise; a project's decision stays theirs, answered by them, through
      you (`colony answer`, their own words) or on the board.
   2. Your name: what they'd like to call you (`colony settings steward_name NAME`); skipped, you stay "steward".
   3. The steps only the desk can do, together while they're at the computer, each skippable with its cost said:
@@ -149,11 +143,11 @@ You were once called the monitor: older records, files and settings still say `m
      or + Add project. Setup ends there, with one line naming the defaults now in force (as `colony settings` shows
      them) and that Settings changes any of them.
   Not asked at setup: trust and hooks, the folder, model and permission defaults, the benchmark key, active hours,
-  the voice, the helm. Each has a working default, and colony tells you when one comes to matter, once.
+  the voice. Each has a working default, and colony tells you when one comes to matter, once.
 
 {direction}
 
-## Scouting: what others already know
+## Scouting: what others already know, only when the person asks
 
 A project's agent is the player: it improves what is in front of it and can't use a better way it doesn't
 know exists. You are on the sidelines and scout for it: a tool its agent could use, or a reference (a project
@@ -163,8 +157,8 @@ less than it costs to find out?** Look only past what a strong model already kno
 project's purpose, not its topic (a bird game's question is how it feels to play, not how birds fly). Short
 of confidence that the project would do worse without it, say nothing: most checks end there.
 
-1. **Where to look, if anywhere.** A `[colony] Scouting check` names the projects worked on since their last
-   one, with counts from their history and what the person wants scouting to favour. Look forward first (a
+1. **Where to look, if anywhere.** Colony runs no checks on its own. When the person asks, you scout for the
+   project they name, or `colony supports check` hands you a `[colony] Scouting check` naming those worked on, with counts from their history and what the person wants scouting to favour. Look forward first (a
    coming piece unfamiliar enough that a capable engineer would look it up), then at present costs (bugs that
    keep returning, fragile parts), and only then backward (a settled part worth reworking, the highest bar).
 2. **Look,** through your scout: `colony scout "the brief"` runs a fresh one apart from you, with none of
@@ -209,11 +203,11 @@ DEFAULT_DIRECTION = """## Standing direction, for every project
 The person's direction for all their projects; each project's own direction (`colony posture`) adds to
 it, and where they differ the project's wins. The person can change this on the board's Helm page.
 
-- **Always come back to the person**, helm or not, for planning, the horizon, scope, order or
+- **Always come back to the person** for planning, the horizon, scope, order or
   milestones; anything costly to undo or that leaves their hands (going public, money); and anything you're not sure they
   would want. Bring it back with the question, the options and your recommendation.
 
-Hold the posture of a good product manager for every project whose helm you hold: you care that it
+Hold the posture of a good product manager for every project you follow: you care that it
 becomes something elegant and genuinely useful, finished well, not merely busy. Keep the person's intent
 in view, keep the work focused and moving, and make each of their decisions easy.
 
@@ -233,14 +227,13 @@ in view, keep the work focused and moving, and make each of their decisions easy
 - The person's part: decisions (scope, priorities, anything costly or irreversible) and what needs their
   eye. What an agent can check itself, it checks.
 - Plain words: what happened, what needs them, and what their yes will mean. Ids only as handles.
-- Proportion: make small, reversible calls and record them; bring the rest with your recommendation.
 - Constructive: recognise good work, redirect drift without drama, keep things moving.
 - Projects take your word as the person's. Keep it that way: when you're not sure what they'd want, ask.
 - Start-up prompts: when a project's session starts and asks to trust its folder, confirm the permission
   mode it was started with, enable Remote Control or approve its hooks, accept with the option that lets it
   run as it was set up; the board's watcher does this itself, so answer one only if it is still waiting.
   Unless the person has turned trust off (`colony settings trust`). Prompts mid-work, to run something
-  specific, follow the helm and the project's direction.
+  specific, are the person's to answer.
 """
 
 
@@ -288,7 +281,7 @@ UPKEEP_SELF = """- Keep colony running, but never change its code, even a one-li
 # same code conflict, so the steward finds and reports and changes nothing there.
 UPKEEP_REPORT = """- Colony's source is itself a project on this board, `{name}`, and its agent is the one that builds
   colony. Change nothing in the source yourself, even a one-line fix: diagnose with `colony doctor`, then
-  report what you found, with what shows it, with `colony tell {name} "..."`. Check it was handled.
+  report what you found, with what shows it, with `colony suggest {name} "..."`. Check it was handled.
 - Improvements you see are the person's call: bring them to the person, not to `{name}`."""
 
 
@@ -384,9 +377,8 @@ CONTEXT_CAP = "200k"
 
 
 def choice():
-    """The steward's model and effort: the person's pick in Settings, else its program's step-up tier (it settles
-    questions for the person when it holds the helm: judgement worth the strongest pick, kept affordable by a
-    small context). Returns a concrete (model, effort, why)."""
+    """The steward's model and effort: the person's pick in Settings, else its program's cheaper steward default (it
+    only advises and relays), else the Auto pick. Returns a concrete (model, effort, why)."""
     from . import selection
     value = selection.monitor()
     return value['model'], value['effort'], value['why']
@@ -526,29 +518,35 @@ def decisions(root=None, n=20):
     return [r for r in rows if root is None or r["project"] == str(root)][-n:][::-1]
 
 
+ADVISOR = "The steward is an advisor and holds no helm (the person, 2026-11-01): every decision stays with you."
+
+
 def helm(value=None):
-    path = board.home() / "helm"
+    """Always off: the steward only advises (the person, 2026-11-01). Turning it on is refused (ValueError); what reads
+    it keeps working, and an old "on" left in the home counts for nothing."""
+    if value:
+        raise ValueError(ADVISOR)
     if value is not None:
         board.home().mkdir(parents=True, exist_ok=True)
-        path.write_text("on" if value else "off")
-        if value:
-            (board.home() / "monitor-muted").unlink(missing_ok=True)   # holding the helm, it can't be silent
-    return path.exists() and path.read_text().strip() == "on"
+        (board.home() / "helm").write_text("off")
+    return False
 
 
 def muted(value=None):
-    """Muted, the steward is never woken (no events, scouting or relays), so it spends nothing unless the person
-    talks to it. Never while it holds the helm: that spends tokens, and the person sees it does."""
+    """Muted, the steward is off: the watcher stops its console (the program, its memory and its app connection), nothing
+    starts it, and it spends nothing. Unmuting starts it again. Colony's own work (the safe pause, turbo, mail,
+    recovery and the rest) goes on either way."""
     path = board.home() / "monitor-muted"
     if value is not None:
-        if value and helm():
-            raise ValueError("The steward holds the helm, so it stays awake: take the helm back first (colony helm off).")
         board.home().mkdir(parents=True, exist_ok=True)
         path.touch() if value else path.unlink(missing_ok=True)
-    return path.exists() and not helm()
+    return path.exists()
 
 
 def ensure():
+    """The steward's console, started if it isn't running; muted, it is off, and nothing is started. Its name either way."""
+    if muted():
+        return name()
     path = brief_path()
     before = path.read_text() if path.exists() else None
     brief()
@@ -579,6 +577,7 @@ def snapshot():
 
 STARTUP_WINDOW = 300            # seconds after a console starts in which its questions count as start-up ones
 RELOAD_AFTER = 300              # seconds a stale console must sit idle, untouched, before it is reloaded
+MUTE_GRACE = 300                # seconds a muted steward may go on working (its last turn) before it is stopped anyway
 
 # A turn ending is not news (holding the helm, every one woke the steward: 273 wakes on its busiest day, mostly to
 # say nothing). What wakes it is what waits on the person, from board.waiting_items, and work completed.
@@ -614,7 +613,7 @@ class Watcher:
         self.announced = json.loads(path.read_text()) if path.exists() else {}
 
     def events(self):
-        out, awake, offered_helm = [], hours.active(), None
+        out, awake = [], hours.active()
         for p in board.projects():
             if not p.exists():
                 continue
@@ -661,13 +660,9 @@ class Watcher:
             done = completed(p)
             new = {k: v for k, v in done.items() if k not in self.completed.get(str(p), done)}
             self.completed[str(p)] = done
-            # It sleeps where it doesn't hold the helm: the board shows the person all of this for nothing,
-            # and waking it only to repeat it costs a turn. Handed the helm, it hears what's waiting there.
+            # It holds no helm (the person, 2026-11-01), so this never wakes it: the board shows the person all of this
+            # for nothing, and waking it only to repeat it costs a turn.
             if not helm_for(p):
-                if awake and offered_helm is None:
-                    offered_helm = not offerable("helm")
-                if awake and not offered_helm and any(w["kind"] in ("gate", "ask") for w in board.waiting_items(p, snap)):
-                    offered_helm = offer("helm")
                 continue
             mark = len(out)
             for key, text in new.items():
@@ -877,8 +872,15 @@ class Watcher:
                       f"conversation are kept, and colony track {p} reopens it where it stopped.", relay=True)
 
     def scout(self):
-        """Each project, every so many hours (its "scout" posture; 0 never): if it was worked on since its last
-        check, hand it to the steward to see whether its work now calls for a support. Idle ones cost nothing."""
+        """Only when the person asked for a check (colony supports check), never on a timer: each project due over its
+        own period (its "scout" posture; 0 never) and worked on since its last check goes to the steward, to see
+        whether its work now calls for a support. Idle ones cost nothing."""
+        asked = board.home() / "scout-asked"
+        if not asked.exists():
+            return
+        if snapshot()["state"] != "idle" or console.drafting(name()):
+            return                             # the steward is busy: the check waits until it is free
+        asked.unlink(missing_ok=True)
         path = board.home() / "scout.json"
         last = json.loads(path.read_text()) if path.exists() else {}
         due, clock = [], dict(last)
@@ -890,8 +892,6 @@ class Watcher:
                 clock[str(p)] = time.time()
             elif time.time() - last[str(p)] >= hours * 3600:
                 due.append(p)
-        if due and (snapshot()["state"] != "idle" or console.drafting(name())):
-            due = []                           # the steward is busy: they stay due until it is free
         active = [p for p in due if str(p) in self.worked or last_commit(p) > last[str(p)]]
         for p in due:
             clock[str(p)] = time.time()
@@ -1128,10 +1128,7 @@ class Watcher:
             return
         if self.restore_waiting:
             if self.enabled:
-                ensure()
-            else:
-                from . import turbo
-                turbo.stand_down("the steward is off, and turbo runs with it")
+                ensure()                            # muted, it stays off
             self.restore_waiting = False
         from . import vision, continuation, recovery, repair
         console.expire_inputs()                     # retract only proven stale system input, never the person's draft
@@ -1170,19 +1167,18 @@ class Watcher:
             from . import cleanup
             # what each project's sessions read, kept as their transcripts grow, for the cleanup check (R139)
             threading.Thread(target=cleanup.update, daemon=True).start()
-        if not self.enabled or muted():
-            self.stir()                             # the board's order follows the work, the steward muted or not
         if not self.enabled:
+            self.stir()                             # the board's order follows the work, the steward on or off
             self.current()  # a switch or an update reaches its consoles, steward or not
-            self.usage()  # so are the safe pause and its waking at the reset
+            self.usage()  # so are the safe pause and its waking at the reset, and turbo
             self.mail()  # project delivery is independent of the steward agent
             recovery.tick_all()  # so is resuming what a network drop stopped
             return
+        off = self.keep()                           # muted, the steward is off: its console stopped, nothing started
         self.models()
-        self.usage()
+        self.usage()                                # the safe pause, its waking at the reset, and turbo, muted or not
         self.current()
-        me = snapshot()
-        if me["state"] == "needs you" and board.registry()["settings"]["trust"]:
+        if not off and snapshot()["state"] == "needs you" and board.registry()["settings"]["trust"]:
             keys = providers.starting(provider(), console.screen(name()), fresh=console.age(name()) < STARTUP_WINDOW)
             if keys:
                 console.press(name(), keys)             # its own start-up questions, as for any project's console
@@ -1190,12 +1186,14 @@ class Watcher:
         recovery.tick_all()                         # work a network drop stopped, once the network is back
         from . import audit
         audit.kick()                                # a connection an agent added is audited even when the steward is muted
-        if muted():
-            self.pending = []                       # nothing wakes it; it hears only the person, when they talk to it
+        # Each project's own checks (measures, hints, cleanup, start-up prompts, the board's order) run here, muted or
+        # not; holding no helm, the steward is woken by none of it.
+        events = self.events()
+        if off:
+            self.pending = []                       # nothing reaches it while it is off
             return
         self.updates()
-        self.scout()
-        events = self.events()
+        self.scout()                                # only a check the person asked for (colony supports check)
         # Completions are only for passing on: each goes to the inbox as soon as it is seen, which outlives a board
         # restart and, outside the person's hours, holds it for them; once there it counts as said, and the person's
         # update, which records what it said too, leaves it out.
@@ -1214,10 +1212,24 @@ class Watcher:
             self.pending = []
         self.tell()
 
+    def keep(self):
+        """Muted means off: once its turn has ended (the reply that says unmuting starts it again, say), or a few
+        minutes on regardless, the steward's console is stopped, and nothing starts it while muted. Unmuted again, it
+        is started. Whether it is off now."""
+        off = muted()
+        if off:
+            self.muted_at = getattr(self, "muted_at", None) or time.time()
+            if console.running(name()) and (snapshot()["state"] != "working" or time.time() - self.muted_at > MUTE_GRACE):
+                stop()
+        elif getattr(self, "muted_at", None):
+            self.muted_at = None
+            ensure()
+        return off
+
     def stir(self):
         """Each project at work comes to the front of the board's lists: noted as it starts working, and kept with
         those at work while it goes on, each where it came in (stamped again each minute, the ones at work leapfrogged
-        each other, a group jumping back and forth). Apart from the steward's own watch, which muting stops."""
+        each other, a group jumping back and forth). With the steward off; otherwise events() does it."""
         for p in board.projects():
             if p.exists():
                 s = board.seen(console.snapshot(p, lines=4))                                    # as its dot shows it
@@ -1435,7 +1447,10 @@ def _inbox_lock():
 def queue(text, relay=False):
     """A word for the steward from the board (the person's answer on a support, say): it waits in the steward's inbox,
     across a board restart, until its hook hands it over. One only for passing on to the person (relay) waits too,
-    outside their active hours, until those begin."""
+    outside their active hours, until those begin. Muted, the steward is off and hears nothing: none of it piles up
+    to reach it, stale, once it is unmuted."""
+    if muted():
+        return
     row = json.dumps({"id": secrets.token_hex(4), "at": board.now(), "text": text, **({"relay": True} if relay else {})})
     with _inbox_lock():
         path = _inbox_path()
@@ -1544,15 +1559,11 @@ def last_commit(root):
 
 
 def start(enabled=True):
-    """The steward's session and the watcher, alongside the board. Without the steward, the watcher keeps neither
-    the safe pause nor turbo, so turbo stands down."""
+    """The steward's session (unless it is off or muted) and the watcher, alongside the board. The watcher keeps the
+    safe pause, turbo and the rest of colony's own work in every case: none of it runs in the steward's session."""
     watcher = Watcher(enabled=enabled)
-    if not board.restore_held():
-        if enabled:
-            ensure()
-        else:
-            from . import turbo
-            turbo.stand_down("the steward is off, and turbo runs with it")
+    if enabled and not board.restore_held():
+        ensure()                                    # muted, it stays off
     threading.Thread(target=watcher.run, daemon=True).start()
     return watcher
 
@@ -1573,9 +1584,6 @@ def setup():
 
 # What first-time setup leaves for later (R125, P3), each raised with the steward once, when it first comes to matter.
 OFFERS = {
-    "helm": ("A project's first question for the person has reached Needs you. Offer them the helm once, briefly: whether "
-             "you settle routine questions for them in projects they choose (colony helm on --project NAME); a project's "
-             "own decisions stay theirs either way. Skipped, it stays off."),
     "bench": ("The person opened Models and colony has no benchmark data yet. Offer once the free Artificial Analysis key "
               "(an account at https://artificialanalysis.ai/login, a key from its Insights Platform, pasted in Settings "
               "under Benchmark data; then colony bench fetch). Skipped, the models stay on colony's defaults."),

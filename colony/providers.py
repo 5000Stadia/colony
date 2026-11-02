@@ -232,6 +232,7 @@ class Provider:
     models, efforts = (), ()           # suggestions, any value can be typed: models as (id, name) pairs
     aliases, efforts_for = {}, {}      # names it takes for models; the efforts a model takes, where they differ
     reports_cost = True                # whether consult() reports dollars, not only tokens
+    steward_model = None               # the steward's model when the person picked none (None: its Auto pick)
     # Waiting costs nothing (colony/waiting.py): a check before each shell command, keyed by event, as (matcher,
     # command); the tool names that run a shell command, the field saying it already runs in the background, what
     # the agent is told instead of sleeping, and whether its hooks answer in JSON even when they let a call through.
@@ -654,6 +655,8 @@ class ClaudeCode(Provider):
     models = [("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5", "Sonnet 5"),
               ("claude-haiku-4-5-20251001", "Haiku 4.5")]
     aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
+    # PROVIDER: the steward only advises and relays (the person, 2026-11-01), so a cheaper model serves it.
+    steward_model = "claude-sonnet-5-5"
     efforts = ["low", "medium", "high", "xhigh", "max"]
     mark = "❯"                                  # how it marks the highlighted option of a choice
     instructions = "CLAUDE.md"                  # the file it reads a project's instructions from

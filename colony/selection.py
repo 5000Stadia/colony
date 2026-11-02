@@ -435,9 +435,16 @@ def consultant(family, automatic=False):
 
 
 def monitor():
+    """The steward's model: the person's pick in Settings, else its program's steward default (an advisor needs no
+    strong model), else the Auto pick."""
     migrate()
     s = board.registry()['settings']
-    return resolve(s['provider'], 'monitor', s.get('monitor_model'))
+    pin = s.get('monitor_model')
+    if not (pin and pin.get('model')):
+        default = concrete(s['provider'], {'model': providers.get(s['provider']).steward_model})
+        if default:
+            return dict(default, own=False, why="colony's default for the steward, an advisor")
+    return resolve(s['provider'], 'monitor', pin)
 
 
 def scout(family):

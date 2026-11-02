@@ -178,6 +178,27 @@ class IntegrationTest(BoardBase):
         self.assertFalse(selection.main(root)['own'])
         self.assertNotIn('routine', selection.bench.plan(root))
 
+    def test_the_steward_defaults_to_a_cheaper_model_unless_the_person_picked_one(self):
+        # an advisor only (the person, 2026-11-01): Sonnet 5.5 where Claude Code runs it, by its steward_model
+        from colony import monitor
+        board.set_setting('provider', 'claude')
+        claude = providers.get('claude')
+        self.assertEqual(claude.steward_model, 'claude-sonnet-5-5')
+        lineup = list(claude.models) + [('claude-sonnet-5-5', 'Sonnet 5.5')]
+        with patch.object(providers, 'available', side_effect=lambda p: lineup if p is claude else list(p.models)):
+            chosen = selection.monitor()
+            self.assertEqual((chosen['model'], chosen['own']), ('claude-sonnet-5-5', False))
+            self.assertIn("colony's default for the steward", chosen['why'])
+            self.assertEqual(monitor.choice()[0], 'claude-sonnet-5-5', "what its console starts on")
+            board.set_setting('monitor_model', 'claude-opus-5-5:high')
+            self.assertEqual(selection.pair(selection.monitor()), {'model': 'claude-opus-5-5', 'effort': 'high'},
+                             "the person's pick wins")
+            board.set_setting('monitor_model', 'auto')
+            self.assertEqual(selection.monitor()['model'], 'claude-sonnet-5-5', "back to colony's default")
+        # where the program can't run it here, the Auto pick stands, as before
+        self.assertEqual(selection.monitor()['model'], selection.auto('claude', 'monitor')['model'])
+        self.assertIsNone(providers.get('codex').steward_model, "Codex keeps its Auto pick")
+
     def test_global_and_project_pins_are_scoped_to_their_provider(self):
         board.set_setting('model', 'claude-opus-5-5')
         board.set_setting('effort', 'high')
