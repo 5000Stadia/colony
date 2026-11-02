@@ -92,8 +92,16 @@ class InputLedgerTest(unittest.TestCase):
         self.assertEqual(self.box.enters, 2)
         self.assertEqual(self.box.clears, 0)
 
-    def test_person_origin_foreign_prefix_and_same_size_personal_text_are_preserved(self):
-        for purpose, replacement in [('person', self.text), ('system', 'h' * len(self.text)),
+    def test_a_persons_message_left_unsent_is_cleared_before_their_next(self):
+        # the board gave it back to their Chat box as not sent; left in the console it blocked every send after it
+        self.seed(purpose='person')
+        self.box.text = self.text
+        self.assertTrue(console.paste_into('box', 'New message.'))
+        self.assertGreaterEqual(self.box.clears, 1)
+        self.assertEqual(self.box.accepted, ['New message.'])
+
+    def test_foreign_prefix_and_same_size_personal_text_are_preserved(self):
+        for purpose, replacement in [('system', 'h' * len(self.text)),
                                      ('system', '[Colony] ' + 'different human draft ' * 23),
                                      ('system', self.text[:360])]:
             with self.subTest(purpose=purpose, replacement=replacement[:12]):

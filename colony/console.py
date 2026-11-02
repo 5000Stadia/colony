@@ -851,8 +851,9 @@ def _input_matches(record, left):
     if not left:
         return False
     wanted, visible = _input_normal(record['text']), _input_normal(left)
-    return bool(visible and (visible == wanted or
-                len(visible) >= max(64, (len(wanted) * 7 + 9) // 10) and wanted.endswith(visible)))
+    # A long message wraps, and the box shows only its last rows (a narrow console: the person's phone attached at 48
+    # columns, 2026-11-02): a long enough end of what colony typed is that message, however much is scrolled away.
+    return bool(visible and (visible == wanted or len(visible) >= 64 and wanted.endswith(visible)))
 
 
 def _accept_input(name, text):
@@ -905,10 +906,12 @@ def _carry_input(record, defer=False):
 
 
 def _retract_input(name, record):
-    """Clear only a proven unsent system write, verifying each deletion and the final empty box."""
+    """Clear only a proven unsent write of colony's (its own, or the person's it typed from Chat), verifying each
+    deletion and the final empty box."""
     keys = provider(name).queue_keys
     left = draft(name)
-    if record.get('purpose') != 'system' or record.get('state') != 'unsent' or not keys or not _input_matches(record, left):
+    if record.get('purpose') not in ('system', 'person') or record.get('state') != 'unsent' or not keys \
+            or not _input_matches(record, left):
         return False
     wanted, bound = _input_normal(record['text']), len(_input_normal(record['text']))
     for _ in range(128):
@@ -937,7 +940,8 @@ def _retract_input(name, record):
 
 
 def expire_inputs(now=None):
-    """Cheap watcher upkeep: only expired unsent system writes; never busy, attached or unmatched input."""
+    """Cheap watcher upkeep: only expired unsent writes colony typed (its own, or the person's from Chat, which the
+    board showed them as not sent); never busy, attached or unmatched input."""
     from . import board
     now = time.time() if now is None else now
     for path in (board.home() / 'consoles').glob('input-*.json'):
@@ -952,7 +956,7 @@ def expire_inputs(now=None):
         if record.get('state') == 'accepted' and not record.get('resubmitted'):
             _resubmit_returned(record, now)
             continue
-        if record.get('purpose') != 'system' or record.get('state') != 'unsent':
+        if record.get('purpose') not in ('system', 'person') or record.get('state') != 'unsent':
             continue
         if now - record.get('at', now) < INPUT_TTL:
             continue
@@ -1006,14 +1010,18 @@ def _resubmit_returned(record, now):
 def _make_way(name):
     """The session's box cleared for a message: "" once it is on screen and empty; colony's own line if one was left
     there unsent (an Enter swallowed) and has now been sent; None if nothing may be typed: no box on screen, the
-    person's own draft in it (theirs to send), or colony's leftover that won't go."""
+    person's own draft in it (typed at the console, theirs to send), or colony's leftover that won't go. A message of
+    the person's that colony typed from Chat and left unsent is cleared, never sent: the board gave it back to their
+    Chat box as not sent, so what they send next is what they mean (one left there had blocked every send after it,
+    2026-11-02)."""
     left = draft(name)
     if not left:
         return left
     record = _pending_input(name)
-    if not record or record.get('purpose') != 'system' or record.get('state') != 'unsent' or not _input_matches(record, left):
+    if not record or record.get('purpose') not in ('system', 'person') or record.get('state') != 'unsent' \
+            or not _input_matches(record, left):
         return None
-    if time.time() - record['at'] >= INPUT_TTL or _carry_input(record):
+    if record['purpose'] == 'person' or time.time() - record['at'] >= INPUT_TTL or _carry_input(record):
         return '' if _retract_input(name, record) else None
     unscroll(name)
     return record['text'] if _sent(name, record['text']) else None

@@ -132,6 +132,25 @@ class WrappedClaudeInputBox(ClaudeInputBox):
                 + '\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n')
 
 
+class ScrolledClaudeInputBox(ClaudeInputBox):
+    """Claude Code's box in a narrow console (the person's phone attached at 48 columns): a long message wraps, and
+    the box shows only its last rows, the prompt on the first of them (2026-11-02: the person's 710-character message
+    sat there unsent, and every send after it stepped back from it as a draft)."""
+    ROWS = 10
+
+    def run(self, args, **kwargs):
+        if args[:2] == ['tmux', 'send-keys'] and '-l' not in args and args[-1] == 'C-u':
+            rows = textwrap.wrap(self.text, width=44)
+            self.text = ' '.join(rows[:-1])          # C-e, C-u: the last row goes
+            return subprocess.CompletedProcess(args, 0, '', '')
+        return super().run(args, **kwargs)
+
+    def screen(self, name):
+        rows = (textwrap.wrap(self.text, width=44) if self.text else [''])[-self.ROWS:]
+        return ('Previous reply.\n' + '─' * 48 + '\n❯\u00a0' + '\n  '.join(rows) + '\n' + '─' * 48
+                + '\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n')
+
+
 class SendTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -313,6 +332,37 @@ class SendTest(unittest.TestCase):
                 self.assertEqual(box.enters, 1)
                 self.assertEqual(box.accepted, [text])
                 self.assertEqual(box.provider.draft(box.screen('box')), '', 'acknowledge only the empty native box')
+
+    LONG = ('I really don\u2019t wanna run huge token hungry tests. I wonder if there is some sort of extended framing '
+            'that we can have on the saved artifact that would work for important things that the compaction might '
+            'drop, such as items that the user wants to talk about, but I would argue that that seems to be a sloppy '
+            'way of doing it and when the user wants to talk about something that isn\u2019t being currently '
+            'addressed, it should probably just be a roadmap item and call it a day. ' * 2)
+
+    def test_a_long_message_in_a_narrow_console_is_sent_though_the_box_shows_only_its_end(self):
+        box = ScrolledClaudeInputBox()
+        with box.on():
+            self.assertTrue(console.type_into('box', self.LONG, _purpose='person'))
+        self.assertEqual(box.accepted, [self.LONG])
+        self.assertEqual(box.enters, 1)
+
+    def test_a_message_of_the_persons_left_unsent_never_blocks_the_next(self):
+        box = ScrolledClaudeInputBox(swallow=100)              # its Enter swallowed: the first stays in the box
+        with box.on():
+            self.assertFalse(console.type_into('box', self.LONG, _purpose='person'))
+        self.assertEqual(box.text, self.LONG)
+        box.swallow = 0
+        with box.on():          # the board gave the first back to their Chat box as not sent: cleared here, not sent
+            self.assertTrue(console.type_into('box', 'And a second thought.', _purpose='person'))
+        self.assertEqual(box.accepted, ['And a second thought.'])
+        box.swallow = 100
+        with box.on():
+            self.assertFalse(console.type_into('box', self.LONG, _purpose='person'))
+        box.swallow = 0
+        with box.on():                                          # sent again as it was: it goes once
+            self.assertTrue(console.type_into('box', self.LONG, _purpose='person'))
+        self.assertEqual(box.accepted, ['And a second thought.', self.LONG])
+        self.assertEqual(box.text, '')
 
     def test_claude_unnumbered_menus_below_rules_still_block_owned_sends(self):
         rule = '─' * 48
