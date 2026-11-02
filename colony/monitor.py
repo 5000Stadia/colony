@@ -599,6 +599,7 @@ class Watcher:
         self.completed = {}                  # what each project had completed when last looked at: items done, shown
         self.close_idle = {}                 # a closing project's looks in a row at idle, its note handed over
         self.nudged, self.nudged_at = set(), {}
+        self.woke_for = set()                # quiet notes a sleeping console is woken for (R142)
         self.told = (0, None)                   # when the steward was last told of its inbox, and what was in it
         self.mail_lock = threading.Lock()
         self.settling, self.waiting = {}, {}    # a stop not yet confirmed; what each project waits on now
@@ -725,7 +726,13 @@ class Watcher:
         incoming = mail.inbox(p)
         letters = [m for m in incoming if not m['delivered_at']]
         asks = [m for m in incoming if m['delivered_at'] and m['ask'] and not m['answer']]
-        notes = [n for n in board.open_notes(p) if not n['delivered_at'] and not n.get('quiet')
+        # A quiet note waits for the next turn, except to a sleeping console (R142): any message wakes it, and once
+        # woken it is told, as for any note (the person, 2026-11-01: "Sending any message in colony should wake")
+        from . import hibernate
+        opened = board.open_notes(p)
+        if hibernate.asleep(p):
+            self.woke_for.update(n['id'] for n in opened if not n['delivered_at'] and n.get('quiet'))
+        notes = [n for n in opened if not n['delivered_at'] and (not n.get('quiet') or n['id'] in self.woke_for)
                  and not vision.is_update(n)]
         waiting = {m['id'] for m in letters} | {n['id'] for n in notes}
         if not waiting and not asks:

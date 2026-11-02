@@ -2131,13 +2131,14 @@ def cmd_decided(a):
 def cmd_suggest(a):
     """(steward) Your own suggestion to a project's agent, never the person's word: it weighs it against its work and
     answers (colony noted). It wakes the project only if its console sits idle, with nothing typed, no one at it and
-    nothing waiting on the person; otherwise the agent hears it on its next turn. Nothing is started for it."""
-    from . import board, console, turbo
+    nothing waiting on the person, or sleeps (R142: started again in its own conversation, and told); otherwise the
+    agent hears it on its next turn. A project the person paused isn't woken."""
+    from . import board, console, hibernate, turbo
     root = _project(a.name)
     if not a.text.strip():
         raise SystemExit('colony suggest NAME "your suggestion, and why it may help"')
     snap = console.snapshot(root, lines=4)
-    now = turbo.ready(root, snap) and not turbo.held(root, snap)
+    now = bool(hibernate.asleep(root)) or (turbo.ready(root, snap) and not turbo.held(root, snap))
     board.add_note(root, None, a.text, author="suggestion", quiet=True, kind="idea")
     woken = now and console.type_into(console.session_name(root), "[colony] You have a suggestion from "
                                        + (board.steward_role() if board.steward_named() else "the steward") + ".")
