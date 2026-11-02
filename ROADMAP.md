@@ -205,7 +205,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R137 Waiting costs nothing
 - [x] R138 A helper never wakes its lead just to say it is still waiting
 - [~] R139 When a cleanup pass pays — each project's check suggests a pass when it clearly pays; its first, on this file, taken (related: R143, R140)
-- [~] R143 A small roadmap — the plan read at many starts orients in few tokens: one line per item here, the details beside it, a brief at each start (related: R139, R140)
+- [x] R143 A small roadmap
 - [x] R132 A bar for a creative item, picked by the person from real examples
 - [x] R140 Guidance arrives at its moment
 - [x] R141 Questions in flight only for the unforeseen
