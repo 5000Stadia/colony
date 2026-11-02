@@ -25,6 +25,7 @@ from colony import tokens as _tokens  # noqa: E402
 REAL_COUNT = _tokens.update          # BoardBase stands it in; TokensTest reads its own transcripts
 import base64, io, socket, time  # noqa: E402
 from contextlib import contextmanager, redirect_stdout  # noqa: E402
+from tests import patience
 
 ROADMAP = """# Roadmap
 
@@ -7386,7 +7387,7 @@ class HandoverTest(BoardBase):
         clean. Here a program that ignores the hang-up keeps running two seconds after its session ends."""
         from colony import handover
         name = self.session("sh -c 'trap \"\" HUP TERM; sleep 2; sleep 0'")
-        deadline = time.time() + 10
+        deadline = time.time() + patience(10)
         while time.time() < deadline and not any("sleep" in row[2] for row in handover.programs([name]).values()):
             time.sleep(0.1)
         ran = handover.programs([name])
@@ -7405,7 +7406,7 @@ class HandoverTest(BoardBase):
     def test_a_program_outliving_the_wait_leaves_the_stop_unmarked_and_named(self):
         from colony import handover
         name = self.session("sh -c 'trap \"\" HUP TERM; sleep 30'")
-        deadline = time.time() + 10
+        deadline = time.time() + patience(10)
         while time.time() < deadline and not any("sleep" in row[2] for row in handover.programs([name]).values()):
             time.sleep(0.1)
         ran = handover.programs([name])
@@ -7481,7 +7482,7 @@ class HandoverTest(BoardBase):
                   "subprocess.Popen(['sleep', '60'], start_new_session=True); time.sleep(60)")
         check = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
         self.addCleanup(check.wait)
-        deadline = time.time() + 10
+        deadline = time.time() + patience(10)
         while time.time() < deadline and len(console._descendants(check.pid)) < 2:
             time.sleep(0.05)
         tree = console._descendants(check.pid)

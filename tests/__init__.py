@@ -11,3 +11,14 @@ for _marker in ("COLONY_PROJECT", "COLONY_CONSOLE"):
 if "COLONY_TEST_FORBIDS" not in os.environ:
     from colony import board as _board
     os.environ["COLONY_TEST_FORBIDS"] = str(_board.home())
+
+
+def patience(seconds):
+    """A wait a test allows real programs and threads, stretched while the machine is busy (up to four times): the
+    suite shares the machine with the live board, its consoles, helpers' test runs and the voice, which takes most
+    cores while it reads aloud, and a window that holds on an idle machine ran out on one loaded past its cores."""
+    try:
+        load = os.getloadavg()[0] / (os.cpu_count() or 1)
+    except OSError:
+        load = 1.0
+    return seconds * min(4.0, max(1.0, load))

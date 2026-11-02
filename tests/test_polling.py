@@ -13,6 +13,7 @@ from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 
 from colony import board, console, monitor, signin
+from tests import patience
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,13 +64,13 @@ class PollingTest(unittest.TestCase):
             return self.snap
         self.snapshot.side_effect = snapshot
         def request():
-            barrier.wait(timeout=3)
+            barrier.wait(timeout=patience(3))
             return board.status_payload(self.reg, [self.root])
         with ThreadPoolExecutor(max_workers=8) as pool:
             pending = [pool.submit(request) for _ in range(8)]
             self.assertTrue(started.wait(3))
             release.set()
-            values = [future.result(timeout=3) for future in pending]
+            values = [future.result(timeout=patience(3)) for future in pending]
         self.assertEqual(len(set(values)), 1)
         self.snapshot.assert_called_once_with(self.root)
 

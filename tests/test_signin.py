@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from colony import board, providers, signin
+from tests import patience
 
 
 class NativeProvider:
@@ -100,13 +101,13 @@ class SigninTest(unittest.TestCase):
         if session:
             if session['state'] in signin._ACTIVE:
                 signin.cancel('fake', session['id'])
-            session['worker'].join(timeout=3)
+            session['worker'].join(timeout=patience(3))
         if signin._checker:
-            signin._checker.join(timeout=3)
+            signin._checker.join(timeout=patience(3))
         signin._sessions.pop((str(self.folder), 'fake'), None)
 
     def wait_for(self, predicate):
-        until = time.monotonic() + 20                  # a loaded machine (other suites, builds) was slower than 5 s
+        until = time.monotonic() + patience(20)                  # a loaded machine (other suites, builds) was slower than 5 s
         while time.monotonic() < until:
             value = signin.state('fake')
             if predicate(value):
@@ -223,7 +224,7 @@ class SigninTest(unittest.TestCase):
         self.waiting()
         worker = signin._slot('fake')['worker']
         row = self.wait_for(lambda row: row['session']['state'] == 'expired')
-        worker.join(timeout=2)
+        worker.join(timeout=patience(2))
         self.assertFalse(worker.is_alive())
         self.assertNotIn('code', row['session'])
         after = signin.start('fake')
@@ -276,18 +277,18 @@ class SigninTest(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         def status():
             entered.set()
-            release.wait(timeout=3)
+            release.wait(timeout=patience(3))
             return False
         with patch.object(self.provider, 'signed_in', side_effect=status) as native:
             try:
                 signin.request_check()
-                self.assertTrue(entered.wait(timeout=2))
+                self.assertTrue(entered.wait(timeout=patience(2)))
                 for _ in range(10):
                     signin.request_check()
                 self.assertEqual(native.call_count, 1)
             finally:
                 release.set()
-                signin._checker.join(timeout=2)
+                signin._checker.join(timeout=patience(2))
         with patch.dict(os.environ, COLONY_CONSOLE_CMD='fixture'), \
                 patch.object(signin, 'request_check') as scheduled:
             signin.tick()
@@ -308,15 +309,15 @@ class SigninTest(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         def status():
             entered.set()
-            release.wait(timeout=3)
+            release.wait(timeout=patience(3))
             return True
         with patch.object(self.provider, 'signed_in', side_effect=status):
             worker = threading.Thread(target=signin.check)
             worker.start()
-            self.assertTrue(entered.wait(timeout=2))
+            self.assertTrue(entered.wait(timeout=patience(2)))
             signin.observe('fake', {'code': 'authentication'}, 'new-failure')
             release.set()
-            worker.join(timeout=2)
+            worker.join(timeout=patience(2))
         self.assertEqual(signin.state('fake')['state'], 'reconnect')
 
     def test_cancel_cleans_native_descendants_as_well_as_supervisor(self):
@@ -325,7 +326,7 @@ class SigninTest(unittest.TestCase):
         session = self.waiting()['session']
         child = int((self.folder / 'descendant.pid').read_text())
         signin.cancel('fake', session['id'])
-        until = time.monotonic() + 2
+        until = time.monotonic() + patience(2)
         while time.monotonic() < until:
             status = Path('/proc') / str(child) / 'stat'
             if not status.exists() or status.read_text().split()[2] == 'Z':
@@ -343,11 +344,11 @@ class SigninTest(unittest.TestCase):
                                    start_new_session=True, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, cwd=self.folder)
         try:
-            output, _ = process.communicate(timeout=2)
+            output, _ = process.communicate(timeout=patience(2))
         finally:
             if process.poll() is None:
                 os.killpg(process.pid, 9)
-                process.wait(timeout=2)
+                process.wait(timeout=patience(2))
         self.assertEqual(process.returncode, -9)
         self.assertEqual(output, b'')
 
@@ -378,16 +379,16 @@ class SigninTest(unittest.TestCase):
                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         try:
             supervisor = int(parent.stdout.readline())
-            until = time.monotonic() + 2
+            until = time.monotonic() + patience(2)
             ready = self.folder / 'native-ready'
             while time.monotonic() < until and not ready.exists():
                 time.sleep(.01)
             self.assertTrue(ready.exists())
             child = int(ready.read_text())
             parent.kill()
-            parent.wait(timeout=2)
+            parent.wait(timeout=patience(2))
             for pid in (supervisor, child):
-                until = time.monotonic() + 2
+                until = time.monotonic() + patience(2)
                 while time.monotonic() < until:
                     status = Path('/proc') / str(pid) / 'stat'
                     try:
@@ -402,5 +403,5 @@ class SigninTest(unittest.TestCase):
         finally:
             if parent.poll() is None:
                 parent.kill()
-            parent.wait(timeout=2)
+            parent.wait(timeout=patience(2))
             parent.stdout.close()

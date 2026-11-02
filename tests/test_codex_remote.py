@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from colony import board, bench, console, codex_remote as remote
 from colony.codex_rpc import Client
 from colony.codex_transfer import transfer, TransferError, writers
+from tests import patience
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -160,7 +161,7 @@ class NativeRemoteTest(unittest.TestCase):
 
     def turn(self, client, tid, text, **params):
         result = client.call('turn/start', dict(threadId=tid, input=[dict(type='text', text=text, text_elements=[])], **params))
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + patience(30)
         while True:
             event = client.receive(deadline)
             if event.get('method') == 'turn/completed':
@@ -228,7 +229,7 @@ class NativeRemoteTest(unittest.TestCase):
                         stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
             os.close(slave)
             slave = None
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + patience(30)
             while time.monotonic() < deadline and process.poll() is None:
                 if select.select([master], [], [], .1)[0]:
                     try:
@@ -296,7 +297,7 @@ class NativeRemoteTest(unittest.TestCase):
             atomic_json(context.file(root), dict(job=dict(id='1234567890abcdef', session=tid,
                         phase='ready', carry='Already sent invoice; do not resend.' + ' z' * 1400, written='now')))
             client.call('thread/compact/start', dict(threadId=tid))
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + patience(30)
             while client.receive(deadline).get('method') != 'turn/completed':
                 pass
             self.turn(client, tid, 'Continue without repeating completed work.')
@@ -327,7 +328,7 @@ class NativeRemoteTest(unittest.TestCase):
             tid = remote.attach(client, root, cfg, None)
             client.call('turn/start', dict(threadId=tid, input=[dict(type='text', text='Ask me to choose paint, then finish.', text_elements=[])],
                         collaborationMode=dict(mode='plan', settings=dict(model=settings['model'], reasoning_effort='low', developer_instructions=None))))
-            deadline = time.monotonic() + 45
+            deadline = time.monotonic() + patience(45)
             while True:
                 event = client.receive(deadline)
                 if event.get('method') == 'item/tool/requestUserInput':
@@ -396,7 +397,7 @@ class NativeRemoteTest(unittest.TestCase):
                                       'collaborationMode': {'mode': 'plan', 'settings': {
                                           'model': settings['model'], 'reasoning_effort': settings['effort'],
                                           'developer_instructions': None}}})
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + patience(30)
             while True:
                 event = client.receive(deadline)
                 if event.get('method') == 'item/tool/requestUserInput':
@@ -431,7 +432,7 @@ class NativeRemoteTest(unittest.TestCase):
             self.assertTrue(remote.alive(home))
             self.assertEqual(sum(s['running'] for s in remote.statuses()), 1)
             self.server.release.set()
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + patience(30)
             while client.receive(deadline).get('method') != 'turn/completed':
                 pass
             self.assertTrue(remote.drain(home))

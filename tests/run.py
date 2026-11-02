@@ -48,8 +48,14 @@ def ids(module):
 
 
 def workers():
-    """One per core, but no more than free memory allows (about 600 MB each: a test process and what it starts)."""
+    """One per free core (cores the machine isn't already busy with: the live board, its consoles, helpers' test runs
+    and the voice share it, and a suite crowding them starved its own timed tests), but no more than free memory allows
+    (about 600 MB each: a test process and what it starts); at least three."""
     cores = os.cpu_count() or 2
+    try:
+        cores = max(3, cores - round(os.getloadavg()[0]))
+    except OSError:
+        pass
     try:
         avail = next(int(line.split()[1]) for line in open("/proc/meminfo") if line.startswith("MemAvailable:")) // 1024
     except (OSError, StopIteration, ValueError):

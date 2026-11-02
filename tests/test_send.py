@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from colony import console, providers
+from tests import patience
 
 _REAL_SLEEP = time.sleep
 
@@ -229,11 +230,11 @@ class SendTest(unittest.TestCase):
         with box.on():
             worker = threading.Thread(target=lambda: results.append(console.type_into('box', first)))
             worker.start()
-            until = time.monotonic() + 2
+            until = time.monotonic() + patience(2)
             while not box.text and time.monotonic() < until:
                 _REAL_SLEEP(.001)
             results.append(console.paste_into('box', second))
-            worker.join(timeout=3)
+            worker.join(timeout=patience(3))
         self.assertFalse(worker.is_alive())
         self.assertEqual(results, [True, True])
         self.assertEqual(box.accepted, [first, second])
