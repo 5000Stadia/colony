@@ -206,7 +206,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R137 Waiting costs nothing
 - [x] R138 A helper never wakes its lead just to say it is still waiting
 - [~] R139 When a cleanup pass pays — each project's check suggests a pass when it clearly pays; its first, on this file, taken (related: R143, R140)
-- [ ] R144 A fresh context at each new item — a lead that finishes an item with a large context starts the next from its brief, not 300k+ of the last; blind-tested before it ships (related: R139, R143)
+- [~] R144 Topics closed as they end — the agent closes each topic as the conversation moves on (`colony topic-closed`, settled or parked), and colony clears it from context at the next pause, with a relevance-steered summary; reminded at two sizes; watched live, not blind-tested (the person's call) (related: R139, R143)
 - [x] R143 A small roadmap
 - [x] R132 A bar for a creative item, picked by the person from real examples
 - [x] R140 Guidance arrives at its moment
