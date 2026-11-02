@@ -86,7 +86,7 @@ def tick(now=None):
     """Called by the watcher: wake each project that has sat idle long enough with work it can start."""
     if board.restore_held():
         return
-    from . import hours
+    from . import hibernate, hours
     now = time.time() if now is None else now
     for root in board.projects():
         if not root.exists():
@@ -95,7 +95,8 @@ def tick(now=None):
         key = str(root)
         try:
             running = console.running(name)
-            state = console.snapshot(root, lines=1)["state"] if running else "off"
+            # asleep (R142) counts as idle: its nudge wakes it (console.type_into), so startable work doesn't wait on it
+            state = console.snapshot(root, lines=1)["state"] if running else "idle" if hibernate.asleep(root) else "off"
         except Exception:
             continue
         if state != "idle" or console.drafting(name) or console.attached(name):

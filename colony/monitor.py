@@ -772,6 +772,10 @@ class Watcher:
                 return {'code': 'console-stopped',
                         'reason': f"recipient console stopped with an error (exit {int(end['status'])}); underlying cause is unknown"}
             when = ' after its startup attempt' if attempted else ''
+            from . import hibernate
+            if hibernate.asleep(p) and not attempted:
+                return {'code': 'console-off', 'reason': 'recipient console is asleep after a day idle; '
+                                                          'the next message for it wakes it'}
             return {'code': 'console-off',
                     'reason': f'recipient console is not running{when}; underlying cause is unknown'}
 
@@ -1156,6 +1160,11 @@ class Watcher:
         try:
             from . import wakes
             wakes.tick()                            # timed wakes due: a note each, handed over by mail() below
+        except Exception:
+            pass
+        try:
+            from . import hibernate
+            hibernate.tick()                        # a console idle a day, nothing set to wake it, sleeps (R142)
         except Exception:
             pass
         from . import tokens

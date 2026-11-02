@@ -43,6 +43,11 @@ def locked(root):
         yield
 
 
+def _asleep(root):
+    from . import hibernate
+    return bool(hibernate.asleep(root))
+
+
 def safe_arm(root):
     from . import mail
     name = console.session_name(root)
@@ -368,6 +373,12 @@ def tick(root, *, forced_hold=None, force=False):
         return value
     if not force and not forced_hold and _quiet(root, g, receipt, s['id'], desired, reason):
         return receipt
+    if _asleep(root):
+        # asleep (R142), its host sleeps with its console: work to continue wakes both, and a later look sets the goal
+        if desired and not reason:
+            from . import hibernate
+            hibernate.wake(root)
+        return receipt
     try:
         with provider.goal_client(root, timeout=3) as client:
             return reconcile(root, client, s['id'], forced_hold=forced_hold)
@@ -396,7 +407,7 @@ def wake(root, g, receipt, desired, reason):
             receipt.pop('wake', None)
             receipt['hold'] = reason
             save(root, receipt, g['generation'])
-    elif desired and safe_arm(root):
+    elif desired and (safe_arm(root) or _asleep(root)):    # asleep (R142): the wake below starts it
         # Hooks and the watcher race here: decide and send under the seat's lock, against the current lead record.
         with locked(root):
             now, receipt = lead.info(root), status(root)

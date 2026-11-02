@@ -479,6 +479,8 @@ def visit(state, rec, root, key, now, paused):
     if not (boost or wake or pending or advice_now):
         return done
     snap = console.snapshot(root, lines=4)
+    if snap.get("asleep"):
+        snap = dict(snap, state="idle")                         # asleep (R142): its nudge wakes it (console.type_into)
     why = held(root, snap) if want else "no longer turned up"
     if pending and (why or snap["state"] == "off"):
         withdraw(root, mine.pop("note"), why or "its console was stopped")

@@ -2861,8 +2861,8 @@ def sidebar(reg, pid):
                          # its helpers' dots on a line of their own under its name (the person: "Cool to have subagent
                          # status dots right under the text newline in a box")
                          f"{helper_html(i, helper_dots(p, snap) if p.exists() else [])}"
-                         f"<span class='sline' id='sline-{i}'>{e(snap.get('behind') or snap['state'] if snap['state'] != 'off' else '')}"
-                         f"{' · ' + e(work) if work and snap['state'] != 'off' else e(work)}</span></a>")
+                         f"<span class='sline' id='sline-{i}'>{e(snap.get('shown') or (snap.get('behind') or snap['state'] if snap['state'] != 'off' else ''))}"
+                         f"{' · ' + e(work) if work and (snap['state'] != 'off' or snap.get('shown')) else e(work)}</span></a>")
             listed[i] = (p, dot(snap), waiting, work, tint)
         # each project a box of its own, the pinned first: no nest chip, nothing that slides out
         side += [c.replace("class='proj", "class='proj pinchip", 1) for c in chips] if here == PINNED else chips
@@ -4689,12 +4689,14 @@ async function poll() {
       document.querySelectorAll(`.msdot[data-p="${i}"]`).forEach((d) => { d.className = 'sdot msdot ' + dc; });
       document.querySelectorAll(`.pwork[data-p="${i}"]`).forEach((x) => { x.textContent = s.work || ''; });
       document.querySelectorAll(`.pbadge[data-p="${i}"]`).forEach((x) => { x.hidden = !s.waiting; x.textContent = s.waiting; });
-      if (line) line.textContent = (s.state === 'off' ? '' : s.behind || s.state) + (s.work ? (s.state === 'off' ? '' : ' · ') + s.work : '');
+      if (line) line.textContent = (s.shown || (s.state === 'off' ? '' : s.behind || s.state)) + (s.work ? (s.state === 'off' && !s.shown ? '' : ' · ') + s.work : '');
       const status = document.getElementById('status-' + i);
       if (status) {
         const act = s.activity || {}, st = s.state.replace(' ', '-');
         status.querySelector('.sdot').className = 'sdot ' + st + (s.behind ? ' behind' : '');
-        status.querySelector('b').textContent = s.behind || s.state;
+        status.querySelector('b').textContent = s.shown || s.behind || s.state;
+        const sleep = status.querySelector('.asleep');
+        if (sleep) sleep.hidden = !s.shown;
         status.querySelector('.statusline .muted').textContent = s.work ? ' · ' + s.work : '';
         const box = status.querySelector('.agents'); box.textContent = '';
         (act.agents || []).forEach((a) => {
@@ -6501,6 +6503,14 @@ def progress_panel(root, pid):
             + "".join(parts) + "</details>")
 
 
+def asleep_line(root):
+    """While a project's console hibernates (R142), said quietly where the person writes to it: its next message
+    wakes it."""
+    from . import hibernate
+    row = hibernate.asleep(root)
+    return f"<p class='muted asleep'>{e(hibernate.line(row))}</p>" if row and not console.live(root) else ""
+
+
 def switch_line(root, name=None, label=None):
     """While a console runs another program than the one now set for it, said where the person looks: a switch still
     waiting for its safe moment doesn't read as one that didn't take."""
@@ -6526,7 +6536,7 @@ def render(reg, pid, view="overview", show_all=""):
                      + project_connections(pid, root))
     if view == "chat":
         root = plist[pid]
-        return shell(reg, pid, f"<header class='slim'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{tabs(pid, view, root)}{switch_line(root)}</header>"
+        return shell(reg, pid, f"<header class='slim'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{tabs(pid, view, root)}{switch_line(root)}{asleep_line(root)}</header>"
                      + chat_page(str(pid), root))
     if view == "console":
         root = plist[pid]
@@ -6535,7 +6545,7 @@ def render(reg, pid, view="overview", show_all=""):
             return shell(reg, pid, f"<header class='slim'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{tabs(pid, view, root)}</header>{vision_box(root, pid)}"
                          f"<div class='card'><p>{e(providers.missing(providers.of(root)))}, so its console can't start.</p>"
                          f"<p class='muted'>Install it, or choose another provider in this project's Settings.</p></div>")
-        return shell(reg, pid, f"<header class='slim'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{tabs(pid, view, root)}{message}{switch_line(root)}</header>"
+        return shell(reg, pid, f"<header class='slim'><h1 class='project-title'>{project_label(root)}{rename_pencil(root)}</h1>{tabs(pid, view, root)}{message}{switch_line(root)}{asleep_line(root)}</header>"
                      + vision_box(root, pid)
                      + console.PAGE.format(label=e(providers.of(root).label), path=e(workdir(root)), name=e(console.session_name(root)), pid=pid, back=project_url(root) + "&view=console", token=console.token(), focus='true', scrolled=e(providers.of(root).scrolled_marker)),
                      wide=True)
@@ -8010,8 +8020,14 @@ def seen(snap):
     """A console as the board's dots and lines show it: idle on screen while its helpers or background commands are at
     work is working, saying what runs ("2 helpers running"). What decides when to write to it keeps the screen's own."""
     from . import chat
+    if snap.get("asleep"):
+        return dict(snap, shown="asleep")              # hibernating (R142): said quietly as asleep, not as stopped
     behind = chat.behind(snap) if snap.get("state") == "idle" else ""
     return dict(snap, state="working", behind=behind) if behind else snap
+
+
+ASLEEP_SAYS = ("Asleep after a day with nothing to do. Its next message wakes it, in its own conversation; while it "
+               "sleeps, the Claude and ChatGPT apps can't reach it.")
 
 
 def status_card(pid, snap, work="", waiting=None):
@@ -8022,8 +8038,9 @@ def status_card(pid, snap, work="", waiting=None):
     agents = "".join(f"<div class='agent{' current' if a['current'] else ''}'><span>{'●' if a['current'] else '○'} {e(a['name'])}</span>"
                      f"<span class='muted'>{e(a['detail'])}</span></div>" for a in act.get("agents", []))
     return (f"<a class='status' id='status-{pid}' href='{project_url(pid)}&view=console'><div class='statusline'>"
-            f"<span class='sdot {dot(snap)}'></span><b>{e(snap.get('behind') or snap['state'])}</b>"
+            f"<span class='sdot {dot(snap)}'></span><b>{e(snap.get('shown') or snap.get('behind') or snap['state'])}</b>"
             f"<span class='muted'>{(' · ' + e(work)) if work else ''}</span></div>"
+            f"<div class='asleep muted'{'' if snap.get('shown') else ' hidden'}>{e(ASLEEP_SAYS)}</div>"
             f"<div class='agents'>{agents}</div>"
             + ("" if waiting is None else f"<div class='waits muted'{' hidden' if waiting else ''}>Nothing waits on you.</div>")
             + "</a>")
