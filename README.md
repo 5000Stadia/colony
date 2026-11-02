@@ -222,6 +222,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   shared library with a date to look again (`colony research "words"`, `--add FILE`). Your standing orders to a
   project are kept by colony and handed back at every session start, after a compaction too (`colony rule`).
   Scheduled context refreshes wait for the current reply to finish before asking the agent for a carry-over.
+  Agents also close each topic as the conversation moves on (`colony topic-closed`, settled or parked, reminded
+  once at 150k and 300k tokens). Colony clears the closed topic from context at the agent's next pause, and
+  Claude's summary is steered toward what the open work needs.
   Codex's own compaction turn preserves completed recent exchanges without treating that empty turn as unfinished work.
 - **Usage limits:** an agent the limit stopped mid-work is woken when it lifts, from the limit's own message on
   its console, and told to carry on where it stopped.

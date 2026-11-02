@@ -21,6 +21,14 @@ TIMEOUT = 15 * 60
 COOLDOWN = 3600
 LIVE = ('due', 'requested', 'ready', 'compacting', 'prepared', 'emitted', 'unknown')
 TRANSCRIPT_VERSION = 2
+# R144: the agent closes a topic when it ends (colony topic-closed). Below the floor a closed topic's detail costs
+# little to keep; the conversation is reminded once as it passes each reminder size, never every turn.
+FLOOR = 100_000
+REMIND = (150_000, 300_000)
+# PROVIDER: Claude Code's /compact takes instructions for its summary; Codex's compaction takes none.
+FOCUS = ('Keep what the open work needs; a closed topic leaves only its conclusion. Keep what the person and you meant, '
+         'their exact words only where those matter, and whose idea each was; open questions stay open, never agreed. '
+         'Keep the paths of files, pictures and pages still in use, and what each is for.')
 _cache = {}
 
 
@@ -435,6 +443,73 @@ def restored(root, st):
     atomic_json(file(root), st)
 
 
+def sizes(window):
+    """The floor and the two reminder sizes; a small window scales them down so each comes before the soft refresh."""
+    w = window or 200_000
+    return min(FLOOR, int(w * .3)), tuple(min(size, int(w * share)) for size, share in zip(REMIND, (.4, .5)))
+
+
+def close_topic(root, note, parked=False):
+    """R144: the agent closed a topic. Its closing line becomes the carry-over, and the context is refreshed at the
+    agent's next pause through the same refresh the size threshold uses. Returns what to tell the agent."""
+    note = (note or '').strip()
+    if not note:
+        raise ValueError('Write what the topic settled, or which item it was parked in and its open question.')
+    if is_monitor(root):
+        raise ValueError('The steward compacts natively; nothing to close here.')
+    s = session(root)
+    if not s or s['provider'] != providers.key(program(root)):
+        raise ValueError("This project's conversation isn't registered with colony yet; nothing to clear.")
+    tokens, window = occupancy(root, s, transcript(s))
+    floor, _ = sizes(window)
+    if tokens is None or tokens < floor:
+        return (f"Closed. This conversation is small ({(tokens or 0) // 1000}k tokens, under {floor // 1000}k), so "
+                "there is nothing to clear yet; what you filed is kept.")
+    line = ('Parked: ' if parked else 'Settled: ') + note
+    with locked(root):
+        st = read(file(root)) or dict(last=time.time())
+        job = st.get('job') or {}
+        mine = job.get('session') == s['id']
+        if mine and job.get('phase') in ('compacting', 'prepared', 'emitted', 'unknown'):
+            raise ValueError('A refresh is already under way; close the topic again once it has finished.')
+        earlier = job.get('carry', '') if mine and job.get('closed') and job.get('phase') == 'ready' else ''
+        carry = (earlier or 'Topics closed in this conversation, in the agent\'s words:') + '\n- ' + line
+        if len(carry.encode()) > CARRY_BUDGET:
+            raise ValueError(f'Shorten the closing line: with any closed before it, it is {len(carry.encode()):,} '
+                             f'bytes, over {CARRY_BUDGET:,}.')
+        job = st['job'] = dict(id=job['id'] if earlier else secrets.token_hex(8), session=s['id'], phase='ready',
+                               closed=True, before=tokens, reason='topic closed', carry=carry, written=board.now())
+        kept = {sid: c for sid, c in carries(st).items() if sid != s['id']}
+        st['carries'] = dict(list(kept.items())[-3:] + [(s['id'], dict(text=carry, at=job['written']))])
+        st.pop('carry', None)
+        file(root, 'context-carried.md').write_text(carry + '\n')
+        log(root, job, 'topic closed', 'parked' if parked else 'settled')
+        atomic_json(file(root), st)
+    return f'Closed. Colony clears it from your context at your next pause ({tokens // 1000}k tokens now).'
+
+
+def reminder(root, st):
+    """R144: one line on closing topics as the conversation first passes each reminder size since it was last
+    compacted. Called under the lock."""
+    s = session(root)
+    if is_monitor(root) or not s:
+        return ''
+    snap = transcript(s)
+    tokens, window = occupancy(root, s, snap)
+    if tokens is None:
+        return ''
+    marks = [m for m in sizes(window)[1] if tokens >= m]
+    seen = st.get('reminded') or {}
+    if seen.get('session') != s['id'] or seen.get('compact') != snap['compact']:
+        seen = dict(session=s['id'], compact=snap['compact'], at=[])
+    if not set(marks) - set(seen['at']):
+        return ''
+    st['reminded'] = dict(seen, at=sorted(set(seen['at']) | set(marks)))
+    atomic_json(file(root), st)
+    return (f"[colony] This conversation is at {tokens // 1000}k tokens. Has a topic ended that you haven't closed? "
+            f'If so, close it within this reply (`{board.GUIDES / "topics.md"}`); if not, carry on: size alone is no reason.')
+
+
 def on_prompt(root, key, payload):
     if not register(root, key, payload):
         return ''
@@ -446,7 +521,7 @@ def on_prompt(root, key, payload):
         st = read(file(root))
         job = st.get('job') or {}
         if job.get('session') != payload['session_id'] or job.get('phase') not in ('prepared', 'emitted'):
-            return ''
+            return '' if compact_start else reminder(root, st)
         snap = transcript(session(root))
         if job['id'] in snap['markers']:
             restored(root, st)
@@ -484,10 +559,12 @@ def safe(root):
 
 
 def refreshing(root):
-    """Only a live refresh of the current conversation holds continuation; a dropped or finished one never does."""
+    """Only a live refresh of the current conversation holds continuation; a dropped or finished one never does, nor
+    a closed topic still waiting for its pause: it holds nothing until it is dispatched."""
     s, job = session(root), read(file(root)).get('job') or {}
     return bool(s and s['provider'] == providers.key(program(root))
-                and job.get('session') == s['id'] and job.get('phase') in LIVE)
+                and job.get('session') == s['id'] and job.get('phase') in LIVE
+                and not (job.get('closed') and job['phase'] == 'ready'))
 
 
 def due(root, st, tokens, window, now):
@@ -541,7 +618,8 @@ def tick(root):
         if window and tokens is not None and tokens < window * SOFT:
             st.pop('ineffective', None)
         reason = due(root, st, tokens, window, now)
-        if unfinished and phase in ('due', 'ready') and not (phase == 'ready' and carry_finishing(job, snap)):
+        if unfinished and phase in ('due', 'ready') and not (phase == 'ready' and (carry_finishing(job, snap)
+                                                                         or job.get('closed'))):
             job.update(phase='deferred', reason=unfinished)
             log(root, job, 'deferred', unfinished)
         elif phase == 'requested' and now - job['asked'] > TIMEOUT:
@@ -563,7 +641,8 @@ def tick(root):
     try:
         tail(snap, budget, source=s['path'])
     except ValueError as err:
-        if job.get('phase') != 'ready' or not carry_finishing(job, snap):
+        # a closed topic waits for the turn that closed it, and any after it, to end
+        if job.get('phase') != 'ready' or not (carry_finishing(job, snap) or job.get('closed')):
             defer(root, job, str(err))
         return
     from . import continuation
@@ -621,7 +700,8 @@ def tick(root):
                         client.call('thread/compact/start', dict(threadId=s['id']))
                     return
             dispatched = True
-            if not console.type_into(seat(root), '/compact'):
+            command = '/compact ' + FOCUS if s['provider'] == 'claude' else '/compact'
+            if not console.type_into(seat(root), command):
                 dispatched = False
                 raise ValueError('The input is now busy; refresh postponed.')
         except Exception as err:

@@ -1372,6 +1372,17 @@ def cmd_needs_you(a):
     return 0
 
 
+def cmd_topic_closed(a):
+    """R144: the agent closed a topic; its line carries over and colony clears the context at its next pause."""
+    from . import board, context
+    try:
+        print(context.close_topic(board.root_of(), a.parked or a.settled, parked=bool(a.parked)))
+    except ValueError as err:
+        print(err, file=sys.stderr)
+        return 1
+    return 0
+
+
 def cmd_connect(a):
     """Outside services: what this project reaches and how, or (add) a new one the person then gives its keys."""
     import shlex
@@ -2278,6 +2289,11 @@ def main(argv=None):
     p.add_argument("--about", default=""); p.add_argument("--service", help="the service it reaches, if not its name (gmail)")
     p.set_defaults(fn=cmd_connect)
     p = sub.add_parser("noted"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_noted)
+    p = sub.add_parser("topic-closed", help="a topic has ended: what it settled, or where it was parked; colony clears it from context at your next pause")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--settled", metavar="TEXT", help="what it settled: what the person and you meant, and whose idea each was")
+    g.add_argument("--parked", metavar="TEXT", help="where it waits (an existing item's notes where one fits) and its open question")
+    p.set_defaults(fn=cmd_topic_closed)
     sub.add_parser("needs-you", help="this turn asks the person something: it waits on their list when it ends").set_defaults(fn=cmd_needs_you)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
     p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")

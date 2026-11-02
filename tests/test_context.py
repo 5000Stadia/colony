@@ -267,6 +267,55 @@ class ContextTest(unittest.TestCase):
             context.tick(self.root)
         self.assertIn('Context carry-over', typed.call_args.args[1])
 
+    def claude(self, tokens, stop='end_turn', window=1_000_000):
+        """A Claude conversation at `tokens`, its last reply ended (or still using a tool)."""
+        if self.s['provider'] != 'claude':
+            self.s['provider'] = 'claude'
+            atomic_json(context.file(self.root, 'context-session.json'), self.s)
+            board.save_registry({'projects': [], 'settings': {'provider': 'claude', 'messaging': False}})
+        with self.path.open('a') as stream:
+            stream.write(json.dumps(dict(type='user', message=dict(content='What did we settle?'))) + '\n')
+            stream.write(json.dumps(dict(type='assistant', message=dict(content=[dict(type='text', text='This.')],
+                         stop_reason=stop, usage=dict(input_tokens=tokens)))) + '\n')
+        context.usage(self.root, dict(session_id='exact-id', context_window=dict(context_window_size=window,
+                      current_usage=dict(input_tokens=tokens))))
+
+    def test_a_closed_topic_waits_for_the_turn_that_closed_it_then_compacts_with_its_line_carried(self):
+        self.claude(400_000, stop='tool_use')
+        told = context.close_topic(self.root, 'The send box is type and Enter; the person chose it.')
+        self.assertIn('next pause', told)
+        self.assert_refresh_waits()                  # mid-turn: nothing typed, and the closing is not dropped
+        job = context.read(context.file(self.root))['job']
+        self.assertEqual((job['phase'], job['closed']), ('ready', True))
+        context.close_topic(self.root, 'R150, whether helpers compact too', parked=True)
+        self.claude(401_000)
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
+            context.tick(self.root)
+        self.assertEqual(typed.call_args.args[1], '/compact ' + context.FOCUS)
+        carry = context.read(context.file(self.root))['job']['carry']
+        self.assertIn('- Settled: The send box is type and Enter', carry)
+        self.assertIn('- Parked: R150, whether helpers compact too', carry)
+
+    def test_a_small_conversation_has_nothing_to_clear_and_an_empty_line_is_refused(self):
+        self.claude(60_000)
+        self.assertIn('nothing to clear', context.close_topic(self.root, 'Settled the voice.'))
+        self.assertFalse(context.read(context.file(self.root)).get('job'))
+        with self.assertRaises(ValueError):
+            context.close_topic(self.root, '  ')
+
+    def test_the_reminder_comes_once_at_each_size_and_again_after_a_compaction(self):
+        prompt = dict(self.payload, hook_event_name='UserPromptSubmit')
+        said = lambda: context.on_prompt(self.root, 'claude', prompt)
+        with patch.object(context, 'register', return_value=True):
+            self.claude(120_000); self.assertEqual(said(), '')
+            self.claude(160_000); self.assertIn("Has a topic ended that you haven't closed?", said())
+            self.assertEqual(said(), '')
+            self.claude(320_000); self.assertIn('320k tokens', said())
+            self.assertEqual(said(), '')
+            with self.path.open('a') as stream:
+                stream.write(json.dumps(dict(type='system', subtype='compact_boundary')) + '\n')
+            self.claude(170_000); self.assertIn('170k tokens', said())
+
     def test_trimming_keeps_whole_messages_where_they_fit_and_never_splits_a_character(self):
         exchange = [dict(role='user', text='Fix the export, then tell me.'),
                     *[dict(role='assistant', text=f'Step {n}: ' + 'Ωé😀' * 60) for n in range(20)],
