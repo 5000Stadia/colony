@@ -97,6 +97,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R135 The project band
 - [x] R136 Active states drawn apart, helpers as dots, and the band ordered by them
 - [~] R142 Idle sessions hibernate — a parked session costs memory and app connections for nothing; built, the live check due Mon 6:42 PM (related: R121)
+- [ ] R145 Send is type and Enter — the box checked empty and free of a menu first, then Enter again while text stays, no matching what the screen shows; after the weekly reset (related: R142)
 
 ## M3 — The monitor: acting for the person
 
