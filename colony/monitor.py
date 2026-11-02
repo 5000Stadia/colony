@@ -836,11 +836,12 @@ class Watcher:
         if starting and woke_starting:
             return woke_starting
         what = " and ".join(filter(None, [
-            "a note from the person on the board" if any(n.get('author') not in ('colony', 'observation', 'monitor', 'suggestion') for n in notes) else "",
+            "a note from the person on the board" if any(n.get('author') not in board.NOT_PERSON for n in notes) else "",
             f"a note from {board.steward_role()}" if any(n.get('author') == 'monitor' for n in notes) else "",
             "a suggestion from " + (board.steward_role() if board.steward_named() else "the steward")
             if any(n.get('author') == 'suggestion' for n in notes) else "",
             "an update from Colony" if any(n.get('author') == 'colony' for n in notes) else "",
+            "a note from another agent or process" if any(n.get('author') == 'agent' for n in notes) else "",
             "an observed file change" if any(n.get('author') == 'observation' for n in notes) else "",
             "mail from another project in the colony" if letters else ""]))
         try:

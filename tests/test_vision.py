@@ -474,7 +474,7 @@ class NestTest(BoardBase):
         self.assertIn("isn't told twice", again.stdout)
         heard = [n for n in board.notes(self.root) if "workflow, never one asset" in n["text"]]
         self.assertEqual(len(heard), 1)
-        self.assertEqual(heard[0]["author"], "monitor")
+        self.assertEqual(heard[0]["author"], "colony")
         self.assertNotEqual(self.cli("nest", "holodeck", "--tell", "2", "--to", "nobody").returncode, 0)
         import threading                                          # two tellings at once still tell once
         other = Path(self.tmp.name) / "photonic"

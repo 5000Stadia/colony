@@ -21,3 +21,5 @@ design/
 
 # a real model page for local tests; not ours to publish
 tests/fixtures/aa-*.html
+build/
+*.egg-info/

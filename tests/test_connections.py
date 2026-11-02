@@ -399,7 +399,7 @@ class AuditTest(BoardBase):
         note = [n for n in board.notes(self.root) if "refused the connection mailer" in n["text"]]
         self.assertEqual(len(note), 1)
         self.assertIn("colony connect --remove mailer", note[0]["text"])
-        self.assertEqual(note[0]["author"], "monitor")
+        self.assertEqual(note[0]["author"], "colony")
         connections.add("mailer", "Mail", ["uvx", "mailer==1.0.0", "stdio"], needs=["PASSWORD"], about="Now explained.")
         self.assertTrue(audit.refused(audit.current(connections.load()["connections"]["mailer"])),
                         "rewording its purpose doesn't wipe a refusal of the same code")

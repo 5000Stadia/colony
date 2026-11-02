@@ -348,7 +348,7 @@ def run(name, opener=None, asker=None):
     if now and fingerprint(now) == of:                  # changed meanwhile: that change has its own audit
         _store(name, record)
         if (refused(record) or misfit(record)) and root:
-            board.add_note(root, None, refusal(name, c, record), author="monitor")
+            board.add_note(root, None, refusal(name, c, record), author="colony")
     return record
 
 

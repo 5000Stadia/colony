@@ -1258,7 +1258,7 @@ def cmd_notes(a):
         # The person typing to it now is awake: their own turn gets no such line.
         night = ("" if Path(root).resolve() == monitor.home().resolve() or _persons(prompt)
                  else hours.notice())
-        spoke = _persons(prompt) or any(n.get("author") not in ("colony", "observation", "monitor", "suggestion")
+        spoke = _persons(prompt) or any(n.get("author") not in board.NOT_PERSON
                                         for n in fresh)          # the person, in the console or on the board
         text = "\n\n".join(filter(None, [
             standing,
@@ -1269,8 +1269,9 @@ def cmd_notes(a):
             rules.session_text(root) if a.session else '',
             nest.session_text(root) if a.session and not own_monitor else '',
             engagement,
-            board.render_notes([n for n in fresh if n.get("author") not in ("colony", "observation", "monitor", "suggestion")], "The person left notes for you on the board:"),
+            board.render_notes([n for n in fresh if n.get("author") not in board.NOT_PERSON], "The person left notes for you on the board:"),
             board.render_notes([n for n in fresh if n.get("author") == "monitor"], f"{board.steward_role()[0].upper()}{board.steward_role()[1:]}, acting for them, left notes for you:"),
+            board.render_notes([n for n in fresh if n.get("author") == "agent"], board.AGENT_HEADING),
             board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") != "advice"],
                                "Suggestions from " + (board.steward_role() if board.steward_named() else "the steward") + ":"),
             board.render_notes([n for n in fresh if n.get("author") == "suggestion" and n.get("kind") == "advice"], "Research advice colony asked for, apart from you:"),
@@ -1513,24 +1514,45 @@ def cmd_said(a):
     return 0
 
 
+def _teller():
+    """Who runs `colony tell`: None for the steward's own session, else the calling project's name, or a process
+    outside colony's consoles (a timer, a script) when nothing says."""
+    from . import board, context, monitor
+    chosen = os.environ.get("COLONY_PROJECT")
+    try:
+        here = Path(chosen) if chosen else Path.cwd()
+    except OSError:
+        here = None
+    if os.environ.get("COLONY_CONSOLE") == monitor.name() or (here is not None and context.is_monitor(here)):
+        return None
+    return board.name_of(chosen) if chosen else board.OUTSIDE
+
+
 def cmd_tell(a):
     """The steward speaks for the person: as an attributed steward note, delivered through hooks into the agent's own
     context (typed text arrives as a paste, which an agent rightly doesn't take as the person's word), and a
-    one-line nudge if the session is idle. It shows on the board like any note."""
+    one-line nudge if the session is idle. It shows on the board like any note. Anyone else who runs it (another
+    project's agent, a timer) sends a note signed as itself, carrying none of the person's authority."""
     from . import board, console
     root = _project(a.name)
-    if not _caught_up(root):
+    source = _teller()
+    if source is None and not _caught_up(root):
         return 3
-    board.add_note(root, None, a.text, author="monitor")
+    if source is None:
+        board.add_note(root, None, a.text, author="monitor")
+        nudge, how = f"a note from {board.steward_role()}", "as a note from the steward, acting for the person"
+    else:
+        board.add_note(root, None, a.text, author="agent", source=source)
+        nudge, how = f"a note from {source}, not the person", f"as a note from {source}, not from the person or their steward"
     try:
         name = console.ensure(root)
         if console.snapshot(root, lines=1)["state"] == "idle":   # held while someone is typing there; the watcher nudges later
-            console.type_into(name, f"[colony] You have a note from {board.steward_role()}.")
+            console.type_into(name, f"[colony] You have {nudge}.")
     except (OSError, subprocess.CalledProcessError):
         # The note is kept either way: sending it again would deliver it twice.
-        print(f"sent to {a.name}; its console isn't ready, so the note waits for its next turn")
+        print(f"sent to {a.name} {how}; its console isn't ready, so the note waits for its next turn")
         return 0
-    print(f"sent to {a.name} as a note from the steward, acting for the person")
+    print(f"sent to {a.name} {how}")
     return 0
 
 

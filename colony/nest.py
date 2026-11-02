@@ -172,7 +172,7 @@ def tell(name, number, root):
         said = f", said in {row['from']}" if row.get("from") else ""
         board.add_note(root, None, f"A standard the person set for the {name} nest{said}, in their words: \"{row['words']}\". "
                        "Weigh it where your work meets it; their direct request to you comes first. You hear this once: "
-                       "keep it from here.", author="monitor")
+                       "keep it from here.", author="colony")
         return None
 
 
