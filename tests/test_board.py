@@ -12867,6 +12867,7 @@ class ReadingFollowTest(BoardBase):
 # Each test has its own board home and stand-in consoles (`sleep 60` in tmux, from BoardBase); none touches a real
 # console, the real home or a project folder.
 from contextlib import ExitStack  # noqa: E402
+import io  # noqa: E402
 from colony import hibernate, wakes  # noqa: E402
 
 LATER = hibernate.HIBERNATE + 60
@@ -13199,3 +13200,213 @@ class HibernateCodexTest(HibernateBase):
     def test_claude_code_has_nothing_to_let_go(self):
         self.assertTrue(providers.get("claude").hibernate(self.root))
 
+
+
+class HibernateColdStartTest(HibernateBase):
+    """From cold, colony starts with most projects asleep (R142). The person, 2026-11-01: "Colony could start in first
+    load full hybernate except for projects last active in the 24 hours colony was last running"."""
+    def setUp(self):
+        super().setUp()
+        from colony import recovery
+        self.recovery = recovery
+        recovery._looked.clear()
+        self.old = Path(self.tmp.name) / "ferns"
+        self.old.mkdir()
+        board.track(self.old)
+        for n in board.open_notes(self.old):          # whatever tracking left: nothing waits to be handed over
+            board.append(self.old, "notes.jsonl", {"type": "delivered", "of": n["id"], "at": board.now()})
+        talk = Path(self.tmp.name) / "conv-ferns.jsonl"
+        talk.write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+        console.remember(self.old, "conv-2", str(talk))
+        self.oldname = console.session_name(self.old)
+
+    def ran_before(self, ran, boot="b1"):
+        """colony's record as it last ran: both consoles running, stamped `ran`."""
+        board.save_json(board.home() / "boot.json", {"boot": boot, "running": [str(self.root), str(self.old)],
+                                                     "back": [], "at": ran})
+
+    def start(self, now, boot, turns, stack):
+        """The first look of a watcher just started: `turns` says when each last took a turn."""
+        stack.enter_context(patch.object(self.recovery, "_boot", return_value=boot))
+        stack.enter_context(patch.object(console, "room", return_value=True))
+        stack.enter_context(patch.object(hibernate, "last_turn", side_effect=lambda root, name: turns[Path(root)]))
+        return self.recovery.rebooted(now)
+
+    def assert_cold_asleep(self, root, conversation):
+        row = hibernate.asleep(root)
+        self.assertTrue(row, f"{root.name} starts asleep")
+        self.assertTrue(row["cold"])
+        self.assertEqual(row["conversation"], conversation, "recorded with the conversation it resumes")
+        self.assertFalse(console.running(console.session_name(root)), "never started")
+
+    def test_after_a_restart_the_recent_one_comes_back_and_the_older_one_sleeps(self):
+        now = time.time()
+        self.ran_before(now - 600)
+        console.stop(self.root)                                   # the machine went down: every console with it
+        with ExitStack() as stack:
+            did = self.start(now, "b2", {self.root: now - 600 - 3600, self.old: now - 600 - 2 * 86400}, stack)
+        self.assertIn("brought back plants", did)
+        self.assertTrue(console.running(self.name), "active in the day before colony last ran: back running")
+        self.assertIsNone(hibernate.asleep(self.root))
+        self.assert_cold_asleep(self.old, "conv-2")
+        rec = json.loads((board.home() / "boot.json").read_text())
+        self.assertNotIn(str(self.old), rec["back"] + rec["running"])
+        snap = console.snapshot(self.old)                          # the board shows it asleep
+        self.assertEqual(snap["state"], "off")
+        self.assertTrue(snap["asleep"])
+        self.assertIn("Asleep since colony started", snap["lines"][0])
+        self.assertIn("next message wakes it", snap["lines"][0])
+
+    def test_after_a_week_off_one_active_an_hour_before_the_stop_comes_back(self):
+        now = time.time()
+        ran = now - 7 * 86400
+        self.ran_before(ran)
+        console.stop(self.root)
+        with ExitStack() as stack:
+            self.start(now, "b2", {self.root: ran - 3600, self.old: ran - 2 * 86400}, stack)
+        self.assertTrue(console.running(self.name), "measured from when colony stopped, not from now")
+        self.assert_cold_asleep(self.old, "conv-2")
+
+    def test_a_wake_set_keeps_it_awake(self):
+        now = time.time()
+        self.ran_before(now - 600)
+        console.stop(self.root)
+        wakes.make(self.old, "check the build", within="2h")
+        with ExitStack() as stack:
+            self.start(now, "b2", {self.root: now - 3 * 86400, self.old: now - 3 * 86400}, stack)
+            self.assertIsNone(hibernate.asleep(self.old), "a wake of its own: it comes back")
+            self.assertTrue(hibernate.asleep(self.root), "the other, idle and with nothing set, sleeps")
+            self.recovery.rebooted(now + self.recovery.EVERY_BACK + 1)
+        self.assertTrue(console.running(self.oldname))
+
+    def test_a_start_after_colony_stop_is_cold_too(self):
+        now = time.time()
+        self.ran_before(now - 120)
+        console.stop(self.root)                                   # `colony stop`, the machine still up
+        with ExitStack() as stack:
+            self.start(now, "b1", {self.root: now - 3600, self.old: now - 2 * 86400}, stack)
+        self.assertTrue(console.running(self.name))
+        self.assert_cold_asleep(self.old, "conv-2")
+
+    def test_the_first_word_to_a_cold_asleep_project_wakes_it_into_its_own_conversation(self):
+        now = time.time()
+        self.ran_before(now - 600)
+        console.stop(self.root)
+        with ExitStack() as stack:
+            self.start(now, "b2", {self.root: now - 3600, self.old: now - 2 * 86400}, stack)
+        self.assert_cold_asleep(self.old, "conv-2")
+        prov = providers.of(self.old)
+        got = {}
+
+        def command(label, s, resume=None, root=None):
+            got["resume"] = resume
+            return "sleep 60"
+        with patch.object(console, "COMMAND", None), patch.object(type(prov), "command", side_effect=command):
+            console.command(self.old.name, self.old)
+        self.assertEqual(got["resume"], "conv-2", "it resumes its own conversation")
+        with patch.object(console, "ready", return_value=None):
+            console.type_into(self.oldname, "[colony] You have a note.")
+        self.assertTrue(console.running(self.oldname), "started by the word for it")
+        self.assertIsNone(hibernate.asleep(self.old), "awake again")
+
+    def test_a_warm_restart_is_unaffected(self):
+        now = time.time()
+        self.ran_before(now - 30)
+        console.ensure(self.old)                                  # `colony restart`: the consoles kept running
+        with ExitStack() as stack:
+            self.assertIsNone(self.start(now, "b1", {self.root: now - 9 * 86400, self.old: now - 9 * 86400}, stack))
+        self.assertEqual(hibernate.rows(), {}, "nothing is put to sleep")
+        self.assertTrue(console.running(self.name))
+        self.assertTrue(console.running(self.oldname))
+        console.stop(self.old)                                    # one ended on its own meanwhile: still warm
+        self.recovery._looked.clear()
+        with ExitStack() as stack:
+            self.start(now, "b1", {self.root: now - 9 * 86400, self.old: now - 9 * 86400}, stack)
+        self.assertEqual(hibernate.rows(), {})
+        self.assertFalse(console.running(self.oldname), "and nothing is started")
+
+
+class HibernateAnyMessageWakesTest(HibernateBase):
+    """The person, 2026-11-01: "Sending any message in colony should wake". A project the person paused stays as is."""
+    def suggest(self):
+        from colony import cli
+        typed = []
+        real = console.type_into
+
+        def type_into(name, text, *a, **k):
+            typed.append(text)
+            return real(name, text, *a, **k)
+        with patch.object(console, "type_into", side_effect=type_into), patch.object(console, "ready", return_value=None), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["suggest", self.root.name, "Try the blue pots"]), 0)
+        return typed
+
+    def test_a_suggestion_wakes_a_sleeping_project_and_is_delivered(self):
+        self.sleep_now()
+        typed = self.suggest()
+        self.assertTrue(any("You have a suggestion" in t for t in typed), "told, as for a note")
+        self.assertTrue(console.running(self.name), "started again")
+        self.assertIsNone(hibernate.asleep(self.root))
+        self.assertTrue(any(n["author"] == "suggestion" and "blue pots" in n["text"] for n in board.open_notes(self.root)))
+
+    def test_a_suggestion_leaves_a_project_the_person_paused(self):
+        self.sleep_now()
+        board.pause_project(self.root)
+        self.suggest()
+        self.assertFalse(console.running(self.name))
+        self.assertTrue(hibernate.asleep(self.root))
+
+    def test_every_path_that_sends_a_project_a_message_wakes_it(self):
+        from colony import cli, mail
+        reg = board.registry()
+        reg["settings"]["messaging"] = True
+        board.save_registry(reg)
+
+        def tell(source):
+            with patch.object(cli, "_teller", return_value=source), patch.object(cli, "_caught_up", return_value=True), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(cli.main(["tell", self.root.name, "Look at the pots"]), 0)
+
+        def watched(send):
+            def go():
+                send()
+                monitor.Watcher(enabled=False).mail()
+            return go
+
+        paths = {
+            "colony suggest": lambda: self.suggest(),
+            "colony tell, from the steward": lambda: tell(None),
+            "colony tell, from another project": lambda: tell("bees"),
+            "colony tell, from a timer": lambda: tell(board.OUTSIDE),
+            "colony send (mail)": watched(lambda: mail.send(mail.address(self.root), "hello from next door")),
+            "a note from a project page": watched(lambda: board.add_note(self.root, {"page": "pots.html"},
+                                                                         "From your page", author="page")),
+            "a note from the person": watched(lambda: board.add_note(self.root, None, "Water", author="person")),
+            "the cleanup check's note (quiet)": watched(lambda: board.add_note(
+                self.root, None, "Cleanup check: x", author="colony", quiet=True, kind="cleanup")),
+        }
+        for path, send in paths.items():
+            with self.subTest(path):
+                self.sleep_now()
+                send()
+                self.assertTrue(console.running(self.name), f"{path}: started again")
+                self.assertIsNone(hibernate.asleep(self.root), f"{path}: awake")
+                for n in board.open_notes(self.root):
+                    board.append(self.root, "notes.jsonl", {"type": "delivered", "of": n["id"], "at": board.now()})
+                mail.delivered(self.root, [m for m in mail.inbox(self.root) if not m["delivered_at"]])
+
+    def test_a_quiet_note_woken_for_is_then_told(self):
+        self.sleep_now()
+        note = board.add_note(self.root, None, "Cleanup check: x", author="colony", quiet=True, kind="cleanup")
+        watcher = monitor.Watcher(enabled=False)
+        watcher.mail()
+        self.assertTrue(console.running(self.name))
+        typed = []
+        with ExitStack() as stack:
+            self.quiet(stack)
+            stack.enter_context(patch.object(console, "age", return_value=3600))
+            stack.enter_context(patch.object(console, "type_into",
+                                             side_effect=lambda name, text, *a, **k: typed.append(text) or True))
+            watcher.mail()
+        self.assertEqual(typed, ["[colony] You have an update from Colony."])
+        self.assertIn(note["id"], watcher.nudged)

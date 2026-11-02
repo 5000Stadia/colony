@@ -18,7 +18,13 @@ board's home records when, and the conversation it resumes. Anything that would 
 before: console.type_into and paste_into do so for every path that types into a console, and the watcher's delivery of
 notes and mail starts an off console itself. Being looked at on the board doesn't wake it; a key pressed in its
 console page does. While it sleeps the Claude and ChatGPT apps can't reach it (their link is the session); the board
-always can, and its message wakes it.
+always can, and its message wakes it. Any message in colony wakes it (the person, 2026-11-01: "Sending any message in
+colony should wake"): a note, quiet ones too (the watcher wakes it and says so), mail, a suggestion, colony tell; a
+project the person paused stays as it is.
+
+From cold (colony started after the machine restarted, or after `colony stop`), colony starts with most projects asleep:
+only those that took a turn in the day before colony last ran, or that something keeps awake, come back running
+(cold(), recovery.rebooted); the rest are recorded asleep with their conversation, never started (sleep_cold()).
 """
 import json
 import time
@@ -89,6 +95,8 @@ def since(row):
 
 def line(row):
     """What the board says of a sleeping console."""
+    if row.get("cold"):
+        return f"Asleep since colony started ({since(row)}): it took no turn in the day before colony last ran. {SAYS}"
     return f"Asleep since {since(row)}, after a day with nothing to do. {SAYS}"
 
 
@@ -116,21 +124,11 @@ def _cut(root):
         return False
 
 
-def awake(root, now=None):
-    """What keeps this project's console awake, in a few words, or None when it may sleep. Read cheapest first: most
-    consoles took a turn within the day."""
-    from . import context, lead, lingering, mail, monitor, usage, wakes
-    from . import chat
-    now = time.time() if now is None else now
-    root = Path(root)
-    if root.resolve() == monitor.home().resolve():
-        return "the steward"
-    name = console.session_name(root)
-    if not console.running(name):
-        return "not running"
-    turn = last_turn(root, name)
-    if now - turn < HIBERNATE:
-        return "took a turn within the day"
+def held(root):
+    """What keeps a project awake whether its console runs or not, in a few words, or None: a wake of its own, a close,
+    a safe pause or a usage limit waiting to lift, something waiting to be handed to it, a lead change, a context
+    refresh. awake() reads these for a running console; cold() for one colony would bring back from cold."""
+    from . import context, lead, mail, usage, wakes
     if wakes.waiting(root):
         return "a wake of its own is set"
     if str(root) in board.closing():
@@ -149,6 +147,27 @@ def awake(root, now=None):
         return "its lead record can't be read"
     if context.refreshing(root):
         return "its context is being refreshed"
+    return None
+
+
+def awake(root, now=None):
+    """What keeps this project's console awake, in a few words, or None when it may sleep. Read cheapest first: most
+    consoles took a turn within the day."""
+    from . import lingering, monitor
+    from . import chat
+    now = time.time() if now is None else now
+    root = Path(root)
+    if root.resolve() == monitor.home().resolve():
+        return "the steward"
+    name = console.session_name(root)
+    if not console.running(name):
+        return "not running"
+    turn = last_turn(root, name)
+    if now - turn < HIBERNATE:
+        return "took a turn within the day"
+    why = held(root)
+    if why:
+        return why
     snap = console.snapshot(root, lines=4, name=name)
     if snap["state"] != "idle":
         return snap["state"]                                   # mid-turn, or a choice on its screen
@@ -186,6 +205,45 @@ def hibernate(root, now=None):
                "provider": providers.key(prov), "session": name}
         _write(lambda r: (r.__setitem__(str(root), row), r)[1])
         console.stop(root)
+    return True
+
+
+def cold(root, ran):
+    """At a cold start (recovery.rebooted: the machine restarted, or colony started again after it was stopped), what
+    brings this project's console back, in a few words, or None: it starts asleep. `ran` is when colony last ran (the
+    watcher's last record of what runs, boot.json's `at`), not now, so a machine off a week doesn't put every project
+    to sleep. The person, 2026-11-01: "Colony could start in first load full hybernate except for projects last active
+    in the 24 hours colony was last running"."""
+    from . import monitor
+    root = Path(root)
+    if root.resolve() == monitor.home().resolve():
+        return "the steward"
+    if not ran:
+        return "when colony last ran isn't known"
+    if ran - last_turn(root, console.session_name(root)) < HIBERNATE:
+        return "took a turn within the day before colony last ran"
+    return held(root)
+
+
+def sleep_cold(root, now=None):
+    """Record a project asleep from a cold start, its console never started: the conversation it resumes, as
+    hibernate() records it. PROVIDER: hibernate() lets go of a host its program left running from before a stop, and
+    may refuse; then it isn't recorded and comes back as before. Whether it sleeps."""
+    from . import providers
+    now = time.time() if now is None else now
+    root, name = Path(root), console.session_name(root)
+    if console.running(name):
+        return False
+    prov = providers.of(root)
+    try:
+        if not prov.hibernate(root):
+            return False
+    except Exception:
+        return False
+    saved = console.saved_conversation(root) or {}
+    row = {"at": board.now(), "since": now, "conversation": saved.get("conversation"),
+           "provider": providers.key(prov), "session": name, "cold": True}
+    _write(lambda r: (r.__setitem__(str(root), row), r)[1])
     return True
 
 

@@ -228,6 +228,8 @@ def frozen(root, now=None):
 # prompt, that the machine restarted and to carry on (the person, 2026-10-28: "all of its Tailscale and other
 # continuation elements of projects to continue, which is probably just a gentle message nudge to the project"). One
 # that was idle comes back idle: carry-on wakes it if it has work it can start. With autostart.py, after a power cut too.
+# From cold (this, or colony started again after `colony stop`), only the projects that took a turn in the day before
+# colony last ran, or that something keeps awake, come back; the rest start asleep (hibernate.cold, R142).
 BOOT = Path("/proc/sys/kernel/random/boot_id")
 EVERY_BACK = 60          # seconds between consoles brought back
 TELL_FOR = 3 * 3600      # seconds after the restart within which one that was at work is told
@@ -253,6 +255,28 @@ def _booted_at():
     return time.strftime("%I:%M %p", time.localtime(at)).lstrip("0")
 
 
+_looked = set()          # the board homes this process has looked at: its first look is the one a start is read from
+
+
+def _from_cold(back, on, ran, now):
+    """From cold, only the projects active in the day before colony last ran, or kept awake, come back running; the
+    rest are recorded asleep (hibernate.sleep_cold), and their next word wakes them (R142). Those to bring back, and
+    how many sleep."""
+    from . import hibernate
+    keep, slept = [], 0
+    for r in back:
+        if hibernate.asleep(on[r]):
+            continue                          # it fell asleep as colony stopped: it stays so, its record as it was
+        try:
+            if hibernate.cold(on[r], ran) is None and hibernate.sleep_cold(on[r], now):
+                slept += 1
+                continue
+        except Exception:
+            pass                              # one project's trouble: it comes back, as before
+        keep.append(r)
+    return keep, slept
+
+
 def rebooted(now=None):
     """Keep the record of what runs, and after a restart bring it back: what was done this pass, or None."""
     if board.restore_held():
@@ -268,6 +292,19 @@ def rebooted(now=None):
         was, rec = "", {}
     on = {str(p): p for p in board.projects() if p.exists()}
     did = None
+    ran = rec.get("at")                       # when colony last ran: the watcher stamps this record each minute it runs
+    home = str(board.home())
+    first = home not in _looked
+    _looked.add(home)
+    if first and rec.get("boot") == boot and rec.get("running") \
+            and not any(console.running(console.session_name(on[r])) for r in rec["running"] if r in on):
+        # colony started again after it was stopped, the machine still up: every console it had ended with it (a warm
+        # `colony restart` keeps them, so one at least still runs). From cold as after a restart, told nothing.
+        back = [r for r in rec["running"] if r in on]
+        rec = {"boot": boot, "running": back, "back": back, "back_at": 0, "since": now, "tell": {}}
+        back, slept = _from_cold(back, on, ran, now)
+        rec.update(running=back, back=back)
+        did = f"started again: {len(back)} to bring back, {slept} asleep"
     if rec.get("boot") and rec["boot"] != boot:
         try:
             w = json.loads((board.home() / "working.json").read_text())
@@ -278,9 +315,10 @@ def rebooted(now=None):
         text = (f"[colony] This machine restarted ({_booted_at()}), and colony started your console again in this "
                 "conversation. Everything that was running then stopped with it: commands, helpers, servers. Check what "
                 "was left mid-way and carry on where you were.")
+        back, slept = _from_cold(back, on, ran, now)
         rec = {"boot": boot, "running": back, "back": back, "back_at": 0, "since": now,
                "tell": {r: text for r in back if str(Path(r).resolve()) in at_work}}
-        did = f"restarted: {len(back)} to bring back"
+        did = f"restarted: {len(back)} to bring back, {slept} asleep"
     rec["boot"] = boot
     back = [r for r in rec.get("back", []) if r in on]
     if back and now - rec.get("back_at", 0) >= EVERY_BACK:
