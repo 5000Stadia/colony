@@ -3759,7 +3759,10 @@ PLAYER = """
     const automatic = !N || (!N.tapped && N.seat === 'auto');
     put('autopaused', yes ? true : null);
     if (yes) { if (automatic) hold(true); }
-    else { stopAt = 0; takeUp(); if (automatic) hold(false); }
+    // Resume Auto is the person saying go: a reply held by their pause would keep Auto from starting anything, so it
+    // goes on too (2026-11-01: "I've unpause the auto, but it did not really unpause and Auto is not Auto
+    // triggering"); a document they paused stays theirs to take up, and the tap still lets the phone play
+    else { stopAt = 0; takeUp(); if (automatic || (N && paused && !N.document)) hold(false); else prime(); }
     changed(); look();
   }
   function hold(want, cause = 'person') {

@@ -241,6 +241,15 @@ const cases = {
     assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().playing, true); assert(b.sounds.length > beforeFinish);
     if (b.kokoro) assert.equal(b.offset(), 17.25, 'explicit Resume Auto preserves the interrupted clip position');
   },
+  async 'Resume Auto takes up a reply the person paused, so Auto can go on'(b) {
+    await b.line([]); b.api.setAutoPaused(true); b.api.append(b.row('queued')); b.api.arrivals(); await flush();
+    await b.api.replay(b.row('history')); await flush(); assert.equal(b.api.state().t, 'history');
+    b.api.hold(true); await flush(); assert.equal(b.api.state().paused, true); const held = b.sounds.length;
+    b.api.setAutoPaused(false); await flush();
+    assert.equal(b.api.autoPaused(), false); assert.equal(b.api.state().paused, false, 'the held reply goes on');
+    assert.equal(b.api.state().t, 'history'); assert(b.sounds.length > held || b.api.state().playing, 'it sounds again');
+    b.api.done(0); await flush(); assert.equal(b.api.state().t, 'queued', 'then Auto takes up what waited');
+  },
   async 'writing continues pending buffer then resumes from cached audio'(b) {
     if (!b.kokoro) return;
     const xs = await b.line(['A']), navigation = b.navigation();
