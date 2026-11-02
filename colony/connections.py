@@ -21,10 +21,14 @@ agent as a note, and an answer recorded from the command line never runs it. Unl
 themselves, every tool waits except those the server marks read-only (MCP's readOnlyHint), and one it never listed
 waits too.
 
-The person's own connectors from their Claude sign-in (their Gmail, Drive) are switched on and off the same way, and
-a console is started denying those its project doesn't have; Claude calls them itself, so they can't be held.
-The apps of the person's ChatGPT sign-in reach Codex the same way, and a Codex console is started with those its
-project doesn't have switched off. PROVIDER: Claude Code's connectors (claude mcp list) and Codex's apps (app/list).
+The person's own connectors from their Claude sign-in (their Gmail, Drive), and every other server their Claude Code
+brings (a plugin's, one of their own like Blender, Chrome), are switched on and off the same way, and a console is
+started denying those its project doesn't have; Claude calls them itself, so they can't be held. The apps of the
+person's ChatGPT sign-in reach Codex the same way, and a Codex console is started with those its project doesn't have
+switched off. These are off in every project until switched on there: most projects never call one, and each loaded
+costs tokens on every step. An agent sees them with `colony connect --list` and switches one on with `--on NAME`; its
+console then reloads into the same conversation at its next idle moment (pending). PROVIDER: Claude Code's servers
+(claude mcp list) and Codex's apps (app/list).
 """
 import fcntl
 import hashlib
@@ -60,7 +64,7 @@ def _lock():
         yield
 
 
-def _shape(entry):
+def _shape(entry, default=True):
     """An entry in today's shape: `on` for every project without its own choice, `projects` each project's own.
     (First kept as a list of projects, or "all".)"""
     to = entry.get("projects")
@@ -68,7 +72,7 @@ def _shape(entry):
         entry.update(on=True, projects={})
     elif isinstance(to, list):
         entry.update(on=False, projects={r: {"on": True} for r in to})
-    entry.setdefault("on", True)
+    entry.setdefault("on", default)
     entry.setdefault("projects", {})
     return entry
 
@@ -81,7 +85,7 @@ def load():
     for group in ("connections", "personal", "chatgpt"):
         data.setdefault(group, {})
         for entry in data[group].values():
-            _shape(entry)
+            _shape(entry, group == "connections")      # the person's own: off until switched on
     return data
 
 
@@ -259,30 +263,75 @@ def holds(c, root):
 
 # --- the person's own connectors (PROVIDER: Claude Code) ------------------------------------------------------------
 
-LISTED = re.compile(r"^claude\.ai (?P<name>.+?): (?P<url>https://\S+) - ")
+CLAUDE_AI = "claude.ai "
+CHROME = "Chrome"
+
+
+def _parse_list(out):
+    """`claude mcp list`'s servers: {name: (target, status)}, as "NAME: TARGET - STATUS" lines. A name holds colons
+    (plugin:gitkraken:gitkraken) but never one followed by a space."""
+    found = {}
+    for line in out.splitlines():
+        head, sep, status = line.rpartition(" - ")
+        name, colon, target = head.partition(": ")
+        if sep and colon and name.strip() and not name.startswith(" "):
+            found[name.strip()] = (target.strip(), status.strip())
+    return found
+
+
+def _claude_config():
+    """Claude Code's own settings file, read only. PROVIDER: Claude Code."""
+    try:
+        cfg = json.loads((Path.home() / ".claude.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _chrome_here():
+    """Whether the person's Claude Code brings Chrome to an interactive console (claude-in-chrome): `claude mcp list`
+    doesn't show it."""
+    cfg = _claude_config()
+    return bool(cfg.get("claudeInChromeDefaultEnabled") or cfg.get("cachedChromeExtensionInstalled"))
 
 
 def discover_personal():
-    """The connectors the person's Claude sign-in brings, as Claude Code lists them; a new one is on in every project
-    until switched off. Slow (it checks each one), so the board calls it in the background."""
+    """The servers the person's Claude Code brings to every console, as it lists them: their claude.ai connectors
+    (denied by URL), and plugins' and their own (denied by name), with Chrome where it is set up. A new one is off in
+    every project until switched on. One not configured offers no tools, so it isn't kept; a plugin's copy of a
+    claude.ai connector (the same URL) is that connector. Slow (it checks each one), so the board calls it in the
+    background."""
     try:
         out = subprocess.run(["claude", "mcp", "list"], capture_output=True, text=True, timeout=90,
                              cwd=str(board.home())).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
-    found = {m["name"]: m["url"] for m in map(LISTED.match, out.splitlines()) if m}
+    listed = {n: t for n, t in _parse_list(out).items() if "not configured" not in t[1].lower()}
+    found, urls = {}, set()
+    for n, (target, status) in listed.items():
+        if n.startswith(CLAUDE_AI) and target.startswith("https://"):
+            found[n[len(CLAUDE_AI):]] = {"url": target.split()[0]}
+            urls.add(target.split()[0])
+    for n, (target, status) in listed.items():
+        if not n.startswith(CLAUDE_AI) and (target.split() or [""])[0] not in urls:
+            found[n] = {"server": n, "reach": target}
+    for n, (target, status) in listed.items():
+        name = n[len(CLAUDE_AI):] if n.startswith(CLAUDE_AI) else n
+        if name in found:
+            found[name]["signin"] = "needs authentication" in status.lower()
+    if _chrome_here():
+        found[CHROME] = {"server": "claude-in-chrome", "signin": False}
 
     def put(data):
-        for name, url in found.items():
-            entry = data["personal"].setdefault(name, {"on": True, "projects": {}})
-            entry["url"] = url
+        for name, what in found.items():
+            data["personal"].setdefault(name, {"on": False, "projects": {}}).update(what)
         return found
     return change(put)
 
 
 def discover_chatgpt():
     """The apps the person's ChatGPT sign-in brings to Codex (Codex's app/list, those connected to their account); a
-    new one is on in every project until switched off. Asked of a Codex app-server colony already runs, else of one
+    new one is off in every project until switched on. Asked of a Codex app-server colony already runs, else of one
     started for the asking."""
     from . import codex_remote, providers
     from .codex_rpc import Client
@@ -304,7 +353,7 @@ def discover_chatgpt():
 
     def put(data):
         for name, aid in found.items():
-            data["chatgpt"].setdefault(name, {"on": True, "projects": {}})["id"] = aid
+            data["chatgpt"].setdefault(name, {"on": False, "projects": {}})["id"] = aid
         return found
     return change(put)
 
@@ -338,11 +387,11 @@ _looking = threading.Lock()
 
 
 def refresh_personal(every=6 * 3600):
-    """discover_personal in the background, at most every few hours."""
+    """discover_personal in the background, at most every few hours (at once while the migration waits for it)."""
     import time
     stamp = board.home() / "connections-looked"
     try:
-        if time.time() - stamp.stat().st_mtime < every:
+        if time.time() - stamp.stat().st_mtime < every and load().get("off_by_default"):
             return
     except OSError:
         pass
@@ -355,18 +404,53 @@ def refresh_personal(every=6 * 3600):
             if discover_personal() is not None:
                 stamp.parent.mkdir(parents=True, exist_ok=True)
                 stamp.touch()
+                migrate()
         finally:
             _looking.release()
     threading.Thread(target=go, daemon=True).start()
 
 
+def _own_servers(root):
+    """The servers a project brings itself (its .mcp.json, its local ones in Claude Code's config), which are never
+    denied: {name: its URL, if it has one}. PROVIDER: Claude Code's project and local scopes."""
+    where, own = board.workdir(root), {}
+    try:
+        own.update(json.loads((where / ".mcp.json").read_text()).get("mcpServers") or {})
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    try:
+        own.update(((_claude_config().get("projects") or {}).get(str(where)) or {}).get("mcpServers") or {})
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return {n: (c.get("url") if isinstance(c, dict) else None) for n, c in own.items()}
+
+
+def _url(c):
+    """Where one of the person's own is served, if over HTTP: Claude Code shows one server per URL, so a plugin's
+    second copy of the same (engineering's Slack beside productivity's) is denied with it only by its URL."""
+    reach = (c.get("url") or c.get("reach") or "").split()
+    return reach[0] if reach and reach[0].startswith("https://") else None
+
+
 def denied(root):
-    """The person's own connectors this console is started without: every one off in its project, and every one whose
-    service the project reaches through colony instead (one path to a service, so a held send has no unheld twin)."""
+    """The person's own servers this console is started without: every one off in its project, and every one whose
+    service the project reaches through colony instead (one path to a service, so a held send has no unheld twin).
+    One served over HTTP is denied by its URL, any other by its name; never one the project brings itself, nor one
+    colony grants it."""
     data = load()
-    through_colony = {c.get("service") or n for n, c in servers(root).items()} if root is not None else set()
-    return [{"serverUrl": c["url"]} for n, c in sorted(data["personal"].items())
-            if c.get("url") and (not is_on(c, root) or personal_service(n, c) in through_colony)]
+    through = _through(root)
+    own = _own_servers(root) if root is not None else {}
+    keep, mine = set(own) | (set(servers(root)) if root is not None else set()), set(filter(None, own.values()))
+    out = []
+    for n, c in sorted(data["personal"].items()):
+        if _loaded("personal", n, c, root, through):
+            continue
+        url = _url(c)
+        if url and url not in mine:
+            out.append({"serverUrl": url})
+        elif c.get("server") and c["server"] not in keep:
+            out.append({"serverName": c["server"]})
+    return out
 
 
 # --- services: one card for each, whichever sources reach it ---------------------------------------------------------
@@ -440,6 +524,214 @@ def choose_path(svc, root, how):
         configure(s["claude"], root, personal=True, on=None if inherit else how in ("claude", "chatgpt", "colony"))
     if s.get("chatgpt"):
         configure(s["chatgpt"], root, chatgpt=True, on=None if inherit else how in ("claude", "chatgpt", "colony"))
+
+
+# --- off until switched on: what an agent sees and switches ------------------------------------------------------
+
+# what each reaches, in a few words, for the agent's list; any other is known by where it is served
+REACHES = {"gmail": "the person's Gmail", "google-drive": "the person's Google Drive files",
+           "google-calendar": "the person's Google Calendar", "claude-docs": "Claude Docs: shared documents",
+           "alphaxiv": "arXiv research papers", "notion": "the person's Notion", "clickup": "the person's ClickUp tasks",
+           "airtable": "the person's Airtable bases", "slack": "the person's Slack", "linear": "Linear issues",
+           "atlassian": "Jira and Confluence", "monday": "monday.com boards", "datadog": "Datadog monitoring",
+           "gitkraken": "git and GitHub, through GitKraken", "blender": "the person's running Blender",
+           "chrome": "the person's Chrome browser", "github": "GitHub", "sites": "ChatGPT Sites"}
+
+
+def reach(name, c):
+    """What a connector reaches, in a few words."""
+    said = REACHES.get(slug(name.split(":")[-1])) or REACHES.get(personal_service(name, c))
+    if said:
+        return said
+    where = c.get("url") or c.get("reach") or ""
+    host = where.split("/")[2:3] if "://" in where else []
+    return host[0] if host else Path(where.split()[0]).name if where.split() else name
+
+
+def _group(root):
+    """Which of the person's own a project's console loads: its program's (PROVIDER: Claude Code's servers, Codex's
+    ChatGPT apps)."""
+    from . import providers
+    return "chatgpt" if root is not None and providers.of(root) is providers.get("codex") else "personal"
+
+
+def _through(root):
+    """The services a project reaches through colony: the person's own twin of each stays out of its console."""
+    return {c.get("service") or n for n, c in servers(root).items()} if root is not None else set()
+
+
+def _loaded(group, n, c, root, through):
+    """Whether one of the person's own reaches this project's console: on there, and its service not taken by colony."""
+    svc = personal_service(n, c) if group == "personal" else slug(n)
+    return is_on(c, root) and svc not in through
+
+
+def listing(root):
+    """The agent's list, as short as it can be: each connector its console could load, on or off here, what it
+    reaches; then how to switch one on."""
+    group, data, through = _group(root), load(), _through(root)
+    lines = []
+    for n, c in sorted(data[group].items(), key=lambda kv: kv[0].lower()):
+        lines.append(f"{n}: {'on' if _loaded(group, n, c, root, through) else 'off'} - {reach(n, c)}"
+                     + (" (needs the person's sign-in)" if c.get("signin") else ""))
+    have = granted(root)
+    for n, c in sorted(data["connections"].items()):
+        state = "on" if n in have else "waiting for the person" if is_on(c, root) else "off"
+        about = re.split(r"\.\s|[(;:]", c.get("about") or "")[0].strip()
+        lines.append(f"{n}: {state} - {about[:60] or c.get('title') or n} (through colony)")
+    if not lines:
+        return ["No connectors here."]
+    return lines + ["Switch one on here: colony connect --on NAME (your console reloads into this conversation when "
+                    "idle, its tools loaded)."]
+
+
+def find(root, name):
+    """(group, key) of the connector a name means here: its listed name, its server's or its last part, any case."""
+    data, want = load(), name.strip().lower()
+    groups = (_group(root), "connections")
+    for test in (lambda n, c: n.lower() == want, lambda n, c: (c.get("server") or "").lower() == want,
+                 lambda n, c: slug(n) == slug(want), lambda n, c: slug(n.split(":")[-1]) == slug(want)):
+        hits = [(g, n) for g in groups for n, c in data[g].items() if test(n, c)]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            raise ValueError(f"{name} could be {', '.join(n for _, n in hits)}: give the whole name.")
+    raise ValueError(f"No connector {name} here (colony connect --list shows what is).")
+
+
+def switch(root, name, on):
+    """An agent switches a connector on or off for its project. Its tools load only as a console starts, so the
+    change waits (pending) for the watcher to reload the console at its next idle moment. Returns (key, changed)."""
+    group, key = find(root, name)
+
+    def loaded():
+        data = load()
+        if group == "connections":
+            return key in granted(root)
+        return _loaded(group, key, data[group][key], root, _through(root))
+    before = loaded()
+    configure(key, root, personal=group == "personal", chatgpt=group == "chatgpt", on=bool(on))
+    after = loaded()
+    if before != after:
+        change(lambda data: data.setdefault("pending", {}).setdefault(_key(root), {}).__setitem__(key, after))
+    return key, before != after
+
+
+def pending(root=None):
+    """The connectors switched for a project whose console hasn't reloaded with them yet: {key: on}; with no root,
+    every project's, by its folder."""
+    every = load().get("pending") or {}
+    return every if root is None else dict(every.get(_key(root)) or {})
+
+
+def settled(root, done):
+    """The console reloaded with them and its agent was told: what was pending for it is cleared."""
+    def put(data):
+        every = data.get("pending") or {}
+        mine = every.get(_key(root)) or {}
+        for k, v in done.items():
+            if mine.get(k) == v:
+                mine.pop(k)
+        if not mine:
+            every.pop(_key(root), None)
+    change(put)
+
+
+def notice(done):
+    """The one line the agent hears once its console has reloaded with what it switched."""
+    def say(names):
+        return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    on, off = [k for k, v in done.items() if v], [k for k, v in done.items() if not v]
+    one = len(on) == 1
+    parts = ([f"{say(on)} {'is' if one else 'are'} now connected, {'its' if one else 'their'} tools loaded"] if on else []) \
+        + ([f"{say(off)} {'is' if len(off) == 1 else 'are'} now disconnected"] if off else [])
+    return "[colony] " + "; ".join(parts) + ". Carry on."
+
+
+# --- once: the person's own off until switched on, kept where they were used -----------------------------------------
+
+def _tool_prefix(name, c):
+    """The server's part of its tools' names (mcp__claude_ai_Gmail__search)."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", c.get("server") or CLAUDE_AI + name)
+
+
+CALLED = re.compile(rb'"type":"tool_use","id":"[^"]*","name":"mcp__(.+?)__')
+WHEN = re.compile(rb'"timestamp":"([^"]+)"')
+
+
+def used_lately(days=14, transcripts=None):
+    """{server's tool prefix: the projects that called one of its tools in the last days}, read from Claude Code's
+    transcripts (subagents' too), each folder mapped back to the project (or a worktree of it) it ran in.
+    PROVIDER: Claude Code's transcripts."""
+    import time
+    base = Path(transcripts) if transcripts else Path.home() / ".claude" / "projects"
+    cutoff = time.time() - days * 86400
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(cutoff)).encode()
+    folders = {}
+    for root in board.projects():
+        folders.setdefault(re.sub(r"[^A-Za-z0-9]", "-", str(board.workdir(root))), []).append(root)
+    out = {}
+    try:
+        dirs = list(base.iterdir())
+    except OSError:
+        return out
+    for d in dirs:
+        roots = folders.get(d.name) or next((r for enc, r in folders.items()
+                                             if d.name.startswith(enc + "--claude-worktrees-")), None)
+        if not roots:
+            continue
+        for f in d.rglob("*.jsonl"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    continue
+                with f.open("rb") as fh:
+                    for line in fh:
+                        if b'"name":"mcp__' not in line:
+                            continue
+                        when = WHEN.search(line)
+                        if when and when.group(1) < since:
+                            continue
+                        for m in CALLED.finditer(line):
+                            out.setdefault(m.group(1).decode(errors="replace"), set()).update(roots)
+            except OSError:
+                continue
+    return out
+
+
+def _migrated(data, used):
+    """data changed so that each of the person's own is off colony-wide and on in each project that called it lately,
+    any project's own choice kept. Returns {connector: [projects on]}."""
+    kept = {}
+    for group in ("personal", "chatgpt"):
+        for n, c in data[group].items():
+            c["on"] = False
+            for root in sorted(used.get(_tool_prefix(n, c), ()) if group == "personal" else (), key=str):
+                own = c["projects"].setdefault(_key(root), {})
+                if "on" not in own:
+                    own["on"] = True
+                    kept.setdefault(n, []).append(_key(root))
+            kept.setdefault(n, [])
+            kept[n] += [r + " (its own choice)" for r, own in sorted(c["projects"].items())
+                        if own.get("on") and r not in kept[n]]
+            if not kept[n]:
+                kept.pop(n)
+    return kept
+
+
+def migrate(used=None):
+    """Once, as the person's own become off until switched on: what each project called in the last two weeks stays
+    on there, everything else goes off colony-wide. What it did is kept (off_by_default) for the person to hear."""
+    if load().get("off_by_default"):
+        return None
+    used = used_lately() if used is None else used
+
+    def put(data):
+        if data.get("off_by_default"):
+            return None
+        kept = _migrated(data, used)
+        data["off_by_default"] = {"at": board.now(), "kept": kept}
+        return kept
+    return change(put)
 
 
 # --- starting a console with them ----------------------------------------------------------------------------------

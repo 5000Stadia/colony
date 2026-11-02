@@ -1069,7 +1069,8 @@ class Watcher:
         """A console set to another program than the one it runs (a switch the person or the steward asked for) is
         switched at its first safe moment: idle, nothing typed in it, no one looking at it, and nothing of its own still
         running out of sight (a command or helper it left at work, a turn its program runs elsewhere). Time adds nothing
-        to that. Every two minutes, with no tokens, a console whose program has been updated, or whose settings or helper
+        to that. So is one whose agent switched a connector (colony connect --on), whose tools load only at a start; once
+        it runs with them, its agent is told in one line and carries on. Every two minutes, with no tokens, a console whose program has been updated, or whose settings or helper
         tiers changed, is reloaded the same way into the same conversation, once it has also sat idle a few minutes:
         no one is waiting on that, and a reload under someone reading it is a jolt. Nothing in the middle of work is touched.
         One console a pass, and only with memory to spare: each reads its whole conversation back as it starts, and all
@@ -1096,9 +1097,14 @@ class Watcher:
         paused = usage.paused()
         seats = [(p, console.session_name(p), None) for p in board.projects() if p.exists()] + [(home(), name(), "monitor")]
         reloaded = False
+        from . import connections
+        switched = connections.pending()
         for root, nm, label in seats:
+            connect = None if label else switched.get(str(Path(root).resolve()))
             if not console.running(nm):
                 self.idle_since.pop(nm, None)
+                if connect:
+                    connections.settled(root, connect)    # its next start loads them
                 continue
             switch = console.switching(root, nm, label)
             provider = console.providers_of(root, label)
@@ -1107,17 +1113,22 @@ class Watcher:
             refresh_signin = bool(connected and math.isfinite(age) and time.time() - age < connected)
             if refresh_signin and str(root) in paused:
                 continue                                  # reconnecting never releases their configured work pause
-            if not (switch or full or refresh_signin):
+            if not (switch or full or refresh_signin or connect):
                 continue
             state = console.snapshot(root, lines=1, name=nm)["state"]
             if state != "idle" or console.drafting(nm) or console.attached(nm):
                 self.idle_since.pop(nm, None)
                 continue
             first = self.idle_since.setdefault(nm, time.time())
-            if not switch and not refresh_signin and time.time() - first < RELOAD_AFTER:
+            if not switch and not refresh_signin and not connect and time.time() - first < RELOAD_AFTER:
                 continue
             why = (f"switching from {switch[1]} to {switch[0]}" if switch else
                    "provider sign-in reconnected" if refresh_signin else console.stale(root, nm, label))
+            if connect and not why:
+                # its agent switched a connector and the console now runs with it: told in one line, it carries on
+                if console.type_into(nm, connections.notice(connect)):
+                    connections.settled(root, connect)
+                continue
             if not why or reloaded or not console.room() or console.busy(root, nm, label):
                 continue
             if refresh_signin and not provider.signin_refresh(root):

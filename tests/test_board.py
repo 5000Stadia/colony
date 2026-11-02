@@ -84,6 +84,9 @@ class BoardBase(unittest.TestCase):
         looking = patch.object(connections, 'refresh_personal')   # never asks the real `claude` for its connectors
         looking.start()
         self.addCleanup(looking.stop)
+        configured = patch.object(connections, '_claude_config', return_value={})   # nor reads its real settings
+        configured.start()
+        self.addCleanup(configured.stop)
         from colony import tokens
         counting = patch.object(tokens, 'update')                  # never reads the machine's real transcripts
         counting.start()

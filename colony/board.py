@@ -101,7 +101,8 @@ compaction; your memory of a guide may not):
   likely solved, or research: `fresh-eyes.md`
 - brief or run helpers, or pair with another project's agent: `helpers.md`
 - keep something you and the person will refer to (the Library): `library.md`
-- use an outside service (anything needing an account or a key, or that sends, posts or spends): `connections.md`
+- use or look for an outside service or connector (anything needing an account or a key, or that sends, posts or
+  spends): `connections.md`
 - put a picture, file or project link in the person's Chat: `chat.md`
 - record a standing order (from now on, always, never) or set a wake: `orders.md`
 - write to another project, or rename this one: `projects.md`
@@ -9474,8 +9475,10 @@ def connections_page(reg):
     connections.refresh_personal()
     audit.kick()                                     # any connection waiting on its audit, started apart from the page
     data, every = connections.load(), [p for p in projects(reg) if p.exists()]
-    out = ["<header><h1>Connections</h1></header><p class='muted'>Outside services your projects reach. Every project has "
-           "each one unless you switch it off there (on its own Connections page, or as you add it). Through colony, keys "
+    out = ["<header><h1>Connections</h1></header><p class='muted'>Outside services your projects reach. Those of your "
+           "Claude and ChatGPT sign-ins (and Claude Code's plugins, Chrome) are off in every project until switched on "
+           "there, on its own Connections page or by its agent (colony connect --on), so a project that never calls one "
+           "spends nothing on it; colony's own are on everywhere unless you switch them off. Through colony, keys "
            "stay in a file only you can read and what sends or spends waits for your tap; through your Claude or ChatGPT "
            "sign-in (Claude projects use the one, Codex projects the other), it goes straight out.</p>"]
     for svc, s in connections.services().items():

@@ -1390,6 +1390,18 @@ def cmd_connect(a):
         r = audit.run(a.audit)
         print(f"{a.audit}: {r['state']} {r.get('safe', '')} {r.get('fits', '')} {r.get('why', '')}".strip())
         return 0
+    if a.list:
+        print("\n".join(connections.listing(board.root_of())))
+        return 0
+    if a.on or a.off:
+        try:
+            key, changed = connections.switch(board.root_of(), a.on or a.off, bool(a.on))
+        except ValueError as err:
+            print(err, file=sys.stderr)
+            return 2
+        print(f"{key} {'on' if a.on else 'off'} here" + (": your console reloads into this conversation when idle, and you "
+              "hear when it's done." if changed else " already."))
+        return 0
     if a.remove:
         c = connections.load()["connections"].get(a.remove)
         if not c or c.get("approved", True):
@@ -2255,6 +2267,9 @@ def main(argv=None):
     p.add_argument("--command", help="what starts its MCP server, its version pinned (none: keys for your own script)")
     p.add_argument("--with", dest="with_", metavar="NAME", help="run a command with a keys-only connection's keys: --with NAME -- COMMAND")
     p.add_argument("--remove", metavar="NAME", help="drop a connection added here that the person hasn't approved")
+    p.add_argument("--list", action="store_true", help="the connectors that exist, on or off here")
+    p.add_argument("--on", metavar="NAME", help="switch a connector on here (the console reloads when idle)")
+    p.add_argument("--off", metavar="NAME", help="switch a connector off here")
     p.add_argument("--audit", metavar="NAME", help=argparse.SUPPRESS)
     p.add_argument("rest", nargs=argparse.REMAINDER)
     p.add_argument("--key", action="append", default=[], help="a key the person enters in Settings (repeat)")

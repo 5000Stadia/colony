@@ -175,8 +175,10 @@ class ConnectionsTest(BoardBase):
                   "claude.ai alphaXiv: https://api.alphaxiv.org/mcp/v1 - ✔ Connected\nblender: /x - ✔ Connected\n")
         with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, listed, "")):
             connections.discover_personal()
-        self.assertEqual(sorted(connections.services()), ["alphaxiv", "gmail", "shop"])
-        self.assertEqual(connections.path_for("gmail", self.root), "claude", "a new connector is on everywhere")
+        self.assertEqual(sorted(connections.services()), ["alphaxiv", "blender", "gmail", "shop"])
+        self.assertIsNone(connections.path_for("gmail", self.root), "a new connector is off until switched on")
+        for svc in ("gmail", "alphaxiv", "blender"):
+            connections.choose_path(svc, None, "claude")
         self.assertNotIn("--settings", connections.claude_args(self.root))
         connections.choose_path("gmail", self.other, "off")
         deny = lambda args: json.loads(args[args.index("--settings") + 1])["deniedMcpServers"]
@@ -496,3 +498,183 @@ class ChatGPTAppsTest(BoardBase):
         connections.approve("github")
         self.assertIn("apps.connector_7686.enabled=false", connections.codex_args(self.root),
                       "through colony, what it holds has no unheld way around")
+
+
+LISTED = ("Checking MCP server health…\n\n"
+          "claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected\n"
+          "claude.ai Notion: https://mcp.notion.com/mcp - ! Needs authentication\n"
+          "plugin:gitkraken:gitkraken: npx -y @gitkraken/gk mcp --plugin --host=claude - ✔ Connected\n"
+          "plugin:productivity:notion: https://mcp.notion.com/mcp (HTTP) - ! Needs authentication\n"
+          "plugin:productivity:slack: https://mcp.slack.com/mcp (HTTP) - ! Needs authentication\n"
+          "plugin:productivity:gmail:  (HTTP) - - Not configured\n"
+          "blender: /home/k/.local/opt/blender-mcp/.venv/bin/mcp-for-blender  - ✔ Connected\n"
+          "shop: /usr/bin/shop-mcp - ✔ Connected\n")
+
+
+class ConnectorsOffTest(BoardBase):
+    """The person's own connectors are off in every project until switched on there (2026-11-01: "almost no tokens
+    dedicated to connections if they are not being used")."""
+
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)
+        self.other = Path(self.tmp.name) / "stall"
+        self.other.mkdir()
+        board.track(self.other)
+        self.config = {"claudeInChromeDefaultEnabled": True}
+        configured = patch.object(connections, "_claude_config", side_effect=lambda: self.config)
+        configured.start()
+        self.addCleanup(configured.stop)
+
+    def discover(self):
+        with patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, LISTED, "")):
+            connections.discover_personal()
+
+    def deny(self, root):
+        args = connections.claude_args(root)
+        return json.loads(args[args.index("--settings") + 1])["deniedMcpServers"] if "--settings" in args else []
+
+    def test_every_server_claude_code_brings_is_off_until_switched_on_and_denied_by_its_kind(self):
+        self.discover()
+        self.assertEqual(sorted(connections.load()["personal"]),
+                         ["Chrome", "Gmail", "Notion", "blender", "plugin:gitkraken:gitkraken",
+                          "plugin:productivity:slack", "shop"],
+                         "not one that isn't configured, nor a plugin's copy of a claude.ai connector")
+        self.assertEqual(self.deny(self.root), [
+            {"serverName": "claude-in-chrome"}, {"serverUrl": "https://gmailmcp.googleapis.com/mcp/v1"},
+            {"serverUrl": "https://mcp.notion.com/mcp"}, {"serverName": "blender"},
+            {"serverName": "plugin:gitkraken:gitkraken"}, {"serverUrl": "https://mcp.slack.com/mcp"},
+            {"serverName": "shop"}], "a server on the web by its URL (and with it any plugin's copy), any other by name")
+        self.assertTrue(connections.load()["personal"]["Notion"]["signin"])
+
+        (self.root / ".mcp.json").write_text(json.dumps({"mcpServers": {"blender": {"command": "x"}}}))
+        self.config["projects"] = {str(board.workdir(self.root)): {"mcpServers": {"plugin:gitkraken:gitkraken": {}}}}
+        connections.add("shop", "The shop", [sys.executable, "-c", "pass"])
+        passed("shop")
+        connections.approve("shop")
+        names = [d.get("serverName") for d in self.deny(self.root)]
+        self.assertNotIn("blender", names, "the project's own server is never denied")
+        self.assertNotIn("plugin:gitkraken:gitkraken", names, "nor one it brings in its local settings")
+        self.assertNotIn("shop", names, "nor the connection colony grants it")
+        self.assertIn("blender", [d.get("serverName") for d in self.deny(self.other)], "another project's is its own")
+        self.config["projects"][str(board.workdir(self.root))]["mcpServers"]["slack"] = {"url": "https://mcp.slack.com/mcp"}
+        self.assertNotIn({"serverUrl": "https://mcp.slack.com/mcp"}, self.deny(self.root), "nor one at its own's URL")
+        self.assertIn({"serverName": "plugin:productivity:slack"}, self.deny(self.root), "named instead")
+
+        connections.choose_path("chrome", self.other, "claude")
+        self.assertNotIn({"serverName": "claude-in-chrome"}, self.deny(self.other), "switched on there")
+        self.assertIn({"serverName": "claude-in-chrome"}, self.deny(self.root), "and only there")
+        self.discover()                                     # looked up again: the person's choices stand
+        self.assertNotIn({"serverName": "claude-in-chrome"}, self.deny(self.other))
+        page = board.connections_page(board.registry())
+        self.assertIn("off in every project until switched on", page)
+        self.assertIn("plugin:gitkraken:gitkraken</b> · off", page)
+
+    def test_codex_apps_are_off_until_switched_on(self):
+        apps = [{"name": "Sites", "id": "connector_2020", "isAccessible": True}]
+        from colony import providers
+        with patch.object(providers, "usable", return_value=True), patch.object(connections, "_apps_asked", return_value=apps):
+            connections.discover_chatgpt()
+        self.assertIn("apps.connector_2020.enabled=false", connections.codex_args(self.root))
+        board.project_settings(self.root, {"provider": "codex"})
+        self.assertEqual(connections.listing(self.root)[0], "Sites: off - ChatGPT Sites")
+        connections.switch(self.root, "sites", True)
+        self.assertNotIn("apps.", " ".join(connections.codex_args(self.root)))
+        self.assertIn("apps.connector_2020.enabled=false", connections.codex_args(self.other))
+
+    def test_the_migration_keeps_on_what_each_project_called_lately(self):
+        self.discover()
+        recent = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 3 * 86400))
+        old = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 30 * 86400))
+        call = lambda tool, when: json.dumps({"type": "assistant", "timestamp": when, "message": {"content": [
+            {"type": "tool_use", "id": "toolu_1", "name": tool, "input": {}}]}}, separators=(",", ":")) + "\n"
+        transcripts = Path(self.tmp.name) / "transcripts"
+        enc = lambda root: "".join(ch if ch.isalnum() else "-" for ch in str(board.workdir(root)))
+        mine = transcripts / enc(self.root) / "s1" / "subagents"
+        mine.mkdir(parents=True)
+        (mine / "agent-a.jsonl").write_text(call("mcp__claude_ai_Gmail__search", recent)
+                                            + call("mcp__blender__look", old))
+        worktree = transcripts / (enc(self.other) + "--claude-worktrees-agent-1")
+        worktree.mkdir(parents=True)
+        (worktree / "t.jsonl").write_text(call("mcp__claude-in-chrome__navigate", recent)
+                                          + call("mcp__claude_ai_Gmail__send", recent))
+        (transcripts / "-tmp-elsewhere").mkdir()
+        (transcripts / "-tmp-elsewhere" / "t.jsonl").write_text(call("mcp__plugin_gitkraken_gitkraken__git_add", recent))
+
+        def before(data):                                   # as the person had it: Gmail on everywhere but stall
+            data["personal"]["Gmail"].update(on=True, projects={str(self.other.resolve()): {"on": False}})
+            data["personal"]["blender"]["on"] = True
+        connections.change(before)
+        used = connections.used_lately(transcripts=transcripts)
+        self.assertEqual(sorted(used), ["claude-in-chrome", "claude_ai_Gmail"], "lately, and only in a project")
+        kept = connections.migrate(used)
+        self.assertEqual(kept, {"Gmail": [str(self.root.resolve())], "Chrome": [str(self.other.resolve())]})
+        data = connections.load()
+        self.assertTrue(connections.is_on(data["personal"]["Gmail"], self.root))
+        self.assertFalse(connections.is_on(data["personal"]["Gmail"], self.other), "its own choice stands")
+        self.assertFalse(connections.is_on(data["personal"]["Gmail"], None), "off colony-wide")
+        self.assertFalse(connections.is_on(data["personal"]["blender"], self.root), "called only long ago")
+        self.assertTrue(connections.is_on(data["personal"]["Chrome"], self.other), "called from its worktree")
+        self.assertIsNone(connections.migrate(used), "once")
+
+    def test_an_agent_lists_what_exists_in_a_few_lines(self):
+        self.discover()
+        connections.choose_path("gmail", self.root, "claude")
+        from colony import cli
+        out = Path(self.tmp.name) / "out.txt"
+        with patch.object(board, "root_of", return_value=self.root), open(out, "w") as f, patch("sys.stdout", f):
+            self.assertEqual(cli.main(["connect", "--list"]), 0)
+        lines = out.read_text().splitlines()
+        self.assertEqual(lines[:3], ["blender: off - the person's running Blender",
+                                     "Chrome: off - the person's Chrome browser", "Gmail: on - the person's Gmail"])
+        self.assertIn("Notion: off - the person's Notion (needs the person's sign-in)", lines)
+        self.assertIn("plugin:gitkraken:gitkraken: off - git and GitHub, through GitKraken", lines)
+        self.assertTrue(lines[-1].startswith("Switch one on here: colony connect --on NAME"))
+        self.assertEqual(len(lines), 8)
+        self.assertLess(len(out.read_text()), 600, "almost nothing to read")
+
+    def test_switching_one_on_reloads_the_idle_console_and_tells_its_agent_in_a_line(self):
+        from colony import cli, console, monitor
+        self.discover()
+        out = Path(self.tmp.name) / "out.txt"
+        with patch.object(board, "root_of", return_value=self.root), open(out, "w") as f, patch("sys.stdout", f), \
+                patch("sys.stderr", f):
+            self.assertEqual(cli.main(["connect", "--on", "gitkraken"]), 0)
+            self.assertEqual(cli.main(["connect", "--on", "nothing"]), 2)
+        self.assertIn("plugin:gitkraken:gitkraken on here", out.read_text())
+        self.assertIn("No connector nothing here", out.read_text())
+        self.assertNotIn({"serverName": "plugin:gitkraken:gitkraken"}, self.deny(self.root))
+        self.assertEqual(connections.pending(self.root), {"plugin:gitkraken:gitkraken": True})
+        self.assertEqual(connections.switch(self.root, "plugin:gitkraken:gitkraken", True),
+                         ("plugin:gitkraken:gitkraken", False), "already on: nothing to reload")
+
+        name = console.session_name(self.root)
+        stale, typed = {"why": "its settings or helper tiers changed"}, []
+        w = monitor.Watcher(enabled=False)
+        state = {"state": "working"}
+        with patch.object(board, "projects", return_value=[self.root]), \
+                patch.object(monitor, "name", return_value="steward-seat"), \
+                patch.object(console, "running", side_effect=lambda n: n == name), \
+                patch.object(console, "switching", return_value=None), \
+                patch.object(console, "snapshot", side_effect=lambda *a, **k: dict(state)), \
+                patch.object(console, "drafting", return_value=False), patch.object(console, "attached", return_value=False), \
+                patch.object(console, "stale", side_effect=lambda *a: stale["why"]), \
+                patch.object(console, "busy", return_value=None), patch.object(console, "room", return_value=True), \
+                patch.object(console, "reload", side_effect=lambda *a: stale.update(why=None)) as reload, \
+                patch.object(console, "type_into", side_effect=lambda n, text: typed.append((n, text)) or True):
+            w.current()
+            reload.assert_not_called()                      # in the middle of its turn: never
+            state["state"] = "idle"
+            w.current()
+            reload.assert_called_once()                     # its first idle moment, not minutes later nor an update's
+            self.assertEqual(typed, [])
+            w.current()
+            self.assertEqual(typed, [(name, "[colony] plugin:gitkraken:gitkraken is now connected, its tools loaded. "
+                                            "Carry on.")])
+            w.current()
+            self.assertEqual(len(typed), 1, "told once")
+            reload.assert_called_once()
+        self.assertEqual(connections.pending(), {})
+        self.assertEqual(connections.notice({"Gmail": True, "Chrome": True, "blender": False}),
+                         "[colony] Gmail and Chrome are now connected, their tools loaded; blender is now disconnected. "
+                         "Carry on.")
