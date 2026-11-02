@@ -23,7 +23,7 @@ LIVE = ('due', 'requested', 'ready', 'compacting', 'prepared', 'emitted', 'unkno
 TRANSCRIPT_VERSION = 2
 # R144: the agent closes a topic when it ends (colony topic-closed). Below the floor a closed topic's detail costs
 # little to keep; the conversation is reminded once as it passes each reminder size, never every turn.
-FLOOR = 100_000
+FLOOR = 150_000
 REMIND = (150_000, 300_000)
 # PROVIDER: Claude Code's /compact takes instructions for its summary; Codex's compaction takes none.
 FOCUS = ('Keep what the open work needs; a closed topic leaves only its conclusion. Keep what the person and you meant, '
