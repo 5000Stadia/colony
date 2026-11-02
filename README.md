@@ -2,8 +2,8 @@
 
 **One page to run all your long projects with Claude Code or Codex.** Each project gets its own agent, live in
 the browser and on your phone. You see what each one is doing, what it's waiting on you for, and how
-far along its roadmap it is, and you steer them all from one board. A steward agent can hold the helm
-for you across them.
+far along its roadmap it is, and you steer them all from one board. An optional steward agent advises you
+across them.
 
 ## Quick start
 
@@ -119,6 +119,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   Colony records its own inserted prompts so a failed background message can be recovered before your next send.
 - **The roadmap**, kept by the agent in `ROADMAP.md`, drawn as a journey: finished milestones as medals, each open
   one a stop with a ring of its progress, a dot per item and what's being worked on now, and the vision at the end.
+  The file stays small: an open item is one line with its 0–3 related items, and its details live in `roadmap/R#.md`.
   A milestone can name its kind (menu, lanes, findings, sections) and is drawn as one; only a sequence implies an
   order. Open a milestone for its items by title, grouped Doing, To come and Done; **Do this next** or **Leave for
   later** reaches the agent in a tap. Shape hints, read by rule from the plan and its history, flag drift (a
@@ -155,14 +156,15 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   nothing waits on you. How hands-on you are is yours to set.
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
 - **The steward**, one more session at the top of the sidebar, optional. It tells you when a project needs you
-  or has finished. It relays what you say to a project in full, as yours. Given the helm, it settles
-  routine questions within the direction you set for each project, and brings back anything about scope,
-  cost or that can't be undone; a decision a project put to you is never its to answer. It never polls: a watcher reads every screen every few seconds for
+  or has finished. It relays what you say to a project in full, as yours, and anything of its own goes as a
+  labelled suggestion. It only advises: it holds no helm, and a decision a project put to you is never its to
+  answer. It runs on a cheaper model. It never polls: a watcher reads every screen every few seconds for
   free and wakes it only when something waits on you or work was completed (a roadmap item done, a showcase
   entry), never just because a turn ended, and it stays silent when there's nothing new for you. Colony's own words reach it through an inbox
   its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
   hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
-  you, and what's new; say mute to mute it.
+  you, and what's new. Muted, it is fully off: its session stops and uses nothing, while colony's own watcher
+  keeps safe pause, mail and recovery going.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.
@@ -175,6 +177,10 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   the provider; native programs keep their credentials, and short-lived login links and codes are never saved
   to chats or board logs. Existing consoles pick up a successful login when safely idle, one per watcher pass,
   preserving conversations and usage pauses. A successful Claude browser login replaces a saved Colony token.
+- **Idle projects sleep:** a project's console with no turn for a day and nothing set to wake it closes until its
+  next message (any message in colony wakes it, in its own conversation). After a restart, only projects active in
+  the day before colony last ran come back running. While one sleeps, the Claude and ChatGPT apps can't reach it;
+  the board always can.
 - **Work keeps going without you:** an agent idle a while with roadmap work it can start, and nothing of its own
   waiting on you, is told so once, by rule, at any hour (outside yours, to take what doesn't need you); a project
   can turn it off. When a network drop stops an agent or its helpers, colony tells it to

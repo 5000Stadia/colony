@@ -18,8 +18,8 @@ reports what it finds and changes nothing here; the person's improvements come t
 - The lineup is discovered, not written in: each provider's `discover()` says which models its program can run
   here, and the cards come from Artificial Analysis for those. A new provider supplies `discover()` (asking its
   program, then confirming each model with a trivial call, where it has no command that lists them).
-- Pushing to this repository's own origin (private) is routine; anything else that leaves the machine is
-  the person's call.
+- This repository's origin is public: push at milestones or a coherent set of finished work, after checking
+  what goes out (the person's rule); anything else that leaves the machine is the person's call.
 ## This project is part of a colony
 
 The colony is the person's set of projects, each with its own agent (you are this project's). They follow and

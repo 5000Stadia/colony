@@ -9867,8 +9867,16 @@ class TokensTest(BoardBase):
                                   env=dict(os.environ, COLONY_PROJECT=str(self.root)))
         self.addCleanup(writer.wait)
         self.addCleanup(writer.kill)
+        def holds():
+            for fd in Path(f"/proc/{writer.pid}/fd").iterdir():
+                try:
+                    if os.readlink(fd) == str(held):
+                        return True
+                except OSError:                 # an fd closed while the interpreter starts
+                    pass
+            return False
         for _ in range(50):
-            if any(os.readlink(fd) == str(held) for fd in Path(f"/proc/{writer.pid}/fd").iterdir()):
+            if holds():
                 break
             time.sleep(0.1)
         # an hour kept before worktrees were followed is re-filed once
