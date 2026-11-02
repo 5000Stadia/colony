@@ -308,7 +308,7 @@ class ContextTest(unittest.TestCase):
         said = lambda: context.on_prompt(self.root, 'claude', prompt)
         with patch.object(context, 'register', return_value=True):
             self.claude(120_000); self.assertEqual(said(), '')
-            self.claude(160_000); self.assertIn("Has a topic ended that you haven't closed?", said())
+            self.claude(160_000); self.assertIn('Has a topic ended? If so, close it within this reply', said())
             self.assertEqual(said(), '')
             self.claude(320_000); self.assertIn('320k tokens', said())
             self.assertEqual(said(), '')

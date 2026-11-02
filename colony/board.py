@@ -106,7 +106,6 @@ compaction; your memory of a guide may not):
 - put a picture, file or project link in the person's Chat: `chat.md`
 - record a standing order (from now on, always, never) or set a wake: `orders.md`
 - write to another project, or rename this one: `projects.md`
-- close a topic the conversation has moved on from: `topics.md`
 - start a project, or weigh structure (helpers, review, tests, memory): `GUIDE_PATH`, how long work goes well, from
   colony's measured runs
 """

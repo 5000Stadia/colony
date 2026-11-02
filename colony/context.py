@@ -506,8 +506,8 @@ def reminder(root, st):
         return ''
     st['reminded'] = dict(seen, at=sorted(set(seen['at']) | set(marks)))
     atomic_json(file(root), st)
-    return (f"[colony] This conversation is at {tokens // 1000}k tokens. Has a topic ended that you haven't closed? "
-            f'If so, close it within this reply (`{board.GUIDES / "topics.md"}`); if not, carry on: size alone is no reason.')
+    return (f"[colony] This conversation is at {tokens // 1000}k tokens. Has a topic ended? If so, close it within "
+            f'this reply, as `{board.GUIDES / "topics.md"}` says; if not, carry on: size alone is no reason.')
 
 
 def on_prompt(root, key, payload):

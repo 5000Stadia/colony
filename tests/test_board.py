@@ -3733,7 +3733,10 @@ class MonitorTest(BoardBase):
         self.assertIn(f"`{board.GUIDES}/`", text)
         self.assertIn("this list outlasts a compaction", " ".join(text.split()), "a guide is re-read once forgotten")
         named = set(re.findall(r": `([a-z-]+\.md)`", text))
-        self.assertEqual(named, {p.name for p in board.GUIDES.glob("*.md")})
+        # R144: closing a topic is first named by the size reminder, once a close can repay its compaction.
+        from colony import context
+        self.assertIn('"topics.md"', Path(context.__file__).read_text())
+        self.assertEqual(named | {"topics.md"}, {p.name for p in board.GUIDES.glob("*.md")})
         for name in named:
             guide = (board.GUIDES / name).read_text()
             self.assertNotIn("ROADMAP.md", guide, "a guide is generic: the project's own plan is named in its file")
