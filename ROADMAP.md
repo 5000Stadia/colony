@@ -23,7 +23,10 @@ new models on its own, keeps itself current, and never gets in the way of the wo
   output can be another's input, and each stays coherent with the others and with the person's direction over
   the long run.
 - Wiser with every project: what one project shows works, measured, becomes guidance for all, so each new
-  project starts smarter than the last.
+  project starts smarter than the last; and the colony can tell whether its own changes made the work better or
+  worse, not only that each seemed a good idea.
+- A research department built in: at each step, a cheap check decides whether research is warranted, and the agent
+  gets one restrained guide for it, curated over time by what actually happened.
 - Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
   decisions; no extra spend without substantial gain.
 - Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
@@ -201,7 +204,8 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R105 A shared research library
 - [x] R106 Standing rules that survive compaction
 - [x] R107 The board checks ready work
-- [ ] R131 Q Branch — research handed to an item's agent at the moment it needs it; shape approved by the person Nov 2 (check, one restrained brief or the curated library entry, learn at done); colony's part builds after Friday's reset
+- [ ] R131 Q Branch, colony's research department — a cheap check at each item; when warranted, the agent gets one restrained guide (the curated library entry, or one research pass), and what happened curates the library; adopted as colony's own feature, on for every project with a per-project off; builds after Friday's reset
+- [ ] R146 Knowing whether colony's changes helped — a warning system read from what colony already records: outcomes, friction and cost kept apart, labels with evidence, a frozen ruler, exposure marked; shaped with colony-codex; builds after Friday's reset (related: R131, R144)
 
 - [x] R137 Waiting costs nothing
 - [x] R138 A helper never wakes its lead just to say it is still waiting
