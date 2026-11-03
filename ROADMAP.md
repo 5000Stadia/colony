@@ -224,7 +224,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 
 ## M12 — Work for customers: custom workflow software, one project per customer
 
-- [ ] R149 What colony needs for a first customer's project — built as a real one shows it: the customer reaching only their app over Tailscale, their change requests reaching the project's agent, each customer walled off from the person's own projects and data; on hold: building waits for Friday's reset, and the person is still brainstorming the platform before any project is set up (related: R147, R94)
+- [ ] R149 What colony needs for a first customer's project — built as a real one shows it: the customer reaching only their app over Tailscale, their change requests reaching the project's agent, each customer walled off from the person's own projects and data; on hold: the person brainstorms it in a project of their own; colony's part is built as that project shows a need, after Friday's reset (related: R147, R94)
 
 ## M6 — Later
 
