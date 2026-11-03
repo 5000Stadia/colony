@@ -22,6 +22,10 @@ new models on its own, keeps itself current, and never gets in the way of the wo
 - One colony, not silos: projects talk directly (asks, replies, nests with a shared vision), one project's
   output can be another's input, and each stays coherent with the others and with the person's direction over
   the long run.
+- Work for others too: the person can build custom workflow software for their own customers, each one its own
+  project from a base primed for it; the customer uses theirs as a web app over Tailscale, hosted by the person
+  or on the customer's own computers, and when they ask "can we change x or y", it goes through to the project's
+  agent working on it and comes back updated.
 - Wiser with every project: what one project shows works, measured, becomes guidance for all, so each new
   project starts smarter than the last; and the colony can tell whether its own changes made the work better or
   worse, not only that each seemed a good idea.
@@ -217,6 +221,10 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R132 A bar for a creative item, picked by the person from real examples
 - [x] R140 Guidance arrives at its moment
 - [x] R141 Questions in flight only for the unforeseen
+
+## M12 — Work for customers: custom workflow software, one project per customer
+
+- [ ] R149 What colony needs for a first customer's project — built as a real one shows it: the customer reaching only their app over Tailscale, their change requests reaching the project's agent, each customer walled off from the person's own projects and data; the person's venture, two prospects (related: R147, R94)
 
 ## M6 — Later
 
