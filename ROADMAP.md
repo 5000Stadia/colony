@@ -206,6 +206,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R107 The board checks ready work
 - [ ] R131 Q Branch, colony's research department — a cheap check at each item; when warranted, the agent gets one restrained guide (the curated library entry, or one research pass), and what happened curates the library; adopted as colony's own feature, on for every project with a per-project off; builds after Friday's reset
 - [ ] R146 Knowing whether colony's changes helped — a warning system read from what colony already records: outcomes, friction and cost kept apart, labels with evidence, a frozen ruler, exposure marked; shaped with colony-codex; builds after Friday's reset (related: R131, R144)
+- [ ] R147 Research in a locked room — one standard way any agent or helper researches the open web: prompt in, text out, a profile per provider, an OS sandbox that sees only its workspace, every call logged, output screened before an agent with tools reads it; Q Branch its first user; builds after Friday's reset (related: R75, R131)
 
 - [x] R137 Waiting costs nothing
 - [x] R138 A helper never wakes its lead just to say it is still waiting
