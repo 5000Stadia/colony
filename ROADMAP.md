@@ -201,7 +201,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R105 A shared research library
 - [x] R106 Standing rules that survive compaction
 - [x] R107 The board checks ready work
-- [ ] R131 Q Branch — research handed to an item's agent at the moment it needs it; parked with Quartermaster
+- [ ] R131 Q Branch — research handed to an item's agent at the moment it needs it; shape approved by the person Nov 2 (check, one restrained brief or the curated library entry, learn at done); colony's part builds after Friday's reset
 
 - [x] R137 Waiting costs nothing
 - [x] R138 A helper never wakes its lead just to say it is still waiting
