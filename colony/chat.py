@@ -214,6 +214,15 @@ def _typed(text):
     return PASTED.sub(lambda m: m.group(1), text) if isinstance(text, str) else text
 
 
+# a compaction command typed into the console, colony's own focus with it: the compaction's note marks it in Chat
+COMPACT = re.compile(r"^\s*/compact(?:\s|$)")
+
+
+def _said(text):
+    """A message into the console that Chat shows: not the program's notices (they start "<"), not a compaction command."""
+    return isinstance(text, str) and bool(text.strip()) and not text.lstrip().startswith("<") and not COMPACT.match(text)
+
+
 def _who(text):
     """Who a message into the console came from: colony's own notices and the steward's relays start [colony]."""
     return "colony" if text.lstrip().startswith("[colony]") else "you"
@@ -246,8 +255,7 @@ def claude_events(path):
         if e.get("type") == "attachment":
             a = e.get("attachment") or {}
             sent = _typed(a.get("prompt"))
-            if a.get("type") == "queued_command" and isinstance(sent, str) and sent.strip() \
-                    and not sent.lstrip().startswith("<"):
+            if a.get("type") == "queued_command" and _said(sent):
                 out.append((_who(sent), sent.strip(), at))
             continue
         if e.get("isCompactSummary"):
@@ -257,7 +265,7 @@ def claude_events(path):
             text = content if isinstance(content, str) else "\n".join(
                 c.get("text", "") for c in content or [] if isinstance(c, dict) and c.get("type") == "text")
             text = _typed(text).strip()
-            if text and not text.startswith("<") and not text.startswith("Caveat:"):
+            if _said(text) and not text.startswith("Caveat:"):
                 out.append((_who(text), text, at))
         elif e.get("type") == "assistant" and isinstance(content, list):
             for c in content:
@@ -274,7 +282,7 @@ def claude_events(path):
                     arg = inp.get("description") or inp.get("command") or inp.get("file_path") or inp.get("pattern") \
                         or inp.get("prompt") or next((v for v in inp.values() if isinstance(v, str)), "")
                     out.append(("step", _step(c.get("name", "tool"), arg), at))
-    return out + [("queued", q.strip(), "") for q in queued if q.strip()]
+    return out + [("queued", q.strip(), "") for q in queued if _said(q)]   # a compaction command, held to keep the order
 
 
 # `colony needs-you`: the agent telling the board its turn asks the person; plumbing, never shown as work
@@ -299,7 +307,7 @@ def codex_events(path):
                 continue
             if p["role"] == "assistant":
                 out.append(("say", text, at))
-            elif not text.startswith("<") and not text.startswith("# AGENTS.md"):
+            elif _said(text) and not text.startswith("# AGENTS.md"):
                 out.append((_who(text), text, at))
         elif kind in ("custom_tool_call", "function_call"):
             if p["step"] is not None:

@@ -7064,6 +7064,25 @@ class StayCurrentTest(BoardBase):
         self.assertEqual(held[1]["message"]["content"][0]["content"], ("Async agent launched " + big)[:64])
         self.assertEqual([s for k, s, _ in chat.claude_events(path)], ["Done.", "Write(a.py)"])
 
+    def test_chat_marks_a_compaction_without_its_command(self):
+        # the person: the note that the conversation was compacted helps; colony's /compact and its focus don't
+        # (2026-11-02)
+        from colony import chat, context
+        path = Path(self.tmp.name) / "compacted.jsonl"
+        focus = "/compact " + context.FOCUS
+        path.write_text("\n".join(json.dumps(e) for e in [
+            {"type": "user", "timestamp": "t1", "message": {"role": "user", "content": "What board is it?"}},
+            {"type": "queue-operation", "operation": "enqueue", "content": focus},
+            {"type": "queue-operation", "operation": "enqueue", "content": "And the BIOS?"},
+            {"type": "queue-operation", "operation": "dequeue"},
+            {"type": "user", "timestamp": "t2", "message": {"role": "user", "content": focus}},
+            {"type": "user", "timestamp": "t3", "isCompactSummary": True, "message": {"role": "user", "content": "Summary"}},
+            {"type": "user", "timestamp": "t4", "message": {"role": "user", "content":
+                "<command-name>/compact</command-name>"}}]) + "\n")
+        self.assertEqual([(k, s) for k, s, _ in chat.claude_events(path)],
+                         [("you", "What board is it?"), ("compact", ""), ("queued", "And the BIOS?")],
+                         "the command hidden, the compaction marked, the person's next message still queued")
+
     def test_memory_to_spare_is_read_from_the_kernel(self):
         from unittest.mock import mock_open, patch
         with patch("builtins.open", mock_open(read_data="MemTotal: 16000000 kB\nMemAvailable:  1500000 kB\n")):
