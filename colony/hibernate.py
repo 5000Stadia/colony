@@ -137,8 +137,10 @@ def held(root):
         return "the safe pause holds it until the reset"
     if _cut(root):
         return "a usage limit stopped it mid-work; colony wakes it as it lifts"
-    if any(not n["delivered_at"] and not n.get("quiet") for n in board.open_notes(root)) \
-            or any(not m["delivered_at"] for m in mail.inbox(root)):
+    # The person's pause holds these until resume; they aren't work the console can take now.
+    if not board.paused(root) and (
+            any(not n["delivered_at"] and not n.get("quiet") for n in board.open_notes(root))
+            or any(not m["delivered_at"] for m in mail.inbox(root))):
         return "something waits to be handed to it"
     try:
         if lead.info(root).get("handoff"):

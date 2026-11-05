@@ -795,7 +795,8 @@ class Watcher:
             delayed(known, retry=not (known['code'] == 'usage-pause' and urgent), replies=state != 'working')
         if state == 'working' or (not known and state != 'off'):
             mail.report(p, [m for m in asks if m['delivery']['status'] == 'reply-delayed'], 'handed')
-        if known and ((known['code'] == 'usage-pause' and not urgent)
+        if known and (known['code'] == 'project-paused'  # held words must not start a sleeping console, even urgent mail
+                      or (known['code'] == 'usage-pause' and not urgent)
                       or (known['code'] != 'usage-pause' and state != 'off')):
             return woke_starting                  # retain the safe pause's existing nonurgent guard
         if not waiting:
