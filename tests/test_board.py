@@ -13244,6 +13244,101 @@ class HibernateWakesTest(HibernateBase):
         self.assertEqual(hibernate.asleep(self.root)["conversation"], "conv-1")
 
 
+class HibernatePausedTest(HibernateBase):
+    def setUp(self):
+        super().setUp()
+        reg = board.registry()
+        reg["settings"]["messaging"] = True
+        board.save_registry(reg)
+
+    def assert_may_sleep(self):
+        with ExitStack() as stack:
+            self.quiet(stack)
+            self.assertIsNone(hibernate.awake(self.root))
+            self.assertIsNone(hibernate.cold(self.root, time.time()))
+            self.assertEqual(hibernate.tick(), [self.root])
+        self.assertFalse(console.running(self.name))
+        self.assertEqual(hibernate.asleep(self.root)["conversation"], "conv-1")
+
+    def test_a_paused_project_with_a_held_note_may_sleep(self):
+        board.pause_project(self.root)
+        board.add_note(self.root, None, "Water the ferns", author="person")
+        self.assert_may_sleep()
+
+    def test_a_paused_project_with_held_mail_may_sleep(self):
+        board.pause_project(self.root)
+        mail.send(mail.address(self.root), "Hello from next door")
+        self.assert_may_sleep()
+
+    def assert_stays_asleep(self, kind):
+        self.sleep_now()
+        board.pause_project(self.root)
+        watcher = monitor.Watcher(enabled=False)
+        if kind.endswith("mail"):
+            mail.send(mail.address(self.root), kind, urgent=kind == "urgent mail")
+        else:
+            board.add_note(self.root, None, kind, author="colony", quiet=kind == "quiet note")
+        with patch.object(console, "ensure", wraps=console.ensure) as ensure:
+            watcher.mail()
+        ensure.assert_not_called()
+        self.assertFalse(console.running(self.name))
+        self.assertEqual(hibernate.asleep(self.root)["conversation"], "conv-1")
+        self.assertTrue(all(not n["delivered_at"] for n in board.open_notes(self.root)))
+        self.assertTrue(all(not m["delivered_at"] for m in mail.inbox(self.root)))
+        self.assertTrue(all(m["delivery"]["code"] == "project-paused" for m in mail.inbox(self.root)))
+
+    def test_a_held_note_does_not_wake_a_paused_sleeper(self):
+        self.assert_stays_asleep("note")
+
+    def test_a_held_quiet_note_does_not_wake_a_paused_sleeper(self):
+        self.assert_stays_asleep("quiet note")
+
+    def test_held_mail_does_not_wake_a_paused_sleeper(self):
+        self.assert_stays_asleep("mail")
+
+    def test_held_urgent_mail_does_not_wake_a_paused_sleeper(self):
+        self.assert_stays_asleep("urgent mail")
+
+    def test_resuming_wakes_and_delivers_in_the_same_conversation(self):
+        self.sleep_now()
+        board.pause_project(self.root)
+        note = board.add_note(self.root, None, "Water the ferns", author="person")
+        quiet = board.add_note(self.root, None, "Cleanup check", author="colony", quiet=True)
+        letter = mail.send(mail.address(self.root), "Hello from next door")
+        watcher = monitor.Watcher(enabled=False)
+        watcher.mail()
+        self.assertTrue(hibernate.asleep(self.root))
+        self.assertEqual(board.resume_project(self.root), "resumed")
+        prov = providers.of(self.root)
+        with patch.object(console, "COMMAND", None), patch.object(providers, "installed", return_value=True), \
+                patch.object(type(prov), "command", return_value="sleep 60") as command:
+            watcher.mail()
+        self.assertEqual(command.call_args.kwargs["resume"], "conv-1")
+        self.assertTrue(console.running(self.name), (console.died(self.name), mail.inbox(self.root)))
+        self.assertIsNone(hibernate.asleep(self.root))
+        with ExitStack() as stack:
+            self.quiet(stack)
+            stack.enter_context(patch.object(console, "age", return_value=3600))
+            typed = stack.enter_context(patch.object(console, "type_into", return_value=True))
+            watcher.mail()
+        self.assertIn("mail from another project", typed.call_args.args[1])
+        self.assertTrue({note["id"], quiet["id"], letter["id"]} <= watcher.nudged)
+        fresh_notes, _ = board.deliver(self.root)
+        fresh_mail, _ = mail.deliver(self.root)
+        self.assertTrue({note["id"], quiet["id"]} <= {n["id"] for n in fresh_notes})
+        self.assertEqual([m["id"] for m in fresh_mail], [letter["id"]])
+        self.assertTrue(all(n["delivered_at"] for n in board.open_notes(self.root)))
+        self.assertTrue(mail.inbox(self.root)[0]["delivered_at"])
+
+    def test_a_person_pause_does_not_hide_a_scheduled_wake(self):
+        board.pause_project(self.root)
+        board.add_note(self.root, None, "Water the ferns", author="person")
+        wakes.make(self.root, "check the build", within="2h")
+        with ExitStack() as stack:
+            self.quiet(stack)
+            self.assertEqual(hibernate.awake(self.root), "a wake of its own is set")
+
+
 class HibernateViewingTest(HibernateBase):
     def test_viewing_it_on_the_board_doesnt_wake_it(self):
         self.sleep_now()

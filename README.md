@@ -165,6 +165,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
   you, and what's new. Muted, it is fully off: its session stops and uses nothing, while colony's own watcher
   keeps safe pause, mail and recovery going.
+- **Idle sessions:** after a day with nothing to do, a project closes its console; its next message wakes it
+  in the same conversation. Notes and mail held by your project pause let it sleep and wait until you resume it.
+  While asleep its Claude or ChatGPT app connection sleeps too; the board can still wake it.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
   wakes them at the reset to carry on.
