@@ -29,8 +29,10 @@ new models on its own, keeps itself current, and never gets in the way of the wo
 - Wiser with every project: what one project shows works, measured, becomes guidance for all, so each new
   project starts smarter than the last; and the colony can tell whether its own changes made the work better or
   worse, not only that each seemed a good idea.
-- A research department built in: at each step, a cheap check decides whether research is warranted, and the agent
-  gets one restrained guide for it, curated over time by what actually happened.
+- A research department built in: the agent writing an item, who sees its need best, flags it for research, and
+  one restrained guide is ready when the item starts. The guides evolve like a field's textbook from edition 1 to
+  edition 30: every research pass that draws on one also searches for itself and keeps the guide, weaving in what it
+  was missing or what is new, so the guides grow with the agents; the worthy ones ship with colony for everyone.
 - Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
   decisions; no extra spend without substantial gain.
 - Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
@@ -208,7 +210,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R105 A shared research library
 - [x] R106 Standing rules that survive compaction
 - [x] R107 The board checks ready work
-- [ ] R131 Q Branch, colony's research department — the item's agent flags research as it writes the item, and the pass runs when the item before it starts, so one restrained guide (the curated library entry, or one research pass) is ready on arrival; what happened curates the library; adopted as colony's own feature, on for every project with a per-project off; builds after Friday's reset
+- [ ] R131 Q Branch, colony's research department — the item's agent flags research as it writes the item, and the pass runs when the item before it starts, so one restrained guide (the curated library entry, or one research pass) is ready on arrival; every pass that draws on a guide keeps it as a living edition, and worthy guides ship with colony; adopted as colony's own feature, on for every project with a per-project off; builds after Friday's reset
 - [ ] R146 Knowing whether colony's changes helped — a warning system read from what colony already records: outcomes, friction and cost kept apart, labels with evidence, a frozen ruler, exposure marked; shaped with colony-codex; builds after Friday's reset (related: R131, R144)
 - [ ] R147 Research in a locked room — one standard way any agent or helper researches the open web: prompt in, text out, a profile per provider, an OS sandbox that sees only its workspace, every call logged, output screened before an agent with tools reads it; Q Branch its first user; builds after Friday's reset (related: R75, R131)
 - [ ] R148 Dev mode — while on, every project tells colony where colony's shape got in its way (a command, guide, rule, notice, the board), as quiet mail colony answers; the person's ask, approved; builds after Friday's reset, after the R142 fix (related: R146)
