@@ -203,7 +203,9 @@ def contained(cmd, name=None):
         return cmd
     # Asked again where the console starts: a long-lived tmux server can lose the right to make scopes ("Access
     # denied") while the board still has it, and a console that can't get one starts as it is rather than dying.
-    unit = f"--unit={UNIT}{name}-{int(time.time())} " if name else ""
+    # Named to the nanosecond: a console started again within the second its last one ended (a wake, a move) found
+    # that one's scope not yet gone, and systemd refused the name, so the new console died as it started.
+    unit = f"--unit={UNIT}{name}-{time.time_ns()} " if name else ""
     return (f"if systemd-run --user --scope --quiet true 2>/dev/null; then exec systemd-run --user --scope --quiet "
             f"{unit}-p OOMPolicy=continue -- sh -c {shlex.quote(cmd)}; else exec sh -c {shlex.quote(cmd)}; fi")
 
