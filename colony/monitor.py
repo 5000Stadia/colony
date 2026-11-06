@@ -315,7 +315,7 @@ def renamed(before, after):
 def brief():
     home().mkdir(parents=True, exist_ok=True)
     source = Path(__file__).resolve().parent.parent
-    own = next((p for p in board.projects() if p.resolve() == source), None)
+    own = board.colony_project()
     upkeep = UPKEEP_REPORT.replace("{name}", own.name) if own else UPKEEP_SELF
     named = board.steward_named()
     role = ROLE.replace("{who}", NAMED_WHO.format(name=named) if named else "steward")
@@ -724,7 +724,8 @@ class Watcher:
     def _mail_project(self, p, closing, woke_starting):
         from . import mail, vision
         incoming = mail.inbox(p)
-        letters = [m for m in incoming if not m['delivered_at']]
+        # Quiet mail (`colony send --dev`, R148) waits for the next turn and wakes no one, a sleeper included.
+        letters = [m for m in incoming if not m['delivered_at'] and not m.get('quiet')]
         asks = [m for m in incoming if m['delivered_at'] and m['ask'] and not m['answer']]
         # A quiet note waits for the next turn, except to a sleeping console (R142): any message wakes it, and once
         # woken it is told, as for any note (the person, 2026-11-01: "Sending any message in colony should wake")

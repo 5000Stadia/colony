@@ -1673,13 +1673,14 @@ def cmd_choose(a):
 def cmd_send(a):
     from . import mail
     try:
-        m = mail.send(a.to, mail.read_text(a.text), ask=a.ask, urgent=a.urgent)
+        m = mail.send(a.to, mail.read_text(a.text), ask=a.ask, urgent=a.urgent, dev=getattr(a, 'dev', False))
     except KeyError:
         raise SystemExit(f"no project named {a.to}; `colony projects` lists them")
     except OSError as err:
         raise SystemExit(str(err))
     delivery = m.get('delivery', {})
-    print(f"queued {m['id']} to {a.to} for session handoff" + (" (answer expected via colony reply)" if a.ask else ""))
+    print(f"queued {m['id']} to {a.to} for session handoff" + (" (answer expected via colony reply)" if a.ask else "")
+          + (" (dev report: quiet, it waits for their next turn)" if m.get("dev") else ""))
     if delivery.get('status') == 'delayed':
         print(f"delivery delayed: {delivery['reason']}")
     return 0
@@ -1708,7 +1709,7 @@ def cmd_mail(a):
     me = mail.address(root)
     for m in ms[-a.last:]:
         way = f"from {mail.shown(m['from'])}" if m["to"] == me else f"to {m['to']}"
-        flag = (" [answered]" if m["answer"] else " [asks]") if m["ask"] else ""
+        flag = ((" [answered]" if m["answer"] else " [asks]") if m["ask"] else "") + (" [dev]" if m.get("dev") else "")
         delivery = m.get('delivery', {})
         state = delivery.get('status', 'handed' if m.get('delivered_at') else 'queued')
         detail = f" [{state}" + (f": {delivery['reason']}" if delivery.get('reason') else "") + "]"
@@ -2299,6 +2300,8 @@ def main(argv=None):
     p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")
     p.add_argument("--ask", action="store_true", help="it expects an answer")
     p.add_argument("--urgent", action="store_true", help="deliver even mid-turn, not when the turn ends")
+    p.add_argument("--dev", action="store_true", help="a report of where colony's shape got in your way: tagged, and "
+                   "quiet (it waits for the recipient's next turn and wakes no one)")
     p.set_defaults(fn=cmd_send)
     p = sub.add_parser("reply"); p.add_argument("id"); p.add_argument("text"); p.set_defaults(fn=cmd_reply)
     p = sub.add_parser("waiting", help="(steward) what waits on the person, as Needs you has it, with each item's ID")
