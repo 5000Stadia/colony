@@ -82,13 +82,16 @@ def blocker(root, snap=None):
     return None
 
 
-def send(to, text, ask=False, re=None, urgent=False):
+def send(to, text, ask=False, re=None, urgent=False, dev=False):
+    """`dev`: a report of where colony's shape got in the way (R148), tagged and quiet: it waits for the recipient's
+    next turn and never wakes it, asleep or idle."""
     if not board.registry()["settings"]["messaging"]:
         raise PermissionError("messaging between projects is off (colony settings messaging on)")
     dest = resolve(to)
     src_root, src = sender()
     msg = {"type": "message", "id": "m" + secrets.token_hex(4), "at": board.now(), "from": src, "to": to,
            "text": text.strip(), "ask": ask, "re": re, "urgent": urgent,
+           **({"dev": True, "quiet": True} if dev else {}),
            "delivery": {'status': 'queued', 'reason': '', 'code': '', 'at': board.now()}}
     if src_root and Path(src_root) in names():
         msg['source_root'] = str(src_root)
@@ -344,7 +347,7 @@ def render(ms, heading):
         return ""
     lines = [heading]
     for m in ms:
-        kind = "asks" if m["ask"] else "writes"
+        kind = ("asks" if m["ask"] else "writes") + (" (dev report)" if m.get("dev") else "")
         lines.append(f"- [{m['id']}] {shown(m['from'])} {kind}: {m['text']}")
     if any(m["ask"] for m in ms):
         lines.append('Answer a question with: colony reply ID "your answer"')

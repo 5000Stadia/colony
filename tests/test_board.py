@@ -13243,6 +13243,81 @@ class HibernateWakesTest(HibernateBase):
         self.assertEqual(got["resume"], "conv-1")
         self.assertEqual(hibernate.asleep(self.root)["conversation"], "conv-1")
 
+    def test_dev_mail_leaves_a_sleeper_asleep_and_plain_mail_wakes_it(self):
+        """R148: a dev report waits for colony's next turn; it never wakes a sleeping colony, as plain mail does."""
+        from colony import mail
+        board.set_setting("messaging", "on")
+        self.sleep_now()
+        m = mail.send(mail.address(self.root), "colony gate's wording misled me", dev=True)
+        self.assertTrue(m["dev"] and m["quiet"])
+        order = []
+        with ExitStack() as stack:
+            self.watch_ensure(stack, order)
+            monitor.Watcher(enabled=False).mail()
+        self.assertNotIn(("ensure", self.root), order, "dev mail wakes no one")
+        self.assertTrue(hibernate.asleep(self.root))
+        with ExitStack() as stack:
+            self.quiet(stack)
+            self.assertIsNone(hibernate.held(self.root), "nor keeps one awake")
+        fresh, _ = mail.deliver(self.root, mark=False)
+        self.assertIn("(dev report)", mail.render(fresh, "Mail:"), "the tag shows when it is read")
+        mail.send(mail.address(self.root), "you are blocking me")
+        with ExitStack() as stack:
+            self.watch_ensure(stack, order)
+            monitor.Watcher(enabled=False).mail()
+        self.assertIn(("ensure", self.root), order, "plain mail wakes it as before")
+        self.assert_woken()
+        self.assertIn("[dev]", self.cli("mail").stdout)
+
+
+class DevModeTest(BoardBase):
+    """R148: one switch; while on, every project's instructions carry the dev line, colony's own its own line."""
+    def setUp(self):
+        super().setUp()
+        board.track(self.root)                                    # stands in for colony's own repository
+        self.ferns = Path(self.tmp.name) / "ferns"
+        self.ferns.mkdir()
+        board.track(self.ferns)
+        self.moss = Path(self.tmp.name) / "moss"
+        (self.moss / ".board").mkdir(parents=True)
+        board.project_settings(self.moss, {"provider": "codex"})
+        board.track(self.moss)
+        own = patch.object(board, "colony_project", return_value=self.root)
+        own.start()
+        self.addCleanup(own.stop)
+
+    def texts(self):
+        return {"colony": (self.root / "CLAUDE.md").read_text(), "ferns": (self.ferns / "CLAUDE.md").read_text(),
+                "moss": (self.moss / "AGENTS.md").read_text()}
+
+    def test_the_line_is_in_every_project_but_colony_while_on_and_gone_when_off(self):
+        board.set_setting("dev_mode", "on")
+        line = board.DEV_LINE.replace("{name}", "plants").strip()
+        got = self.texts()
+        for name in ("ferns", "moss"):
+            self.assertIn(line, got[name], name)
+            self.assertNotIn(board.DEV_OWN.strip(), got[name])
+        self.assertNotIn(line, got["colony"], "colony doesn't report to itself")
+        self.assertIn(board.DEV_OWN.strip(), got["colony"], "it hears the reports arrive as quiet mail")
+        self.assertLess(len(line.split()), 75, "about 60 words, read on every turn")
+        board.set_setting("dev_mode", "off")
+        for name, text in self.texts().items():
+            self.assertNotIn("Dev mode is on", text, name)
+
+    def test_the_switch_shows_only_where_colony_is_a_project(self):
+        self.assertIn("name='dev_mode'", board.settings_page(board.registry()))
+        with patch.object(board, "colony_project", return_value=None):
+            self.assertNotIn("name='dev_mode'", board.settings_page(board.registry()))
+            self.assertEqual(board.dev_line(self.ferns), "", "nor any line: nobody would receive the reports")
+
+    def test_colony_project_is_found_by_its_source_folder(self):
+        source = Path(board.__file__).resolve().parent.parent
+        self.assertIsNone(REAL_COLONY_PROJECT([self.root, self.ferns]))
+        self.assertEqual(REAL_COLONY_PROJECT([self.ferns, source]), source)
+
+
+REAL_COLONY_PROJECT = board.colony_project
+
 
 class HibernateViewingTest(HibernateBase):
     def test_viewing_it_on_the_board_doesnt_wake_it(self):
