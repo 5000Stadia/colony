@@ -31,8 +31,9 @@ new models on its own, keeps itself current, and never gets in the way of the wo
   worse, not only that each seemed a good idea.
 - A research department built in: the agent writing an item, who sees its need best, flags it for research, and
   one restrained guide is ready when the item starts. The guides evolve like a field's textbook from edition 1 to
-  edition 30: every research pass that draws on one also searches for itself and keeps the guide, weaving in what it
-  was missing or what is new, so the guides grow with the agents; the worthy ones ship with colony for everyone.
+  edition 30: when an item that used one finishes, its agent is asked whether what it found belongs in the guide, and
+  a light model weaves that into the one section it fits, so the guides grow with the agents without making them
+  token-hungry; the worthy ones ship with colony for everyone.
 - Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
   decisions; no extra spend without substantial gain.
 - Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
