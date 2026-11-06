@@ -654,24 +654,25 @@ def dismissed(name, wait=4.0):
 
 
 def _sent(name, text, tries=3):
-    """Confirm an empty input box; retry Enter only for our own pending input.
+    """Enter, and again while text stays in the box and no choice has come up, up to `tries` more times. Its box was
+    empty a moment before colony typed (type_into and paste_into see to that, and that no choice was on screen), so
+    what stays in it is colony's. True once it is empty; otherwise not sent, and the board gives the words back.
+    Given up (R145): the person typing at the machine's own keyboard in that same split second.
 
-    A missing box may be a redraw. A different draft, a choice or a dead console
-    cannot acknowledge delivery and must never receive a retry intended for us.
-    """
+    A missing box may be a redraw: no Enter then. A choice or a dead console never gets one."""
     owned = _pending_input(name, live=False)
     def same_dispatch():
+        if not owned:
+            return True
         current = _input_json(_input_paths(name)[0])
-        return (owned.get('incarnation') and owned['incarnation'] == _input_identity(name)
-                and isinstance(current, dict) and current.get('id') == owned['id'])
+        return bool(owned.get('incarnation') and owned['incarnation'] == _input_identity(name)
+                    and isinstance(current, dict) and current.get('id') == owned['id'])
     for attempt in range(tries + 1):
         if attempt:
             time.sleep(0.5 * attempt)
-        if (owned and not same_dispatch()) or not running(name) or asking(name):
+        if not same_dispatch() or not running(name) or asking(name):
             return False
         left = draft(name)
-        if owned and not same_dispatch():
-            return False
         if left == "":
             _accept_input(name, text)
             return True
@@ -680,17 +681,10 @@ def _sent(name, text, tries=3):
         record = _pending_input(name)
         if record and record.get('state') == 'accepted' and _input_normal(record['text']) == _input_normal(text):
             return False                                  # an accepted queued prompt must never receive another Enter
-        owned_suffix = bool(record and record.get('state') == 'unsent' and
-                            _input_normal(record['text']) == _input_normal(text) and _input_matches(record, left))
-        if not provider(name).pending_input(text, left) and not owned_suffix:
-            return False
-        if owned and not same_dispatch():
-            return False
         subprocess.run(["tmux", "send-keys", "-t", name, "Enter"], check=True)
     # Give the final Enter one bounded redraw interval before reading its result.
     time.sleep(0.1)
-    accepted = (not owned or same_dispatch()) and running(name) and not asking(name) and draft(name) == ""
-    accepted = accepted and (not owned or same_dispatch())
+    accepted = same_dispatch() and running(name) and not asking(name) and draft(name) == ""
     if accepted:
         _accept_input(name, text)
     return accepted

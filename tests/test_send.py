@@ -76,10 +76,7 @@ class InputBox:
                 self.after_write()
             elif args[-1] == 'Enter':
                 self.enters += 1
-                if self.change == 'human':
-                    self.text = 'a different human draft'
-                    self.change = None
-                elif self.change == 'unknown':
+                if self.change == 'unknown':
                     self.visible = False
                 elif self.swallow:
                     self.swallow -= 1
@@ -95,8 +92,6 @@ class InputBox:
             self.alive = False
         elif self.change == 'unknown-before-enter':
             self.visible = False
-        elif self.change == 'human-before-enter':
-            self.text = 'a different human draft'
 
     def on(self):
         stack = ExitStack()
@@ -194,16 +189,8 @@ class SendTest(unittest.TestCase):
         self.assertEqual(box.accepted, ['pending'])
         self.assertEqual(box.enters, 1)
 
-    def test_human_replacement_is_neither_submitted_nor_an_acknowledgement(self):
-        box = InputBox(change='human')
-        with box.on():
-            self.assertFalse(console.paste_into('box', 'the original message'))
-        self.assertEqual(box.text, 'a different human draft')
-        self.assertEqual(box.enters, 1)
-        self.assertEqual(box.accepted, [])
-
-    def test_choice_dead_unknown_and_foreign_before_initial_enter_are_left_alone(self):
-        for change in ('choice-before-enter', 'dead-before-enter', 'unknown-before-enter', 'human-before-enter'):
+    def test_choice_dead_and_unknown_before_initial_enter_are_left_alone(self):
+        for change in ('choice-before-enter', 'dead-before-enter', 'unknown-before-enter'):
             with self.subTest(change=change):
                 box = InputBox(change=change)
                 with box.on():
@@ -258,51 +245,6 @@ class SendTest(unittest.TestCase):
         self.assertEqual(results, [True, True])
         self.assertEqual(box.accepted, [first, second])
 
-    def test_codex_native_preview_matches_count_and_visible_suffix(self):
-        provider = providers.Codex()
-        text = 'p' * 1024 + ' expected suffix'
-        styled = '› \x1b[38;5;6m[Pasted Content 1024 chars]\x1b[39m expected\n  footer'
-        left = provider.draft(styled)
-        self.assertTrue(provider.pending_input(text, left))
-        self.assertTrue(provider.pending_input(text, '[Pasted Content 1024 chars]'))
-        self.assertTrue(provider.pending_input(text, '[Pasted Content 1024 chars] #2 expected'))
-        self.assertTrue(provider.pending_input('abcdef', 'ab[Pasted Content 2 chars]ef'))
-        self.assertFalse(provider.pending_input(text, '[Pasted Content 1024 chars] foreign suffix'))
-        self.assertFalse(provider.pending_input(text, '[Pasted Content 9999 chars]'))
-        self.assertFalse(provider.pending_input(text, '[Pasted Content 1024 cha'))
-        self.assertFalse(provider.pending_input(text, '[Pasted Content 0 chars]'))
-        self.assertFalse(provider.pending_input(text, '[Pasted Content -1 chars]'))
-
-    def test_plain_prefix_ownership_uses_the_whole_visible_draft(self):
-        provider = providers.Provider()
-        self.assertTrue(provider.pending_input('one message', 'one mess'))
-        self.assertFalse(provider.pending_input('same prefix ' * 4 + 'ours', 'same prefix ' * 4 + 'human'))
-        self.assertFalse(provider.pending_input('text', ''))
-        self.assertFalse(provider.pending_input('text', None))
-
-    def test_claude_physical_wraps_and_native_paste_pills(self):
-        provider = providers.ClaudeCode()
-        for text, visible in [
-                ('some words wrap here', 'some words\n  wrap here'),
-                ('abcdefghijk', 'abcde\n  fghijk'),
-                ('line one\nline two', 'line one\n  line two'),
-                ('long single line', '[Pasted text #1]'),
-                ('first\nsecond\nthird', '[Pasted text #3 +2 lines]'),
-                ('first\r\nsecond', '[Pasted text #3 +1 lines]'),
-                ('abcde longwordabcdefghij ending', 'abcde\n  longwordabc\n  defghij ending'),
-                ('caf' + 'e\u0301', 'café')]:
-            with self.subTest(text_chars=len(text), visible_chars=len(visible)):
-                self.assertTrue(provider.pending_input(text, visible))
-        for text, visible in [
-                ('first\nsecond', '[Pasted text #1 +2 lines]'),
-                ('same prefix original', 'same prefix changed'),
-                ('single line', '[Pasted text #1 +1 lines]'),
-                ('first\nsecond expected', '[Pasted text #1 +1 lines] foreign'),
-                ('prefix first\nsecond suffix', 'prefix [Pasted text #4 +1 lines] suffix'),
-                ('same  words', 'same words')]:
-            with self.subTest(text_chars=len(text), visible_chars=len(visible)):
-                self.assertFalse(provider.pending_input(text, visible))
-
     def test_claude_collapsed_pastes_use_the_same_guarded_send_sequence(self):
         for text in ('c' * 1155, 'first\nsecond\nthird\nfourth'):
             with self.subTest(chars=len(text)):
@@ -326,7 +268,6 @@ class SendTest(unittest.TestCase):
                 self.assertIsNone(box.provider.choice(screen), 'physical input wraps are not menu options')
                 self.assertIsNone(box.provider.choice('Old question\n❯ 1. Yes\n  2. No\n' + screen),
                                   'an older numbered choice cannot override the current typing box')
-                self.assertTrue(box.provider.pending_input(text, box.provider.draft(screen)))
                 with box.on():
                     self.assertTrue(console._sent('box', text))
                 self.assertEqual(box.enters, 1)
