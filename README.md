@@ -132,6 +132,11 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   with how it's taken: a command, or a small separate model's judgement. Colony takes it at each push and finished
   milestone, in its own copy of the project, never from the agent's say-so, and shows it against its target with
   its trend.
+- **Warning signs:** whether colony's own changes are making the work better or worse, read from what it already
+  records: outcomes, friction (corrections, repairs, reopened items) and cost, kept apart, each with its evidence.
+  Unclear cases get a label from a cheap model on a frozen ruler (rubric and model recorded, never relabelled).
+  It says "too little evidence" plainly and never shows a quiet week as good. It sits folded under Measures, and
+  raises a notice only for a concern its thresholds support.
 - **The Library:** what you and the agent keep referring to on purpose (a world's places and people, a policy
   set, research you build on, a page you work on together), each with why it's kept, under headings either of you
   sets; text opens to edit together, a page runs. It starts empty; what's done folds into an archive that costs the
@@ -222,7 +227,10 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **A wiser colony:** what one project learns, the next starts with. When you correct an agent, the steward may
   propose a one-sentence lesson keyed to the colony action it's about; you adopt it with a tap on Needs you, and
   agents see it each time they take that action (`colony lesson`). Research one project did is kept for all in a
-  shared library with a date to look again (`colony research "words"`, `--add FILE`). Your standing orders to a
+  shared library with a date to look again (`colony research "words"`, `--add FILE`). Web research runs in a
+  locked room (`colony room`): prompt in, text out, with search and page reading only, in an OS sandbox that sees
+  only its own folder and public names. Every call is logged, and the result is screened for text aimed at the
+  reading agent before one with tools reads it. Your standing orders to a
   project are kept by colony and handed back at every session start, after a compaction too (`colony rule`).
   Scheduled context refreshes wait for the current reply to finish before asking the agent for a carry-over.
   Agents also close each topic as the conversation moves on (`colony topic-closed`, settled or parked). They
@@ -265,8 +273,10 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony settings          global settings; a project's own with `colony settings --project NAME`
 
 **Settings.** Each project can have its own model, effort, permissions and Remote Control; blank keeps
-the global choice. A new colony lets agents do anything in their own folders without asking ("allow
-everything"); Settings can make that ask, accept edits only, or plan only. The **provider** (the program that runs the agent) is Claude Code or Codex. Another joins
+the global choice. Adding a project asks how much its agent may do without asking. A new colony's default is
+"allow everything" in its own folders, and colony answers the few permission questions a program still asks
+there. "Allow all but the dangerous" lets the program judge what's risky and ask only for that (Claude Code's auto
+mode, Codex's automatic review). Ask each time, accept edits, and plan only are the rest. The **provider** (the program that runs the agent) is Claude Code or Codex. Another joins
 as a class in `colony/providers.py` built on `Provider`, which names everything colony asks of a program, with a
 default where colony has one; `colony doctor` shows what each program supplies itself and what it lacks. Every place
 specific to one program is marked `PROVIDER:` in the code.
