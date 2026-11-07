@@ -2712,6 +2712,29 @@ def starting(provider, screen, fresh=True):
     return provider.choose(screen, yes) if yes else None
 
 
+# A tool's permission question mid-work ("Do you want to proceed?", "Do you want to make this edit to x?"). PROVIDER:
+# Claude Code still asks a few in its bypass mode: a Bash command whose removals its parser can't rule out, a change to
+# its own folders. Left unanswered, it blocks the request after two minutes.
+PERMISSION = re.compile(r"\bdo you want to (?:proceed|make this edit|create|allow|run|delete|overwrite)\b", re.I)
+
+
+def approving(provider, screen):
+    """The keys that answer a tool's permission question on screen with its plain Yes, for a project whose sessions
+    the person set to do everything unasked (permissions "all"). Never "Yes, and don't ask again", which would write
+    a standing rule, and never a question the agent put to the person (its menu offers to type or chat instead)."""
+    found = provider.choice(screen)
+    if not found:
+        return None
+    question, options, here = found
+    if not PERMISSION.search(" ".join(question)) or any(re.match(r"(type something|chat about this)", o.lower())
+                                                        for o in options):
+        return None
+    yes = next((k for k, o in enumerate(options) if o.strip().rstrip(".").lower() == "yes"), None)
+    if yes is None:
+        return None
+    return (["Down"] * (yes - here) if yes > here else ["Up"] * (here - yes)) + ["Enter"]
+
+
 PROVIDERS = {"claude": ClaudeCode(), "codex": Codex()}
 
 

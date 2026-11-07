@@ -3717,6 +3717,32 @@ class MonitorTest(BoardBase):
             console.screen, console.press = saved
         self.assertTrue(board.DEFAULT_SETTINGS["trust"])
 
+    def test_a_permission_question_is_answered_yes_where_the_person_set_sessions_to_do_everything(self):
+        claude = providers.get("claude")
+        rm = (" Bash command\n   rm -rf ws && sed -e 's#a#$LIBS#' f\n │ Dangerous rm operation not ruled out — the shell may "
+              "read this command differently than it was parsed\n ⚠ Claude Code will automatically block this request in "
+              "1:24, to avoid holding up an unattended session\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n")
+        self.assertEqual(providers.approving(claude, rm), ["Enter"])
+        edit = " Do you want to make this edit to ledger.py?\n   1. Yes\n   2. Yes, and don't ask again\n ❯ 3. No\n"
+        self.assertEqual(providers.approving(claude, edit), ["Up", "Up", "Enter"], "its plain Yes: never a standing rule")
+        asked = (" Do you want to proceed with the migration?\n ❯ 1. Yes\n   2. No\n   3. Type something.\n"
+                 "   4. Chat about this\n")
+        self.assertIsNone(providers.approving(claude, asked), "a question the agent put to the person waits for them")
+        self.assertIsNone(providers.approving(claude, "Is this a project you trust?\n ❯ 1. Yes\n   2. No, exit"))
+        console.snapshot = lambda root, lines=6, name=None: {"state": "needs you", "lines": []}
+        pressed, saved = [], (console.screen, console.press)
+        console.screen = lambda name: rm
+        console.press = lambda name, keys: pressed.append(keys)
+        monitor.snapshot = lambda: {"state": "working", "lines": []}
+        try:
+            monitor.Watcher().tick()
+            self.assertEqual(pressed, [["Enter"]], "all, as a new colony sets it: answered")
+            board.project_settings(self.root, {"permissions": "edits"})
+            monitor.Watcher().tick()
+            self.assertEqual(pressed, [["Enter"]], "anything less: it waits for the person")
+        finally:
+            console.screen, console.press = saved
+
     def test_a_reload_waits_for_the_old_program_to_let_go(self):
         child = subprocess.Popen(["sleep", "30"])
         self.addCleanup(child.kill)

@@ -631,11 +631,16 @@ class Watcher:
             except Exception:
                 pass
             snap = console.snapshot(p, lines=4)
-            if snap["state"] == "needs you" and board.registry()["settings"]["trust"]:
+            if snap["state"] == "needs you":
                 # the person put it on the board as it is set up: a new session's start-up questions (its folder's
-                # trust, its permission mode, Remote Control, hooks) are answered so it runs that way
+                # trust, its permission mode, Remote Control, hooks) are answered so it runs that way; and where they
+                # set its sessions to do everything unasked, a tool's permission question its program still asks
                 name = console.session_name(p)
-                keys = providers.starting(providers.of(p), console.screen(name), fresh=console.age(name) < STARTUP_WINDOW)
+                screen = console.screen(name)
+                keys = (providers.starting(providers.of(p), screen, fresh=console.age(name) < STARTUP_WINDOW)
+                        if board.registry()["settings"]["trust"] else None) \
+                    or (providers.approving(providers.of(p), screen)
+                        if board.project_settings(p)[0].get("permissions") == "all" else None)
                 if keys:
                     console.press(name, keys)
                     continue
