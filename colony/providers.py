@@ -2013,7 +2013,9 @@ class Codex(Provider):
                  "use one long sleep or wait_agent with a long timeout: both end when news arrives. Or wait inside one "
                  "command until it's true: `until <check>; do sleep 2; done`.")
     # colony's permission choices, in Codex's terms
+    # PROVIDER: "auto" is Codex's automatic review of its approval requests, in its workspace-write sandbox (0.166)
     permissions = {"ask": ["-a", "on-request", "-s", "workspace-write"], "edits": ["-a", "never", "-s", "workspace-write"],
+                   "auto": ["--approve-for-me"],
                    "all": ["--dangerously-bypass-approvals-and-sandbox"], "plan": ["-a", "on-request", "-s", "read-only"]}
     DELIVERY = ("\n- Colony's Codex hooks deliver notes and mail at session start and before each prompt, and record "
                 "questions when a turn ends. The board's launch command supplies them; review them in `/hooks`. If hooks have not "
@@ -2719,9 +2721,10 @@ PERMISSION = re.compile(r"\bdo you want to (?:proceed|make this edit|create|allo
 
 
 def approving(provider, screen):
-    """The keys that answer a tool's permission question on screen with its plain Yes, for a project whose sessions
-    the person set to do everything unasked (permissions "all"). Never "Yes, and don't ask again", which would write
-    a standing rule, and never a question the agent put to the person (its menu offers to type or chat instead)."""
+    """The keys that answer a tool's permission question on screen for a project whose sessions the person set to do
+    everything unasked (permissions "all"): "Yes, and don't ask again" where it's offered, so the same question
+    doesn't come back (the person's word, 2026-11-06), else its plain Yes; never a question the agent put to the
+    person (its menu offers to type or chat instead)."""
     found = provider.choice(screen)
     if not found:
         return None
@@ -2729,7 +2732,9 @@ def approving(provider, screen):
     if not PERMISSION.search(" ".join(question)) or any(re.match(r"(type something|chat about this)", o.lower())
                                                         for o in options):
         return None
-    yes = next((k for k, o in enumerate(options) if o.strip().rstrip(".").lower() == "yes"), None)
+    said = [o.strip().rstrip(".").lower() for o in options]
+    yes = next((k for k, o in enumerate(said) if re.match(r"yes\b.*\bdon.t ask again\b", o)), None)
+    yes = next((k for k, o in enumerate(said) if o == "yes"), None) if yes is None else yes
     if yes is None:
         return None
     return (["Down"] * (yes - here) if yes > here else ["Up"] * (here - yes)) + ["Enter"]

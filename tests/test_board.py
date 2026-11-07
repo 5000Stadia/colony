@@ -3717,14 +3717,14 @@ class MonitorTest(BoardBase):
             console.screen, console.press = saved
         self.assertTrue(board.DEFAULT_SETTINGS["trust"])
 
-    def test_a_permission_question_is_answered_yes_where_the_person_set_sessions_to_do_everything(self):
+    def test_a_permission_question_is_answered_where_the_person_set_sessions_to_do_everything(self):
         claude = providers.get("claude")
         rm = (" Bash command\n   rm -rf ws && sed -e 's#a#$LIBS#' f\n │ Dangerous rm operation not ruled out — the shell may "
               "read this command differently than it was parsed\n ⚠ Claude Code will automatically block this request in "
               "1:24, to avoid holding up an unattended session\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n")
         self.assertEqual(providers.approving(claude, rm), ["Enter"])
         edit = " Do you want to make this edit to ledger.py?\n   1. Yes\n   2. Yes, and don't ask again\n ❯ 3. No\n"
-        self.assertEqual(providers.approving(claude, edit), ["Up", "Up", "Enter"], "its plain Yes: never a standing rule")
+        self.assertEqual(providers.approving(claude, edit), ["Up", "Enter"], "don't ask again, where it's offered")
         asked = (" Do you want to proceed with the migration?\n ❯ 1. Yes\n   2. No\n   3. Type something.\n"
                  "   4. Chat about this\n")
         self.assertIsNone(providers.approving(claude, asked), "a question the agent put to the person waits for them")
@@ -3742,6 +3742,17 @@ class MonitorTest(BoardBase):
             self.assertEqual(pressed, [["Enter"]], "anything less: it waits for the person")
         finally:
             console.screen, console.press = saved
+
+    def test_adding_a_project_asks_how_much_its_agent_may_do_unasked(self):
+        page = board.add_project_page(board.registry(), "new", "")
+        ask = page.index("How much may its agent do without asking?")
+        self.assertLess(ask, page.index("<details class='more'>"), "asked on its own, not folded under More options")
+        self.assertIn("<option value='auto'>allow all but the dangerous</option>", page)
+        self.assertEqual(page.count("name='permissions'"), 3, "once in each way to add one, never twice")
+        self.assertEqual(board.PERMISSIONS["auto"], "auto", "Claude Code's auto mode")
+        self.assertEqual(providers.get("codex").permissions["auto"], ["--approve-for-me"], "Codex's automatic review")
+        board.project_settings(self.root, {"permissions": "auto"})
+        self.assertEqual(board.project_settings(self.root)[0]["permissions"], "auto")
 
     def test_a_reload_waits_for_the_old_program_to_let_go(self):
         child = subprocess.Popen(["sleep", "30"])
@@ -4720,6 +4731,7 @@ class ProjectSettingsTest(BoardBase):
         codex = providers.get("codex")
         expected = {"ask": ["-a", "on-request", "-s", "workspace-write"],
                     "edits": ["-a", "never", "-s", "workspace-write"],
+                    "auto": ["--approve-for-me"],
                     "all": ["--dangerously-bypass-approvals-and-sandbox"],
                     "plan": ["-a", "on-request", "-s", "read-only"]}
         with patch.object(connections, "codex_args", return_value=[]):
@@ -4732,7 +4744,7 @@ class ProjectSettingsTest(BoardBase):
                         for i, arg in enumerate(args):
                             if arg in ("-a", "-s"):
                                 actual += args[i:i + 2]
-                            elif arg == "--dangerously-bypass-approvals-and-sandbox":
+                            elif arg in ("--dangerously-bypass-approvals-and-sandbox", "--approve-for-me"):
                                 actual.append(arg)
                         self.assertEqual(actual, flags)
                         if permission in ("ask", "edits"):

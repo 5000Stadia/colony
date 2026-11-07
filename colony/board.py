@@ -306,7 +306,8 @@ DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "mo
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
-PERMISSIONS = {"ask": None, "edits": "acceptEdits", "all": "bypassPermissions", "plan": "plan"}
+# "auto": all but the dangerous, each program judging which (Claude Code's auto mode, Codex's automatic review)
+PERMISSIONS = {"ask": None, "edits": "acceptEdits", "auto": "auto", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
     "auto_balance": "Auto intelligence/cost balance: 0 Intelligence, 3 Balanced, 6 Economy; intermediate steps 1, 2, 4, 5",
     "providers": "the agent programs colony uses: claude, codex (comma-separated; all by default)",
@@ -321,7 +322,7 @@ SETTING_HELP = {
     "messaging": "project agents can message each other (colony send, colony reply)",
     "dev_mode": "where colony's own repository is a project on the board, every project tells colony where colony's shape got in its way (colony send colony --dev)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
-    "permissions": "what new sessions may do unasked: ask, edits, all, or plan",
+    "permissions": "what new sessions may do unasked: ask, edits, auto (all but the dangerous), all, or plan",
     "monitor": "the steward session runs with the board",
     "steward_name": "what you call the steward, as Jarvis (blank: steward); it answers to it, and the board shows it",
     "model": "main-agent model pin for this provider (blank: colony Auto)",
@@ -7776,17 +7777,19 @@ def app_reach():
     return "; ".join(ways) + "." if ways else ""
 
 
-def project_settings_form(pid, own, action="/project-settings", root=None):
-    """The choices a project can make for itself; blank keeps the global one."""
+def project_settings_form(pid, own, action="/project-settings", root=None, permissions=True):
+    """The choices a project can make for itself; blank keeps the global one (its permissions left out where the
+    page asks them on their own)."""
     opt = lambda name, choices, cur: (f"<select name='{name}'>" + "".join(
         f"<option value='{v}'{' selected' if str(cur) == v else ''}>{label}</option>" for v, label in choices) + "</select>")
     g = registry()["settings"]
     remote = "on" if own.get("remote", g["remote_by"].get(own.get("provider") or g["provider"], g["remote"])) else "off"
     prog = providers.get(own.get("provider") or g["provider"])
-    names = {"ask": "ask each time", "edits": "accept edits", "all": "allow everything", "plan": "plan only"}
+    names = dict(PERMISSION_LABELS)
     return (f"<form method='post' action='{action}' class='options'><input type='hidden' name='p' value='{pid}'>"
             + provider_fields(own.get("provider", ""), own.get("model", ""), own.get("effort", ""), "global") +
-            f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
+            (f"<label>Permissions {opt('permissions', [(k, v) for k, v in names.items()], own.get('permissions') or g['permissions'])}</label>"
+             if permissions else "")
             # each program's own way in from its app (Provider.reach): Claude Code's Remote Control, Codex's ChatGPT pairing
             + (f"<label>{e(prog.reach)} {opt('remote', [('on', 'on'), ('off', 'off')], remote)}</label>" if prog.reach else "")
             + "<div class='swatches'><span>Colour</span>" + "".join(
@@ -7914,16 +7917,22 @@ def add_project_page(reg, tab="new", error=""):
     """Add a project three ways, one tab each: a new one, an existing folder, or a clone of a GitHub
     repository. Folders are chosen with Browse…, which starts closed and opens in place."""
     from . import voice
-    choices = (project_settings_form(0, {}, action="")
+    choices = (project_settings_form(0, {}, action="", permissions=False)
                .split("<input type='hidden' name='p' value='0'>", 1)[1].rsplit("<button>Save</button></form>", 1)[0]
                + (f"<label>Voice, reading its replies aloud <select name='voice'>{voice_choices()}</select></label>" if voice.ready() else "")
                + connection_ticks())
     two = sum(1 for k, pv in providers.PROVIDERS.items() if providers.usable(pv) and providers.enabled(pv)) > 1
     # R125: what it is goes to its agent's first brief; the rest has working defaults, folded until wanted
+    # the person's word, 2026-11-06: adding a project asks how far its agent may act unasked
+    g = reg["settings"]
+    safety = ("<label>How much may its agent do without asking? <select name='permissions'>" + "".join(
+        f"<option value='{k}'{' selected' if k == g['permissions'] else ''}>{label}</option>" for k, label in PERMISSION_LABELS)
+        + "</select> <span class='muted'>(all but the dangerous: Claude Code's auto mode or Codex's automatic review "
+          "decides what's risky and asks you only for that)</span></label>")
     choices = ("<label>What is it? <span class='muted'>(optional: a line or two its agent starts from)</span>"
-               "<textarea name='what' rows='2' placeholder='what you want it to become'></textarea></label>"
+               "<textarea name='what' rows='2' placeholder='what you want it to become'></textarea></label>" + safety +
                f"<details class='more'><summary>More options <span class='muted'>({'program, ' if two else ''}model, "
-               f"permissions, colour, voice, connections; blank keeps colony's)</span></summary>{choices}</details>")
+               f"colour, voice, connections; blank keeps colony's)</span></summary>{choices}</details>")
     where = reg["new_root"]
     picker = lambda name, value, placeholder: (
         f"<div class='picker'><div class='chosen'><input name='{name}' value='{e(value)}' placeholder='{e(placeholder)}' readonly>"
@@ -9496,7 +9505,8 @@ def codex_pairing_page(reg, root, result):
     return shell(reg, -2, body)
 
 
-PERMISSION_LABELS = [("ask", "ask each time"), ("edits", "accept edits"), ("all", "allow everything"), ("plan", "plan only")]
+PERMISSION_LABELS = [("ask", "ask each time"), ("edits", "accept edits"), ("auto", "allow all but the dangerous"),
+                     ("all", "allow everything"), ("plan", "plan only")]
 
 # Settings opens where the person left it: the sections they had open, and the one a link names
 SETTINGS_FOLDS = """<script>
