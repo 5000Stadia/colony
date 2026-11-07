@@ -396,8 +396,12 @@ class QDept(Base):
         # online outside it
         self.curated_done()
         start, done = self.notes()
-        self.assertIn("then search the web yourself for what R1 needs beyond what the guide covers, both before you "
-                      "design", start)
+        self.assertIn("its hand-over before you design", start)
+        from colony.qbranch import qbranch
+        self.assertIn("Read it, then search the web yourself for what this item needs beyond it, both before you "
+                      "design", qbranch.HANDOVER)
+        self.assertIn("one from your search needs a primary source", done)
+        self.assertIn("saying whether your build tested it", done)
         self.assertIn("Answer this only after both using the guide and searching the web yourself beyond it", done)
         self.assertIn("if you didn't search while building, run a short search now", done)
 

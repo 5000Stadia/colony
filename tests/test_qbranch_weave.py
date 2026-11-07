@@ -86,7 +86,7 @@ elif p.startswith('You screen untrusted research'):
 else:
     sys.exit(1)
 '''
-HANDOVER = "When this item is done, you'll be asked whether anything you found belongs in this guide. One test decides it: would it change what the next agent decides after reading the section it belongs in? It fails if the guide already says it, if it fits only your project, or if your build didn't bear it out. Where the guide's advice failed you, that is a finding too. If it passes, give it in one or two generic sentences with its source; if not, add nothing. The test keeps the guide to the most direct, useful information: what is true but wouldn't change a decision stays out."
+HANDOVER = ("When this item is done, you'll be asked whether anything you found belongs in this guide, a question that only works after both. One test decides it: would it change what the next agent decides after reading the section it belongs in? It fails if the guide already says it, if it fits only your project, or if nothing backs it: a finding from your build must have held up in it, and one from your search needs a primary source (the maker's own docs, code or paper) that your build didn't contradict. Where the guide's advice failed you, that is a finding too. If it passes, give it in one or two generic sentences with its source, and say whether your build tested it; if not, add nothing. The test keeps the guide to the most direct, useful information: what is true but wouldn't change a decision stays out.")
 
 
 class Weave(unittest.TestCase):
@@ -340,7 +340,7 @@ class Weave(unittest.TestCase):
         inp = dict(entry='small', shelf=[dict(id='small', path=str(self.entry))])
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(qb.brief(inp, tmp, {}), 0)
-            self.assertIn('Read it before you design; the calls are yours. ' + HANDOVER,
+            self.assertIn('Read it, then search the web yourself for what this item needs beyond it, both before you design; the calls are yours. ' + HANDOVER,
                           Path(tmp, 'brief.md').read_text())
 
     def test_render_header_order(self):
