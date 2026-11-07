@@ -615,6 +615,11 @@ class Watcher:
 
     def events(self):
         out, awake = [], hours.active()
+        try:
+            from . import warning_signs
+            warning_signs.check()               # R146: the records read again every few hours, in the background
+        except Exception:
+            pass
         for p in board.projects():
             if not p.exists():
                 continue
