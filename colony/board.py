@@ -6679,6 +6679,7 @@ def render(reg, pid, view="overview", show_all=""):
                        f"<span class='muted'>{len(others)}</span></summary>"
                        + "".join(row(n, f"{note_by(n)} · ") for n in others) + "</details>")
         out.append(measures_html(root))
+        out.append(warnings_html(root))           # R146: whether the work is getting worse, folded
         # roadmap: the list reads best; the map shows the shape, open by default only when the plan branches
         out.append("<h2 id='roadmap'>Roadmap</h2>")
         from . import hints
@@ -6771,6 +6772,7 @@ def render(reg, pid, view="overview", show_all=""):
         # settles meanwhile drops out, except while being typed in). With nothing waiting, the section is out of the
         # way, and comes back by itself when something does.
         out.append(measures_html(root))           # the numbers it steers by, as colony took them, before all else
+        out.append(warnings_html(root, notice_only=True))   # a supported concern only, never a quiet "all well"
         rows = waiting_html(pid, root)
         out.append(f"<section id='waitingbox'{'' if rows else ' hidden'}><h2>Waiting on you (<span id='wcount'>{waiting}</span>)</h2>"
                    f"<div class='card' id='waiting'>{rows}</div></section>"
@@ -7101,6 +7103,99 @@ def measures_html(root):
         rows.append(f"<div class='measure'><span class='mname'>{e(m['name'])}</span> {value}"
                     f"<div class='muted small' title='{e(m['what'])}'>{e(m['part'] if m['part'] not in (None, 'Vision', 'Measures') else 'the whole plan')}{when}</div>{why}</div>")
     return f"<div class='card measures'>{''.join(rows)}</div>" if rows else ""
+
+
+def warnings_html(root, notice_only=False):
+    """R146: the warning signs read from what colony records, in three parts kept apart (Outcomes, Repairs and
+    corrections, Cost), folded; each concern and each counted case opens on its evidence. Never a score, never green:
+    a quiet week says too little evidence. With notice_only, only a supported concern, as one line."""
+    from . import warning_signs as ws
+    try:
+        v = ws.view(root)
+    except Exception:
+        return ""
+    if not v or v.get("missing"):
+        return "" if notice_only else ("<details class='card fold warnings'><summary><h3>Warning signs</h3>"
+                                       "<span class='muted'>not read yet</span></summary><p class='muted small'>Colony "
+                                       "reads this project's records every few hours; nothing is shown until then.</p>"
+                                       "</details>")
+    if notice_only:
+        if not v["concerns"]:
+            return ""
+        return ("<div class='card warnings'><span class='flag'>Warning sign:</span> "
+                + "; ".join(e(c["text"]) for c in v["concerns"])
+                + f" <a href='{project_url(root)}&view=roadmap#warnings'>the cases →</a></div>")
+    day = lambda wk: e(local_day(wk + "T12:00:00Z"))
+
+    def case(s):
+        ev, lab = s["evidence"], v["labels"].get(s["id"])
+        where = {"commit": "commit", "roadmap": "roadmap line at", "detail": "details file at", "message": "message",
+                 "note": "note", "answer": "answer to gate", "mail": "mail"}.get(ev.get("type"), ev.get("type"))
+        said = (f"<div class='muted small'>labelled {e(lab['label'].replace('_', ' '))}: {e(lab['why'])} "
+                f"<i>({e(lab['model'])}, rubric {e(lab['rubric_version'])}, packet {e(lab['packet_hash'])})</i></div>"
+                if lab else ("" if s["explicit"] else "<div class='muted small'>awaiting a label</div>"))
+        return (f"<details class='item'><summary>{e(s['kind'])}{' · ' + e(s['item']) if s.get('item') else ''}: "
+                f"{e(short(s['text'].removeprefix(str(s.get('item')) + ': '), 110))}</summary><div class='body small'>"
+                f"<div class='muted'>{e(where)} <code>{e(str(ev.get('ref') or ''))}</code>"
+                f"{' · ' + e(ev['file']) if ev.get('file') else ''} · {e(local_day(s['at']))}</div>"
+                + (f"<div>before: {e(ev['before'])}</div>" if ev.get("before") else "")
+                + f"<div>{e(ev.get('line') or s['text'])}</div>{said}</div></details>")
+    out = []
+    if v["concerns"]:
+        for c in v["concerns"]:
+            out.append(f"<details class='item' open><summary><span class='flag'>Concern ({e(c['kind'])}):</span> "
+                       f"{e(c['text'])}</summary>{''.join(case(s) for s in c['cases'])}</details>")
+    thin = lambda r: "<span class='muted'>too little evidence</span>"
+    rows = []
+    for r in v["weeks"]:
+        o = r["outcomes"]
+        rows.append(f"<div class='measure'><span class='mname'>{day(r['week'])}</span> "
+                    + (f"{o.get('written', 0)} written, {o.get('started', 0)} started, {o.get('finished', 0)} finished"
+                       f" ({o.get('checks', 0)} with a check), {o.get('reopened', 0)} reopened, {o.get('open', 0)} open"
+                       + (f", {o['signoffs']} put to you to sign off" if o.get("signoffs") else "")
+                       if r["evidence"] else thin(r)) + "</div>")
+    out.append("<h4>Outcomes</h4>" + ("".join(rows) or "<p class='muted'>No items in its history.</p>"))
+    rows = []
+    for r in v["weeks"]:
+        f, i, a = r["friction"], r["intent"], r["awaiting"]
+        head = (f"{len(f)} counted" + (f", {len(i)} changes of your intent (not counted)" if i else "")
+                + (f", {len(a)} awaiting a label" if a else ""))
+        rows.append(f"<details class='item'><summary><span class='mname'>{day(r['week'])}</span> "
+                    f"{head if (f or i or a) else ('none found' if r['evidence'] else thin(r))}</summary>"
+                    + "".join(case(s) for s in (f + i + a)[:12])
+                    + (f"<p class='muted small'>and {len(f + i + a) - 12} more</p>" if len(f + i + a) > 12 else "") + "</details>")
+    out.append("<h4>Repairs and corrections</h4>" + "".join(rows))
+    rows = []
+    tok = lambda n: f"{n / 1e6:.1f}M" if n >= 1e6 else f"{n / 1e3:.0f}k"
+    for r in v["weeks"]:
+        c = r["cost"]
+        rows.append(f"<div class='measure'><span class='mname'>{day(r['week'])}</span> "
+                    + (f"{tok(c['weighted'])} weighted tokens over {c['conversations']} conversations"
+                       + (f"; {tok(c['nothing_landed'])} where no commit landed (abandoned work, or talk)"
+                          if c.get("nothing_landed") else "")
+                       if c else "<span class='muted'>no transcripts read</span>") + "</div>")
+    out.append("<h4>Cost</h4>" + "".join(rows))
+    cov, ex = v["coverage"], v["exposure"]
+    closed = sum(1 for x in ex if x["topic_closing"]["ran"])
+    out.append(f"<p class='muted small'>Read {e(local_day(v['made']))} from {cov['roadmap_commits']} roadmap commits, "
+               f"{cov['commits']} commits and {len(cov.get('cost_weeks', []))} weeks of transcripts"
+               + (f" ({e(cov['note'])})" if cov.get("note") else "") + ". "
+               f"Exposure: {len(ex)} items with the guidance version they started on; {closed} ran while topics were "
+               f"closed (R144); {sum(1 for x in ex if x['research'])} had research written for them. "
+               f"A week says anything only with {v['thresholds']['min_events']} item events; a concern needs "
+               f"{v['thresholds']['min_base']} earlier weeks with evidence. Nothing here becomes a rule by itself.</p>")
+    if v["breaks"]:
+        out.append("<p class='muted small'>Ruler breaks: " + "; ".join(
+            f"{e(local_day(b['at']))}, {len(b['moved'])} of {b['anchors']} anchor judgements moved under {e(b['model'])}"
+            for b in v["breaks"]) + ": labels before and after are not compared.</p>")
+    out.append("<details class='item'><summary class='muted small'>What these records can't show</summary><ul class='muted small'>"
+               + "".join(f"<li>{e(x)}</li>" for x in v["cannot_show"]) + "</ul></details>")
+    last = v["weeks"][0] if v["weeks"] else None
+    status = (f"<span class='flag'>{len(v['concerns'])} concern{'s' if len(v['concerns']) > 1 else ''}</span>"
+              if v["concerns"] else "<span class='muted'>no warning sign</span>" if last and last["evidence"]
+              else "<span class='muted'>too little evidence</span>")
+    return (f"<details class='card fold warnings' id='warnings'><summary><h3>Warning signs</h3>{status}</summary>"
+            + "".join(out) + "</details>")
 
 
 KIND_MARK = {"menu": "☰ menu", "lanes": "‖ lanes", "findings": "? findings", "sections": "▦ sections"}
