@@ -391,6 +391,16 @@ class QDept(Base):
         self.look()
         self.assertEqual(len(self.notes()), 2)                # R2 had no guide: no question
 
+    def test_the_question_at_done_comes_after_both_the_guide_and_the_agents_own_search(self):
+        # the person, 2026-11-06: it only works if the agent considers it after both using the guide and searching
+        # online outside it
+        self.curated_done()
+        start, done = self.notes()
+        self.assertIn("then search the web yourself for what R1 needs beyond what the guide covers, both before you "
+                      "design", start)
+        self.assertIn("Answer this only after both using the guide and searching the web yourself beyond it", done)
+        self.assertIn("if you didn't search while building, run a short search now", done)
+
     def test_for_the_guide_goes_to_learn_with_private_names(self):
         (self.base / "home").mkdir(exist_ok=True)
         (self.base / "home" / "nests.json").write_text(json.dumps(

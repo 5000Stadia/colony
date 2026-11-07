@@ -29,8 +29,10 @@ research library; the agent gets a one-line note at the item's start.
 
 Curated guides (the shelf, seeded from colony/qbranch/shelf/ into the board's home) carry `match:` terms; any one term,
 as a whole word or phrase, in an item's line or details, when the item before it starts, hands the guide over at the
-item's start, flagged or not, and runs no search. At such an item's [x] its agent is asked once whether anything it
-found belongs in the guide; what it writes in a `## For the guide` section goes to Q Branch's learn and weave.
+item's start, flagged or not, and runs no pass. The note asks its agent to search the web itself beyond the guide as
+well, and at the item's [x] it is asked once, after both, whether anything it found belongs in the guide (the person,
+2026-11-06: the question only works after both); what it writes in a `## For the guide` section goes to Q Branch's
+learn and weave.
 """
 import json
 import os
@@ -607,11 +609,17 @@ def name_or(root):
 COMING = ("Q Branch is researching {iid} (it is flagged research): its guide is coming, and a note will point to it "
           "when it's ready. Begin with what doesn't turn on the Research section's decisions.")
 READY = "Q Branch's research guide for {iid} is at {path}: read it before you design; the calls are yours."
-CURATED = ("A curated Q Branch guide bears on {iid}: \"{title}\", at {path}. Read it before you design; the calls are "
-           "yours.")
-# The question at [x] asks what the hand-over said it would, in its words (Memory Research's 9f92e21).
-UPKEEP = ("{iid} is done, and it was handed the curated guide \"{title}\". Did you find anything that would change what "
-          "the next agent decides after reading the section it belongs in? It fails if the guide already says it, if "
+# The guide and the agent's own search, both before it designs: the question at [x] only works after both (the person).
+CURATED = ("A curated Q Branch guide bears on {iid}: \"{title}\", at {path}. Read it, then search the web yourself for "
+           "what {iid} needs beyond what the guide covers, both before you design; the calls are yours. When {iid} is "
+           "done you'll be asked whether anything you found belongs in the guide, and that question only works after "
+           "both.")
+# The question at [x] asks what the hand-over said it would, in its words (Memory Research's 9f92e21), and only after
+# the agent has both used the guide and searched beyond it (the person, 2026-11-06).
+UPKEEP = ("{iid} is done, and it was handed the curated guide \"{title}\". Answer this only after both using the guide "
+          "and searching the web yourself beyond it; if you didn't search while building, run a short search now on what "
+          "{iid} needed. Did your search or your build turn up anything that would change what the next agent decides "
+          "after reading the section it belongs in? It fails if the guide already says it, if "
           "it fits only your project, or if your build didn't bear it out; where the guide's advice failed you, that "
           "is a finding too. If something passes, add a `## For the guide` section to {details}: each finding in one "
           "or two generic sentences with its source URL, at most three. If not, add nothing (the default).")
