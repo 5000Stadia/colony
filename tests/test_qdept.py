@@ -424,6 +424,8 @@ class QDept(Base):
         self.assertIn("saying whether your build tested it", done)
         self.assertIn("Answer this only after both using the guide and searching the web yourself beyond it", done)
         self.assertIn("if you didn't search while building, run a short search now", done)
+        quiet = [bool(n.get("quiet")) for n in board.read(self.root, "notes.jsonl") if n.get("type", "note") == "note"]
+        self.assertEqual(quiet, [True, False])               # the finish question wakes an agent gone idle
 
     def test_for_the_guide_goes_to_learn_with_private_names(self):
         (self.base / "home").mkdir(exist_ok=True)

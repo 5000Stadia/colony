@@ -319,8 +319,9 @@ def redact(text, names):
     return text
 
 
-def note(root, iid, text):
-    return board.add_note(root, {"item": iid}, text, author="colony", quiet=True, kind="qbranch")
+def note(root, iid, text, quiet=True):
+    """Quiet by default: an item's agent is working when its guide arrives, so it reads it on its next turn."""
+    return board.add_note(root, {"item": iid}, text, author="colony", quiet=quiet, kind="qbranch")
 
 
 # ---------------------------------------------------------------- the machine-wide queue
@@ -760,7 +761,8 @@ def _finished(root, its, iid):
     # A flagged item had a research pass too: it maintains the guide as much as the agent's own search does (the person).
     found = "your research guide, your own search or your build" if rec.get("status") == "ready" else \
         "your search or your build"
-    note(root, iid, UPKEEP.format(iid=iid, title=cur["title"], details=details, found=found))
+    # Not quiet: an agent often goes idle once its item is done, and the question is for while the work is fresh.
+    note(root, iid, UPKEEP.format(iid=iid, title=cur["title"], details=details, found=found), quiet=False)
     update(root, lambda s: s["items"][iid]["curated"].update(asked=board.now()))
 
 
