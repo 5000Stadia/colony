@@ -38,6 +38,8 @@ KIND = re.compile(r"^(.*?)\s*·\s*(" + "|".join(KINDS) + r")\s*$", re.I)
 LANE = re.compile(r"\s*\(lane:\s*([^)]+?)\s*\)")
 # An item may name the 0-3 others that bear on it, before any `(after ...)`: `(related: R5, R9)`. Nothing waits on them.
 RELATED = re.compile(r"\s*\(related:\s*(R\d+(?:\s*,\s*R\d+)*)\s*\)")
+# Its agent may flag it for research beside that, `(research)`, with a `## Research` section in its details (R131, qdept.py).
+RESEARCH = re.compile(r"\s*\(research\)", re.I)
 LABEL = {"todo": "todo", "doing": "doing", "verify": "to verify", "done": "done"}
 
 # Every project's instructions file carries only what holds on any turn, and one pointer per moment to a guide here,
@@ -302,7 +304,7 @@ DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "mo
                     "safe_pause": 98, "auto_update": True, "monitor_model": {}, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT, "updates": 60,
                     "tailscale": "", "tailscale_lan_before": None, "steward_name": "", "repair_provider": "",
-                    "dev_mode": True}
+                    "dev_mode": True, "research_sourced": False}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -320,6 +322,7 @@ SETTING_HELP = {
     "turbo_by": "turbo for each program, as claude=on,codex=on (on unless turned off): when its weekly use runs behind pace, its projects with queued work are turned up as each one ticks",
     "lan": "the board answers every device on your home network, not only this machine (off: your phone reaches it through Tailscale or the Claude app)",
     "messaging": "project agents can message each other (colony send, colony reply)",
+    "research_sourced": "Q Branch's research passes plan their sources (its sourced method) instead of the plain search-and-read pass (off: plain, the default until a test shows the plan gains)",
     "dev_mode": "where colony's own repository is a project on the board, every project tells colony where colony's shape got in its way (colony send colony --dev)",
     "trust": "a new console's start-up questions (folder trust, permission mode, Remote Control, hooks) are answered so it runs as set up",
     "permissions": "what new sessions may do unasked: ask, edits, auto (all but the dangerous), all, or plan",
@@ -419,7 +422,7 @@ def set_setting(key, value):
         reg["new_root"] = str(Path(value).expanduser())
         if reg["new_root"] not in reg["roots"]:
             reg["roots"].append(reg["new_root"])
-    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update", "dev_mode"):
+    elif key in ("remote", "monitor", "lan", "messaging", "trust", "consult", "auto_update", "dev_mode", "research_sourced"):
         was = reg["settings"].get(key)
         reg["settings"][key] = str(value).lower() in ("on", "true", "yes", "1")
         if key == "lan" and reg["settings"][key] != was:
@@ -535,7 +538,8 @@ def set_setting(key, value):
 # What turbo means for a project, as it ticks it (colony/turbo.py): stronger models, going deeper on its queued
 # work, research on a topic it names. Never part of how its console starts.
 TURBO = {"turbo_models": True, "turbo_deeper": True, "turbo_research": False, "turbo_topic": ""}
-PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", "color", "carry_on", *TURBO)
+PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "auto_balance", "color", "carry_on",
+                "research", "research_source", *TURBO)
 # A project's own colour, the person's to choose: its accent in light and dark, which every tint on its page comes
 # from (the bars, the chosen chip, buttons), and a light wash on its chip in the menu. Green is the board's own.
 PALETTE = {"green": ("#2f5d50", "#7fb5a2"), "forest": ("#2e5a2e", "#8fc48f"), "sage": ("#566f50", "#aac4a2"),
@@ -589,6 +593,15 @@ def project_settings(root, changes=None):
                     own.pop(k)                         # as colony starts it: nothing of the project's own
             elif k == "remote":
                 own[k] = str(v).lower() in ("on", "true", "yes", "1")
+            elif k == "research":                          # Q Branch (R131): on as colony starts it, only off is kept
+                if str(v).lower() in ("off", "false", "no", "0"):
+                    own[k] = "off"
+                else:
+                    own.pop(k, None)
+            elif k == "research_source":                   # a shelf entry's id: the project's standing source
+                if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,60}", str(v)):
+                    raise KeyError(k)
+                own[k] = str(v)
             elif k == "carry_on":                          # on as colony starts it: only off is kept
                 if str(v).lower() in ("off", "false", "no", "0"):
                     own[k] = "off"
@@ -824,6 +837,8 @@ def protocol(root):
     text = _protocol(root).replace("GUIDE_PATH", str(Path(__file__).resolve().parent.parent / "GUIDE.md"))
     text = text.replace("GUIDES_DIR", str(GUIDES) + "/")
     text += dev_line(root)
+    from . import qdept
+    text += qdept.standing_line(root)
     return text + PRIVATE if is_private(root) else text
 
 
@@ -1115,9 +1130,10 @@ def _roadmap(text, shared):
             seq = current.get("kind", "sequence") == "sequence"
             after = links or ([prev] if prev and seq else [])
             lane, related = LANE.search(m.group(3)), RELATED.search(m.group(3))
-            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": RELATED.sub("", LANE.sub("", m.group(3))).strip(),
+            last = {"id": m.group(2), "state": STATE[m.group(1)], "text": RESEARCH.sub("", RELATED.sub("", LANE.sub("", m.group(3)))).strip(),
                     "after": after, "links": links, "desc": "", "milestone": current["id"], "lane": lane.group(1) if lane else None,
-                    "related": re.findall(r"R\d+", related.group(1)) if related else []}
+                    "related": re.findall(r"R\d+", related.group(1)) if related else [],
+                    "research": bool(RESEARCH.search(m.group(3)))}
             if shared:
                 last['owner'] = shared['owners'].get(last['id']) or shared['lead']
             current["items"].append(last)
@@ -6724,6 +6740,7 @@ def render(reg, pid, view="overview", show_all=""):
                         + (f" <span class='badge gate'>{waiting} waiting</span>" if waiting else "")
                         + (f" <span class='badge'>{len(ns)} notes</span>" if ns else "")
                         + (f" {timer(times[it['id']])}" if it["id"] in times else "")
+                        + qdept_badge(root, it)
                         + f"</summary><div class='body'>{steer_row(pid, it)}"
                         + (f"<p>{e(it['text'])}</p>" if lead_clause(it['text'], 90) != it['text'] else "")
                         + item_body(root, it, (it['desc'] or ('' if lead_clause(it['text'], 90) != it['text'] else 'No description yet.')))
@@ -7439,6 +7456,14 @@ def roadmap_map(road, pid, all_notes, gs, root=None):
             f"{''.join(nodes)}</div></div></div>")
 
 
+def qdept_badge(root, it):
+    from . import qdept
+    try:
+        return qdept.badge(root, it)
+    except Exception:
+        return ""
+
+
 def render_item(reg, pid, iid):
     """One roadmap item in depth: what it is, where it sits, the work done on it, its gates, and the
     thread where the person directs it."""
@@ -7465,6 +7490,8 @@ def render_item(reg, pid, iid):
                 f"<p class='muted'>Builds on: {', '.join(link(a) for a in it['after']) or 'nothing'}"
                 f"<br>Unlocks: {', '.join(link(u) for u in unlocks) or 'nothing yet'}"
                 + (f"<br>Related: {', '.join(link(r) for r in related)}" if related else "") + "</p></div>")
+    from . import qdept
+    body.append(qdept.item_card(root, it))
     gs = [g for g in gates(root) if g.get("item") == iid]
     if gs:
         body.append("<h2>Gates</h2>")
@@ -7801,6 +7828,12 @@ def project_settings_form(pid, own, action="/project-settings", root=None, permi
             + (f"<label><input type='checkbox' name='carry_on' value='on'{'' if own.get('carry_on') == 'off' else ' checked'}>"
                "<input type='hidden' name='carry_on' value='off'> Carry on by itself: idle with roadmap work it can start, "
                "it is told so <span class='muted'>(once, until something changes)</span></label>" if root else "")
+            + (f"<label><input type='checkbox' name='research' value='on'{'' if own.get('research') == 'off' else ' checked'}>"
+               "<input type='hidden' name='research' value='off'> Research <span class='muted'>(Q Branch: a guide for each item "
+               "its agent flags research, and curated guides where an item matches one)</span></label>"
+               f"<label>Standing source <input name='research_source' value='{e(str(own.get('research_source', '')))}' size='12' "
+               "placeholder='none'> <span class='muted'>(a curated guide's id, which its agent is pointed to once)</span></label>"
+               if root else "")
             + (auto_balance_fields(root) + tier_fields(root) + turbo_fields(root) if root else "") + f"<button>Save</button></form>")
 
 
@@ -9805,6 +9838,8 @@ def settings_page(reg):
         f"<span class='muted'>(after colony restart)</span></label>"
         f"<label><input type='checkbox' name='messaging' value='on'{check('messaging')}> Projects can message each other "
         f"<span class='muted'>(one inbox per project)</span></label>"
+        + f"<label><input type='checkbox' name='research_sourced' value='on'{check('research_sourced')}> Research passes plan "
+        f"their sources <span class='muted'>(Q Branch's sourced method; off: the plain search-and-read pass)</span></label>"
         + (f"<label><input type='checkbox' name='dev_mode' value='on'{check('dev_mode')}> Dev mode "
            f"<span class='muted'>(every project tells colony where colony's shape got in its way, with the details; "
            f"the reports wait for colony's next turn)</span></label>" if colony_project() else "")
@@ -10830,6 +10865,7 @@ class Handler(BaseHTTPRequestHandler):
             set_setting("messaging", form.get("messaging", "off"))
             set_setting("trust", form.get("trust", "off"))
             set_setting("auto_update", form.get("auto_update", "off"))
+            set_setting("research_sourced", form.get("research_sourced", "off"))
             if colony_project() and (form.get("dev_mode") == "on") != bool(reg["settings"].get("dev_mode")):
                 set_setting("dev_mode", form.get("dev_mode", "off"))   # shown only there; rewires only on a change
             from . import autostart

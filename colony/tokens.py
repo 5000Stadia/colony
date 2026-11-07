@@ -20,7 +20,8 @@ BUDGET = 20                             # seconds one look may spend reading; th
 WINDOWS = (("4 h", 4 * 3600), ("24 h", 24 * 3600), ("7 d", 7 * 24 * 3600))
 TMP = re.compile(r"^/tmp/colony-([a-z]+)-")
 # what colony's own asks are, by the folder each runs in
-ASKS = {"consult": "Consultants, judges and audits", "models": "Model checks", "token": "Model checks", "scout": "Steward's scouts"}
+ASKS = {"consult": "Consultants, judges and audits", "models": "Model checks", "token": "Model checks", "scout": "Steward's scouts",
+        "research": "Research passes (Q Branch)", "screen": "Research screens", "qbranch": "Guide upkeep (Q Branch)"}
 _lock = threading.Lock()
 
 
