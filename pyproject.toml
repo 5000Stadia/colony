@@ -13,7 +13,8 @@ license = {text = "MIT"}
 colony = "colony.cli:main"
 
 [tool.setuptools]
-packages = ["colony"]
+packages = ["colony", "colony.qbranch"]
 
 [tool.setuptools.package-data]
 colony = ["data/*.json", "static/**/*", "static/*"]
+"colony.qbranch" = ["README.md", "prompts/*.md", "shelf/*.md", "shelf/editions/*.md"]
