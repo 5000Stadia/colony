@@ -1,7 +1,7 @@
 """Q Branch's core, inside colony: research handed to a roadmap item's agent when the item needs it, as one short,
 restrained guide for the item's domain, and curated guides kept by what happened when they were used.
 
-Copied from Memory Research's qbranch/ at commit 40cf24b (after 4df8b3d and 9f92e21); that project owns the method
+Copied from Memory Research's qbranch/ at commit 40cf24b (after 4df8b3d and 9f92e21), with its hand-over and name-matching changes through 8495595; that project owns the method
 (its prompts, curation reviews and studies), and colony owns the seam (colony/qdept.py). Changes from that copy: the
 cheap warrant check and the subject step are gone (the item's own agent flags research and writes the subject, its
 requirements and decisions in the item's Research section); brief takes that subject, or names a curated entry to

@@ -5,7 +5,7 @@ item's domain: the library's curated entry where one fits, otherwise one researc
 After the item is built, what the agent found that the guide lacked can be woven back into a curated guide, so guides
 are kept by what happened when they were used. Q Branch recommends nothing: the agent doing the work makes the call.
 
-This is Q Branch's core, copied into colony from Memory Research's `qbranch/` at commit 40cf24b. That project owns the
+This is Q Branch's core, copied into colony from Memory Research's `qbranch/` at commit 40cf24b, with its later name-matching and hand-over changes through 8495595. That project owns the
 method: the prompts, the curation reviews and the studies behind them; changes to it come to colony from there.
 Colony's seam (`colony/qdept.py`) decides when it runs, delivers what it makes and keeps its settings; its runners
 (`colony/qroom.py`) send every model call through colony's research room. The core itself knows nothing of colony's
