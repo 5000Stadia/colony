@@ -41,6 +41,13 @@ class BadInput(Exception):
     pass
 
 
+
+def names_in(text, private):
+    """Whether any private name appears in text as a whole word or phrase, ignoring case: a project named "JOB" is
+    in "JOB's plan" but not in "jobs table", nor "Lab" in "label" (colony's fix, sent to Memory Research)."""
+    return any(re.search(r'(?<!\w)' + r'\s+'.join(map(re.escape, x.split())) + r'(?!\w)', text, re.I)
+               for x in private if x.strip())
+
 def prompt(name):
     return open(os.path.join(HERE, 'prompts', name + '.md')).read()
 
@@ -557,7 +564,7 @@ def candidate_error(candidate, private):
         return 'candidate text must contain 1 to 80 words'
     if not isinstance(url, str) or not SOURCE_URL.fullmatch(url):
         return 'candidate needs a source URL'
-    if any(x.casefold() in (text + '\n' + url).casefold() for x in private):
+    if names_in(text + '\n' + url, private):
         return 'candidate contains a private string'
     return ''
 
@@ -663,7 +670,7 @@ def weave_locked(inp, path, editions, name, private, extra):
             if (not isinstance(title, str) or not title.strip() or len(title) > 80 or
                     '\n' in title or '\r' in title or title.strip() != title or
                     title.casefold() in {x.group(2).strip().casefold() for x in headings} or
-                    any(x.casefold() in title.casefold() for x in private)):
+                    names_in(title, private)):
                 raise RunnerFailed('invalid new heading')
             level = min(4, len(m.group(1)) + 1)
             heading, body = '#' * level + ' ' + title, ''
@@ -679,7 +686,7 @@ def weave_locked(inp, path, editions, name, private, extra):
         after = len(rewritten.split())
         if (not rewritten.strip() or after > cap or re.search(r'^\s*#+\s', rewritten, re.M) or
                 candidate['url'] not in rewritten or
-                any(x.casefold() in rewritten.casefold() for x in private) or
+                names_in(rewritten, private) or
                 (not new and after < before * .7)):
             raise RunnerFailed('rewritten body failed validation')
         try:

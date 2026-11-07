@@ -353,3 +353,18 @@ class Weave(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PrivateNames(unittest.TestCase):
+    """A private name is found as a whole word or phrase, never inside another word."""
+
+    def test_a_short_project_name_does_not_refuse_ordinary_words(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("qbranch_core", HERE / "qbranch.py")
+        q = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(q)
+        self.assertFalse(q.names_in("Keep the jobs table small.", ["JOB"]), "JOB is not in jobs")
+        self.assertFalse(q.names_in("A label on each row.", ["Lab"]))
+        self.assertTrue(q.names_in("As JOB's plan showed,", ["JOB"]))
+        self.assertTrue(q.names_in("seen in memory  research before", ["Memory Research"]), "any spacing, any case")
+        self.assertFalse(q.names_in("anything", ["", "  "]), "a blank name matches nothing")
