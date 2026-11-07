@@ -565,7 +565,33 @@ class Provider:
 
     def scout(self, brief, model, effort, run=None):
         """One fresh, stateless scout for the steward: only searching the web and reading pages, held there by the
-        program itself, so strangers' text never reaches the session that speaks for the person; {"text", "error"}."""
+        program itself, so strangers' text never reaches the session that speaks for the person; {"text", "error"}.
+        It runs in the research room (room.py), unscreened: its caller screens what it hands on."""
+        from . import room
+        out = room.research(brief, family=key(self), model=model, effort=effort, screen=False, spawn=run, kind="scout")
+        return {"text": out["text"], "error": out["error"]}
+
+    # --- the research room (room.py): one locked-down pass, prompt in, text out
+    room_sandbox = False                # whether the room wraps it in its OS sandbox (False: it keeps its own)
+
+    def room_command(self, model, effort, work, out, tools=True):
+        """The command for one room pass that reads its prompt on stdin, in the folder work, keeping its answer in
+        the folder out if it writes one there: tools, only searching the web and reading pages; else no tools at
+        all (the screen's model). Its every event, one JSON object to a line, on stdout."""
+        raise NotImplementedError
+
+    def room_login(self):
+        """How a sandboxed pass signs in: (environment, [(a file to bind read-only, its path under the pass's
+        HOME)])."""
+        return {}, []
+
+    def room_events(self, event):
+        """The tool calls one event of a pass records: [{"tool", "input"}], and [{"refused": name}] for any the
+        program refused."""
+        return []
+
+    def room_result(self, events, out):
+        """A finished pass, from its events and its out folder: {"text", "usage", "error"}."""
         raise NotImplementedError
 
 
@@ -1178,29 +1204,54 @@ class ClaudeCode(Provider):
     # PROVIDER: Claude Code holds a process to the tools it's given. The scout's: search and fetch, and nothing else
     # (no shell, edits, local files, MCP servers or helpers); anything else that would ask is refused unasked.
     SCOUT_TOOLS = "WebSearch,WebFetch"
+    SCOUT_REFUSED = "Bash,Edit,Write,NotebookEdit,Read,Grep,Glob,Agent"
+    # PROVIDER: Claude Code runs in the room's OS sandbox (room.py): only its own binary and libraries, a fresh HOME,
+    # and its login. Checked on Claude Code 2.1.319: with a fresh HOME it needs only the login (the token, or the
+    # credentials file) and writes its own .claude.json there; no /etc beyond DNS.
+    room_sandbox = True
 
-    def scout(self, brief, model, effort, run=None):
-        """One fresh, stateless scout in an empty folder, with none of the person's settings, hooks, MCP servers or
-        CLAUDE.md files: it can search the web and read pages, and nothing else (checked on Claude Code 2.1.288)."""
-        import os
-        import subprocess
-        import tempfile
-        cmd = [self.program, "-p", "--model", model, *(["--effort", effort] if effort else []), "--setting-sources", "",
-               "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", self.SCOUT_TOOLS,
-               "--allowedTools", self.SCOUT_TOOLS, "--disallowedTools", "Bash,Edit,Write,NotebookEdit,Read,Grep,Glob,Agent",
-               "--no-session-persistence", "--output-format", "json"]
-        with tempfile.TemporaryDirectory(prefix="colony-scout-") as here:
-            try:
-                env = dict(os.environ, **({self.TOKEN_ENV: self.token()} if self.token() else {}))
-                d = json.loads((run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=here, env=env,
-                                                       timeout=1800).stdout)
-            except (ValueError, OSError, subprocess.TimeoutExpired) as err:
-                return {"text": "", "error": err.__class__.__name__}
-        from . import tokens
-        tokens.note("claude", d.get("usage"))           # a scout keeps no transcript: what it spent is noted here
-        if d.get("is_error"):
-            return {"text": "", "error": str(d.get("result") or d.get("subtype") or "error")[:300]}
-        return {"text": d.get("result") or "", "error": None}
+    def room_command(self, model, effort, work, out, tools=True):
+        """No settings, hooks, MCP servers or CLAUDE.md files, no session kept; with tools, searching the web and
+        reading pages and nothing else; without, none at all. What else would ask is refused unasked."""
+        allow = self.SCOUT_TOOLS if tools else ""
+        return [self.program, "-p", *(["--model", model] if model else []), *(["--effort", effort] if effort else []),
+                "--setting-sources", "", "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", allow,
+                *(["--allowedTools", allow] if tools else []), "--disallowedTools", self.SCOUT_REFUSED,
+                "--no-session-persistence", "--output-format", "stream-json", "--verbose"]
+
+    def room_login(self):
+        """The long-lived token when the person gave one; else the credentials file Claude Code keeps, read-only."""
+        if self.token():
+            return {self.TOKEN_ENV: self.token()}, []
+        env = {k: os.environ[k] for k in ("ANTHROPIC_API_KEY", self.TOKEN_ENV) if os.environ.get(k)}
+        if env:
+            return env, []
+        folder = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+        creds = folder / ".credentials.json"
+        return {}, [(creds, ".claude/.credentials.json")] if creds.is_file() else []
+
+    def room_events(self, event):
+        found = []
+        if event.get("type") == "assistant":
+            for b in (event.get("message") or {}).get("content") or []:
+                if isinstance(b, dict) and b.get("type") in ("tool_use", "server_tool_use"):
+                    found.append({"tool": b.get("name"), "input": b.get("input")})
+        if event.get("type") == "user":                 # what its tools handed back: the links it was given
+            for b in (event.get("message") or {}).get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    found.append({"urls": re.findall(r'https?://[^\s<>\[\]"\x27`\\]+', json.dumps(b.get("content")))})
+        if event.get("type") == "result":
+            for d in event.get("permission_denials") or []:
+                found.append({"refused": d.get("tool_name"), "input": d.get("tool_input")})
+        return found
+
+    def room_result(self, events, out):
+        last = next((e for e in reversed(events) if e.get("type") == "result"), None)
+        if last is None:
+            return {"text": "", "usage": None, "error": "no result"}
+        if last.get("is_error"):
+            return {"text": "", "usage": last.get("usage"), "error": str(last.get("result") or last.get("subtype") or "error")[:300]}
+        return {"text": last.get("result") or "", "usage": last.get("usage"), "error": None}
 
     def conversation(self, payload):
         """Which conversation a hook ran in, and where it is kept: for a console that must be restarted."""
@@ -1913,29 +1964,40 @@ class Codex(Provider):
     # search index knows, so no address a page makes up can carry anything out. Checked on Codex 0.160.
     SCOUT_OFF = ("hooks", "shell_tool", "unified_exec", "apps", "plugins", "view_image", "image_generation", "goals")
 
-    def scout(self, brief, model, effort, run=None):
-        """One fresh, stateless scout in an empty folder, reading no AGENTS.md: it searches the web and reads what the
-        search finds, and can act nowhere."""
-        import subprocess
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="colony-scout-") as here:
-            work, last = Path(here) / "work", Path(here) / "answer.txt"
-            work.mkdir()
-            cmd = [self.program, "exec", "-m", model, *(["-c", f"model_reasoning_effort={effort}"] if effort else []),
-                   "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-                   *[a for f in self.SCOUT_OFF for a in ("--disable", f)], "-c", 'web_search="indexed"',
-                   "-c", "project_doc_max_bytes=0", "-o", str(last), "-C", str(work), "-"]
-            try:
-                r = (run or subprocess.run)(cmd, input=brief, capture_output=True, text=True, cwd=work, timeout=1800)
-            except (OSError, subprocess.TimeoutExpired) as err:
-                return {"text": "", "error": err.__class__.__name__}
-            text = last.read_text() if last.exists() else ""
-        used = re.search(r"tokens used\W+([\d,]+)", str(getattr(r, "stderr", "") or "") + str(getattr(r, "stdout", "") or ""), re.I)
-        if used:                                          # a scout keeps no transcript: what it spent is noted here
-            from . import tokens
-            tokens.note("codex", {"input_tokens": int(used[1].replace(",", ""))})
-        why = ((r.stderr or "").strip().splitlines() or ["no answer"])[-1][:300]
-        return {"text": text, "error": None if text.strip() else why}
+    # PROVIDER: in the room (room.py) Codex keeps its own sandbox and is not wrapped in the room's (its own binds /,
+    # and sandboxes binding / have hung here in mount locking; one inside another adds that risk). Not checked live: whether
+    # its shell is truly off. Memory Research's runs found it can't be (it reads any file in read-only mode), so the
+    # room logs any command it runs as a tool call outside the allowed set, and Codex stays off research by default.
+    room_sandbox = False
+    ROOM_TOOLS = ("web_search",)
+
+    def room_command(self, model, effort, work, out, tools=True):
+        return [self.program, "exec", *(["-m", model] if model else []),
+                *(["-c", f"model_reasoning_effort={effort}"] if effort else []),
+                "-s", "read-only", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+                *[a for f in self.SCOUT_OFF for a in ("--disable", f)],
+                "-c", 'web_search="indexed"' if tools else 'web_search="disabled"',
+                "-c", "project_doc_max_bytes=0", "--json", "-o", str(Path(out) / "answer.txt"), "-C", str(work), "-"]
+
+    def room_events(self, event):
+        item = event.get("item") if isinstance(event.get("item"), dict) else None
+        if not item or event.get("type") not in ("item.started", "item.completed"):
+            return []
+        kind = item.get("type") or item.get("item_type")
+        if kind in ("agent_message", "reasoning", "todo_list", None):
+            return []
+        if event.get("type") == "item.completed" and kind == "command_execution":
+            return []                                  # its start was logged; once is enough
+        return [{"tool": kind, "input": {k: v for k, v in item.items() if k not in ("id", "type", "item_type",
+                                                                                     "aggregated_output")}}]
+
+    def room_result(self, events, out):
+        answer = Path(out) / "answer.txt"
+        text = answer.read_text() if answer.exists() else ""
+        usage = next((e.get("usage") for e in reversed(events) if e.get("type") == "turn.completed"), None)
+        why = next((str((e.get("error") or {}).get("message") if isinstance(e.get("error"), dict) else e.get("message"))
+                    for e in reversed(events) if e.get("type") in ("turn.failed", "error")), None)
+        return {"text": text, "usage": usage, "error": None if text.strip() else (why or "no answer")[:300]}
 
     def discover(self, run=None):
         """The models this account can run, from Codex's own catalog of them, with each one's effort levels;

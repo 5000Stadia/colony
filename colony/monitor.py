@@ -361,12 +361,17 @@ def scout(text, family=None):
     p = providers.PROVIDERS[k]
     if not providers.usable(p):
         raise ValueError(providers.unusable(p))
+    from . import room
     t = selection.scout(k)
-    out = p.scout(f"{SCOUT_ROLE}\n\nThe steward's brief:\n\n{text.strip()}", t["model"], t["effort"])
+    out = room.research(f"{SCOUT_ROLE}\n\nThe steward's brief:\n\n{text.strip()}", family=k, model=t["model"],
+                        effort=t["effort"], kind="scout")      # in the research room, screened before the steward reads it
+    if out["status"] == "held":
+        raise ValueError(f"the screen held the scout's report ({out['error']}); its run is kept in {out['run_dir']}")
     report = out["text"].replace(supports.NOTICE, "").strip()
     if not report:
         raise ValueError(f"the scout brought nothing back ({out['error'] or 'an empty report'})")
-    return f"{report}\n\n{supports.NOTICE}"
+    envelope = out["envelope"].replace(supports.NOTICE, "").strip()
+    return f"{envelope}\n\n{supports.NOTICE}"
 
 
 # PROVIDER: Claude Code's --autocompact (its only compaction now); Codex compacts on its own. It compacts about a third
