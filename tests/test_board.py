@@ -6721,12 +6721,18 @@ class ScoutTest(BoardBase):
     def test_each_program_holds_its_scout_to_searching_and_reading_the_web_in_an_empty_folder(self):
         seen = {}
 
-        def run(cmd, **kw):
-            seen.update(cmd=cmd, kw=kw, files=os.listdir(kw["cwd"]))
-            if "-o" in cmd:
-                Path(cmd[cmd.index("-o") + 1]).write_text("- name: tidy")
-            return subprocess.CompletedProcess(cmd, 0, json.dumps({"result": "- name: tidy"}), "")
+        def answering(reply, err="", answer=True):
+            def run(cmd, **kw):            # the room's spawn: the command it would start, and a stand-in that answers
+                seen.update(cmd=cmd, kw=kw, files=os.listdir(kw["cwd"]))
+                if "-o" in cmd and answer:
+                    Path(cmd[cmd.index("-o") + 1]).write_text("- name: tidy")
+                code = (f"import sys; seen = sys.stdin.read(); open({str(Path(self.tmp.name) / 'input.txt')!r}, 'w').write(seen); "
+                        f"print({reply!r}); sys.stderr.write({err!r})")
+                return subprocess.Popen([sys.executable, "-c", code], **dict(kw, env=None))
+            return run
+        run = answering(json.dumps({"type": "result", "result": "- name: tidy"}))
         flag = lambda name: seen["cmd"][seen["cmd"].index(name) + 1]
+        given = lambda: (Path(self.tmp.name) / "input.txt").read_text()
         out = providers.get("claude").scout("the brief", "claude-sonnet-5", "high", run=run)
         self.assertEqual(out, {"text": "- name: tidy", "error": None})
         self.assertEqual(flag("--tools").split(","), ["WebSearch", "WebFetch"], "Claude Code gives it these and no others")
@@ -6736,12 +6742,12 @@ class ScoutTest(BoardBase):
         self.assertEqual((flag("--setting-sources"), flag("--permission-mode")), ("", "dontAsk"),
                          "none of the person's settings, hooks or CLAUDE.md; whatever would ask is refused")
         self.assertIn("--strict-mcp-config", seen["cmd"], "no MCP servers")
-        self.assertEqual((flag("--model"), flag("--effort"), seen["kw"]["input"]), ("claude-sonnet-5", "high", "the brief"))
+        self.assertEqual((flag("--model"), flag("--effort"), given()), ("claude-sonnet-5", "high", "the brief"))
         self.assertEqual(seen["files"], [], "an empty folder")
-        self.assertFalse(Path(seen["kw"]["cwd"]).exists(), "gone afterwards")
+        self.assertEqual(Path(seen["kw"]["cwd"]).parent.parent, board.home() / "room", "kept in the room, for audit")
         for loose in ("--add-dir", "--dangerously-skip-permissions", "--permission-prompt-tool"):
             self.assertNotIn(loose, seen["cmd"])
-        refused = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps({"is_error": True, "result": "API Error"}), "")
+        refused = answering(json.dumps({"type": "result", "is_error": True, "result": "API Error"}))
         self.assertEqual(providers.get("claude").scout("b", "m", None, run=refused), {"text": "", "error": "API Error"})
 
         out = providers.get("codex").scout("the brief", "gpt-6-astra", "medium", run=run)
@@ -6756,15 +6762,16 @@ class ScoutTest(BoardBase):
         self.assertEqual(settings, {'web_search="indexed"', "project_doc_max_bytes=0", "model_reasoning_effort=medium"},
                          "it opens only what the search index knows, and reads no AGENTS.md")
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", seen["cmd"])
-        self.assertEqual((flag("-m"), seen["kw"]["input"], seen["files"]), ("gpt-6-astra", "the brief", []))
+        self.assertEqual((flag("-m"), given(), seen["files"]), ("gpt-6-astra", "the brief", []))
         self.assertEqual(flag("-C"), str(seen["kw"]["cwd"]), "it works in the empty folder")
-        silent = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "warning\nERROR: not signed in\n")
+        silent = answering("", "warning\nERROR: not signed in\n", answer=False)
         self.assertEqual(providers.get("codex").scout("b", "m", None, run=silent), {"text": "", "error": "ERROR: not signed in"})
 
     def test_colony_scout_runs_one_on_the_monitors_program_and_its_report_ends_with_the_notice_once(self):
         from colony import supports
         reg = board.registry()
-        reg["settings"]["helper_models"] = {"claude:routine": {"model": "claude-haiku-4-5-20251001", "effort": "low"}}
+        reg["settings"]["helper_models"] = {"claude:routine": {"model": "claude-haiku-4-5-20251001", "effort": "low"},
+                                            "claude:rote": {"model": "claude-sonnet-5", "effort": "low"}}
         board.save_registry(reg)
         bin_, log = Path(self.tmp.name) / "bin", Path(self.tmp.name) / "scout-calls.jsonl"
         bin_.mkdir()
@@ -6773,10 +6780,14 @@ class ScoutTest(BoardBase):
             "prompt = sys.stdin.read()",
             f"open({str(log)!r}, 'a').write(json.dumps(dict(argv=sys.argv[1:], files=os.listdir('.'), prompt=prompt)) + chr(10))",
             "failed = 'nothing to find' in prompt",
-            f"print(json.dumps(dict(is_error=failed, result='API Error' if failed else '- name: tidy' + chr(10) * 2 + {supports.NOTICE!r})))"]))
+            "screen = prompt.startswith('You screen untrusted research')",
+            "said = '{\"cuts\": [], \"verdict\": \"pass\"}' if screen else 'API Error' if failed else "
+            f"'- name: tidy' + chr(10) * 2 + {supports.NOTICE!r}",
+            "print(json.dumps(dict(type='result', is_error=failed and not screen, result=said)))"]))
         (bin_ / "claude").chmod(0o755)
         (self.root / "brief.txt").write_text("from a file")
-        env = dict(os.environ, PYTHONPATH=str(ROOT), PATH=f"{bin_}:{os.environ['PATH']}")
+        # no OS sandbox for this stand-in, which writes its record outside its room
+        env = dict(os.environ, PYTHONPATH=str(ROOT), PATH=f"{bin_}:{os.environ['PATH']}", COLONY_ROOM_SANDBOX="none")
         scout = lambda *a, stdin=None: subprocess.run([sys.executable, "-m", "colony", "scout", *a], cwd=self.root, input=stdin,
                                                       capture_output=True, text=True, env=env)
         for args, stdin, brief in ((["faster test runs, on GitHub"], None, "faster test runs, on GitHub"),
@@ -6787,8 +6798,11 @@ class ScoutTest(BoardBase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertTrue(r.stdout.rstrip().endswith(supports.NOTICE), r.stdout)
                 self.assertEqual(r.stdout.count(supports.NOTICE), 1, "the notice, once, though the scout wrote it too")
-                call = json.loads(log.read_text().splitlines()[-1])
+                calls = [json.loads(line) for line in log.read_text().splitlines()]
+                call = calls[-2]
                 self.assertTrue(call["prompt"].startswith(monitor.SCOUT_ROLE), "its own instructions, then the brief")
+                self.assertTrue(calls[-1]["prompt"].startswith("You screen untrusted research"), "then the screen")
+                self.assertIn("UNTRUSTED RESEARCH FROM THE OPEN WEB", r.stdout, "the steward reads it in the envelope")
                 self.assertTrue(call["prompt"].rstrip().endswith(brief))
                 self.assertEqual(call["files"], [], "in an empty folder")
                 argv = call["argv"]
@@ -6798,13 +6812,15 @@ class ScoutTest(BoardBase):
         self.assertEqual((r.returncode, r.stdout), (2, ""))
         self.assertIn("the scout brought nothing back (API Error)", r.stderr)
         self.assertIn("isn't one of colony's programs", scout("x", "--provider", "elsewhere").stderr)
-        codex = providers.PROVIDERS["codex"]
-        codex.scout = lambda brief, model, effort: {"text": "- name: tidy", "error": None}
-        try:
+        from unittest.mock import patch
+        from colony import room
+        done = dict(status="done", text="- name: tidy", envelope="ENVELOPE\n- name: tidy", error=None, run_dir="r")
+        with patch.object(room, "research", lambda *a, **kw: done):
             out = monitor.scout("a brief", "codex")
-        finally:
-            del codex.scout                          # the instance attribute: the class's method again
-        self.assertEqual(out, "- name: tidy\n\n" + supports.NOTICE, "a report without it gets the notice too")
+        self.assertEqual(out, "ENVELOPE\n- name: tidy\n\n" + supports.NOTICE, "a report without it gets the notice too")
+        with patch.object(room, "research", lambda *a, **kw: dict(done, status="held", text="", error="bad reply")), \
+                self.assertRaisesRegex(ValueError, "the screen held"):
+            monitor.scout("a brief", "codex")
 
     def test_the_monitor_hands_the_reading_to_colony_scout_and_opens_no_pages_itself(self):
         flat = lambda text: " ".join(text.split())

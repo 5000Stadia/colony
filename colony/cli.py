@@ -725,6 +725,27 @@ def cmd_scout(a):
     return 0
 
 
+def cmd_room(a):
+    """One pass in the research room on a generic prompt from stdin: it can only search and read the web. Prints the
+    screened envelope (the pass's own text with --no-screen); exit 0 done, 5 held by the screen, 3 hung, 2 error.
+    Its run folder, for audit, on stderr."""
+    from . import room
+    prompt = sys.stdin.read()
+    if not prompt.strip():
+        raise SystemExit("colony room < prompt (the prompt on stdin); see colony room -h")
+    try:
+        out = room.research(prompt, family=a.provider, model=a.model, effort=a.effort, timeout=a.timeout,
+                            screen=not a.no_screen)
+    except (ValueError, OSError) as err:
+        print(f"colony room: {err}", file=sys.stderr)
+        return 2
+    print(f"colony room: {out['status']}, sandbox {out['sandbox']}, {len(out['tools'])} tool calls; {out['run_dir']}"
+          + (f" ({out['error']})" if out["error"] else ""), file=sys.stderr)
+    if out["status"] == "done":
+        print(out["envelope"] if not a.no_screen else out["text"])
+    return {"done": 0, "held": 5, "hung": 3}.get(out["status"], 2)
+
+
 def cmd_statusline(a):
     """(Claude Code's status line) Record the usage limits Claude Code hands its status line, then show the
     person's own status line if they set one, else a short line of their own usage."""
@@ -2269,6 +2290,14 @@ def main(argv=None):
     p.add_argument("--file", help="read the brief from a file")
     p.add_argument("--provider", help="the program to run it on (default: the steward's)")
     p.set_defaults(fn=cmd_scout)
+    p = sub.add_parser("room", help="one pass in the research room: a prompt on stdin, searched and read on the "
+                                        "web only, its text screened before it is printed")
+    p.add_argument("--provider", help="the program to run it on (default: colony's)")
+    p.add_argument("--model", help="default: the program's routine tier")
+    p.add_argument("--effort")
+    p.add_argument("--timeout", type=float, default=1800, help="seconds before it is stopped as hung (default 1800)")
+    p.add_argument("--no-screen", action="store_true", help="print its own text, for a caller that screens it itself")
+    p.set_defaults(fn=cmd_room)
     p = sub.add_parser("notes"); p.add_argument("item", nargs="?"); p.add_argument("--deliver", action="store_true")
     p.add_argument("--console", metavar="PROVIDER", help="(hook) deliver only in this provider's matching board console")
     p.add_argument("--session", action="store_true"); p.set_defaults(fn=cmd_notes)
