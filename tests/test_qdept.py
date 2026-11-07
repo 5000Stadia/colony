@@ -391,6 +391,26 @@ class QDept(Base):
         self.look()
         self.assertEqual(len(self.notes()), 2)                # R2 had no guide: no question
 
+    def test_a_flagged_item_with_a_guide_gets_both_and_both_maintain_it(self):
+        # the person, 2026-11-06: an item flagged for research, where a domain guide exists, does both, for thoroughness
+        # and to maintain the guide
+        text = {"R2": "Add long-term memory to the helper"}
+        self.plan("   ", flagged={"R2"}, extra=text)
+        self.details("R2", SECTION)
+        self.look()
+        self.plan("~  ", flagged={"R2"}, extra=text)
+        self.look()
+        self.work()
+        self.plan("x~ ", flagged={"R2"}, extra=text)
+        self.look()
+        start = self.notes()
+        self.assertEqual(len(start), 2)
+        self.assertTrue(any("A curated Q Branch guide bears on R2" in n for n in start))
+        self.assertIn(qdept.READY.format(iid="R2", path=self.rec("R2")["path"]), start)
+        self.plan("xx ", flagged={"R2"}, extra=text)
+        self.look()
+        self.assertIn("Did your research guide, your own search or your build turn up anything", self.notes()[-1])
+
     def test_the_question_at_done_comes_after_both_the_guide_and_the_agents_own_search(self):
         # the person, 2026-11-06: it only works if the agent considers it after both using the guide and searching
         # online outside it

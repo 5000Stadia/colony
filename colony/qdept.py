@@ -617,7 +617,7 @@ CURATED = ("A curated Q Branch guide bears on {iid}: \"{title}\", at {path}. Rea
 # Memory Research's 68d3a79).
 UPKEEP = ("{iid} is done, and it was handed the curated guide \"{title}\". Answer this only after both using the guide "
           "and searching the web yourself beyond it; if you didn't search while building, run a short search now on what "
-          "{iid} needed. Did your search or your build turn up anything that would change what the next agent decides "
+          "{iid} needed. Did {found} turn up anything that would change what the next agent decides "
           "after reading the section it belongs in? It fails if the guide already says it, if "
           "it fits only your project, or if nothing backs it: a finding from your build must have held up in it, and "
           "one from your search needs a primary source (the maker's own docs, code or paper) that your build didn't "
@@ -757,7 +757,10 @@ def _finished(root, its, iid):
         details = lead.details_path(root, iid)
     except Exception:
         details = f"roadmap/{iid}.md"
-    note(root, iid, UPKEEP.format(iid=iid, title=cur["title"], details=details))
+    # A flagged item had a research pass too: it maintains the guide as much as the agent's own search does (the person).
+    found = "your research guide, your own search or your build" if rec.get("status") == "ready" else \
+        "your search or your build"
+    note(root, iid, UPKEEP.format(iid=iid, title=cur["title"], details=details, found=found))
     update(root, lambda s: s["items"][iid]["curated"].update(asked=board.now()))
 
 

@@ -33,7 +33,9 @@ new models on its own, keeps itself current, and never gets in the way of the wo
   one restrained guide is ready when the item starts. The guides evolve like a field's textbook from edition 1 to
   edition 30: when an item that used one finishes, its agent is asked whether what it found belongs in the guide, and
   a light model weaves that into the one section it fits, so the guides grow with the agents without making them
-  token-hungry; the worthy ones ship with colony for everyone.
+  token-hungry; the worthy ones ship with colony for everyone. An item flagged for research where a guide exists
+  does both, for thoroughness and to keep the guide; and a guide is used where it has shown it pays and skipped
+  where it doesn't, with the reason known.
 - Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
   decisions; no extra spend without substantial gain.
 - Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
