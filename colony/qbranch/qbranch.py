@@ -44,8 +44,10 @@ class BadInput(Exception):
 
 def names_in(text, private):
     """Whether any private name appears in text as a whole word or phrase, ignoring case: a project named "JOB" is
-    in "JOB's plan" but not in "jobs table", nor "Lab" in "label" (colony's fix, sent to Memory Research)."""
-    return any(re.search(r'(?<!\w)' + r'\s+'.join(map(re.escape, x.split())) + r'(?!\w)', text, re.I)
+    in "JOB's plan" and "job_runner" but not in "jobs table", nor "Lab" in "label". Only a letter or digit joins a
+    name to the next word, so an underscore or hyphen in an identifier, path or slug still separates it, and a
+    multi-word name's parts may be joined by spaces, underscores or hyphens (as upstream, Memory Research 3a94e85)."""
+    return any(re.search(r'(?<![^\W_])' + r'[\s_-]+'.join(map(re.escape, x.split())) + r'(?![^\W_])', text, re.I)
                for x in private if x.strip())
 
 def prompt(name):
