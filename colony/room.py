@@ -34,7 +34,11 @@ SCREEN_TIMEOUT = 600               # each call of the screen's model
 KEEP_DAYS = 30
 HOME_IN = "/room"                  # the workspace, inside the sandbox: its HOME and working folder
 # The least of /etc a pass needs to resolve names and check certificates (each bound at its real path, if present).
-ETC = ("/etc/resolv.conf", "/etc/hosts", "/etc/nsswitch.conf", "/etc/gai.conf", "/etc/ssl/certs/ca-certificates.crt")
+# Not the machine's own resolv.conf: it can resolve private names (a tailnet's, the home network's), and the board
+# itself is served under one, so a hijacked pass could read it and carry what it read out in a URL. A pass resolves
+# through public resolvers only (RESOLV), so only public names reach it.
+ETC = ("/etc/nsswitch.conf", "/etc/gai.conf", "/etc/ssl/certs/ca-certificates.crt")
+RESOLV = "nameserver 1.1.1.1\nnameserver 9.9.9.9\nnameserver 8.8.8.8\noptions edns0\n"
 # Passed into the sandbox when set (a network that needs a proxy); every other variable of the board's is left out.
 PASS_ENV = ("LANG", "LC_ALL", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy")
 URL = re.compile(r'https?://[^\s<>\[\]"\x27`\\]+', re.I)
@@ -102,6 +106,11 @@ def sandbox_args(bw, workspace, program, login_files=(), env=None):
     binds = list(runtime(program)) + [(os.path.realpath(e), e) for e in ETC if os.path.exists(e)]
     for src, dest in binds:
         args += ["--ro-bind", src, dest]
+    own = Path(workspace).parent / "etc"            # beside the workspace, so the pass can't change them
+    own.mkdir(exist_ok=True)
+    (own / "resolv.conf").write_text(RESOLV)
+    (own / "hosts").write_text("127.0.0.1 localhost\n::1 localhost\n")
+    args += ["--ro-bind", str(own / "resolv.conf"), "/etc/resolv.conf", "--ro-bind", str(own / "hosts"), "/etc/hosts"]
     args += ["--bind", str(workspace), HOME_IN]
     for src, rel in login_files:
         args += ["--ro-bind", str(src), f"{HOME_IN}/{rel}"]

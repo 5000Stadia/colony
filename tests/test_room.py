@@ -134,6 +134,18 @@ class Room(unittest.TestCase):
         with patch.object(room, "ETC", ("/",)), self.assertRaises(ValueError):
             room.sandbox_args("/usr/bin/bwrap", work, str(self.fake))
 
+    def test_a_pass_resolves_only_public_names(self):
+        work = self.base / "work"
+        args = room.sandbox_args("/usr/bin/bwrap", work, str(self.fake))
+        binds = {args[i + 2]: args[i + 1] for i, a in enumerate(args) if a in ("--bind", "--ro-bind")}
+        self.assertNotEqual(binds["/etc/resolv.conf"], os.path.realpath("/etc/resolv.conf"),
+                            "never the machine's resolver: it reaches a tailnet's names, the board's among them")
+        said = Path(binds["/etc/resolv.conf"]).read_text()
+        self.assertIn("nameserver 1.1.1.1", said)
+        self.assertNotIn("search", said)
+        self.assertNotIn(str(work), binds["/etc/resolv.conf"], "kept beside the workspace, where the pass can't change it")
+        self.assertNotIn("ts.net", Path(binds["/etc/hosts"]).read_text())
+
     @unittest.skipUnless(shutil.which("bwrap") and sys.platform.startswith("linux"), "needs bubblewrap")
     def test_a_shell_in_the_sandbox_cannot_read_a_file_beside_it(self):
         canary = self.base / "canary.txt"
