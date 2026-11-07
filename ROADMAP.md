@@ -109,7 +109,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R135 The project band
 - [x] R136 Active states drawn apart, helpers as dots, and the band ordered by them
 - [x] R142 Idle sessions hibernate
-- [~] R145 Send is type and Enter — the box checked empty and free of a menu first, then Enter again while text stays, no matching what the screen shows; after the weekly reset (related: R142). Built and deployed Nov 6; on hold: its live check waits on a day of mail-delivery records (Sat Nov 7, 9 AM)
+- [x] R145 Send is type and Enter
 
 ## M3 — The monitor: acting for the person
 
