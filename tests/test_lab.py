@@ -263,7 +263,7 @@ class LockPlayTest(BoardBase):
         self.assertEqual(lab.summary()[0]["silence"], 3.2)
 
     def test_a_clip_the_phone_held_until_unlock_did_not_survive_its_gap(self):
-        # Kabe's A run with the ramp (Oct 31): clip 4 was sent on time after its 6 s gap but started only when the
+        # The person's A run with the ramp (Oct 31): clip 4 was sent on time after its 6 s gap but started only when the
         # phone was unlocked, 44 ms before the page showed again, while still reported hidden
         def row(n, event, at, vis="hidden"):
             return dict(approach="A", run="A-ramp-2", clip=n, event=event, t=f"2026-10-31T22:08:{at}Z", vis=vis,

@@ -368,6 +368,6 @@ class PrivateNames(unittest.TestCase):
         self.assertTrue(q.names_in("As JOB's plan showed,", ["JOB"]))
         self.assertTrue(q.names_in("seen in memory  research before", ["Memory Research"]), "any spacing, any case")
         self.assertFalse(q.names_in("anything", ["", "  "]), "a blank name matches nothing")
-        self.assertTrue(q.names_in("https://github.com/x/flowsmith_core", ["flowSmith"]), "inside an identifier")
+        self.assertTrue(q.names_in("https://github.com/x/gardenpath_core", ["gardenPath"]), "inside an identifier")
         self.assertTrue(q.names_in("https://x.org/memory-research/a", ["Memory Research"]), "in a slug")
         self.assertTrue(q.names_in("see job_runner", ["JOB"]))

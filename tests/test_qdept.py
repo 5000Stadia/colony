@@ -489,7 +489,7 @@ class QDept(Base):
     def test_seed_shelf_carries_no_project_labels(self):
         text = (qdept.SEED / "memory.md").read_text()
         self.assertNotIn("observed in", text)
-        for name in ("Memory Research", "Memory Survey", "Kernos", "Kabe"):
+        for name in ("Memory Research", "Memory Survey", "Kernos"):
             self.assertNotIn(name, text)
         self.assertEqual(text, (qdept.SEED / "editions" / "memory-e1.md").read_text())
 
