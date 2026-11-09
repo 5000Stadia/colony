@@ -507,6 +507,7 @@ def health(entries=None, today=None):
     priced = {p['model'] for p in points if p['cost'] is not None}
     notes += [f"{label} has no cost per task, measured or estimated, so Auto can't choose it"
               for _, model, label, _ in bench.lineup() if model not in priced]
-    summary = (f"{last.get('measured', 0)} of {pages} model-page reads succeeded on {day}" if pages else
-               'no model-page read yet')
+    waiting = len(last.get('unmeasured') or [])
+    summary = (f"{last.get('measured', 0)} of {pages} model pages measured on {day}"
+               + (f", {waiting} not run there yet" if waiting else '') if pages else 'no model-page read yet')
     return problems, notes, summary
