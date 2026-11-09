@@ -378,6 +378,9 @@ def page_point(html, model, effort, url, date):
     for own in mine:
         score = _number(_field(own, 'intelligenceIndex')[1], ((), ('value',)), 'The Intelligence Index')
         listed, cost = _field(own, 'intelligenceIndexCostPerTask')
+        if not listed and score is None:
+            readings.add((None, None, 'unstated', _page_price(own)))      # not run yet: the page says so, no failure
+            continue
         if not listed:
             raise ValueError('No cost per Intelligence Index task on the page')
         cost = _number(cost, (('cost', 'total'), ('total',), ('cost',), ()), 'The cost per task')

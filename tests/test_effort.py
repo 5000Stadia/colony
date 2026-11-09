@@ -305,6 +305,9 @@ class PagePointTest(unittest.TestCase):
                 self.read(html, 'claude-sonnet-5-5-high', 'high')
         for cost in (None, {'cost': {'total': None}}):
             self.assertIsNone(self.read(changed(intelligenceIndexCostPerTask=cost), 'claude-sonnet-5-5-high', 'high'))
+        not_run = {**{k: v for k, v in own.items() if k != 'intelligenceIndexCostPerTask'},
+                   'intelligenceIndex': None, 'intelligenceIndexEvaluations': []}       # how a page shows a pair not run yet
+        self.assertIsNone(self.read(streamed(other, not_run), 'claude-sonnet-5-5-high', 'high'))
 
     def test_without_the_estimated_flag_the_runs_listed_show_a_measured_index(self):
         # Artificial Analysis dropped intelligenceIndexIsEstimated in Nov 2026 (every page read failed on the 8th);
