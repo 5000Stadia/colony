@@ -135,8 +135,8 @@ def set_vision(name, text, words="", context=""):
 
 
 def standard(name, words, source="", replaces=None):
-    """A standard the person stated, kept in their words for the nest's steward to carry to the nestmates it applies
-    to when it matters (projects don't carry these in their context). A newer statement replaces an older one."""
+    """A standard the person stated, kept in their words on the nest's page (projects don't carry these in their
+    context). A newer statement replaces an older one."""
     with _locked():
         data = nests()
         if name not in data:
@@ -150,30 +150,6 @@ def standard(name, words, source="", replaces=None):
             rows.append({"id": "s" + secrets.token_hex(4), "words": words.strip(), "from": source.strip(), "at": board.now(), "told": {}})
         _save(data)
         return len(rows)
-
-
-def tell(name, number, root):
-    """Carry one of the nest's standards to a nestmate whose work has come to where it applies: once. The project
-    keeps it as a note and acts on it; telling it again is refused, so the steward never badgers. Returns when it was
-    told before, or None now that it has been."""
-    with _locked():
-        data, key = nests(), str(Path(root).resolve())
-        rows = data.get(name, {}).get("standards", [])
-        if not 1 <= number <= len(rows):
-            raise ValueError(f"The {name} nest has no standard {number}; colony nest lists them.")
-        if key not in data[name]["members"]:
-            raise ValueError(f"{Path(root).name} is not in the {name} nest.")
-        row = rows[number - 1]
-        told = row.setdefault("told", {})
-        if key in told:
-            return told[key]
-        told[key] = board.now()
-        _save(data)
-        said = f", said in {row['from']}" if row.get("from") else ""
-        board.add_note(root, None, f"A standard the person set for the {name} nest{said}, in their words: \"{row['words']}\". "
-                       "Weigh it where your work meets it; their direct request to you comes first. You hear this once: "
-                       "keep it from here.", author="colony")
-        return None
 
 
 def _about(root):

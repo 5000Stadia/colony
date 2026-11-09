@@ -12,6 +12,16 @@ if "COLONY_TEST_FORBIDS" not in os.environ:
     from colony import board as _board
     os.environ["COLONY_TEST_FORBIDS"] = str(_board.home())
 
+# Nor are the person's projects: a test board's registry without roots of its own takes the package's projects/
+# folder, which holds the person's real projects, so a test's watcher once reloaded an idle console of theirs onto
+# the test's Codex setting, twice. Every test process gets an empty folder there instead.
+import atexit as _atexit
+import shutil as _shutil
+import tempfile as _tempfile
+from colony import board as _board
+_board.PACKAGE_PROJECTS = __import__("pathlib").Path(_tempfile.mkdtemp(prefix="colony-test-projects-"))
+_atexit.register(_shutil.rmtree, _board.PACKAGE_PROJECTS, True)
+
 
 def patience(seconds):
     """A wait a test allows real programs and threads, stretched while the machine is busy (up to four times): the

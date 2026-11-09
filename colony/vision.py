@@ -105,7 +105,7 @@ def _notifications(root, events):
                     + '\n\nConsider the effect on the work at hand and the path ahead, and act accordingly. '
                       'Discuss anything unclear with the person. Read the current Vision before acting; '
                       'later changes may have followed this one. ' + SCOPE)
-            # Colony writes the notice of a save; the change itself stays the person's (monitor.unseen).
+            # Colony writes the notice of a save; the change itself stays the person's.
             board.append(recipient, 'notes.jsonl', dict(type='note', id=ident, at=event['at'],
                          author='observation' if event['how'] == 'file' else 'colony', anchor=None,
                          text=text, quiet=True, change='vision', source=event.get('source')))

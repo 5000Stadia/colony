@@ -15,7 +15,7 @@ from tests.test_board import BoardBase
 
 
 def passed(name):
-    """The steward's audit of a connection as it stands, run and passed (the person may approve it)."""
+    """Colony's audit of a connection as it stands, run and passed (the person may approve it)."""
     audit._store(name, {"of": audit.fingerprint(connections.load()["connections"][name]), "state": "done", "safe": "yes",
                         "fits": "yes", "summary": "Fine.", "at": "now", "by": "a test"})
 
@@ -318,7 +318,7 @@ class ConnectionsTest(BoardBase):
 
 
 class AuditTest(BoardBase):
-    """The steward's audit of a connection an agent adds: the package read from its registry without running it, then
+    """Colony's audit of a connection an agent adds: the package read from its registry without running it, then
     judged by a fresh reviewer before the person may approve it."""
 
     def setUp(self):
@@ -651,10 +651,9 @@ class ConnectorsOffTest(BoardBase):
 
         name = console.session_name(self.root)
         stale, typed = {"why": "its settings or helper tiers changed"}, []
-        w = monitor.Watcher(enabled=False)
+        w = monitor.Watcher()
         state = {"state": "working"}
         with patch.object(board, "projects", return_value=[self.root]), \
-                patch.object(monitor, "name", return_value="steward-seat"), \
                 patch.object(console, "running", side_effect=lambda n: n == name), \
                 patch.object(console, "switching", return_value=None), \
                 patch.object(console, "snapshot", side_effect=lambda *a, **k: dict(state)), \

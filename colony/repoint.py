@@ -206,9 +206,8 @@ def _places(old):
 
 def refind():
     """Projects whose folder has gone, found again by their identity and followed (repoint), each said once to the
-    steward for the person. One that can't be followed yet is said once with why, and stays where colony last knew
+    person in a notice on the board. One that can't be followed yet is said once with why, and stays where colony last knew
     it. Returns [(old, new or None, what was said)]."""
-    from . import monitor
     reg = board.registry()
     out, said = [], _said()
     for value, old in sorted((reg.get("ids") or {}).items()):
@@ -226,7 +225,7 @@ def refind():
             if said.get(old) == line:
                 continue
         said[old] = line
-        monitor.queue(f"[colony] {line} Tell the person once.", relay=True)
+        board.notice(line)
         out.append((old, new, line))
     _save_said(said)
     return out

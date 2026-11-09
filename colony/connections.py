@@ -12,7 +12,7 @@ with them, and nothing it does waits for the person. A console starts with
 the connections its project has (claude_args, codex_args); `colony connect run` reads the keys as it starts the
 server (run).
 
-One an agent adds runs nowhere until the person approves it, and they are asked only after the steward's audit (audit)
+One an agent adds runs nowhere until the person approves it, and they are asked only after colony's audit (audit)
 has read its code and passed it; one the audit refuses can't be approved.
 
 What leaves the person's hands waits on them: a held tool is not run when the agent calls it. It becomes a gate on
@@ -113,8 +113,8 @@ def _own(entry, root):
 
 
 def is_on(entry, root):
-    """Whether a project has it: its own choice, else the colony-wide one (which a console of no project, the
-    steward's, also takes)."""
+    """Whether a project has it: its own choice, else the colony-wide one (which a console of no project also
+    takes)."""
     mine = _own(entry, root)
     return mine["on"] if "on" in mine else bool(entry.get("on", True))
 
@@ -181,7 +181,7 @@ def add(name, title, command, *, needs=(), hold=None, tools=None, about="", serv
     """A connection: the MCP server to start (its command, pinned), the keys it needs, the tools that wait for the
     person's tap (None: all but those the server marks read-only), and optionally the only tools it offers. Every
     project has it once its keys are entered, unless the person switches it off there. by: the project that asked for
-    it, whose work the steward's audit weighs it against (audit)."""
+    it, whose work colony's audit weighs it against (audit)."""
     if not NAME.fullmatch(name):
         raise ValueError("A connection's name is lowercase letters, digits, - or _, as ebay or snackstand-mail.")
     if not command and not needs:
@@ -203,7 +203,7 @@ def add(name, title, command, *, needs=(), hold=None, tools=None, about="", serv
 
 
 def approve(name):
-    """The person's yes to a connection an agent added: its command may run, once the steward's audit has run and not
+    """The person's yes to a connection an agent added: its command may run, once colony's audit has run and not
     refused it."""
     from . import audit
     a = audit.current(load()["connections"][name])

@@ -16,7 +16,7 @@ A console can also freeze mid-work, and then shows "working" until the person lo
 positive evidence: the timer on its live working line (elapsed in providers.py) reads the same for FROZEN seconds on
 the same process, and its conversation's file hasn't changed meanwhile. It is then restarted in the same conversation (with whatever its program runs the turn in apart
 from the console: unfreeze in providers.py) and told to carry on, at most RESTARTS times a day;
-after that the person hears of it through the steward. A screen whose working line isn't recognised is never touched.
+after that the person is told in a notice on the board. A screen whose working line isn't recognised is never touched.
 """
 import json
 import socket
@@ -199,10 +199,9 @@ def frozen(root, now=None):
     recent = [t for t in mine["restarts"] if now - t < 86400]
     if len(recent) >= RESTARTS:
         if not mine.get("told") or now - mine["told"] >= 86400:
-            from . import monitor
-            monitor.queue(f"{root.name}'s console froze mid-work again (its timer stood at {shown} for "
-                          f"{FROZEN // 60} minutes), after {RESTARTS} restarts in a day, so colony left it as it is. "
-                          "It needs a look: open its console on the board.", relay=True)
+            board.notice(f"{root.name}'s console froze mid-work again (its timer stood at {shown} for "
+                         f"{FROZEN // 60} minutes) after {RESTARTS} restarts in a day, so colony left it as it is. "
+                         "Open its console on the board to look.")
             rows[key] = dict(mine, restarts=recent, told=now)
             _frozen_path().write_text(json.dumps(rows, indent=1))
             return "the person told"

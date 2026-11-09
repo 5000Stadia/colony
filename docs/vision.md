@@ -1,7 +1,7 @@
 # Shared project vision
 
 `## Vision` in the logical project's `ROADMAP.md` holds the live, multiline description of the finished
-work. The board, project list, consultant brief and monitor posture all read it through `board.roadmap`.
+work. The board, the project list and the consultant brief all read it through `board.roadmap`.
 An absent or empty section falls back to the old introductory goal. Vision prose and bullets do not
 become roadmap items. Adding the section preserves the existing introduction and milestones.
 
@@ -14,7 +14,7 @@ This routing is an agent responsibility; saving a form does not attempt to class
 ## Updating it
 
 A newly added project's first work is a vision conversation between its own agent and the person.
-The monitor's setup does not replace it. New projects start with an empty Vision section and no
+New projects start with an empty Vision section and no
 placeholder milestones. Joined projects can read their plans, specs and history first; their existing
 plans remain intact. The agent records the vision once clearly agreed, then lays the roadmap toward it.
 Tracking queues this opening conversation once, including for projects that already have a roadmap,
@@ -33,7 +33,7 @@ so `colony new`, the add form, clones and shared-folder projects follow the same
 - `colony vision --history` and the page's Vision history show when and how the text changed, including
   the person's words when recorded. The history is a record, not another source of authority.
 
-The watcher runs even when the monitor agent is disabled. File and Vision updates never wake an idle
+File and Vision updates never wake an idle
 or stopped agent. The next engagement hook delivers one catch-up with the first pending state, the
 current Vision and the number of intervening changes. All original history remains available on the
 board. Notes on an unstarted item wait until that work becomes relevant; project Vision is relevant
@@ -73,7 +73,7 @@ new vision on an approval step.
 
 `python3 -m unittest tests.test_vision` covers multiline consumers, legacy introductions, fences,
 conversation records, HTTP saves with browser line endings, stale edits, recovery, concurrent
-observers and writers, removal, migration, shared folders, and delivery with the monitor off.
+observers and writers, removal, migration, shared folders, and delivery from the watcher.
 Run it with the existing suites listed in `CLAUDE.md` before rollout. All fixtures use isolated board
 state and stand-in consoles; these checks make no model calls.
 

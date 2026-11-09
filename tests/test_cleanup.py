@@ -209,8 +209,9 @@ class CheckTest(Base):
         [note] = self.notes()
         self.assertTrue(note.get("quiet"))
         for part in ("docs/guide.md", "of this project's reading", "pay back in about", "between items",
-                     "one gate", "skip it for now"):
+                     "without a gate", "leaving the Vision as it is", "tell them in a line with these numbers"):
             self.assertIn(part, note["text"])
+        self.assertNotIn("skip it for now", note["text"], "a pass that pays at worst is taken, not put to the person")
         said = cleanup.history(self.root)["startup"]
         self.assertEqual((said["note"], said["after"], said["files"]), (note["id"], "R2", ["docs/guide.md"]))
         self.finish("R3")

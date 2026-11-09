@@ -2,42 +2,38 @@
 
 **One page to run all your long projects with Claude Code or Codex.** Each project gets its own agent, live in
 the browser and on your phone. You see what each one is doing, what it's waiting on you for, and how
-far along its roadmap it is, and you steer them all from one board. An optional steward agent advises you
-across them.
+far along its roadmap it is, and you steer them all from one board: one project at a time, or several at once.
 
 ## Quick start
 
     git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start
 
 That's it. It installs colony, checks that Claude Code or Codex is signed in (and stops with how to sign in if
-neither is), starts the board and prints where to open it. Then talk with the steward, colony's own agent, in Chat
-on the board, or in your Claude app, where it appears by its name. On Codex, open the steward’s page and press
-**Connect to ChatGPT**, then enter the code in the ChatGPT app under **Codex → Add manually**.
-The steward introduces colony and sets it up with you in
-a few short steps. Tell it what you want and it starts projects and works with each for you, or press
-**+ Add project** yourself and use the steward as little as you like. You need
+neither is), starts the board and prints where to open it. Then press **+ Add project**: a folder of your own
+work, new or under way, gets its agent, which starts by shaping the project's vision with you. You need
 [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex), tmux and
-Python 3.10+. With both programs signed in, `~/colony/start --program codex` (or `claude`) picks the steward's.
+Python 3.10+. With both programs signed in, `start` asks which new projects run on (`colony settings provider`
+changes it later).
 
-The board answers this machine only. From your phone: the Claude or ChatGPT app, where the steward and every
-project's session appear, or the board itself through Tailscale with HTTPS (the steward walks you through it;
-see [The board from anywhere](#the-board-from-anywhere-safely-tailscale)). `~/colony/start --lan` opens it to
+The board answers this machine only. From your phone: the Claude or ChatGPT app, where every project's session
+appears, or the board itself through Tailscale with HTTPS (see
+[The board from anywhere](#the-board-from-anywhere-safely-tailscale)). `~/colony/start --lan` opens it to
 every device on your home network instead.
 
 A project's agent starts working in its own console right away (it spends tokens from then on), and the project
 joins the board.
 
-`colony stop` ends the board, steward and project consoles. Optional repair access stays available;
+`colony stop` ends the board and project consoles. Optional repair access stays available;
 turn it off separately in Settings. `~/colony/start` brings the board back, and each console returns
 to its conversation when you open it.
 
 ### If you're an agent installing colony for someone
 
-1. `git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start` (add `--program claude` or
-   `--program codex` if they named one; never `--lan` unless they asked for their home network).
+1. `git clone https://github.com/5000Stadia/colony ~/colony && ~/colony/start` (never `--lan` unless they asked
+   for their home network; if they named a program, `colony settings provider claude` or `codex` afterwards).
 2. If `start` stops, give them its line as it is (usually how to sign in), and run it again once they have.
-3. Give them the local link it printed, and say the steward is waiting there and in their program's app.
-4. Leave signing in, keys and Tailscale to them and the steward: those need their own accounts and passwords.
+3. Give them the local link it printed, and say their first project starts from **+ Add project** there.
+4. Leave signing in, keys and Tailscale to them: those need their own accounts and passwords.
 
 ### Moving to a fresh machine
 
@@ -60,7 +56,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Every project's live console**, in the browser and on a phone (swipe to scroll, a key row for
   Esc/Tab/arrows, full screen). Sessions run in tmux, so closing the page stops nothing, and
   `tmux attach -t board-…` reaches the same session from a terminal.
-- **Chat**, beside each console (and the steward's): the conversation as the Claude app shows it, your messages
+- **Chat**, beside each console: the conversation as the Claude app shows it, your messages
   in bubbles, the agent's replies in full, each run of work folded to a line ("Ran 6 commands, edited 2 files")
   that opens to the steps (a background command shows once it finishes), and a choice on its screen as buttons. What you
   send goes into its console; sent while it works, it shows faded as queued until the agent takes it up. Claude Code
@@ -68,7 +64,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   a `!` shell command, as soon as that ends. It reads
   the session's own transcript, so it costs nothing, and the Console tab is a tap away. Under each reply, copy and
   play: play reads everything since your message aloud (Auto-speak reads each new reply as it arrives), at the
-  speed you pick. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
+  speed you pick. ⏭ steps to the next part of a reply (the prose between its runs of commands), and past the last
+  to the next reply; ⏮ restarts a part, or early in one goes back a part, across replies too; the phone's lock
+  screen does the same. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
   nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
   without it, the phone's own voice reads.
   The attachment **+** opens photos or files on the first tap while typing, keeping the draft and selection.
@@ -96,7 +94,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   the project and handle folder names and references where practical, keeping access and history working.
   Agents can rename their own project with `colony rename "New name"`; those changes are recorded as theirs.
 - **Repair access:** Settings → Agent programs → Colony repair access can keep one native Codex connection
-  for the installation, independently of project cards, the steward and ordinary project consoles. Enable it,
+  for the installation, independently of project cards and ordinary project consoles. Enable it,
   then pair once in ChatGPT using the fresh code shown on that page. Its detached host survives board stops
   and restarts, so you can ask Codex to repair Colony through the app if the board breaks. It starts no AI work
   while idle. The machine must remain online and Codex signed in; other agents can keep running locally.
@@ -112,7 +110,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Waiting on you:** decisions a project put to you (gates, each with tap answers, **Choose for me** where
   none is recommended, and **Choose for me, now and for questions like this**, which tells the agent where your line is), a question its agent says it is asking
   (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
-  **Needs you**, the glowing count first in the top bar beside the steward, opens onto all of it at once.
+  **Needs you**, the glowing count first in the top bar, opens onto all of it at once. Colony's own notices
+  (a project closed, a console that keeps freezing, a folder followed where it moved) sit above it, each with
+  Dismiss, for a week at most.
 - **Message**, at the top of every project: type or paste into its console as if you were there,
   or have its agent write to another project. Attach a file from your device or the project.
   Wrapped Claude input is recognized as a draft, while actual menus retain their send guard.
@@ -154,28 +154,26 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   the agent in conversation. Saving tells the agent what changed so it can adjust the work. Details for a few
   items go into those items' descriptions or specs.
 - **Nests:** projects that share a purpose share a nest (a business and its departments, a holodeck and its
-  parts, D&D and its campaigns). A nest has its own page (its shared vision, projects, links and demos) and
-  the steward carries your standards between nestmates, once each; nothing crosses into another nest.
+  parts, D&D and its campaigns). A nest has its own page (its shared vision, projects, links, demos and the
+  standards you set for it); nothing crosses into another nest.
 - **Showcase:** each project's lab-style page of deliverables worth seeing, newest first: what it is and how to
   see or try it, with older ones kept as its history. Rate or comment if you like; it reaches the agent, and
   nothing waits on you. How hands-on you are is yours to set.
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
-- **The steward**, one more session at the top of the sidebar, optional. It tells you when a project needs you
-  or has finished. It relays what you say to a project in full, as yours, and anything of its own goes as a
-  labelled suggestion. It only advises: it holds no helm, and a decision a project put to you is never its to
-  answer. It runs on a cheaper model. It never polls: a watcher reads every screen every few seconds for
-  free and wakes it only when something waits on you or work was completed (a roadmap item done, a showcase
-  entry), never just because a turn ended, and it stays silent when there's nothing new for you. Colony's own words reach it through an inbox
-  its hook hands over, so its conversation with you holds only what's for you. Every hour in your active
-  hours (`colony settings updates`), it tells you what the projects finished, what was already waiting on
-  you, and what's new. Muted, it is fully off: its session stops and uses nothing, while colony's own watcher
-  keeps safe pause, mail and recovery going.
+- **Tell projects**, on the front page: write once, tick one project, several or all, and each gets it as your
+  own note, the same as one written on its page.
+- **Status reports**, from the top bar's Reports: a button (or a schedule you set: every few hours, or a time of
+  day, on the days you tick) has a fresh model write where every project stands and what waits on you, numbered,
+  with a recommendation for each and its answer live under it. Earlier reports stay in the feed.
+- **Your verdict at each finished milestone:** colony asks once, in the same words each time, how the milestone
+  turned out against how such work usually goes. It is the one view of the work getting better; skipping is fine.
 - **Idle sessions:** after a day with nothing to do, a project closes its console; its next message wakes it
   in the same conversation. Notes and mail held by your project pause let it sleep and wait until you resume it.
   While asleep its Claude or ChatGPT app connection sleeps too; the board can still wake it.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
-  wakes them at the reset to carry on.
+  wakes them at the reset to carry on. A project can also pause at a share of a program's week you set for it
+  (**Week pause**), winding down the same way.
 - **Reconnect from your phone:** Settings → Agent programs → Sign-in status and reconnect works over
   Tailscale for Claude Code and Codex. A sign-out or known authentication rejection shows a reconnect notice
   directly on the board. Open the provider's own sign-in page; Claude returns a code to paste back here,
@@ -221,10 +219,10 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
   Outside them agents keep working but don't end on a question to you: the decisions they need, and any
   question asked in a console, are held off Waiting on you and arrive together when your hours begin (new
-  hours move them), and the steward isn't woken just to pass something on. What you send goes through at any hour.
+  hours move them). What you send goes through at any hour.
   Seen within the last quarter hour (you wrote to an agent, tapped or sent on the board, opened one of its
   pages), you count as around whatever the clock says.
-- **A wiser colony:** what one project learns, the next starts with. When you correct an agent, the steward may
+- **A wiser colony:** what one project learns, the next starts with. When you correct an agent, it may
   propose a one-sentence lesson keyed to the colony action it's about; you adopt it with a tap on Needs you, and
   agents see it each time they take that action (`colony lesson`). Research one project did is kept for all in a
   shared library with a date to look again (`colony research "words"`, `--add FILE`). Web research runs in a
@@ -252,7 +250,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 Code hooks. The agent keeps `ROADMAP.md` current, puts decisions to you with `colony gate`, marks work
 ready with `colony ready`, and records what it did with each of your notes (`colony noted`). The hooks
 hand it your notes, answers and mail at the start of each turn, so nothing relies on its memory. The
-board and the steward reach a session by typing into its console, never over something you have
+board reaches a session by typing into its console, never over something you have
 half-typed there. The board's record of a project is in its `.board/` folder.
 
 At consulted decisions, gates show the relevant recommendations with their sources.
@@ -261,7 +259,7 @@ the consultants' checking round. Choices and revisions stay in the decision's re
 [How agents link consultant points to a gate](docs/consultation-gates.md).
 
     colony board [--lan]     start the board (this machine only; --lan: every device on your home network too)
-    colony restart           reload the board after a change; consoles and the steward keep running
+    colony restart           reload the board after a change; consoles keep running
     colony doctor            is everything up and wired? what to do if not
     colony urls              where the board answers
     colony remote            the board from your own devices, anywhere, through Tailscale

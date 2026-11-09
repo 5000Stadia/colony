@@ -927,16 +927,14 @@ class RecoveryTest(unittest.TestCase):
         self.assertIsNone(again(400), 'three times: it waits twenty minutes now')
         self.assertTrue(again(400, reply=True), 'a reply since the last nudge: the waits start over')
 
-    def test_the_watcher_resumes_work_whether_or_not_the_monitor_runs(self):
-        for enabled in (False, True):
-            with patch.object(recovery, 'tick_all') as resumed, patch.object(vision, 'observe_all'), \
-                    patch.object(continuation, 'tick_all'), patch.object(context, 'tick_all'), \
-                    patch.object(monitor.Watcher, 'mail'), patch.object(monitor.Watcher, 'models'), \
-                    patch.object(monitor.Watcher, 'usage'), patch.object(monitor.Watcher, 'current'), \
-                    patch.object(monitor, 'snapshot', return_value=dict(state='working', lines=[])), \
-                    patch.object(monitor, 'muted', return_value=True):
-                monitor.Watcher(enabled=enabled).tick()
-                resumed.assert_called_once_with()
+    def test_the_watcher_resumes_work_on_every_pass(self):
+        with patch.object(recovery, 'tick_all') as resumed, patch.object(vision, 'observe_all'), \
+                patch.object(continuation, 'tick_all'), patch.object(context, 'tick_all'), \
+                patch.object(monitor.Watcher, 'mail'), patch.object(monitor.Watcher, 'models'), \
+                patch.object(monitor.Watcher, 'usage'), patch.object(monitor.Watcher, 'current'), \
+                patch.object(monitor.Watcher, 'events'):
+            monitor.Watcher().tick()
+            resumed.assert_called_once_with()
 
     def test_the_network_check_runs_apart_and_counts_the_network_down_until_it_answers(self):
         tried, answer = [], threading.Event()
@@ -1065,8 +1063,7 @@ class RestartTest(unittest.TestCase):
         with patch.object(console, 'snapshot', side_effect=lambda root, lines=6, name=None: dict(state=states[root], lines=[])), \
                 patch.object(board, 'at_rest', return_value=True), patch.object(chat, 'helpers', return_value=[]), \
                 patch.object(lingering, 'commands', return_value=[]), \
-                patch.object(machine, '_power', side_effect=lambda mode: powered.append(mode)), \
-                patch.object(monitor, 'queue', side_effect=lambda text, relay=False: told.append(text)):
+                patch.object(machine, '_power', side_effect=lambda mode: powered.append(mode)):
             t = time.time()
             machine.start(now=t)
             self.assertEqual(machine.tick(t), f'asked {busy.name} to park', 'the idle one is clear unasked; the first at work asked')
@@ -1108,12 +1105,11 @@ class RestartTest(unittest.TestCase):
             machine.cancel()
             self.assertIsNone(machine.state())
             self.assertIn('cancelled the machine', board.notes(busy)[-1]['text'])
-            told = []
-            with patch.object(machine, '_power', return_value='Access denied'), \
-                    patch.object(monitor, 'queue', side_effect=lambda text, relay=False: told.append(text)):
+            with patch.object(machine, '_power', return_value='Access denied'):
                 machine.start(off=True, now=t)
                 machine.tick(t + machine.WITHIN)
-            self.assertIn("couldn't shut down the machine (Access denied)", told[0])
+            told = [n['text'] for n in board.notices()]
+            self.assertIn("couldn't shut down the machine (Access denied)", told[0], 'the person is told on the board')
             self.assertIn('Access denied', machine.line())
 
     def test_colony_can_start_with_the_machine_as_a_systemd_user_service(self):
@@ -1153,15 +1149,14 @@ class FrozenTest(unittest.TestCase):
         self.addCleanup(env.stop)
         board.save_registry(dict(projects=[str(self.root)], roots=[], settings=dict(messaging=False, active_hours='off')))
         self.screen, self.process, self.state, self.draft = CLAUDE_WORKING.format('4m 12s'), ('41', '900'), 'working', False
-        self.restarted, self.typed, self.told, self.talk = [], [], [], ('c1', (4096, 1))
+        self.restarted, self.typed, self.talk = [], [], ('c1', (4096, 1))
         for target, name, value in ((console, 'screen', lambda name: self.screen),
                                     (recovery, '_conversation', lambda root: self.talk),
                                     (recovery, '_process', lambda name: self.process),
                                     (console, 'reload', lambda root, name=None, label=None: self.restarted.append(root)),
                                     (console, 'snapshot', lambda root, lines=6, name=None: dict(state=self.state, lines=[])),
                                     (console, 'drafting', lambda name: self.draft),
-                                    (console, 'type_into', lambda name, text: self.typed.append(text) or True),
-                                    (monitor, 'queue', lambda text, relay=False: self.told.append((text, relay)))):
+                                    (console, 'type_into', lambda name, text: self.typed.append(text) or True)):
             p = patch.object(target, name, side_effect=value)
             p.start()
             self.addCleanup(p.stop)
@@ -1270,14 +1265,12 @@ class FrozenTest(unittest.TestCase):
             self.assertEqual(sorted(codex_remote.let_go(keep)), sorted([str(moved), str(frozen)]))
             self.assertNotIn(codex_remote.home_for(kept), drained, 'its project still runs on Codex: kept, console or not')
 
-    def test_codex_keeps_the_hosts_of_the_projects_on_it_and_the_stewards(self):
-        from colony import monitor
+    def test_codex_keeps_the_hosts_of_the_projects_on_it(self):
         codex = providers.get('codex')
         with patch.object(board, 'projects', return_value=[self.root, Path(self.tmp.name) / 'claude-one']), \
                 patch.object(providers, 'of', side_effect=lambda p: codex if p == self.root else providers.get('claude')), \
-                patch.object(monitor, 'provider', return_value=codex), \
                 patch.object(codex_remote, 'let_go', side_effect=lambda keep: sorted(keep)) as let_go:
-            self.assertEqual(codex.let_go(), sorted([str(self.root.resolve()), str(monitor.home().resolve())]))
+            self.assertEqual(codex.let_go(), [str(self.root.resolve())])
         self.assertEqual(providers.get('claude').let_go(), [], 'Claude Code leaves nothing running of its own')
 
     def test_stop_host_ends_a_host_that_answers_nothing(self):
@@ -1332,12 +1325,12 @@ class FrozenTest(unittest.TestCase):
         self.beat(start)
         self.assertEqual(self.beat(start + recovery.FROZEN), 'the person told')
         self.assertEqual(len(self.restarted), recovery.RESTARTS)
-        self.assertEqual(len(self.told), 1)
-        self.assertTrue(self.told[0][1], 'relayed to the person')
-        self.assertIn('after 3 restarts in a day', self.told[0][0])
+        told = [n['text'] for n in board.notices()]
+        self.assertEqual(len(told), 1, 'the person is told in a notice on the board')
+        self.assertIn('after 3 restarts in a day', told[0])
         self.beat(start + recovery.FROZEN + 60)
         self.assertIsNone(self.beat(start + 2 * recovery.FROZEN + 60))
-        self.assertEqual(len(self.told), 1, 'once a day')
+        self.assertEqual(len(board.notices()), 1, 'once a day')
         self.beat(t + 86400 + 10)
         self.assertEqual(self.beat(t + 86400 + 10 + recovery.FROZEN), 'restarted', 'a day on, restarts are open again')
 

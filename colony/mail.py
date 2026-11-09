@@ -8,6 +8,7 @@ in even while the recipient is mid-turn (Claude Code queues it); otherwise mail 
 Mail itself is provider-agnostic: files and the `colony` command. PROVIDER: only the mid-turn typing assumes
 Claude Code (see console.type_into).
 """
+import re as _re
 import secrets
 import sys
 from contextlib import contextmanager
@@ -40,22 +41,16 @@ def resolve(name):
 
 
 def shown(name):
-    """A sender's name as people and agents read it: the steward's messages are stored as from "monitor", and are
-    from the person's name for it, the role beside it, once it has one."""
-    if name != "monitor":
-        return name
-    named = board.steward_named()
-    return f"{named} (the person's steward)" if named else "steward"
+    """A sender's name as people and agents read it: mail from colony's retired steward (R152) is stored as from
+    "monitor", and still reads as its own."""
+    return "the steward (retired)" if name == "monitor" else name
 
 
 def sender():
-    """Who is writing: the project whose folder this runs in, the steward, or the person."""
+    """Who is writing: the project whose folder this runs in, or the person."""
     here = board.root_of()
     if here in names():
         return here, address(here)
-    from . import monitor
-    if Path.cwd().resolve() == monitor.home().resolve():
-        return None, "monitor"
     return None, "the person"
 
 
@@ -82,6 +77,16 @@ def blocker(root, snap=None):
     return None
 
 
+NO_REPLY = _re.compile(r"\bno (reply|answer|response)s? (is )?(needed|necessary|required|expected)\b"
+                       r"|\bno need to (reply|answer|respond)\b", _re.I)
+
+
+def asks_answer(text, ask=True):
+    """A message marked as asking whose own words say no reply is needed doesn't ask: it would wait unanswered at
+    every session start, and a reply would tell the sender nothing."""
+    return bool(ask) and not NO_REPLY.search(text or "")
+
+
 def send(to, text, ask=False, re=None, urgent=False, dev=False):
     """`dev`: a report of where colony's shape got in the way (R148), tagged and quiet: it waits for the recipient's
     next turn and never wakes it, asleep or idle."""
@@ -90,7 +95,7 @@ def send(to, text, ask=False, re=None, urgent=False, dev=False):
     dest = resolve(to)
     src_root, src = sender()
     msg = {"type": "message", "id": "m" + secrets.token_hex(4), "at": board.now(), "from": src, "to": to,
-           "text": text.strip(), "ask": ask, "re": re, "urgent": urgent,
+           "text": text.strip(), "ask": asks_answer(text, ask), "re": re, "urgent": urgent,
            **({"dev": True, "quiet": True} if dev else {}),
            "delivery": {'status': 'queued', 'reason': '', 'code': '', 'at': board.now()}}
     if src_root and Path(src_root) in names():
@@ -129,7 +134,7 @@ def messages(root):
     out = {}
     for e in board.read(root, FILE):
         if e["type"] == "message":
-            out.setdefault(e["id"], dict(e, delivered_at=None, answer=None))
+            out.setdefault(e["id"], dict(e, delivered_at=None, answer=None, ask=asks_answer(e["text"], e["ask"])))
             out[e['id']].setdefault('delivery', {'status': 'queued', 'reason': '', 'code': '', 'at': e['at']})
         elif e["type"] == "delivered" and e["of"] in out:
             out[e["of"]]["delivered_at"] = e["at"]

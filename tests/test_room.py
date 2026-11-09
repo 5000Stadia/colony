@@ -260,11 +260,6 @@ class Room(unittest.TestCase):
         self.assertEqual([t["tool"] for t in out["tools"]], ["web_search", "command_execution"],
                          "a command it ran is logged, once")
 
-    def test_scouts_keep_their_shape(self):
-        self.assertEqual(providers.get("claude").scout("b", "m", None), {"text": "Useful research. https://cited.example/a", "error": None})
-        self.mode(mode="error")
-        self.assertEqual(providers.get("claude").scout("b", "m", None), {"text": "", "error": "API Error"})
-
     def test_old_runs_are_pruned(self):
         old, new = room.folder() / "old", room.folder() / "new"
         old.mkdir(parents=True)

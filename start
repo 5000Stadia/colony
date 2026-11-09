@@ -13,8 +13,8 @@ if ! command -v colony >/dev/null; then
   python3 -m pip install --user -q -e "$here" 2>/dev/null || python3 -m pip install --user -q -e "$here" --break-system-packages
   export PATH="$HOME/.local/bin:$PATH"
 fi
-# On a new board, `colony board` settles which program the steward runs on (signed in, by one tiny call) and stops
-# with how to sign in if none is; --program claude|codex picks one when both are.
+# On a new board, `colony board` settles which program new projects run on (signed in, by one tiny call) and stops
+# with how to sign in if none is; with both signed in, it asks which (colony settings provider changes it later).
 colony board "$@" || exit 1
 echo
 echo "Stop everything: colony stop"

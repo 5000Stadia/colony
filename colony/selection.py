@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import board, bench, providers
 
-ROLES = ('main', 'routine', 'step-up', 'chores', 'rote', 'consultant', 'monitor')
+ROLES = ('main', 'routine', 'step-up', 'chores', 'rote', 'consultant')
 _LOCK = threading.RLock()
 
 
@@ -122,7 +122,7 @@ def recommendations(state):
             if not providers.usable(provider):
                 continue
             for role in ROLES:
-                if root and (role in ('consultant', 'monitor') or providers.key(providers.of(root)) != family):
+                if root and (role == 'consultant' or providers.key(providers.of(root)) != family):
                     continue
                 ident = key(family, role, root)
                 blocked = state['blocked'].get(ident, [])
@@ -191,7 +191,7 @@ def reconcile():
         if (root / '.board').exists():
             migrate(root)
     with transaction() as state:
-        # A seat whose role colony no longer has (the retired unattended runtime had one) is dropped, not kept up.
+        # A seat whose role colony no longer has (the retired unattended runtime's, the retired steward's) is dropped.
         for ident in [i for i in state['accepted'] if i.split(':', 1)[1].split('@')[0] not in ROLES]:
             del state['accepted'][ident]
         split_chores(state)
@@ -367,8 +367,6 @@ def migrate(root=None):
                                            'effort': settings.get('effort')}
         if alias(settings.get('model')):
             settings['model'] = settings['effort'] = ''
-        if alias((settings.get('monitor_model') or {}).get('model')):
-            settings['monitor_model'] = {}
         settings['consultants'] = {k: v for k, v in (settings.get('consultants') or {}).items() if not alias(v.get('model'))}
         settings.setdefault('main_models', {})[settings['provider']] = pair(settings) if settings.get('model') else {}
         settings['model_selection_version'] = 1
@@ -434,24 +432,6 @@ def consultant(family, automatic=False):
     return resolve(family, 'consultant', pin)
 
 
-def monitor():
-    """The steward's model: the person's pick in Settings, else its program's steward default (an advisor needs no
-    strong model), else the Auto pick."""
-    migrate()
-    s = board.registry()['settings']
-    pin = s.get('monitor_model')
-    if not (pin and pin.get('model')):
-        default = concrete(s['provider'], {'model': providers.get(s['provider']).steward_model})
-        if default:
-            return dict(default, own=False, why="colony's default for the steward, an advisor")
-    return resolve(s['provider'], 'monitor', pin)
-
-
-def scout(family):
-    """The steward's scout reads at its program's routine tier: reading, not judgement."""
-    migrate()
-    return resolve(family, 'routine', (board.registry()['settings'].get('helper_models') or {}).get(key(family, 'routine')))
-
 
 def project_roots():
     """Read seats without registering projects (registration itself resolves helper models)."""
@@ -468,7 +448,7 @@ def role_label(ident):
     family, role = ident.split(':', 1)
     role, _, project = role.partition('@')
     project_name = next((r.name for r in project_roots() if key(family, role, r) == ident), project)
-    label = {'main': 'main agents', 'monitor': board.steward_name()}.get(role, role)
+    label = {'main': 'main agents'}.get(role, role)
     if role in bench.TIERS:
         label += ' helpers'
     return providers.get(family).label + ' · ' + label + (' · ' + project_name if project else '')
@@ -496,9 +476,8 @@ def affected(ident, before, after):
             continue
         out.append(dict(label=f'{root.name}: {role}', before=pair(pin) if pin.get('model') else before,
                         after=after, pinned=bool(pin.get('model')), root=str(root)))
-    if role in ('consultant', 'monitor'):
-        pin = ((settings.get('consultants') or {}).get(family) if role == 'consultant' else
-               settings.get('monitor_model') if family == settings['provider'] else None) or {}
-        out.append(dict(label=f'{family} {board.steward_name() if role == "monitor" else role}', before=pair(pin) if pin.get('model') else before,
+    if role == 'consultant':
+        pin = (settings.get('consultants') or {}).get(family) or {}
+        out.append(dict(label=f'{family} {role}', before=pair(pin) if pin.get('model') else before,
                         after=after, pinned=bool(pin.get('model'))))
     return out or [dict(label=role_label(ident), before=before, after=after, pinned=False)]

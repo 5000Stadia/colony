@@ -60,7 +60,7 @@ class EffortPolicyTest(unittest.TestCase):
                 pick = policy.pick('claude', role, self.points, position)
                 self.assertEqual((pick['model'], pick['effort']), (balanced['model'], balanced['effort']))
                 self.assertEqual(pick['evidence']['goal'], pick['evidence']['ceiling'])
-        for role in ('main', 'routine', 'chores', 'monitor'):
+        for role in ('main', 'routine', 'chores'):
             self.assertLess(policy.pick('claude', role, self.points, 6)['evidence']['goal'],
                             policy.pick('claude', role, self.points, 3)['evidence']['goal'])
 
@@ -169,11 +169,11 @@ class RefreshEvidenceTest(unittest.TestCase):
     def test_family_fallback_uses_only_unblocked_candidates(self):
         points=[dict(model=m,effort='high',score=s,cost=c,family='codex',version='v1',estimated=False,evidence={})
                 for m,s,c in [('top',60,2),('other',50,1)]]
-        pick=policy.pick('codex','monitor',points,blocked=[{'model':'top','effort':'high'}])
+        pick=policy.pick('codex','main',points,blocked=[{'model':'top','effort':'high'}])
         self.assertEqual(pick['model'],'other')
         self.assertEqual(pick['evidence']['ceiling'],60)
         self.assertEqual(pick['evidence']['family_best'],50)
-        self.assertIn('8.00 below goal',pick['why'])
+        self.assertIn('6.00 below goal',pick['why'])
 
 
 # ---------------------------------------------------------------- reading AA's pages; cost as volume x price
@@ -490,7 +490,7 @@ class ModelDataHealthTest(BoardBase):
         with socket.socket() as s:
             s.bind(('127.0.0.1', 0))
             port = str(s.getsockname()[1])
-        (board.home() / 'server.json').write_text(json.dumps(['--port', port, '--no-monitor']))
+        (board.home() / 'server.json').write_text(json.dumps(['--port', port]))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = cli.cmd_doctor(argparse.Namespace(tests=False))

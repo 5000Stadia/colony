@@ -253,5 +253,82 @@ class ExposureTest(Base):
         self.assertEqual(ws.report()["cannot_show"], ws.CANNOT_SHOW)
 
 
+
+class VerdictTest(Base):
+    """The person's verdict at each finished milestone: the one view that can show the work getting better."""
+
+    def roadmap(self, *states):
+        lines = ["# Garden", ""]
+        for n, st in enumerate(states, 1):
+            lines += [f"## M{n} — Part {n}", "", f"- [{st}] R{n} Item {n}", ""]
+        (self.root / "ROADMAP.md").write_text("\n".join(lines))
+
+    def test_a_milestone_newly_finished_is_asked_about_once_in_words_that_never_change(self):
+        self.roadmap("x", " ")
+        self.assertEqual(ws.ask_verdicts(self.root), [], "what was finished before the first look isn't asked")
+        self.assertEqual(ws.ask_verdicts(self.root), [])
+        self.roadmap("x", "x")
+        [g] = ws.ask_verdicts(self.root)
+        self.assertEqual(g["question"], f"garden finished M2, Part 2. {ws.VERDICT_QUESTION}")
+        self.assertEqual((g["options"], g["default"], g["verdict"]), (list(ws.VERDICTS), ws.NO_VERDICT, "M2"))
+        self.assertEqual(ws.ask_verdicts(self.root), [], "asked once")
+        self.assertEqual([x["id"] for x in board.gates(self.root)], [g["id"]])
+
+    def test_a_shared_plan_is_asked_about_by_its_own_folder_only(self):
+        from colony import lead
+        self.roadmap(" ")
+        with patch.object(lead, "plan_root", return_value=self.base / "elsewhere"):
+            ws.ask_verdicts(self.root)
+            self.roadmap("x")
+            self.assertEqual(ws.ask_verdicts(self.root), [])
+        self.assertFalse((self.root / ".board" / "verdicts.json").exists())
+
+    def test_a_skipped_verdict_stands_quietly_and_counts_for_nothing(self):
+        self.roadmap(" ")
+        ws.ask_verdicts(self.root)
+        self.roadmap("x")
+        [g] = ws.ask_verdicts(self.root)
+        with patch.object(board, "stands_at", return_value=0), patch.object(board, "due", return_value=True):
+            self.assertEqual([x["id"] for x in board.stand_defaults(self.root)], [g["id"]])
+        [after] = board.gates(self.root)
+        self.assertEqual((after["answer"], after["answered_by"]), (f"Default stood (skipped): {ws.NO_VERDICT}", "colony"))
+        self.assertEqual(board.notes(self.root), [], "no note for the agent")
+        self.assertEqual(ws.verdicts(self.root), [])
+
+    def test_a_verdict_asked_again_stays_the_milestones_and_the_reply_it_answers_counts_for_nothing(self):
+        # Memory Research's report: a reply asking for a fuller brief was taken as M3's verdict, and the re-ask had no tag
+        self.roadmap(" ")
+        ws.ask_verdicts(self.root)
+        self.roadmap("x")
+        [g] = ws.ask_verdicts(self.root)
+        board.answer_gate(self.root, g["id"], "I need a fuller brief before I can judge")
+        again = board.add_gate(self.root, g["question"], reframes=g["id"], told="The brief: ...", options=ws.VERDICTS)
+        self.assertEqual(again["verdict"], "M1", "asked again, still M1's verdict")
+        self.assertEqual(ws.verdicts(self.root), [], "the request for a brief isn't a verdict")
+        board.answer_gate(self.root, again["id"], ws.VERDICTS[0])
+        self.assertEqual([(v["milestone"], v["verdict"], v["gate"]) for v in ws.verdicts(self.root)],
+                         [("M1", ws.VERDICTS[0], again["id"])])
+
+    def test_the_persons_verdict_reaches_the_agent_and_the_weeks_outcomes(self):
+        self.roadmap(" ")
+        ws.ask_verdicts(self.root)
+        self.roadmap("x")
+        [g] = ws.ask_verdicts(self.root)
+        board.answer_gate(self.root, g["id"], "Worse: the forms got cluttered")
+        [v] = ws.verdicts(self.root)
+        self.assertEqual((v["milestone"], v["verdict"], v["words"]), ("M1", "Worse", "the forms got cluttered"))
+        self.assertTrue(any("forms got cluttered" in n["text"] for n in board.notes(self.root)), "the agent hears it")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "plan", at=T0)
+        rep = self.build(now=time.time(), scan=False)
+        wk = ws.week(g["at"])
+        self.assertEqual([x["verdict"] for x in self.project(rep)["weeks"][wk]["verdicts"]], ["Worse"])
+        with patch.object(ws, "report", return_value=rep):
+            row = next(r for r in ws.view(self.root, rep)["weeks"] if r["week"] == wk)
+        self.assertEqual([x["milestone"] for x in row["outcomes"]["verdicts"]], ["M1"], "an outcome, beside the rest")
+        with patch.object(ws, "report", return_value=rep):
+            self.assertIn("your verdict: M1 Worse (the forms got cluttered)", board.warnings_html(self.root))
+
+
 if __name__ == "__main__":
     unittest.main()

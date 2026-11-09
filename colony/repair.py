@@ -1,7 +1,7 @@
 """Installation repair access. Reads never enroll, pair, or submit work.
 
 The explicitly selected provider owns its native host. It lives outside project
-hosts so removing projects, restarting the board, and steward settings do not
+hosts so removing projects, restarting the board, and changing settings do not
 remove the owner's way back into this installation.
 """
 import fcntl

@@ -165,6 +165,31 @@ def threshold(root=None):
     return t if 0 < t <= 100 else None
 
 
+def week_threshold(root):
+    """The share of any program's week at which this project pauses (week_pause, set by the person for a project
+    that should build no further once either program's week passes a share): every program it may build on is counted,
+    since a project's agent can run another program's builds. None is off."""
+    try:
+        t = float(board.project_settings(root)[1].get("week_pause") or 0)
+    except (TypeError, ValueError):
+        return None
+    return t if 0 < t <= 100 else None
+
+
+def weeks_past(root, pct, clock):
+    """The weekly windows of every program at pct or past it, named by program: {"codex weekly": {used, resets_at,
+    program}}."""
+    from . import providers
+    out = {}
+    for k, x in providers.PROVIDERS.items():
+        if not providers.usable(x):
+            continue
+        v = read(k, raw=True).get("weekly") or {}
+        if v.get("used") is not None and v["used"] >= pct and not (v.get("resets_at") and v["resets_at"] <= clock):
+            out[f"{k} weekly"] = dict(v, program=k)
+    return out
+
+
 def over(key, pct):
     """The window of a program at or past pct, the one that resets last: (name, {used, resets_at}) or None."""
     hit = [(w, v) for w, v in read(key).items() if v["used"] >= pct]
@@ -208,7 +233,15 @@ def check():
             return bool(value.get('resets_at') and value['resets_at'] <= clock)
 
         blocking = {w: v for w, v in raw.items() if limit(w, t) and not reset(v) and v['used'] >= limit(w, t)}
+        week = week_threshold(p)
+        blocking.update(weeks_past(p, week, clock) if week else {})
         for window, saved in held.items():
+            if saved.get('program'):                       # a program's week (week_pause): held until it resets
+                latest = read(saved['program'], raw=True).get('weekly') or {}
+                if week and not reset(saved) and not reset(latest) and not (
+                        latest.get('used') is not None and latest['used'] <= max(0, week - RESUME_MARGIN)):
+                    blocking.setdefault(window, dict(saved, **latest))
+                continue
             if not limit(window, t):
                 continue
             latest = raw.get(window, {})
@@ -232,13 +265,20 @@ def check():
                 from . import console
                 active = console.snapshot(p).get("state") == "working"
                 now[str(p)]["active"] = active
-                if active:
+                past = {w: x for w, x in blocking.items() if x.get('program')}
+                if past and not any(w for w in blocking if w not in past):
+                    # the person asked to be told: idle, it is woken to tell them where things stand
+                    board.add_note(p, None, week_down(p, week, past), author="colony", quiet=active)
+                elif active:
                     others = [(k, x) for k, x in providers.PROVIDERS.items() if k != key and providers.usable(x)]
                     board.add_note(p, None, wind_down(p, prov, window, v, others), author="colony", quiet=True)
                 changed.append((p, "paused"))
         elif previous:
             turned = held and all(reset(v) or reset(raw.get(w, {})) for w, v in held.items())
-            why = ("this project no longer pauses at a usage limit" if not t
+            weekly = any(v.get('program') for v in held.values())
+            why = (("this project no longer pauses at a share of the week" if not week
+                    else "the week it paused at has reset") if weekly
+                   else "this project no longer pauses at a usage limit" if not t
                    else f"this project now uses {prov.label}" if previous['provider'] != key
                    else f"{prov.label}'s usage limit has reset" if turned
                    else f"{prov.label}'s blocking usage windows have reset or fallen below their pause thresholds")
@@ -335,6 +375,21 @@ def twin(root, key):
                 board.workdir(p) == board.workdir(root) or p.name == f"{root.name}-{key}"):
             return p
     return None
+
+
+def week_down(root, pct, past):
+    """What an agent is told when a program's week passes the project's week_pause: wind down as for the safe pause,
+    and tell the person where each program stands; carrying on is theirs."""
+    from . import providers
+    weeks = "; ".join(f"{providers.PROVIDERS[k].label} {line(k) or 'not read'}" for k, x in providers.PROVIDERS.items()
+                      if providers.usable(x))
+    names = " and ".join(providers.PROVIDERS[v["program"]].label for v in past.values())
+    return (f"Week pause: {names} {'is' if len(past) == 1 else 'are'} past {pct:g}% of the week, the share the person set "
+            f"for this project ({weeks}). Wind down now: let work already running finish, helpers included (don't "
+            "cancel them), and take in what they hand back; commit what works so far (a clean point; the item stays in "
+            "progress). Start nothing new. (Idle when it came: nothing to land.) Then end your turn by telling the person, briefly, where things stand (done, "
+            "half-done, next) and where each program's week is, and wait for them: carrying on before the week resets "
+            f"is theirs (colony settings --project {root.name} week_pause off, or a higher share).")
 
 
 def wind_down(root, prov, window, v, others):

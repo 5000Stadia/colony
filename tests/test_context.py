@@ -296,6 +296,31 @@ class ContextTest(unittest.TestCase):
         self.assertIn('- Settled: The send box is type and Enter', carry)
         self.assertIn('- Parked: R150, whether helpers compact too', carry)
 
+    def test_a_compaction_run_from_a_subfolder_is_the_projects(self):
+        sub = self.root / 'canvas'; (sub / '.git').mkdir(parents=True)          # its own repository, inside
+        nested = self.root / 'projects' / 'other'; (nested / '.board').mkdir(parents=True)
+        board.save_registry({'projects': [str(nested)], 'settings': {'provider': 'codex', 'messaging': False}})
+        self.assertTrue(context.in_project(self.root, dict(cwd=str(sub))), 'the agent cd-ed into part of its project')
+        self.assertFalse(context.in_project(self.root, dict(cwd=str(nested))), "another project's folder isn't this one")
+        self.assertFalse(context.in_project(self.root, dict(cwd=str(nested / 'src'))))
+        self.assertFalse(context.in_project(self.root, dict(cwd=self.tmp.name)), 'outside it: a scratch session')
+        self.state('compacting'); self.message('user', 'blue'); self.message('assistant', 'yes')
+        context.before_compact(self.root, 'codex', dict(self.payload, cwd=str(sub)))
+        self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'prepared', 'its hook is heard from there')
+
+    def test_a_compaction_that_never_reports_back_stops_holding_the_next_refresh(self):
+        self.claude(400_000)
+        st = self.state('compacting'); st['job']['asked'] = time.time() - context.TIMEOUT + 60
+        atomic_json(context.file(self.root), st)
+        with self.assertRaises(ValueError) as refused:
+            context.close_topic(self.root, 'The R8 rehearsal settled.')
+        self.assertIn('started 14 minutes ago', str(refused.exception))
+        st['job']['asked'] = time.time() - context.TIMEOUT - 1; atomic_json(context.file(self.root), st)
+        with patch.object(context, 'safe', return_value=True), patch.object(console, 'type_into') as typed:
+            context.tick(self.root)
+        self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'deferred', 'it never reported back')
+        self.assertIn('next pause', context.close_topic(self.root, 'The R8 rehearsal settled.'))
+
     def test_a_small_conversation_has_nothing_to_clear_and_an_empty_line_is_refused(self):
         self.claude(60_000)
         self.assertIn('nothing to clear', context.close_topic(self.root, 'Settled the voice.'))
@@ -398,13 +423,9 @@ class ContextTest(unittest.TestCase):
         self.assertEqual(context.read(context.file(self.root))['job']['phase'], 'ready')
         self.assertIn('Do not resend.', context.file(self.root, 'context-carried.md').read_text())
 
-    def test_the_monitor_types_nothing_for_its_context_and_disabled_monitor_watcher(self):
-        self.message('user', 'keep blue'); self.message('assistant', 'yes')
-        atomic_json(context.file(self.root), dict(last=time.time() - 30 * 3600))
-        with patch.object(context, 'safe', return_value=True), patch.object(context, 'is_monitor', return_value=True), patch.object(console, 'type_into', return_value=True) as typed:
-            context.tick(self.root); typed.assert_not_called()   # it compacts natively: nothing in the person's view
+    def test_the_watchers_pass_refreshes_context(self):
         with patch.object(context, 'tick_all') as refresh, patch.object(monitor.Watcher, 'mail'), patch('colony.vision.observe_all'):
-            watcher = monitor.Watcher(enabled=False); watcher.tick(); refresh.assert_called_once()
+            watcher = monitor.Watcher(); watcher.tick(); refresh.assert_called_once()
 
     def test_claude_usage_cache_and_compaction_attachment(self):
         self.s['provider'] = 'claude'
@@ -518,12 +539,6 @@ class ContextTest(unittest.TestCase):
             context.tick(self.root); typed.assert_not_called()
         self.assertNotIn('await_usage', context.read(context.file(self.root)))
         self.assertEqual(board.read(self.root, 'context-history.jsonl')[-1]['after'], 50000)
-
-    def test_monitor_launch_resumes_its_exact_registered_codex_session(self):
-        atomic_json(context.file(monitor.home(), 'context-session.json'), self.s)
-        with patch.object(console, 'COMMAND', None), patch('colony.selection.migrate'), \
-                patch.object(monitor, 'choice', return_value=('gpt-6.1-sol', 'medium', 'test')):
-            self.assertIn('resume exact-id', console.command('monitor', folder=monitor.home()))
 
     def test_ineffective_refresh_does_not_loop(self):
         self.state('restored'); self.usage(150000)

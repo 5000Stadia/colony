@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from colony import board, cli, handover, monitor, providers
+from colony import board, cli, handover, providers
 
 
 class SetupLinksTest(unittest.TestCase):
@@ -22,9 +22,8 @@ class SetupLinksTest(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def start(self, installed, choice=None):
-        args = argparse.Namespace(no_monitor=False, foreground=False, program=choice,
-                                  port=8877, lan=False, local=False)
+    def start(self, installed):
+        args = argparse.Namespace(foreground=False, port=8877, lan=False, local=False)
         with ExitStack() as stack:
             stack.enter_context(patch.object(providers, "installed", lambda p: providers.key(p) in installed))
             for key in installed:
@@ -38,37 +37,21 @@ class SetupLinksTest(unittest.TestCase):
             stack.enter_context(patch.object(cli, "_launch", return_value=False))
             stack.enter_context(redirect_stdout(io.StringIO()))
             self.assertEqual(cli.cmd_board(args), 1, "stop before launching a server")
-        return json.loads((board.home() / "to_monitor.jsonl").read_text().splitlines()[0])["text"]
 
-    def assert_program_settled(self, text, key):
+    def assert_program_settled(self, key):
         self.assertEqual(board.registry()["settings"]["provider"], key)
-        self.assertIn(f"Colony uses {providers.get(key).label}, chosen at start.", text)
-        self.assertIn("Do not ask which program again", text)
-        self.assertIn("starting with the introduction", text)
-        self.assertIn("install and sign in to another later", text)
-        self.assertIn("Settings → Agent programs", text)
-        self.assertNotIn("starting with which agent programs", text)
 
-    def test_explicit_start_choice_is_not_asked_again_when_both_are_installed(self):
-        self.assert_program_settled(self.start(["claude", "codex"], "codex"), "codex")
+    def test_only_codex_is_settled_at_start(self):
+        self.start(["codex"])
+        self.assert_program_settled("codex")
 
-    def test_only_codex_is_not_asked_again(self):
-        self.assert_program_settled(self.start(["codex"]), "codex")
+    def test_only_claude_is_settled_at_start(self):
+        self.start(["claude"])
+        self.assert_program_settled("claude")
 
-    def test_only_claude_is_not_asked_again(self):
-        self.assert_program_settled(self.start(["claude"]), "claude")
-
-    def test_start_default_is_also_settled_before_setup(self):
-        self.assert_program_settled(self.start(["claude", "codex"]), "claude")
-
-    def test_steward_brief_uses_named_board_links_and_skips_the_settled_question(self):
-        board.save_registry({"roots": [], "settings": {"lan": False, "provider": "codex"}})
-        monitor.brief()
-        brief = monitor.brief_path().read_text()
-        self.assertIn("`/?n=NAME`, using its folder", brief)
-        self.assertIn("[Weekend recipes](/?n=Weekend%20recipes)", brief)
-        self.assertIn("Do not ask which program again", brief)
-        self.assertIn("Settings → Agent", brief)
+    def test_both_installed_settle_on_the_default_with_no_terminal_to_ask(self):
+        self.start(["claude", "codex"])
+        self.assert_program_settled("claude")
 
 
 if __name__ == "__main__":

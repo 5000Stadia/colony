@@ -249,11 +249,11 @@ def left(seats=None, only=None):
     for each such scope. root: the project it was left by, while that is on the board (else None). only: that
     project's alone."""
     from collections import Counter
-    from . import monitor, providers
+    from . import providers
     if seats is None:
-        roots = [p for p in board.projects()] + [monitor.home()]
+        roots = list(board.projects())
         shared = Counter(str(board.workdir(p)) for p in roots)
-        seats = {"names": {console.session_name(p): p for p in board.projects()} | {monitor.name(): monitor.home()},
+        seats = {"names": {console.session_name(p): p for p in roots},
                  # a folder two projects work in tells neither's apart: only a named scope says whose
                  "dirs": [(str(board.workdir(p)), p) for p in roots if shared[str(board.workdir(p))] == 1]}
     panes, kept = _panes(), set()

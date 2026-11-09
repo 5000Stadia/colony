@@ -53,7 +53,7 @@ def kind(path):
 
 
 def ref(key, rel, pin="", entry="", whole=False, viewer=False):
-    """The opener's address for a path of a project (key: its project folder, current menu position, or "steward"), from its folder."""
+    """The opener's address for a path of a project (key: its project folder or current menu position), from its folder."""
     q = lambda v: urllib.parse.quote(str(v), safe="")
     return (f"/open?{board.project_query(key)}&f={urllib.parse.quote(str(rel), safe='/')}" + (f"&pin={q(pin)}" if pin else "")
             + (f"&s={q(entry)}" if entry else "") + ("&whole=1" if whole else "") + ("&viewer=1" if viewer else ""))
@@ -70,7 +70,7 @@ def link(key, root, target, pin="", entry="", here=None):
     path = pins.inside(base, target)
     if not path or not path.exists():
         return None
-    return ref("steward" if key == "steward" else Path(root), path.relative_to(base), pin, entry), kind(path) == "raw"
+    return ref(Path(root), path.relative_to(base), pin, entry), kind(path) == "raw"
 
 
 def address(key, url):
@@ -207,8 +207,6 @@ def came_from(referer, key, root, pin=None, entry=None, host=''):
 
     Only a same-board referrer for this project may choose a view. Its origin and numeric index are never reused.
     """
-    if key == "steward":
-        return "/steward?view=chat", f"{board.steward_name()} · Chat", False
     if entry:
         return return_ref(root, 'showcase', 's-' + entry['id']), "Showcase", False
     if pin:
@@ -298,9 +296,8 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     and Comment at its foot. Edit is for pinned text files; a cut-off preview is never editable."""
     base = Path(root).resolve()
     rel = str(path.relative_to(base))
-    steward = key == "steward"
-    entry = None if steward or not entry_id else showcase.get(root, entry_id)
-    pin = None if steward else pinned(root, rel, pin_id)
+    entry = showcase.get(root, entry_id) if entry_id else None
+    pin = pinned(root, rel, pin_id)
     back, label, _ = came_from(referer, key, root, pin, entry, host)
     how = kind(path)
     name = Path(root).name if rel == "." else rel
@@ -323,7 +320,7 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
         if cut:
             body += (f"<p class='cut'>The first {size(len(text.encode()))} of {size(path.stat().st_size)} is shown. "
                      f"<a href='{e(ref(key, rel, pin_id, entry_id, whole=True))}'>Open the whole file</a></p>")
-    to = board.the_steward() if steward else "the agent"
+    to = "the agent"
     if entry:                                              # a showing keeps its identity: the comment is on it
         action, ident, hint = "/showcase/comment", entry["id"], f"What you think of “{entry['title']}”: it reaches the agent"
     elif pin:
@@ -342,15 +339,15 @@ def page(reg, key, root, path, *, pin_id="", entry_id="", whole=False, referer="
     edit = f"<a class='readedit' href='/pin/edit?{board.project_query(root)}&id={e(pin['id'])}'>Edit</a>" if editable else ""
     audio = (f"<div class='readaudio' role='group' aria-label='Document actions' data-url='{e(ref(key, rel) + '&audio=1')}'><button type='button' class='readplay'>Play document</button>"
              f"{edit}<span class='readaudiostatus' role='status'></span></div>") if how in ('doc', 'text') else ""
-    project = '/steward?view=chat' if steward else return_ref(root)
+    project = return_ref(root)
     exits = (f"<a class='back' href='{e(back)}'>‹ Back to {e(label)}</a>"
-             f"<a class='readproject' href='{e(project)}'>Project: {e(board.steward_name() if steward else board.name_of(root))}</a>")
+             f"<a class='readproject' href='{e(project)}'>Project: {e(board.name_of(root))}</a>")
     out = (f"<div class='readtop readnav' role='navigation' aria-label='Document navigation'>{exits}</div>"
            f"<p class='who readabout'>{' · '.join(about)}</p>"
            f"{audio}<article class='reader{' plain' if how == 'text' else ''}'>{body}</article>"
            + (f"<p class='sent'>Sent: it reaches {e(to)} as a message.</p>" if sent else "")
            + f"<div class='readfoot'>{comment}<div class='readnav' role='navigation' aria-label='Document navigation'>{exits}</div></div><script>{READER}</script>")
-    return board.shell(reg, -1 if steward else int(key), out)
+    return board.shell(reg, int(key), out)
 
 
 # ---------------------------------------------------------------- the person's sweep

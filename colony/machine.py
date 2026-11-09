@@ -155,11 +155,10 @@ def tick(now=None):
         _save(s)
         err = _power(s["mode"])
         if err:
-            from . import monitor
             s["failed"] = err
             _save(s)
-            monitor.queue(f"Colony couldn't {'shut down' if s['mode'] == 'off' else 'restart'} the machine ({err}); "
-                          "the projects are parked. Run sudo systemctl reboot yourself.", relay=True)
+            board.notice(f"Colony couldn't {'shut down' if s['mode'] == 'off' else 'restart'} the machine ({err}); "
+                         "the projects are parked. Run sudo systemctl reboot yourself.")
         return "restarting" if not err else "failed"
     _save(s)
     return did

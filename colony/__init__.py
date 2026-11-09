@@ -1,2 +1,2 @@
-"""Colony: one board for all of a person's long projects, each with its own agent, and a steward that can act for them."""
+"""Colony: one board for all of a person's long projects, each with its own agent, watched over by colony itself."""
 __version__ = "0.1.0"

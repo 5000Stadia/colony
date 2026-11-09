@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 
-from colony import board, console, monitor, signin
+from colony import board, console, signin
 from tests import patience
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,8 +36,7 @@ class PollingTest(unittest.TestCase):
         self.snapshot = self.stack.enter_context(patch.object(console, 'snapshot', side_effect=lambda p: self.snap))
         self.moments = self.stack.enter_context(patch.object(board, 'moments', return_value=[]))
         for target, name, value in ((board, 'name_of', 'Fixture'), (board, 'at_work', 'R1 sample'),
-                                    (board, 'nav_order', []), (monitor, 'involved', True),
-                                    (monitor, 'snapshot', {'state': 'off', 'lines': []}),
+                                    (board, 'nav_order', []),
                                     (signin, 'states', {'claude': {'state': 'reconnect'}})):
             self.stack.enter_context(patch.object(target, name, return_value=value))
         board._STATUS.clear()
@@ -52,7 +51,7 @@ class PollingTest(unittest.TestCase):
         self.moments.assert_called_once_with(self.root, self.snap)
         self.assertEqual(data['projects'][0]['state'], 'idle')
         self.assertEqual(data['reconnect'], ['Claude Code'])
-        self.assertEqual(data['monitor']['state'], 'off')
+        self.assertNotIn('monitor', data, 'no steward to report on')
 
     def test_slow_status_work_is_single_flight_across_concurrent_devices(self):
         started, release = threading.Event(), threading.Event()

@@ -1,4 +1,4 @@
-"""PROVIDER: Codex app servers for projects and the steward, shared by the console and ChatGPT.
+"""PROVIDER: Codex app servers for projects, shared by the console and ChatGPT.
 
 Only launch() changes lifecycle. Rendering commands, fingerprints and settings
 does not start a daemon. SIGHUP drains admitted turns and never forces shutdown.
@@ -196,18 +196,17 @@ def start_check():
 
 def home_for(root):
     from . import board
-    key = 'steward' if context.is_monitor(root) else hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:12]
+    key = hashlib.sha256(str(Path(root).resolve()).encode()).hexdigest()[:12]
     return board.codex_homes() / key
 
 
 def workdir(root):
     from . import board
-    return Path(root) if context.is_monitor(root) else board.workdir(root)
+    return board.workdir(root)
 
 
 def label(root):
-    from . import board
-    return (board.steward_named() or 'steward') if context.is_monitor(root) else Path(root).name
+    return Path(root).name
 
 
 def socket_for(home):
@@ -300,8 +299,7 @@ def pair(root, manual_code=None):
     """
     home = home_for(root)
     if not alive(home):
-        who = 'the steward’s' if context.is_monitor(root) else 'this project’s'
-        raise RemoteError(f'Open {who} console with Remote Control on, then return here to pair it.')
+        raise RemoteError('Open this project’s console with Remote Control on, then return here to pair it.')
     try:
         with Client(socket_for(home), timeout=40) as client:
             if manual_code is not None:
@@ -347,19 +345,13 @@ def pairing_choice(root, choice=None):
 
 
 def offer_pairing(root):
-    """A project's first remote connection: someone asks the person whether to connect it to ChatGPT and, on
-    yes, hands them a fresh code. The steward relays it when it runs; otherwise the project's own agent asks.
+    """A project's first remote connection: its own agent asks the person whether to connect it to ChatGPT and, on
+    yes, hands them a fresh code.
 
     launch() holds the project lock. A reconnect must not repeat the offer.
     """
-    from . import board, monitor
+    from . import board
     if pairing_choice(root) is not None:
-        return
-    if context.is_monitor(root):
-        monitor.queue("Ask the person whether to connect you to ChatGPT now. On yes, have them open your steward page "
-                      "and press Connect to ChatGPT. In the ChatGPT app, signed in to the same account, open "
-                      "Codex → Add manually and enter the fresh code before it expires. Never put codes in notes.", relay=True)
-        pairing_choice(root, 'offered')
         return
     name = Path(root).name
     ask = (f"Ask the person whether to connect {name} to ChatGPT now. On yes, run `colony pair {name}` and give them "
@@ -367,10 +359,7 @@ def offer_pairing(root):
            f"Codex → Add manually and enter it before it expires. Then confirm with `colony pair {name} --check CODE`. "
            "A code goes only in your reply, never in a note or message; on Not now, leave it, as the project page "
            "keeps a Connect button.")
-    if board.registry()["settings"]["monitor"] and not monitor.muted():
-        monitor.queue(f"New Codex project {name} is connected for ChatGPT but not paired. " + ask, relay=True)
-    else:
-        board.add_note(Path(root), None, ask.replace(f"connect {name}", "connect this project"), author="colony")
+    board.add_note(Path(root), None, ask.replace(f"connect {name}", "connect this project"), author="colony")
     pairing_choice(root, 'offered')
 
 
@@ -462,7 +451,7 @@ def overrides(root, home, settings):
     config['sandbox_mode'] = {'all': 'danger-full-access', 'plan': 'read-only'}.get(permission, 'workspace-write')
     config['sandbox_workspace_write.writable_roots'] = [str(board.home())]
     from . import lead
-    project = root if not context.is_monitor(root) else None
+    project = root
     if project and str(Path(root).resolve()) == lead.info(root)['lead']:
         config['sandbox_workspace_write.writable_roots'].append(str(lead.plan_root(root)))
     if project:
@@ -751,7 +740,7 @@ def launch(root, settings, resume=None):
 def local(root, settings, resume, home):
     from . import providers
     provider = providers.get('codex')
-    args = shlex.split(provider.local_command(label(root), settings, resume, None if context.is_monitor(root) else root))
+    args = shlex.split(provider.local_command(label(root), settings, resume, root))
     source = Path(os.environ.get('COLONY_CODEX_SOURCE_HOME') or provider.config_home()).resolve()
     if home == home_for(root):
         # Same persistent hook/helper configuration in embedded mode after remote off.

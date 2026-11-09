@@ -23,3 +23,6 @@ design/
 tests/fixtures/aa-*.html
 build/
 *.egg-info/
+
+# the person's own words for a roadmap item: kept on this machine, out of the public repository
+roadmap/*.words.md

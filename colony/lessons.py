@@ -2,9 +2,9 @@
 
 A lesson is one short sentence keyed to a colony action (asking a gate, showing a deliverable, adding a
 connection), proposed from evidence (the person declined something, corrected an answer, rated work low, had an
-item redone) by the steward or an agent, and adopted only by the person's tap. Once adopted it is printed in that
+item redone) by an agent, and adopted only by the person's tap. Once adopted it is printed in that
 command's output, every time an agent runs it, in the project it is for or in all of them: at the moment it
-applies, not in a file read once. At most a few per action, so they are read; the steward merges or retires before
+applies, not in a file read once. At most a few per action, so they are read; one is merged or retired before
 adding more.
 
 A lesson is retired on evidence, not age: when the mistake recurs despite it, or the person overrides it, it is
@@ -57,7 +57,7 @@ def propose(action, text, evidence, by, project=None):
         raise ValueError("Say what happened that taught it (--evidence): the person adopts it on that.")
     rows = load()
     row = {"id": "l" + secrets.token_hex(4), "action": action, "text": text, "evidence": evidence.strip(),
-           "scope": _scope(project), "by": Path(by).name if by else "steward", "state": "proposed",
+           "scope": _scope(project), "by": Path(by).name if by else "colony", "state": "proposed",
            "at": board.now(), "shown": 0}
     rows.append(row)
     _save(rows)

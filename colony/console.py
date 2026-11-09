@@ -39,36 +39,21 @@ def token():
 COMMAND = os.environ.get("COLONY_CONSOLE_CMD")      # set only to replace the provider's CLI (tests, demos)
 
 
-def command(label, root=None, folder=None):
+def command(label, root=None):
     """How the project's provider starts its agent, with the project's settings (falling back to the global ones),
-    back in the conversation it was last in, if it had one. folder: a console that isn't a project's (the
-    steward's) resumes the conversation last active there."""
+    back in the conversation it was last in, if it had one. label: the session's title in its program's app, where
+    it has one (PROVIDER: Claude's Remote Control)."""
     if COMMAND:
         return COMMAND.format(name=shlex.quote(label))
     from . import board, providers, selection
     selection.migrate(root)
     s = board.project_settings(root)[0] if root else board.registry()["settings"]
     s = {k: v for k, v in s.items() if k not in board.TURBO}        # what turbo means for it isn't how it starts
-    if label != "monitor" or root:
-        s = dict(s, **selection.pair(selection.main(root)))
+    s = dict(s, **selection.pair(selection.main(root)))
     # PROVIDER: resuming needs the provider to say which conversation its hooks ran in (conversation()) and to
     # take resume= in command(); one that doesn't simply starts fresh after a restart.
     resume = last_conversation(root) if root else None
-    if label == "monitor" and not root:
-        from . import monitor, context
-        model, effort, _ = monitor.choice()
-        s = dict(s, model=model, effort=effort, autocompact=monitor.CONTEXT_CAP)
-        known = context.session(monitor.home())
-        if known and known['provider'] == providers.key(providers.of(None)) and Path(known['path']).exists():
-            resume = known['id']
-    if not resume and not root and folder and providers.supplies(providers.of(None), "latest_conversation"):
-        resume = providers.of(None).latest_conversation(folder)
-    # PROVIDER: the label is the session's title in its program's app, where it has one (Claude's Remote Control):
-    # the steward goes by the name the person gave it, a change reloading it there once it sits idle.
-    title = (board.steward_named() or "steward") if label == "monitor" and not root else label
-    if label == "monitor" and not root:
-        return providers.of(None).steward_command(title, s, resume=resume)
-    return providers.of(root).command(title, s, root=root, **({"resume": resume} if resume else {}))
+    return providers.of(root).command(label, s, root=root, **({"resume": resume} if resume else {}))
 
 
 def _conversations():
@@ -321,35 +306,34 @@ def died(name):
     return d if d.get("status") and d.get("at", 0) >= began else None
 
 
-def ensure(root, name=None, label=None, settle=0):
+def ensure(root, name=None, settle=0):
     """Start the session if it is not running: the provider's CLI, in the project, as its settings say. settle: when
     it had to be started, seconds to watch that it stays (a message for it waits that long rather than be lost)."""
     name = name or session_name(root)
     if not running(name):
         from . import board, providers
-        if not COMMAND and not providers.installed(providers.of(None if label else root)):
+        if not COMMAND and not providers.installed(providers.of(root)):
             return name                             # its program isn't here: no console that would only die
         # what an earlier one died of no longer counts from here (died() reads only what came after this start)
         began = time.time()
         # COLONY_CONSOLE marks the session as the board's, so its hooks record its conversation and no other.
         # COLONY_PROJECT says which project it is, where two share a folder; it works in that project's folder.
-        extra = [a for k, v in providers.of(None if label else root).console_env.items() for a in ("-e", f"{k}={v}")]
+        extra = [a for k, v in providers.of(root).console_env.items() for a in ("-e", f"{k}={v}")]
         subprocess.run(["tmux", "new-session", "-d", "-s", name, "-c", str(board.workdir(root)), "-x", "200", "-y", "50",
                         "-e", f"COLONY_CONSOLE={name}", "-e", f"COLONY_PROJECT={Path(root)}", *extra,
-                        contained(lingers(command(label or Path(root).name, None if label else root, folder=root if label else None)), name),
+                        contained(lingers(command(Path(root).name, root)), name),
                         # in the same breath, before the program can end: if it does, its screen stays to be read
                         ";", "set-option", "-w", "-t", name, "remain-on-exit", "on"],
                        check=True)
         subprocess.run(["tmux", "set-option", "-t", name, "status", "off"], capture_output=True)
-        _started(name, fingerprint(root, label), providers.key(providers_of(root, label)), at=began)
-        scrollable(name, providers_of(root, label))
-        if not label:
-            from . import hibernate
-            hibernate.clear(root)                   # started again for whatever reached it: awake (R142)
-            try:
-                catch_up(root)
-            except Exception:
-                pass                                # a note it would have had: never a console that fails to start
+        _started(name, fingerprint(root), providers.key(providers_of(root)), at=began)
+        scrollable(name, providers_of(root))
+        from . import hibernate
+        hibernate.clear(root)                       # started again for whatever reached it: awake (R142)
+        try:
+            catch_up(root)
+        except Exception:
+            pass                                    # a note it would have had: never a console that fails to start
         until = time.time() + settle
         while time.time() < until and running(name):
             time.sleep(0.1)
@@ -360,9 +344,9 @@ def ensure(root, name=None, label=None, settle=0):
     return name
 
 
-def providers_of(root, label=None):
+def providers_of(root):
     from . import providers
-    return providers.of(None if label else root)
+    return providers.of(root)
 
 
 def scrollable(name, prov):
@@ -383,16 +367,15 @@ def unscroll(name):
 
 # ---------------------------------------------------------------- staying current: reloading a stale console
 
-def fingerprint(root, label=None):
+def fingerprint(root):
     """What a console was started with: its launch command (less the conversation it resumes) and the files
     its program reads only at start (see the provider's startup_files). A change means a reload would differ."""
     import hashlib
     from . import board, providers
-    cmd = command(label or Path(root).name, None if label else root, folder=root if label else None)
+    cmd = command(Path(root).name, root)
     cmd = re.sub(r" (--)?resume \S+", "", cmd)
-    p = providers.of(None if label else root)
-    files = [f for f in (p.startup_files(board.workdir(root)) if not label else [])
-             if f.exists()]
+    p = providers.of(root)
+    files = [f for f in p.startup_files(board.workdir(root)) if f.exists()]
     h = hashlib.sha256(cmd.encode())
     for f in sorted(files):
         h.update(f.read_bytes())
@@ -424,40 +407,56 @@ def _started(name, fp, program=None, at=None):
     _record(lambda have: have.__setitem__(name, {"fingerprint": fp, "at": at or time.time(), **({"program": program} if program else {})}))
 
 
+DISAGREE_CONFIRM = 120      # seconds a process reading must keep contradicting the start record before it counts
+_disagreed = {}
+
+
 def running_program(name):
-    """Which program a console runs (its provider's key): as colony started it, else from its process's path (Claude
-    Code keeps its versions in versions/, Codex in releases/), else None."""
-    try:
-        was = json.loads(_started_path().read_text()).get(name) or {}
-    except (OSError, ValueError):
-        was = {}
-    if was.get("program"):
-        return was["program"]
+    """Which program a console runs (its provider's key): as colony started it, unless its process's path (Claude
+    Code keeps its versions in versions/, Codex in releases/) has said otherwise for DISAGREE_CONFIRM seconds; else
+    from that path; else None. A start record once said Claude while the console ran Codex, so the switch back to
+    its setting was never seen and it sat at Codex's first screen for a day and a half; and a single reading once
+    said Codex of a Claude console at work, so the reading has to hold before it outweighs the record."""
     m = _running_exe(name)
-    return ("claude" if m.group(1) else "codex") if m else None
+    live = ("claude" if m.group(1) else "codex") if m else None
+    try:
+        was = (json.loads(_started_path().read_text()).get(name) or {}).get("program")
+    except (OSError, ValueError):
+        was = None
+    if live and was and live != was:
+        first = _disagreed.setdefault((name, live), time.time())
+        return live if time.time() - first >= DISAGREE_CONFIRM else was
+    for k in [k for k in _disagreed if k[0] == name]:
+        _disagreed.pop(k)
+    return was or live
 
 
-def switching(root, name=None, label=None):
+def switching(root, name=None):
     """A console set to another program than the one it runs (a switch asked for, not yet made): (set, running), as
     provider keys, or None."""
     from . import providers
     name = name or session_name(root)
     if not running(name):
         return None
-    want, ran = providers.key(providers_of(root, label)), running_program(name)
+    want, ran = providers.key(providers_of(root)), running_program(name)
     return (want, ran) if ran and ran != want else None
 
 
-def busy(root, name=None, label=None):
+def busy(root, name=None):
     """What still runs for a console that its screen can show as idle (a command or helper it left at work in the
     background, a turn its program runs elsewhere), or None. PROVIDER: busy(); what can't be read counts as busy."""
     from . import providers
     name = name or session_name(root)
-    p = providers.PROVIDERS.get(running_program(name)) or providers_of(root, label)
-    try:
-        return p.busy(root, name)
-    except Exception:
-        return "its program couldn't say whether anything still runs"
+    # the program it runs and the one it is set to: if the reading of which runs is ever wrong, the other still
+    # sees its work (a Claude console's helpers, read as Codex, were once cut off by a reload)
+    for p in dict.fromkeys(x for x in (providers.PROVIDERS.get(running_program(name)), providers_of(root)) if x):
+        try:
+            why = p.busy(root, name)
+        except Exception:
+            return "its program couldn't say whether anything still runs"
+        if why:
+            return why
+    return None
 
 
 def catch_up(root):
@@ -516,11 +515,12 @@ def running_version(name):
 
 
 def _running_exe(name):
-    """The program's own path among a console's processes, matched on its versions/ or releases/ folder, or None."""
+    """The program's own path among a console's processes, matched on its versions/ or releases/ folder, or None.
+    Nearest the pane first, so the console's program wins over any other it started (a consult's codex under Claude)."""
     r = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True)
     todo, seen = r.stdout.split(), set()
     while todo:
-        pid = todo.pop()
+        pid = todo.pop(0)
         if pid in seen:
             continue
         seen.add(pid)
@@ -535,19 +535,19 @@ def _running_exe(name):
     return None
 
 
-def stale(root, name=None, label=None):
+def stale(root, name=None):
     """Why a running console is out of date, or None: its program was updated since it started, or what it
     would be started with has changed (a setting, a helper tier)."""
     from . import providers
     name = name or session_name(root)
     if not running(name):
         return None
-    p = providers.of(None if label else root)
+    p = providers.of(root)
     now = re.search(r"\d+(\.\d+)+", p.version() or "")
     ran = running_version(name)
     if now and ran and now.group(0) != ran:
         return f"{p.label} {ran} → {now.group(0)}"
-    why = not label and p.stale(root)       # what only its program knows (Codex's app access)
+    why = p.stale(root)                     # what only its program knows (Codex's app access)
     if why:
         return why
     try:
@@ -556,7 +556,7 @@ def stale(root, name=None, label=None):
         was = None
     if not was:
         return "started before colony kept a record of how it starts"
-    if fingerprint(root, label) != was.get("ran", was["fingerprint"]):    # ran: what its process started with, in older records
+    if fingerprint(root) != was.get("ran", was["fingerprint"]):    # ran: what its process started with, in older records
         return "its settings or helper tiers changed"
     return None
 
@@ -584,7 +584,7 @@ def attached(name):
     return r.stdout.strip() not in ("", "0")
 
 
-def reload(root, name=None, label=None):
+def reload(root, name=None):
     """Restart a console on what it would be started with now, back in the same conversation."""
     name = name or session_name(root)
     pane = subprocess.run(["tmux", "display", "-p", "-t", name, "#{pane_pid}"], capture_output=True, text=True).stdout.strip()
@@ -595,7 +595,7 @@ def reload(root, name=None, label=None):
     deadline = time.time() + 15
     while time.time() < deadline and any(Path(f"/proc/{pid}").exists() for pid in held):
         time.sleep(0.2)
-    return ensure(root, name, label)
+    return ensure(root, name)
 
 
 def _descendants(pid):
@@ -717,8 +717,8 @@ def coming_up(name):
 def ready(name, wait=0):
     """What is in the session's box once it is on screen ("" when it is empty); None while it isn't, looked for up to
     `wait` seconds while the console is still coming up. Typed into a console still starting, whose blank screen
-    reads as idle, colony's line was counted as sent, though it sat in the box unsent once the program came up: the
-    steward's first-time setup waited on it for minutes."""
+    reads as idle, colony's line was counted as sent, though it sat in the box unsent once the program came up: a
+    first-time setup once waited on it for minutes."""
     until = time.time() + wait
     while True:
         left = draft(name)
@@ -797,9 +797,8 @@ def _input_identity(name):
 
 
 def _input_root(name):
-    from . import board, monitor
-    return next((str(p) for p in board.projects() if session_name(p) == name),
-                str(monitor.home()) if monitor.name() == name else None)
+    from . import board
+    return next((str(p) for p in board.projects() if session_name(p) == name), None)
 
 
 def _input_event(name, record, event):
@@ -1027,8 +1026,8 @@ def type_into(name, text, wait=0, *, _purpose='system'):
     """Type a message into a session and send it, as if the person had; unless someone has a draft there, which
     is theirs to send, or its box isn't on screen (looked for up to `wait` seconds while it comes up): then nothing
     is typed, and False says so. Colony's own unsent line left there earlier is sent first, rather than mistaken for
-    the person's draft, and then the message: sending only the leftover lost the person's first message to the
-    steward. True only once the message has left the box. Colony's own words never go to a project the person paused
+    the person's draft, and then the message: sending only the leftover once lost the person's first message.
+    True only once the message has left the box. Colony's own words never go to a project the person paused
     (R134); theirs do."""
     if _purpose == 'system' and held(name):
         return False
@@ -1042,7 +1041,7 @@ def type_into(name, text, wait=0, *, _purpose='system'):
         if before and _purpose == 'system' and " ".join(before.split()) == " ".join(text.split()):
             return True                                  # it was this very line, left unsent earlier: now it is sent
         unscroll(name)
-        # PROVIDER: this is how the board and the steward reach an agent, and it relies on the CLI taking typed
+        # PROVIDER: this is how the board reaches an agent, and it relies on the CLI taking typed
         # text plus Enter as a message, and on Claude Code queuing it when it arrives mid-turn (urgent mail does
         # that). A provider that drops or garbles input while busy needs the watcher to wait for "idle" instead.
         try:
@@ -1268,15 +1267,15 @@ def recv_frame(sock):
     return opcode, data
 
 
-def bridge(sock, root, name=None, label=None):
+def bridge(sock, root, name=None):
     """Attach a terminal to the session and pass bytes both ways until either side leaves. Leaving
     detaches; the session keeps running. A sleeping project's (R142) is woken by a key pressed there, not by a look."""
-    size = None if label else _asleep_until_touched(sock, root, name)
+    size = _asleep_until_touched(sock, root, name)
     if size is False:
         return
-    name = ensure(root, name, label)
-    inline, up = providers_of(root, label).scrolls_in_tmux, False
-    scrollable(name, providers_of(root, label))                 # a session started before it took the mouse too
+    name = ensure(root, name)
+    inline, up = providers_of(root).scrolls_in_tmux, False
+    scrollable(name, providers_of(root))                        # a session started before it took the mouse too
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"

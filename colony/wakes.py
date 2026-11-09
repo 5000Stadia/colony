@@ -1,7 +1,7 @@
 """Timed wakes: an agent asks to be woken later, to check back on something (a build, a reply, a price), instead of
 a sleeping process or a cron job no one can see. Each is kept in its project's .board/wakes.jsonl, one row as it is
 made, one each time it fires, one if it is cancelled, so it outlives a board restart or a reboot and its use can be
-counted (KERNOS built follow-ups and its live data showed none was ever used). The steward's live under its home.
+counted (KERNOS built follow-ups and its live data showed none was ever used).
 
 Waiting costs nothing: the watcher's pass reads what is due. A due wake becomes a note from colony, handed over with
 a prompt like any other, once its console is idle (or off, which the watcher then starts) and inside the person's
@@ -95,7 +95,7 @@ def make(root, why, at=None, within=None, every=None, by="agent", now=None):
         raise ValueError("Say when: --at TIME or --in DURATION (and --every DURATION to repeat).")
     row = {"type": "made", "id": "w" + secrets.token_hex(3), "at": _stamp(now), "due": _stamp(due), "why": why,
            "by": by, **({"every": step} if step else {})}
-    (Path(root) / ".board").mkdir(parents=True, exist_ok=True)     # the steward's home may not have one yet
+    (Path(root) / ".board").mkdir(parents=True, exist_ok=True)
     board.append(root, "wakes.jsonl", row)
     return row
 
@@ -132,19 +132,16 @@ def when(w):
 def text(w):
     """The note it becomes: why, and when and by whom it was set."""
     made = time.strftime("%Y-%m-%d %H:%M", time.localtime(board.epoch(w["at"])))
+    # "steward": a wake set before the steward was retired (R152), still due
     who = {"agent": "you", "steward": "the steward", "person": "the person"}.get(w.get("by"), w.get("by") or "you")
     return f"[colony] Wake: {w['why']} (set {made} by {who})"
 
 
-def fire(root, w, now=None, steward=False):
+def fire(root, w, now=None):
     """Hand a due wake over and record it fired, with its next time if it repeats (from this firing, so missed ones
     while the board was down make one, not one each)."""
     now = hours.clock() if now is None else now
-    if steward:
-        from . import monitor
-        monitor.queue(text(w))
-    else:
-        board.add_note(root, None, text(w), author="colony", kind="wake")
+    board.add_note(root, None, text(w), author="colony", kind="wake")
     board.append(root, "wakes.jsonl", {"type": "fired", "id": w["id"], "at": _stamp(now),
                                        **({"next": _stamp(now + w["every"])} if w.get("every") else {})})
 
@@ -154,18 +151,16 @@ def tick(now=None):
     one working, or asking something, is left until its turn ends."""
     if board.restore_held():
         return
-    from . import console, monitor
+    from . import console
     now = hours.clock() if now is None else now
     if not hours.active(now):
         return
     stamp = _stamp(now)
-    places = [(p, False) for p in board.projects() if p.exists()] + [(monitor.home(), True)]
-    for root, steward in places:
+    for root in [p for p in board.projects() if p.exists()]:
         due = [w for w in waiting(root) if w["due"] <= stamp]
         if not due:
             continue
-        state = (monitor.snapshot() if steward else console.snapshot(root, lines=1))["state"]
-        if state not in ("idle", "off"):
+        if console.snapshot(root, lines=1)["state"] not in ("idle", "off"):
             continue
         for w in due:
-            fire(root, w, now, steward)
+            fire(root, w, now)

@@ -1,7 +1,9 @@
 """Warning signs (R146): whether colony's changes are making the projects' work better or worse, read over months from
 what colony already records. Not a quality score: three views kept apart, never added up.
 
-- Outcomes: items written, started, finished and still open each week, the checks they carried, the person's sign-offs.
+- Outcomes: items written, started, finished and still open each week, the checks they carried, the person's sign-offs,
+  and their verdict on each finished milestone: colony asks once, in words that never change, so answers compare over
+  months. It is the one view that can show the work getting better.
 - Friction: items reopened ([x] back to [ ] or [~]), reverts, the person's explicit corrections, dev reports (where
   colony's shape got in a project's way), and the ambiguous cases a cheap model labelled as a missed requirement or a
   defect. A change of intent is shown, never counted against the work.
@@ -95,15 +97,23 @@ SOFT = re.compile(r"\b(actually|instead|I meant|rather than|why did|why is|why d
 GUIDANCE = ("GUIDE.md", "guides")      # the guidance colony deploys, by commit of its own repository
 
 CANNOT_SHOW = [
-    "which guides an agent actually opened, or what the steward's notes changed: neither is recorded per item",
+    "which guides an agent actually opened, or what colony's notes changed: neither is recorded per item",
     "edits to the always-loaded protocol inside colony/board.py: they share commits with the rest of board.py",
     "which model or tier worked an item: transcripts are not tied to items",
     "Q Branch briefs handed at an item's start: not recorded yet; research library entries naming an item stand in",
     "the person's words typed straight into a console: only those sent through the board (messages, notes, answers) "
     "are read, since a transcript doesn't tell the person's typing from colony's",
     "a project whose roadmap isn't in git: its items have no history to read",
-    "getting better: fewer corrections can mean less inspection, and less rework less ambitious work",
+    "getting better, except through the person's verdicts: fewer corrections can mean less inspection, and less "
+    "rework less ambitious work",
 ]
+
+# The person's verdict on each finished milestone (gate g259f14eb, 2026-11-08: their verdict at milestones). The words
+# never change, so answers stay comparable; a skipped one stands as no verdict, quietly.
+VERDICT_QUESTION = "How did this turn out, compared with how this kind of work usually goes?"
+VERDICTS = ("Better", "About the same", "Worse")
+NO_VERDICT = "No verdict"
+
 
 _lock = threading.Lock()
 _running = False
@@ -629,6 +639,9 @@ def read_project(root, now=None, guides=None):
                                 and not (it.get("dropped") and stamp(it["dropped"]) < end)
                                 and ([s for t, s, _ in it["events"] if stamp(t) < end] or ["todo"])[-1] != "done")
     has_board = (Path(root) / ".board").is_dir()
+    said = verdicts(root) if has_board else []
+    for v in said:
+        at(week(v["at"])).setdefault("verdicts", []).append(v)
     coverage = {"roadmap_commits": road["commits"], "items": len(items), "commits": len(times),
                 "board_records": has_board, "weeks": sorted(weeks),
                 "note": ("no roadmap history in git" if not road["commits"] else
@@ -638,6 +651,48 @@ def read_project(root, now=None, guides=None):
             "exposure": expo, "commit_times": times,
             "clean": [{"item": r, "text": short(it["text"], 240)} for r, it in sorted(items.items())
                       if it.get("done") and not any(s["item"] == r for s in sigs)]}
+
+
+def ask_verdicts(root):
+    """Called every few seconds per project: when a milestone has newly finished, one question goes on the person's
+    list (VERDICT_QUESTION). Asked once per shared plan, by its own folder; what was finished before the first look
+    isn't asked."""
+    from . import lead
+    root = Path(root)
+    if lead.plan_root(root).resolve() != root.resolve():
+        return []
+    path = root / ".board" / "verdicts.json"
+    road = board.roadmap(root)
+    done = {m["id"]: m for m in road["milestones"] if m["items"] and all(i["state"] == "done" for i in m["items"])}
+    try:
+        asked = json.loads(path.read_text())["finished"]
+    except (OSError, ValueError, KeyError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"finished": sorted(done)}))
+        return []
+    new = [m for m in sorted(done) if m not in asked]
+    if not new:
+        return []
+    path.write_text(json.dumps({"finished": sorted(set(asked) | set(done))}))
+    return [board.add_gate(root, f"{root.name} finished {m}, {done[m]['title']}. {VERDICT_QUESTION}",
+                           why="Your verdict at each milestone is the one way colony can see the work getting better "
+                               "(your choice, Nov 8). A few words help, and skipping is fine.",
+                           options=VERDICTS, default=NO_VERDICT, verdict=m) for m in new]
+
+
+def verdicts(root):
+    """The person's verdicts on finished milestones: [{milestone, at (when it was asked), verdict, words, gate}].
+    Skipped ones aren't verdicts, nor a reply on one asked again since (a question, such as asking for a brief)."""
+    out, gs = [], board.gates(root)
+    asked_again = {g.get("reframes") for g in gs if g.get("reframes")}
+    for g in gs:
+        if not g.get("verdict") or not g["answer"] or g["answered_by"] == "colony" or g["id"] in asked_again:
+            continue
+        text = g["answer"].strip()
+        said = next((v for v in VERDICTS if text.lower().startswith(v.lower())), "")
+        out.append({"milestone": g["verdict"], "at": g["at"], "verdict": said or "in words",
+                    "words": text[len(said):].strip(" :.-—") if said else text, "gate": g["id"]})
+    return out
 
 
 def evidence(w):

@@ -1,6 +1,6 @@
 # Colony roadmap
 
-One board to follow and steer a person's long projects, each driven by its own agent, with a monitor that acts for them across the colony.
+One board to follow and steer a person's long projects, each driven by its own agent, with colony keeping watch across them.
 
 
 ## Vision
@@ -11,14 +11,16 @@ a colony that remembers why, talks within itself, and gets wiser with every proj
 its own agent, which holds a shared vision with the person, lays the path toward it, and builds each step to
 fit it and to make the next easier. The person steers; the agents carry the work, judging with the smartest
 models where judgement matters, spending lightly where it doesn't, and bringing the person only what truly
-needs them. A monitor acts for the person across the colony, within the helm they give it. The colony is more
+needs them. Colony itself keeps watch across the projects for the person, and their word reaches one project or
+many at once, as their own. The colony is more
 than projects side by side: they speak to each other, work for each other, carry what one learns to the
 others, and hold together over months and years, so the whole stands as a special and impressive execution of
 many projects as one system. Colony works from a fresh install on whichever agent programs are there, follows
 new models on its own, keeps itself current, and never gets in the way of the work.
 
 - One board: every project, its vision, its path and what waits on the person, readable on a phone.
-- The person's word is never lost: notes, direct conversation and the vision reach the agents and the monitor.
+- The person's word is never lost: notes, direct conversation and the vision reach the agents, one project or
+  several at once.
 - One colony, not silos: projects talk directly (asks, replies, nests with a shared vision), one project's
   output can be another's input, and each stays coherent with the others and with the person's direction over
   the long run.
@@ -110,6 +112,8 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R136 Active states drawn apart, helpers as dots, and the band ordered by them
 - [x] R142 Idle sessions hibernate
 - [x] R145 Send is type and Enter
+- [x] R150 Status reports
+- [x] R151 Playback steps part by part
 
 ## M3 — The monitor: acting for the person
 
@@ -118,6 +122,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R15 Supports
 - [x] R16 Scouting
 - [x] R17 A console survives a memory kill and comes back to its conversation
+- [x] R152 Tell projects, then the steward retired
 
 ## M4 — Colony on its own board
 
@@ -141,7 +146,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 
 - [x] R35 Ready to publish
 - [x] R102 A colony showcase
-- [~] R125 A fresh install can start with or without the steward — a newcomer reaches a working board; a short recheck on Claude remains, and the steward is now an advisor, muted (related: R130)
+- [~] R125 A fresh install reaches a working board — a short recheck on Claude remains; the steward choice at install goes with R152 (related: R130, R152)
 - [x] R126 Overview, Roadmap, Library and Showcase
 - [x] R128 Pictures, PDFs and tables in Chat open full screen
 - [x] R129 What the person asked colony-codex directly during Claude's pause
@@ -229,7 +234,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 
 ## M12 — Work for customers: custom workflow software, one project per customer
 
-- [ ] R149 What colony needs for a first customer's project — built as a real one shows it: the customer reaching only their app over Tailscale, their change requests reaching the project's agent, each customer walled off from the person's own projects and data; on hold: the person brainstorms it in a project of their own; colony's part is built as that project shows a need, after Friday's reset (related: R147, R94)
+- [ ] R149 What colony needs for a first customer's project — on hold: waits for the business project's first client to show what colony must build (the person, Nov 3: the business project takes it from there). Built as a real one shows it: the customer reaching only their app over Tailscale, their change requests reaching the project's agent, each customer walled off from the person's own projects and data; split decided 2026-11-07: the person's business project keeps the business and the customer's app, colony builds the bridge; the request box's contract agreed with that project 2026-11-07 (v1); then starting a project from a base, the walls and the bridge, as its first customer needs them (related: R147, R94)
 
 ## M6 — Later
 

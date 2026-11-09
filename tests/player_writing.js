@@ -30,7 +30,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
   + source.slice(allowStart, allowEnd) + source.slice(restoreStart, restoreEnd) + `
   window.testPlayer = {
     returning: returnToReading, target: textTarget, showHere, view(v) {view=v;}, of(key, name) {return observer.of(name,key);},
-    arrivals, start, begin, done, hold, skip, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
+    arrivals, start, begin, done, hold, skip, previous, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
     autoPaused: () => autoPaused(), setAutoPaused: yes => setAutoPaused(yes),
     replay(x) { return again(x, L.projects[x.p] || {}); },
     replayFrom(xs, i) { return againFrom(xs, i, L.projects); },
@@ -58,7 +58,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
 
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return {promise, resolve}; };
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
-function browser(kokoro, restore = '') {
+function browser(kokoro, restore = '', stored = {}) {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
   const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [], navigations = [], spoken = []; let gestureVersion = 0;
   let failing = false, voicePlan = null;      // clips fetched over the network that fail to play; /voice answers
@@ -72,7 +72,8 @@ function browser(kokoro, restore = '') {
   document.activeElement = null;
   document.body = {classList: {contains: () => false}};
   document.querySelector = () => null;
-  const storage = new Map([['aloud', '1'], ['automode', 'audio']]);
+  const storage = new Map([['aloud', '1'], ['automode', 'audio'], ...Object.entries(stored)]);
+  const lockScreen = {handlers: {}, setActionHandler(a, h) { this.handlers[a] = h; }};
   if (restore) {
     document.activeElement = box;
     storage.set('linenow', JSON.stringify({
@@ -117,7 +118,7 @@ function browser(kokoro, restore = '') {
   window.colonyReadingFollow = {canFollow: () => true, inChat: () => true, remaining: () => 0, version: () => gestureVersion};
   const context = vm.createContext({window, document, colonyNav: nav, Audio,
     SpeechSynthesisUtterance: class {constructor(text) {this.text = text;}},
-    navigator: {}, AbortController, location: {href: 'http://board/', pathname: '/', search: ''}, URL, URLSearchParams,
+    navigator: {mediaSession: lockScreen}, AbortController, location: {href: 'http://board/', pathname: '/', search: ''}, URL, URLSearchParams,
     Date: class extends Date {constructor(...args) {super(...(args.length ? args : [time]));} static now() {return time;}},
     localStorage: {getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k)},
     fetch: async (url, options = {}) => {
@@ -147,6 +148,10 @@ function browser(kokoro, restore = '') {
   const api = window.testPlayer;
   const row = t => ({p: '0', t, b: [[t, new Date(time).toISOString()]]});
   return {api, kokoro, sounds, resumed, spoken,
+    lock(action) { lockScreen.handlers[action](); },
+    // a reply in parts: the prose between its runs of commands, as the line holds them
+    parts(x, ks) { x.b = ks.map(k => [k, x.b[0][1]]); api.words(x.t, ks.map(k => ({k, text: k + ' part. More words.'}))); },
+    marked: () => marks.map(m => [m.get('how'), JSON.parse(m.get('keys'))['0'].join(',')]),
     failClips(yes) { failing = yes; }, voiceFails(n) { voicePlan = {fails: n, count: 0}; },
     async hide(yes) { document.hidden = yes; document.emit('visibilitychange'); await flush(); }, player: () => audios[0], hum: () => audios[1], box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
     offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
@@ -180,6 +185,73 @@ function browser(kokoro, restore = '') {
 }
 
 const cases = {
+  async 'skip steps a reply part by part, and past its last part on to the next reply'(b) {
+    const xs = await b.line(['A', 'B']); b.parts(xs[0], ['a1', 'a2', 'a3']);
+    await b.api.start(xs[0]); assert.equal(b.api.state().j, 0);
+    b.api.skip(); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().j, 1, 'one part on, not the whole reply');
+    assert.deepEqual(b.marked(), [['skipped', 'a1']], 'only the part stepped past counts skipped');
+    assert.equal(b.api.state().playing, true); assert.equal(b.api.state().paused, false);
+    b.lock('nexttrack'); await flush(); assert.equal(b.api.state().j, 2, 'the lock screen next is the same move');
+    b.api.skip(); await flush(); assert.equal(b.api.state().t, 'B', 'past the last part, the next reply');
+    assert.deepEqual(b.marked(), [['skipped', 'a1'], ['skipped', 'a2'], ['skipped', 'a3']]);
+  },
+  async 'back restarts a part heard into, and early in one goes to the part before'(b) {
+    const xs = await b.line(['A']); b.parts(xs[0], ['a1', 'a2', 'a3']);
+    await b.api.start(xs[0]); b.api.skip(); b.api.skip(); await flush(); assert.equal(b.api.state().j, 2);
+    if (b.kokoro) b.offset(8); else await b.advance(8000);
+    const sounds = b.sounds.length;
+    b.api.previous(); await flush();
+    assert.equal(b.api.state().j, 2, 'heard into, the same part from its start'); assert(b.sounds.length > sounds, 'it sounds again');
+    if (b.kokoro) assert.equal(b.offset(), 0);
+    b.api.previous(); await flush(); assert.equal(b.api.state().j, 1, 'early in it, the part before');
+    b.lock('previoustrack'); await flush(); assert.equal(b.api.state().j, 0, 'the lock screen previous is the same move');
+    assert.equal(b.api.state().playing, true); assert.equal(b.api.state().paused, false);
+    assert.equal(b.marked().length, 2, 'going back marks nothing');
+  },
+  async 'back from a reply\'s first part goes to the last part of the reply before, then that reply again'(b) {
+    const xs = await b.line(['A', 'B']); b.parts(xs[0], ['a1', 'a2']);
+    await b.api.start(xs[0]); await b.end(); assert.equal(b.api.state().j, 1); await b.end();
+    assert.equal(b.api.state().t, 'B'); const marks = b.marks.length;
+    b.api.previous(); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().j, 1, 'the reply before, at its last part');
+    assert.equal(b.api.state().playing, true);
+    b.api.previous(); await flush(); assert.equal(b.api.state().j, 0, 'and on back through it');
+    await b.end(); assert.equal(b.api.state().j, 1); await b.end();
+    assert.equal(b.api.state().t, 'B', 'then the reply gone back from'); assert.equal(b.api.state().j, 0);
+    assert.equal(b.marks.length, marks, 'what is heard again marks nothing');
+    await b.end(); assert.equal(b.api.state().t, null); assert.deepEqual(b.marked().pop(), ['heard', 'B']);
+  },
+  async 'back between replies plays the one read last, from its last part'(b) {
+    const xs = await b.line(['A']); b.parts(xs[0], ['a1', 'a2']);
+    await b.api.start(xs[0]); await b.end(); await b.end(); assert.equal(b.api.state().t, null);
+    b.api.previous(); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().j, 1);
+    await b.end(); assert.equal(b.api.state().t, null, 'and after it, quiet again');
+  },
+  async 'the replies read are kept by their keys, and back fetches their words again after a reload'(b) {
+    const xs = await b.line(['A', 'B']); b.parts(xs[0], ['a1', 'a2']);
+    await b.api.start(xs[0]); b.api.skip(); b.api.skip(); await flush(); assert.equal(b.api.state().t, 'B');
+    const kept = JSON.parse(b.storage.get('linepast'));
+    assert.deepEqual(kept.map(x => [x.t, x.ks]), [['A', ['a1', 'a2']]]);
+    assert(!JSON.stringify(kept).includes('More words'), 'kept by keys, not words');
+    b = browser(b.kokoro, '', {linepast: JSON.stringify(kept)});
+    const ys = await b.line(['B']); await b.api.start(ys[0]);
+    b.api.previous(); await flush();
+    assert.equal(b.api.state().t, 'A'); assert.equal(b.api.state().j, 1);
+    assert(b.fetches.some(u => u.pathname === '/chat/text' && u.searchParams.get('k') === 'a1,a2'), 'its words fetched again');
+  },
+  async 'a document steps back a section the same way'(b) {
+    await b.line([]);
+    const doc = b.document('book.md', ['One. A start.', 'Two. A middle.', 'Three. The end.']), p = doc.play(); doc.resolve(); await p;
+    b.api.section(2); await flush(); assert.equal(b.api.state().section, 2);
+    b.api.previous(); await flush(); assert.equal(b.api.state().section, 1, 'early in a section, the one before');
+    if (b.kokoro) b.offset(8); else await b.advance(8000);
+    b.api.previous(); await flush(); assert.equal(b.api.state().section, 1, 'heard into, the same section again');
+    b.api.previous(); await flush(); b.api.previous(); await flush();
+    assert.equal(b.api.state().section, 0, 'none before the first: it starts again'); assert.equal(b.api.state().document, true);
+    assert.equal(b.marks.length, 0);
+  },
   async 'paused Auto queues arrivals without selecting or sounding after unrelated interactions'(b) {
     await b.line([]); b.api.setAutoPaused(true);
     b.api.append(b.row('A')); b.api.append(b.row('B')); b.api.arrivals(); await flush();

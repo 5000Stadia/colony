@@ -118,15 +118,83 @@ class ProviderResumeTest(unittest.TestCase):
             self.choose('codex')
             self.assertIsNone(console.switching(self.root))
 
+    def test_what_runs_outweighs_a_start_record_that_says_otherwise(self):
+        name = console.session_name(self.root)
+        console._started(name, 'fp', 'claude')                      # the record says Claude...
+        codex = re.search(r"/versions/(\d[\w.]*)$|/releases/(\d[\d.]*)-", "/x/releases/0.167.0-linux")
+        with patch.object(console, 'running', return_value=True), patch.object(console, '_running_exe', return_value=codex):
+            self.assertEqual(console.running_program(name), 'claude', "one reading doesn't outweigh the record")
+            self.assertIsNone(console.switching(self.root))
+            console._disagreed[(name, 'codex')] -= console.DISAGREE_CONFIRM
+            self.assertEqual(console.running_program(name), 'codex')   # ...but Codex has kept running
+            self.assertEqual(console.switching(self.root), ('claude', 'codex'), "set to Claude, running Codex")
+        with patch.object(console, 'running', return_value=True), patch.object(console, '_running_exe', return_value=None):
+            self.assertEqual(console.running_program(name), 'claude', "nothing readable: the record stands")
+
+    def test_the_program_nearest_the_pane_is_the_consoles_own(self):
+        tree = {'1': ['3', '6'], '6': ['7']}                        # Claude, and a shell running a consult's codex
+        exe = {'3': '/h/.local/share/claude/versions/2.1.319', '7': '/h/.codex/releases/0.167.0-linux/codex'}
+        class R:
+            def __init__(self, out): self.stdout = out
+        def run(args, **kw):
+            return R('1\n') if args[0] == 'tmux' else R('\n'.join(tree.get(args[-1], [])))
+        def readlink(path):
+            pid = path.split('/')[2]
+            if pid in exe:
+                return exe[pid]
+            raise OSError(pid)
+        with patch.object(console.subprocess, 'run', side_effect=run), patch.object(console.os, 'readlink', side_effect=readlink):
+            self.assertEqual(console._running_exe('s').group(1), '2.1.319')
+
+    def test_a_switch_goes_ahead_while_the_wrong_program_waits_at_its_first_question(self):
+        from colony import monitor
+        m = monitor.Watcher()
+        name = console.session_name(self.root)
+        with patch.object(board, 'projects', return_value=[self.root]), \
+                patch.object(console, 'running', side_effect=lambda n: n == name), \
+                patch.object(console, 'switching', side_effect=lambda r, n, l=None: ('claude', 'codex') if n == name else None), \
+                patch.object(console, 'snapshot', return_value={'state': 'needs you'}), \
+                patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
+                patch.object(console, 'busy', return_value=None), \
+                patch.object(console, 'room', return_value=True), patch.object(console, 'reload') as reload:
+            m.current()
+            reload.assert_called_once()
+        with patch.object(board, 'projects', return_value=[self.root]), \
+                patch.object(console, 'running', side_effect=lambda n: n == name), \
+                patch.object(console, 'switching', return_value=None), patch.object(console, 'stale', return_value='an update'), \
+                patch.object(console, 'snapshot', return_value={'state': 'needs you'}), \
+                patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
+                patch.object(console, 'busy', return_value=None), \
+                patch.object(console, 'room', return_value=True), patch.object(console, 'reload') as reload:
+            m.current_checked = 0
+            m.idle_since[name] = 0
+            m.current()
+            reload.assert_not_called()                  # on its own program, a question waits for the person
+
+    def test_a_console_is_busy_if_either_its_running_or_its_set_program_sees_work(self):
+        name = console.session_name(self.root)
+        console._started(name, 'fp', 'codex')                       # read as Codex, set to Claude
+        with patch.object(providers.get('codex'), 'busy', return_value=None), \
+                patch.object(providers.get('claude'), 'busy', return_value='2 agents still at work'):
+            self.assertEqual(console.busy(self.root, name), '2 agents still at work')
+        with patch.object(providers.get('codex'), 'busy', return_value=None), \
+                patch.object(providers.get('claude'), 'busy', return_value=None):
+            self.assertIsNone(console.busy(self.root, name))
+
+    def test_a_test_board_never_sees_the_persons_projects(self):
+        real = Path(board.__file__).resolve().parent.parent / 'projects'
+        self.assertNotEqual(board.projects_home().resolve(), real.resolve())
+        self.assertFalse(any(Path(p).resolve().parent == real.resolve() for p in board.projects()),
+                         "a test's watcher once switched the person's idle console to the test's provider")
+
     def test_a_requested_switch_waits_for_nothing_but_a_safe_moment(self):
         from colony import monitor
-        m = monitor.Watcher(enabled=False)
+        m = monitor.Watcher()
         name = console.session_name(self.root)
         busy = {'why': 'a command it started is still running'}
         with patch.object(board, 'projects', return_value=[self.root]), \
-                patch.object(monitor, 'name', return_value='steward-seat'), \
                 patch.object(console, 'running', side_effect=lambda n: n == name), \
-                patch.object(console, 'switching', side_effect=lambda r, n, l: ('claude', 'codex') if n == name else None), \
+                patch.object(console, 'switching', side_effect=lambda r, n, l=None: ('claude', 'codex') if n == name else None), \
                 patch.object(console, 'snapshot', return_value={'state': 'idle'}), \
                 patch.object(console, 'drafting', return_value=False), patch.object(console, 'attached', return_value=False), \
                 patch.object(console, 'busy', side_effect=lambda *a: busy['why']), \
@@ -141,10 +209,9 @@ class ProviderResumeTest(unittest.TestCase):
 
     def test_an_update_still_waits_a_few_idle_minutes(self):
         from colony import monitor
-        m = monitor.Watcher(enabled=False)
+        m = monitor.Watcher()
         name = console.session_name(self.root)
         with patch.object(board, 'projects', return_value=[self.root]), \
-                patch.object(monitor, 'name', return_value='steward-seat'), \
                 patch.object(console, 'running', side_effect=lambda n: n == name), \
                 patch.object(console, 'switching', return_value=None), \
                 patch.object(console, 'snapshot', return_value={'state': 'idle'}), \

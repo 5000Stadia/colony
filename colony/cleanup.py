@@ -19,7 +19,9 @@ project's reading (below that, a quick payback is still not worth the person's a
 the bar sits between them; design/r139-check.md replays it over both projects' history.
 
 It names the best hotspot in one note, at the nearest seam: a milestone's end when that is at most FEW items away
-(it waits for it), otherwise now, between two items. The agent puts it to the person as one gate. Each hotspot is
+(it waits for it), otherwise now, between two items. Since it speaks only when even the worst case pays, the agent
+takes the pass there without a gate and tells the person the numbers (their choice, Nov 9: when the effort pays
+for itself, the pass is automatic); an older suggestion's gate still counts as their choice. Each hotspot is
 said once until it changes (its size by RESAY, after a full window of new readings). What was said, what the person
 chose (their answer to the gate that cites it), whether a pass was taken (the hotspot shrank), and what it then
 saved are kept in .board/cleanup.jsonl; a taken pass is measured after MEASURE_AFTER and told to the agent once, and
@@ -220,12 +222,12 @@ def update(budget=20, now=None):
         _lock.release()
         return False
     try:
-        from . import monitor, providers, tokens
+        from . import providers, tokens
         now = now or time.time()
         state, end, done = load(), time.time() + budget, True
         roots = [Path(p) for p in board.projects(board.registry(), adopt=False)]      # a look that only reads
         by_name = {r.name: str(r) for r in roots}
-        place, paths = tokens._Places(roots, monitor.home()), _Paths()
+        place, paths = tokens._Places(roots, tokens.old_steward()), _Paths()
         found = tokens.sources(keep=WINDOW + DAY)
         for f, prog in found:
             if time.time() > end:
@@ -239,7 +241,7 @@ def update(budget=20, now=None):
             if not steps:
                 continue
             if any(s[0] == "cwd" for s in steps) or "root" not in st:
-                who = tokens.owner(place(st, f), roots, monitor.home()) if st.get("cwd") else ("outside", "")
+                who = tokens.owner(place(st, f), roots, tokens.old_steward()) if st.get("cwd") else ("outside", "")
                 st["root"] = by_name.get(who[1], "") if who[0] == "project" else ""
             if st["root"]:
                 data = state["projects"].setdefault(st["root"], {"days": {}, "hours": {}})
@@ -405,10 +407,10 @@ def wording(h, seam):
     return (f"Cleanup check (colony's arithmetic on this project's reading, no model): {what} takes {h['share']:.0%} of this "
             f"project's reading, about {_short(h['weekly'])} tokens a week, re-reads counted. A pass on it alone ({how}) "
             f"would cost about {_short(h['cost'])} tokens and pay back in about {_weeks(mid)} ({_weeks(best)} to "
-            f"{_weeks(worst)}), against about {_weeks(h['horizon'])} of roadmap still to come. Suggested {seam}. Put it "
-            f"to the person as one gate with these numbers, your recommendation, and the default to skip it for now and "
-            f"carry on (nothing pauses unless they take it), naming the hotspot in its question so colony keeps their "
-            f"answer with it. If they take it, colony measures what it saved.")
+            f"{_weeks(worst)}), against about {_weeks(h['horizon'])} of roadmap still to come. Even at worst it pays, so take "
+            f"the pass {seam}, without a gate (the person's choice: a pass that pays for itself is automatic), "
+            f"leaving the Vision as it is (it is their words; a change to it is theirs), and tell them in a line with "
+            f"these numbers when you next report. Colony measures what it saved and tells you.")
 
 
 def _log(root, rec):

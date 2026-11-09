@@ -30,6 +30,40 @@ count: wc -w chapters/*.md` (a command; the first number on its last line) or `Â
 separate model reads it); colony takes it at each push and finished milestone and shows it, so it is never your own
 report.
 
+## Research flag
+
+When you write or update a roadmap item, name the decisions it turns on, each with what you'd do without research
+(your default), and ask of each:
+- Stale: is your default likely out of date, because how this kind of decision is made has moved in the past year
+  (new methods or results that change what a good design is)? A changed fact is Exact, not Stale: a version, price,
+  standard, law or program, or a tool or platform gaining or losing support. If unsure, one search for what changed
+  in the field this past year.
+- Thin: would a specialist likely find your default wrong, because the right call rests on what they know but rarely
+  publish, or on small or new work that may already exist? A field having specialists, or more detail being possible,
+  is not enough.
+- Exact: must the work use precise, current, sourced figures or facts?
+
+Flag the item (research) when a decision answers yes to Stale or Thin, and write its Research section: the trigger,
+the subject in generic words, the requirements, and each such decision with what you'd do without research. Exact
+facts behind one decision: look them up while you work, no flag. If the project's product is figures or evidence kept
+current from sources (an atlas, a dataset, a tracker), it gets a standing source entry for where they live and how
+they mislead, not flags item by item. High stakes alone are no reason: they set how deep, not whether. No yes: no
+flag; your default stands.
+
+The flag is `(research)` on the item's line, beside `(related: ...)`; the section goes in `roadmap/R#.md`, with
+nothing of the project in its subject or requirements:
+
+    ## Research
+    Trigger: Stale: memory tooling for coding agents moved this year.
+    Subject: how do long-running coding agents keep and recover what they learned across sessions?
+    Requirements: runs offline on one laptop; no paid services
+    Decisions:
+    - Which store for recalled notes? Default: plain Markdown files in the repository.
+
+Colony researches it before the item starts and hands you the result then. Later, when a change brings in a decision
+the research should cover and doesn't, and its answer could change what you do, add that decision line: only it is
+researched. Rewording, a changed default or new detail runs nothing.
+
 ## Starting an item
 
 First decide the item's brief: its details file and its related items' â€” read those, nothing more.

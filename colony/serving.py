@@ -2,7 +2,10 @@
 machine's on the person's tailnet, with a real certificate; the board at https://<name>/, and a project that serves
 (Bookflow's host) at https://<name>:<its port>/, proxied to its localhost port. A project asks with colony serve PORT
 and binds 127.0.0.1 only (Tailscale's advice: what it serves carries the person's identity headers, which a direct
-caller could otherwise forge), taking its external origin from the URL colony prints. Kept across restarts by
+caller could otherwise forge), taking its external origin from the URL colony prints. Each local port a project serves
+has an address of its own (one project served three story boards side by side, and the one address it had moved to each in
+turn, so the person's link showed another board), and a port another project serves is refused, naming it (one
+project's host came up on a port colony had served for another's, which crash-looped). Kept across restarts by
 tailscaled itself; looked at again as the board starts and every few minutes while it runs, so certificates turned on
 later are taken up with no restart; a project's goes when it leaves the board.
 
@@ -25,11 +28,13 @@ def _path():
 
 
 def records():
-    """{project folder: {"port": its local port, "https": its https port}}."""
+    """{project folder: [{"port": a local port it serves, "https": that one's https port}, ...]} (a record from before a
+    project could serve several held one row, not a list)."""
     try:
-        return json.loads(_path().read_text())
+        rows = json.loads(_path().read_text())
     except (OSError, ValueError):
         return {}
+    return {k: [v] if isinstance(v, dict) else list(v) for k, v in rows.items()}
 
 
 def _save(rows):
@@ -82,39 +87,54 @@ def ensure_board(port):
 
 
 def add(root, port):
-    """Serve a project's local port over HTTPS, on a port of its own (the same one again if it had one). Its URL;
-    ValueError with what stands in the way."""
+    """Serve one of a project's local ports over HTTPS, at an address of its own (the same one again for a port it
+    serves already). Its URL; ValueError with what stands in the way, a port another project serves among it."""
     why = ready()
     if why:
         raise ValueError(why)
-    rows, key = records(), str(Path(root).resolve())
+    rows, key, port = records(), str(Path(root).resolve()), int(port)
+    for k, rs in rows.items():
+        for r in rs:
+            if k != key and r["port"] == port:
+                raise ValueError(f"port {port} is served for {board.name_of(Path(k))} at {tailscale.url(r['https'])}: "
+                                 "listen on a free port, and serve that")
     now = tailscale.served()
-    mine = rows.get(key, {}).get("https")
-    used = {r["https"] for k, r in rows.items() if k != key} | {h for h, local in now.items() if h != mine}
-    https = mine if mine and mine not in used else next(
-        h for h in range(tailscale.FIRST, tailscale.FIRST + 200) if h not in used and (h == mine or not _taken(h)))
-    err = tailscale.serve(https, int(port))
+    mine = next((r["https"] for r in rows.get(key, []) if r["port"] == port), None)
+    used = {r["https"] for rs in rows.values() for r in rs if r["https"] != mine} | {h for h in now if h != mine}
+    https = mine if mine else next(h for h in range(tailscale.FIRST, tailscale.FIRST + 200) if h not in used and not _taken(h))
+    err = tailscale.serve(https, port)
     if err:
         raise ValueError(f"tailscale serve: {err}")
-    rows[key] = {"port": int(port), "https": https}
+    rows[key] = [r for r in rows.get(key, []) if r["port"] != port] + [{"port": port, "https": https}]
     _save(rows)
     return tailscale.url(https)
 
 
-def remove(root):
-    """A project's HTTPS ended (colony serve --off, or the project leaving the board). Whether it had one."""
+def remove(root, port=None):
+    """A project's HTTPS ended for one local port (colony serve --off PORT), or for all it serves (--off, or the project
+    leaving the board). Whether anything was served."""
     rows, key = records(), str(Path(root).resolve())
-    had = rows.pop(key, None)
+    had = [r for r in rows.get(key, []) if port is None or r["port"] == int(port)]
+    for r in had:
+        tailscale.unserve(r["https"])
     if had:
-        tailscale.unserve(had["https"])
+        left = [r for r in rows.get(key, []) if r not in had]
+        if left:
+            rows[key] = left
+        else:
+            rows.pop(key, None)
         _save(rows)
     return bool(had)
 
 
+def served(root):
+    """What a project serves: [(its https address, the local port), ...]."""
+    return [(tailscale.url(r["https"]), r["port"]) for r in records().get(str(Path(root).resolve()), [])]
+
+
 def of(root):
-    """A project's HTTPS address, or None."""
-    had = records().get(str(Path(root).resolve()))
-    return tailscale.url(had["https"]) if had else None
+    """A project's HTTPS address (its first, where it serves several), or None."""
+    return next((url for url, _ in served(root)), None)
 
 
 def restore(port):
@@ -124,11 +144,13 @@ def restore(port):
     ensure_board(port)
     on = {str(Path(p).resolve()) for p in board.projects()}
     now = tailscale.served()
-    for key, r in list(records().items()):
+    for key, rs in list(records().items()):
         if key not in on:
             remove(key)
-        elif now.get(r["https"]) != r["port"]:
-            tailscale.serve(r["https"], r["port"])
+            continue
+        for r in rs:
+            if now.get(r["https"]) != r["port"]:
+                tailscale.serve(r["https"], r["port"])
 
 
 def keep(port):

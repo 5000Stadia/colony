@@ -19,7 +19,7 @@ class SelectionTest(unittest.TestCase):
         self.addCleanup(env.stop)
         self.a = {'model': 'a-1', 'effort': 'low', 'why': 'Measured'}
         self.b = {'model': 'b-2', 'effort': 'high', 'why': 'Measured'}
-        self.picks = {'test:main': self.a, 'test:monitor': self.a}
+        self.picks = {'test:main': self.a, 'test:consultant': self.a}
         class Provider(providers.Provider):
             label = 'Test provider'
             models = [('a-1', 'A'), ('b-2', 'B')]
@@ -28,7 +28,7 @@ class SelectionTest(unittest.TestCase):
         for target, name, value in ((providers, 'PROVIDERS', {'test': Provider()}),
                                     (providers, 'usable', lambda p: True),
                                     (providers, 'DEFAULT', 'test'),
-                                    (selection, 'ROLES', ('main', 'monitor')),
+                                    (selection, 'ROLES', ('main', 'consultant')),
                                     (selection.bench, 'token_price', lambda m: (1, 2) if m == 'a-1' else (2, 4)),
                                     (selection, 'recommendations', lambda s: {k: copy.deepcopy(v) for k, v in self.picks.items()
                                      if v['model'] not in s['rejected'] and selection.pair(v) not in s['blocked'].get(k, [])})):
@@ -46,10 +46,10 @@ class SelectionTest(unittest.TestCase):
         first = selection.reconcile()
         self.assertEqual(selection.auto('test', 'main')['model'], 'a-1')
         proposal = first['pending']['b-2']
-        self.assertEqual(set(proposal['roles']), {'test:main', 'test:monitor'})
+        self.assertEqual(set(proposal['roles']), {'test:main', 'test:consultant'})
         self.assertEqual(selection.reconcile()['pending']['b-2']['id'], proposal['id'])
         selection.decide('b-2', proposal['id'], 'approve')
-        self.assertEqual(selection.auto('test', 'monitor')['model'], 'b-2')
+        self.assertEqual(selection.auto('test', 'consultant')['model'], 'b-2')
         self.assertFalse(selection.read()['pending'])
 
     def test_rejection_survives_restart_and_automatic_policy(self):
@@ -83,7 +83,7 @@ class SelectionTest(unittest.TestCase):
         selection.rollback(st['history'][-1]['id'])
         self.assertEqual(selection.reconcile()['accepted']['test:main']['effort'], 'low')
         self.assertNotIn('a-1', selection.read()['rejected'])
-        self.assertEqual(selection.auto('test', 'monitor')['model'], 'a-1')
+        self.assertEqual(selection.auto('test', 'consultant')['model'], 'a-1')
 
     def test_return_can_be_reversed_but_an_old_button_cannot_replay(self):
         selection.reconcile()
@@ -129,7 +129,7 @@ class SelectionTest(unittest.TestCase):
             state['accepted']['test:runtime'] = dict(self.a)
         accepted = selection.reconcile()['accepted']
         self.assertNotIn('test:runtime', accepted)
-        self.assertEqual(set(accepted), {'test:main', 'test:monitor'})
+        self.assertEqual(set(accepted), {'test:main', 'test:consultant'})
 
 
 from tests.test_board import BoardBase
@@ -140,19 +140,18 @@ class IntegrationTest(BoardBase):
         board.set_setting('provider', 'claude')
         def picked(family, role, entries, **kwargs):
             return {'model': 'gpt-6-astra' if family == 'codex' else 'claude-opus-5-5',
-                    'effort': 'xhigh' if role == 'monitor' else 'high', 'why': 'Fixture role policy'}
+                    'effort': 'xhigh' if role == 'consultant' else 'high', 'why': 'Fixture role policy'}
         with patch.object(providers, 'usable', return_value=True), \
                 patch.object(selection.bench, 'standings', return_value=[]), \
                 patch.object(selection.bench, 'role_pick', side_effect=picked):
             selection.reconcile()
             with selection.transaction() as state:
-                for role in ('monitor', 'main'):
+                for role in ('consultant', 'main'):
                     state['accepted']['codex:' + role]['effort'] = 'medium'
             settled = selection.reconcile()
-            self.assertEqual(settled['accepted']['codex:monitor']['effort'], 'xhigh')
+            self.assertEqual(settled['accepted']['codex:consultant']['effort'], 'xhigh')
             self.assertEqual(settled['accepted']['codex:main']['effort'], 'high')
             self.assertEqual(board.registry()['settings']['provider'], 'claude')
-            self.assertEqual(selection.monitor()['model'], 'claude-opus-5-5')
             self.assertEqual(selection.main()['model'], 'claude-opus-5-5')
 
     def test_legacy_form_pins_and_aliases_migrate_once_real_pins_survive(self):
@@ -178,40 +177,16 @@ class IntegrationTest(BoardBase):
         self.assertFalse(selection.main(root)['own'])
         self.assertNotIn('routine', selection.bench.plan(root))
 
-    def test_the_steward_defaults_to_a_cheaper_model_unless_the_person_picked_one(self):
-        # an advisor only (the person, 2026-11-01): Sonnet 5.5 where Claude Code runs it, by its steward_model
-        from colony import monitor
-        board.set_setting('provider', 'claude')
-        claude = providers.get('claude')
-        self.assertEqual(claude.steward_model, 'claude-sonnet-5-5')
-        lineup = list(claude.models) + [('claude-sonnet-5-5', 'Sonnet 5.5')]
-        with patch.object(providers, 'available', side_effect=lambda p: lineup if p is claude else list(p.models)):
-            chosen = selection.monitor()
-            self.assertEqual((chosen['model'], chosen['own']), ('claude-sonnet-5-5', False))
-            self.assertIn("colony's default for the steward", chosen['why'])
-            self.assertEqual(monitor.choice()[0], 'claude-sonnet-5-5', "what its console starts on")
-            board.set_setting('monitor_model', 'claude-opus-5-5:high')
-            self.assertEqual(selection.pair(selection.monitor()), {'model': 'claude-opus-5-5', 'effort': 'high'},
-                             "the person's pick wins")
-            board.set_setting('monitor_model', 'auto')
-            self.assertEqual(selection.monitor()['model'], 'claude-sonnet-5-5', "back to colony's default")
-        # where the program can't run it here, the Auto pick stands, as before
-        self.assertEqual(selection.monitor()['model'], selection.auto('claude', 'monitor')['model'])
-        self.assertIsNone(providers.get('codex').steward_model, "Codex keeps its Auto pick")
-
     def test_global_and_project_pins_are_scoped_to_their_provider(self):
         board.set_setting('model', 'claude-opus-5-5')
         board.set_setting('effort', 'high')
-        board.set_setting('monitor_model', 'claude-sonnet-5:low')
         board.project_settings(self.root, {'provider': 'codex'})
         self.assertTrue(selection.main(self.root)['model'].startswith('gpt-'))
         board.set_setting('provider', 'codex')
-        self.assertTrue(selection.monitor()['model'].startswith('gpt-'))
         board.set_setting('model', 'gpt-6-astra')
         board.set_setting('effort', 'max')
         board.set_setting('provider', 'claude')
         self.assertEqual(selection.main()['model'], 'claude-opus-5-5')
-        self.assertEqual(selection.monitor()['model'], 'claude-sonnet-5')
 
     def test_proposal_includes_pinned_project_and_cannot_leak_to_monitor_queue(self):
         from colony import console
@@ -270,11 +245,10 @@ class IntegrationTest(BoardBase):
             server.shutdown()
             server.server_close()
 
-    def test_monitor_consultant_and_codex_helpers_use_the_same_accepted_pairs(self):
-        from colony import bench, console, consult, monitor
+    def test_consultant_and_codex_helpers_use_the_same_accepted_pairs(self):
+        from colony import bench, console, consult
         board.track(self.root)
         with patch.object(console, 'COMMAND', None):
-            self.assertEqual(monitor.choice()[:2], tuple(selection.pair(selection.auto('claude', 'monitor')).values()))
             self.assertEqual(consult.pick('codex')[:2], tuple(selection.pair(selection.auto('codex', 'consultant')).values()))
             board.project_settings(self.root, {'provider': 'codex'})
             bench.write_helpers(self.root)

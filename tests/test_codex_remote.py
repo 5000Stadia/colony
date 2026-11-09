@@ -141,8 +141,7 @@ class NativeRemoteTest(unittest.TestCase):
         root = Path(self.tmp.name) / 'fresh'
         root.mkdir(exist_ok=True)
         from colony import context
-        with patch.object(context, 'seat', return_value='console'), patch.object(context, 'is_monitor', return_value=False), \
-                patch.dict(os.environ, COLONY_CONSOLE='console'):
+        with patch.object(context, 'seat', return_value='console'), patch.dict(os.environ, COLONY_CONSOLE='console'):
             home = remote.home_for(root); home.mkdir(parents=True, exist_ok=True)
             self.assertTrue(remote.accepts_hook(root, {'session_id': 'first', 'transcript_path': '/x'}))
             self.assertEqual(remote.read_json(home / 'colony-thread.json')['thread'], 'first')
@@ -674,34 +673,24 @@ class CheckWantedTest(unittest.TestCase):
 
 
 class PairingTest(unittest.TestCase):
-    def test_first_connection_offers_once_through_claude_monitor_without_creating_code(self):
+    def test_first_connection_has_the_projects_own_agent_ask_once_without_creating_code(self):
         with tempfile.TemporaryDirectory() as folder, \
                 patch.dict(os.environ, COLONY_BOARD_HOME=folder), patch.object(remote, 'Client') as client:
-            board.save_registry({'roots': [], 'settings': {'provider': 'claude'}})
-            root = Path(folder) / 'codex-project'
-            remote.offer_pairing(root)
-            remote.offer_pairing(root)
-            queued = (board.home() / 'to_monitor.jsonl').read_text().splitlines()
-            self.assertEqual(len(queued), 1)
-            self.assertIn('colony pair codex-project', json.loads(queued[0])['text'], 'the monitor relays a fresh code on yes')
-            self.assertIn('never in a note', json.loads(queued[0])['text'])
-            self.assertEqual(remote.pairing_choice(root), 'offered')
-            remote.pairing_choice(root, 'deferred')
-            remote.offer_pairing(root)
-            self.assertEqual((board.home() / 'to_monitor.jsonl').read_text().splitlines(), queued)
-            self.assertEqual(remote.pairing_choice(root), 'deferred')
-            client.assert_not_called()
-
-    def test_without_the_monitor_the_projects_own_agent_asks(self):
-        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, COLONY_BOARD_HOME=folder):
-            board.save_registry({'roots': [], 'settings': {'provider': 'codex', 'monitor': False}})
+            board.save_registry({'roots': [], 'settings': {'provider': 'codex'}})
             root = Path(folder) / 'codex-project'
             (root / '.board').mkdir(parents=True)
             remote.offer_pairing(root)
-            self.assertFalse((board.home() / 'to_monitor.jsonl').exists())
+            remote.offer_pairing(root)
             [note] = board.notes(root)
             self.assertEqual(note['author'], 'colony')
-            self.assertIn('colony pair codex-project', note['text'])
+            self.assertIn('colony pair codex-project', note['text'], 'its agent hands the person a fresh code on yes')
+            self.assertIn('never in a note', note['text'])
+            self.assertEqual(remote.pairing_choice(root), 'offered')
+            remote.pairing_choice(root, 'deferred')
+            remote.offer_pairing(root)
+            self.assertEqual(len(board.notes(root)), 1, 'asked once')
+            self.assertEqual(remote.pairing_choice(root), 'deferred')
+            client.assert_not_called()
 
     def test_pair_and_check_use_existing_project_socket_and_only_return_manual_code(self):
         with patch.object(remote, 'home_for', return_value=Path('/owned/project')), \
@@ -736,11 +725,11 @@ class PairingTest(unittest.TestCase):
             self.assertNotIn('private-code', str(caught.exception))
 
 
-class StewardRemoteTest(unittest.TestCase):
+class RemoteLaunchTest(unittest.TestCase):
     def setUp(self):
-        from colony import monitor, providers
-        self.monitor, self.codex = monitor, providers.get('codex')
-        self.tmp = tempfile.TemporaryDirectory(prefix='colony-steward-remote-test-')
+        from colony import providers
+        self.codex = providers.get('codex')
+        self.tmp = tempfile.TemporaryDirectory(prefix='colony-remote-launch-test-')
         self.addCleanup(self.tmp.cleanup)
         base = Path(self.tmp.name)
         self.source = base / 'source'
@@ -751,16 +740,10 @@ class StewardRemoteTest(unittest.TestCase):
                          COLONY_CODEX_SOURCE_HOME=str(self.source))
         env.start()
         self.addCleanup(env.stop)
-        board.save_registry({'roots': [], 'settings': {'provider': 'codex', 'remote': True,
-                                                       'steward_name': 'Juniper', 'messaging': False}})
-        self.root = monitor.home()
+        board.save_registry({'roots': [], 'settings': {'provider': 'codex', 'remote': True, 'messaging': False}})
+        self.root = base / 'project'
         (self.root / '.board').mkdir(parents=True)
-        self.project = base / 'project'
-        (self.project / '.board').mkdir(parents=True)
-        self.project_record = self.project / '.board' / 'settings.json'
-        self.project_record.write_text('{"provider":"codex"}')
-        self.project_home = remote.home_for(self.project)
-        remote.atomic_json(self.project_home / 'colony-thread.json', {'thread': 'project-thread'})
+        (self.root / '.board' / 'settings.json').write_text('{"provider":"codex"}')
         self.settings = dict(model='fixture', effort='high', permissions='all', remote=True)
 
     def test_launch_passes_permissions_only_to_a_fresh_remote_console(self):
@@ -784,241 +767,8 @@ class StewardRemoteTest(unittest.TestCase):
                 self.assertFalse(any(arg.startswith('sandbox_workspace_write.') for arg in args))
                 if resume:
                     self.assertEqual(args[-2:], ['resume', resume])
-                    rpc.call.assert_any_call('thread/resume', dict(cwd=str(self.root), model='fixture',
+                    rpc.call.assert_any_call('thread/resume', dict(cwd=str(remote.workdir(self.root)), model='fixture',
                         approvalPolicy='never', sandbox='danger-full-access',
                         config={'model_reasoning_effort': 'high'}, threadId=resume, excludeTurns=True))
 
-    def test_console_launch_uses_steward_folder_and_resumes_its_conversation(self):
-        import shlex
-        from colony import context, selection, providers
-        transcript = self.source / 'rollout.jsonl'
-        transcript.write_text('{"type":"session_meta"}\n')
-        remote.atomic_json(context.file(self.root, 'context-session.json'),
-                           dict(provider='codex', id='steward-thread', path=str(transcript)))
-        with patch.object(console, 'COMMAND', None), patch.object(selection, 'migrate'), \
-                patch.object(self.monitor, 'choice', return_value=('fixture', 'high', None)), \
-                patch.object(providers, 'installed', return_value=True), \
-                patch.object(console, 'running', return_value=False), \
-                patch.object(console, 'contained', side_effect=lambda cmd, name: cmd), \
-                patch.object(console, 'fingerprint', return_value='fingerprint'), \
-                patch.object(console, 'scrollable'), patch.object(console.subprocess, 'run') as run:
-            console.ensure(self.root, self.monitor.name(), 'monitor')
-            cmd = run.call_args_list[0].args[0]
-            self.assertEqual(cmd[cmd.index('-c') + 1], str(self.root))
-            launch = shlex.split(cmd[cmd.index('-e') + 4].split('\n')[0])
-            self.assertIn('colony.codex_remote', launch)
-            self.assertEqual(launch[launch.index('--project') + 1], str(self.root))
-            self.assertEqual(launch[launch.index('--resume') + 1], 'steward-thread')
-            self.assertTrue(json.loads(launch[launch.index('--settings') + 1])['remote'])
-            run.reset_mock()
-            board.set_setting('provider', 'claude')
-            with patch.object(providers.get('claude'), 'token', return_value=None):
-                command = console.command('monitor', folder=self.root)
-            self.assertNotIn('colony.codex_remote', command)
-            self.assertIn('--remote-control Juniper', command)
 
-    def test_host_launch_and_resume_use_only_the_stewards_home_and_seat(self):
-        from unittest.mock import Mock
-        from colony import context
-        class Exec(BaseException):
-            pass
-        home = remote.home_for(self.root)
-        self.assertEqual(home, board.home() / 'codex-remote' / 'steward')
-        self.assertNotEqual(home, self.project_home)
-        socket = remote.socket_for(home)
-        socket.parent.mkdir(parents=True)
-        socket.touch()
-        transcript = home / 'rollout.jsonl'
-        transcript.write_text('{"type":"session_meta"}\n')
-        process = Mock(pid=987654321)
-        process.poll.return_value = None
-        self.addCleanup(remote._processes.pop, process.pid, None)
-        def reply(method, params=None):
-            if method == 'remoteControl/status/read':
-                return dict(status='connected', serverName='fixture host')
-            if method == 'thread/resume':
-                return dict(model='fixture', reasoningEffort='high', approvalPolicy='never',
-                            sandbox={'type': 'dangerFullAccess'},
-                            thread={'id': 'steward-thread', 'path': str(transcript)})
-            return {}
-        with patch.object(self.codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]), \
-                patch.object(bench, 'effective', return_value={}), \
-                patch.object(remote, 'alive', return_value=False), \
-                patch.object(remote, 'process_start', return_value='fixture-start'), \
-                patch.object(remote, 'trust_hooks'), patch.object(remote, 'transfer') as transfer_thread, \
-                patch.object(remote, 'Client') as client, \
-                patch.object(remote.subprocess, 'Popen', return_value=process) as popen, \
-                patch.object(remote.os, 'execvpe', side_effect=Exec) as execute:
-            rpc = client.return_value.__enter__.return_value
-            rpc.call.side_effect = reply
-            with self.assertRaises(Exec):
-                remote.launch(self.root, self.settings, 'steward-thread')
-            transfer_thread.assert_called_once_with(self.source, home, 'steward-thread')
-            args, kw = popen.call_args
-            self.assertEqual(args[0][:2], ['codex', 'app-server'])
-            self.assertIn('unix://' + str(socket), args[0])
-            self.assertEqual(kw['cwd'], self.root)
-            self.assertEqual(kw['env']['CODEX_HOME'], str(home))
-            self.assertEqual(kw['env']['COLONY_PROJECT'], str(self.root))
-            self.assertEqual(kw['env']['COLONY_CONSOLE'], self.monitor.name())
-            self.assertEqual(execute.call_args.args[2]['COLONY_CONSOLE'], self.monitor.name())
-            self.assertIn('steward-thread', execute.call_args.args[1])
-            rpc.call.assert_any_call('thread/resume', dict(cwd=str(self.root), model='fixture',
-                approvalPolicy='never', sandbox='danger-full-access', config={'model_reasoning_effort': 'high'},
-                threadId='steward-thread', excludeTurns=True))
-            rpc.call.assert_any_call('thread/name/set', {'threadId': 'steward-thread', 'name': 'Juniper'})
-        self.assertEqual(context.session(self.root)['id'], 'steward-thread')
-        self.assertEqual(remote.status(self.root)['mode'], 'connected')
-        self.assertEqual(remote.read_json(self.project_home / 'colony-thread.json'), {'thread': 'project-thread'})
-        self.assertEqual(self.project_record.read_text(), '{"provider":"codex"}')
-        self.assertFalse((self.project_home / 'colony-daemon.json').exists())
-        self.assertEqual(remote.pairing_choice(self.root), 'offered')
-        self.assertIn('steward page', (board.home() / 'to_monitor.jsonl').read_text())
-
-    def test_remote_off_never_starts_a_host_and_keeps_owned_history(self):
-        home = remote.home_for(self.root)
-        home.mkdir(parents=True)
-        (home / 'colony-owned').touch()
-        with patch.object(self.codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]), \
-                patch.object(remote, 'alive', return_value=False), patch.object(remote, 'start') as start, \
-                patch.object(remote, 'local', return_value=0) as local:
-            self.assertEqual(remote.launch(self.root, dict(self.settings, remote=False), 'steward-thread'), 0)
-            start.assert_not_called()
-            local.assert_called_once_with(self.root, dict(self.settings, remote=False), 'steward-thread', home)
-            self.assertEqual(remote.status(self.root)['mode'], 'off')
-
-    def test_explicit_stop_ends_only_steward_host_and_claude_has_no_host(self):
-        with patch.object(self.monitor.subprocess, 'run') as run, patch.object(remote, 'stop_host') as stop, \
-                patch.object(console, 'running_program', return_value=None):
-            self.monitor.stop()
-            run.assert_called_once_with(['tmux', 'kill-session', '-t', self.monitor.name()], capture_output=True)
-            stop.assert_called_once_with(self.root)
-            stop.reset_mock()
-            board.set_setting('provider', 'claude')
-            self.monitor.stop()
-            stop.assert_not_called()
-        self.assertEqual(remote.read_json(self.project_home / 'colony-thread.json'), {'thread': 'project-thread'})
-
-    def test_hooks_adopt_only_the_steward_conversation_and_name_it_for_the_app(self):
-        with patch.dict(os.environ, COLONY_CONSOLE=self.monitor.name()), patch.object(remote, 'Client') as client:
-            self.assertTrue(remote.accepts_hook(self.root, {'session_id': 'steward-thread'}))
-            client.return_value.__enter__.return_value.call.assert_called_once_with(
-                'thread/name/set', {'threadId': 'steward-thread', 'name': 'Juniper'})
-            self.assertFalse(remote.accepts_hook(self.root, {'session_id': 'another-thread'}))
-            self.assertFalse(remote.accepts_hook(self.root, {'session_id': 'helper', 'agent_id': 'helper'}))
-            self.assertTrue(remote.accepts_hook(self.root, {'session_id': 'steward-thread'}))
-        with patch.dict(os.environ, COLONY_CONSOLE=console.session_name(self.project)):
-            self.assertFalse(remote.accepts_hook(self.root, {'session_id': 'steward-thread'}))
-
-    def test_page_and_setup_name_the_pairing_place(self):
-        with patch.object(board, 'MONITOR', None), patch.object(board, 'switch_line', return_value=''), \
-                patch.object(board, 'shell', side_effect=lambda reg, pid, body, **kw: body), \
-                patch.object(remote, 'alive', return_value=True), patch.object(remote, 'paired', return_value=False), \
-                patch('colony.codex_rpc.Client') as client:
-            client.return_value.__enter__.return_value.call.return_value = {'status': 'connected'}
-            page = board.monitor_page(board.registry(), view='console')
-            self.assertIn('In ChatGPT: not paired yet', page)
-            self.assertIn('Connect to ChatGPT', page)
-            self.assertIn("name='project' value='" + str(self.root) + "'", page)
-            self.assertIn('Juniper', board.codex_pairing_options(board.registry()))
-            self.assertIn('Connect to ChatGPT', self.monitor.ROLE)
-            board.set_setting('provider', 'claude')
-            self.assertNotIn('Connect to ChatGPT', board.monitor_page(board.registry(), view='console'))
-
-    def test_cleanup_keeps_and_stops_steward_without_touching_project_host(self):
-        home = remote.home_for(self.root)
-        for root, folder, pid in ((self.root, home, 11001), (self.project, self.project_home, 11002)):
-            remote.atomic_json(folder / 'colony-daemon.json', {'project': str(root), 'pid': pid, 'start': 'fixture'})
-        live = {home, self.project_home}
-        def kill(pid, sig):
-            self.assertEqual(pid, 11001)
-            live.discard(home)
-        with patch.object(remote, 'alive', side_effect=lambda folder: folder in live), \
-                patch.object(remote.os, 'kill', side_effect=kill) as signal_host, \
-                patch.object(self.monitor.subprocess, 'run'), patch.object(console, 'running_program', return_value='codex'):
-            self.assertEqual(remote.hosts({str(self.root), str(self.project)}), {11001, 11002})
-            self.assertEqual(remote.let_go({str(self.root), str(self.project)}), [])
-            self.monitor.stop()
-            self.assertEqual(signal_host.call_count, 1)
-            self.assertEqual(live, {self.project_home})
-            self.assertEqual(remote.hosts({str(self.root), str(self.project)}), {11002})
-
-    def test_turning_remote_off_drains_only_the_steward_host(self):
-        home = remote.home_for(self.root)
-        with patch.object(self.codex, 'version', return_value='codex-cli ' + remote.TESTED_VERSIONS[-1]), \
-                patch.object(remote, 'alive', return_value=True), patch.object(remote, 'start') as start, \
-                patch.object(remote, 'drain', return_value=True) as drain, patch.object(remote, 'local', return_value=0):
-            self.assertEqual(remote.launch(self.root, dict(self.settings, remote=False), 'steward-thread'), 0)
-            drain.assert_called_once_with(home)
-            start.assert_not_called()
-
-    def test_steward_pairing_routes_use_its_existing_host_and_reject_other_folders(self):
-        import urllib.request
-        import urllib.error
-        import urllib.parse
-        server = ThreadingHTTPServer(('127.0.0.1', 0), board.Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(thread.join)
-        self.addCleanup(server.server_close)
-        self.addCleanup(server.shutdown)
-        base = f'http://127.0.0.1:{server.server_address[1]}'
-        def post(path, root=None, origin=None, **values):
-            data = urllib.parse.urlencode(dict(project=str(root or self.root), **values)).encode()
-            return urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers={'Origin': origin or base}))
-        with patch.object(remote, 'alive', return_value=True), patch.object(remote, 'Client') as client:
-            rpc = client.return_value.__enter__.return_value
-            rpc.call.return_value = dict(manualPairingCode='STEWARD-CODE', expiresAt=int(time.time()) + 180)
-            with post('/codex-pair') as response:
-                page = response.read().decode()
-                self.assertEqual(response.headers['Cache-Control'], 'no-store')
-                self.assertIn('Pair Juniper with ChatGPT', page)
-                self.assertIn('STEWARD-CODE', page)
-                self.assertIn('Add manually', page)
-                self.assertIn("href='/steward'", page)
-            client.assert_called_once_with(remote.socket_for(remote.home_for(self.root)), timeout=40)
-            rpc.call.return_value = {'claimed': True}
-            with post('/codex-pair/status', code='STEWARD-CODE') as response:
-                self.assertEqual(json.load(response), {'claimed': True})
-            self.assertEqual(remote.pairing_choice(self.root), 'paired')
-            self.assertIsNone(remote.pairing_choice(self.project))
-            self.assertNotIn('STEWARD-CODE', (remote.home_for(self.root) / 'colony-pairing.json').read_text())
-            client.reset_mock()
-            for values, expected in (({'root': self.project}, 404), ({'origin': 'https://elsewhere.example'}, 403)):
-                with self.assertRaises(urllib.error.HTTPError) as caught:
-                    post('/codex-pair', **values)
-                self.assertEqual(caught.exception.code, expected)
-            board.set_setting('provider', 'claude')
-            with self.assertRaises(urllib.error.HTTPError) as caught:
-                post('/codex-pair')
-            self.assertEqual(caught.exception.code, 404)
-            client.assert_not_called()
-
-    def test_stop_uses_running_provider_while_a_switch_is_pending(self):
-        board.set_setting('provider', 'claude')
-        with patch.object(self.monitor.subprocess, 'run'), patch.object(remote, 'stop_host') as stop, \
-                patch.object(console, 'running_program', return_value='codex'):
-            self.monitor.stop()
-            stop.assert_called_once_with(self.root)
-
-    def test_first_session_hook_keeps_steward_bookmark_across_provider_switch(self):
-        from types import SimpleNamespace
-        from colony import cli, context, providers, selection
-        paths = {'codex': self.source / 'codex.jsonl', 'claude': self.source / 'claude.jsonl'}
-        paths['codex'].write_text('{"type":"session_meta"}\n')
-        paths['claude'].write_text('{"type":"user","message":{"content":"Hello"}}\n')
-        with patch.dict(os.environ, COLONY_CONSOLE=self.monitor.name(), COLONY_PROJECT=str(self.root)), \
-                patch.object(remote, 'Client'), patch.object(providers, 'discover'), patch('builtins.print'), \
-                patch.object(Path, 'cwd', return_value=self.root):
-            for family in ('codex', 'claude'):
-                board.set_setting('provider', family)
-                payload = dict(session_id=family + '-steward', transcript_path=str(paths[family]),
-                               cwd=str(self.root), hook_event_name='SessionStart')
-                with patch.object(cli, '_hook_input', return_value=payload):
-                    cli.cmd_notes(SimpleNamespace(deliver=True, session=True, console=family))
-                self.assertEqual(console.saved_conversation(self.root, family)['conversation'], family + '-steward')
-        board.set_setting('provider', 'codex')
-        self.assertEqual(context.session(self.root)['id'], 'codex-steward')
-        with patch.object(console, 'COMMAND', None), patch.object(selection, 'migrate'), \
-                patch.object(self.monitor, 'choice', return_value=('fixture', 'high', None)):
-            self.assertIn('--resume codex-steward', console.command('monitor', folder=self.root))

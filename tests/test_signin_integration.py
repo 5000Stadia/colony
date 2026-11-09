@@ -22,7 +22,7 @@ class SigninIntegrationTest(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.dict(os.environ, COLONY_BOARD_HOME=str(self.folder / 'board')))
         board.save_registry({'roots': [], 'settings': {'active_hours': 'off', 'messaging': False,
-                                                     'monitor': False, 'auto_update': False}})
+                                                     'auto_update': False}})
         self.claude, self.codex = providers.get('claude'), providers.get('codex')
 
     def patch(self, target, name, **kwargs):
@@ -122,22 +122,19 @@ class SigninIntegrationTest(unittest.TestCase):
         self.patch(monitor.time, 'time', side_effect=lambda: self.clock[0])
         self.native_tick = self.patch(signin, 'tick')
         self.observed = self.patch(signin, 'observe')
-        self.queued = self.patch(monitor, 'queue', side_effect=AssertionError('sign-in detection must not queue an agent'))
         self.patch(console, 'type_into', side_effect=AssertionError('sign-in detection must not type into an agent'))
-        self.watcher = monitor.Watcher(enabled=False)
+        self.watcher = monitor.Watcher()
         self.watcher.signin_observed = 0
         return self.watcher
 
-    def test_watcher_auth_detection_works_with_steward_off_muted_and_is_rate_limited(self):
+    def test_watcher_auth_detection_is_rate_limited(self):
         watcher = self.observation_fixture()
-        with patch.object(monitor, 'muted', return_value=True):
-            watcher.signin()
-            watcher.signin()
+        watcher.signin()
+        watcher.signin()
         self.native_tick.assert_called()
         self.assertEqual(self.observed.call_count, 1, 'native scheduling continues but screens are observed at most every 30 seconds')
         self.assertEqual(self.observed.call_args.args[0], 'claude')
         self.assertEqual(self.observed.call_args.args[1]['code'], 'authentication')
-        self.queued.assert_not_called()
 
     def test_watcher_uses_running_provider_during_pending_switch(self):
         watcher = self.observation_fixture(running_key='claude', desired_key='codex')
@@ -242,7 +239,7 @@ class SigninIntegrationTest(unittest.TestCase):
         self.reload = self.patch(console, 'reload')
         connected = datetime.fromtimestamp(now - 100, timezone.utc).isoformat()
         self.patch(signin, 'states', return_value={'claude': {'state': 'signed-in', 'connected_at': connected}})
-        self.watcher = monitor.Watcher(enabled=False)
+        self.watcher = monitor.Watcher()
         self.watcher.current_checked = now
         return self.watcher
 
@@ -254,7 +251,7 @@ class SigninIntegrationTest(unittest.TestCase):
         saved_goal = lead.location().read_bytes()
         settings = (board.home() / 'board.json').read_bytes()
         watcher.current()
-        self.reload.assert_called_once_with(self.projects[0], 'fixture-older', None)
+        self.reload.assert_called_once_with(self.projects[0], 'fixture-older')
         self.refresh.assert_called_once_with(self.projects[0])
         self.assertEqual(lead.location().read_bytes(), saved_goal)
         self.assertEqual((board.home() / 'board.json').read_bytes(), settings)

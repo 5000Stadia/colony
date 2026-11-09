@@ -614,22 +614,6 @@ def days_since_fetch():
     return (datetime.datetime.now(datetime.timezone.utc) - then).total_seconds() / 86400
 
 
-def ready_to_announce():
-    """Models in the lineup whose data has come and that haven't been announced: each is announced once. The
-    first time the board looks, what's there is taken as known, not as news."""
-    p = board.home() / "bench" / "announced.json"
-    try:
-        told = set(json.loads(p.read_text()))
-        first = False
-    except (OSError, ValueError):
-        told, first = set(), True
-    ready = [mid for _, mid, _, _ in lineup() if not card(mid)["pending"]]
-    new = [] if first else [m for m in ready if m not in told]
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(sorted(told | set(ready))))
-    return new
-
-
 def framing(key):
     """The cards' tiers for a provider, framed as theirs, in a line: for the add-project form."""
     t = tiers_for(key)

@@ -12,7 +12,7 @@ migration".
                                      and what to sign in to
 
 A pack takes colony's home, every project folder on the board and on its Archived shelf (they come back from there),
-each one's conversations (Claude Code's folders of them, the steward's too; Codex's are in colony's home), and the
+each one's conversations (Claude Code's folders of them, an old install's steward's too; Codex's are in colony's home), and the
 colony program's own checkout with its git history. It leaves out what the new machine makes again (a Python
 environment, node_modules, caches, the voice's model) and every sign-in and key, which the person enters again there.
 An archive and not loose files: the disk it goes on may keep neither permissions nor links (NTFS). Paths are kept
@@ -198,7 +198,7 @@ def _recorded(roots):
 
 def parts(reg=None):
     """What a pack takes, as [{kind, name, path, inside}]: colony's home, the program, each project folder on the board and
-    on its shelf, the Claude Code conversations of each (and of colony's home, where the steward works), and a recorded
+    on its shelf, the Claude Code conversations of each (and of colony's home, where an old install's steward worked), and a recorded
     conversation kept anywhere else. One inside another (the projects in the program's folder) is packed with it, and
     keeps its own name and size; inside names the outermost."""
     from . import providers
@@ -234,7 +234,7 @@ def parts(reg=None):
         near = max((k for k in keys if d.name == k or d.name.startswith(k + "-")), key=len, default=None)
         if near and d.is_dir() and not d.is_symlink():
             rest = d.name[len(near):].lstrip("-")
-            add("claude", "the steward" if (keys[near], rest) == ("colony's home", "monitor") else
+            add("claude", "the steward (retired)" if (keys[near], rest) == ("colony's home", "monitor") else
                 f"{keys[near]} ({rest})" if rest else keys[near], d)
     for root, transcript in _recorded([p for _, _, p in folders]):
         if transcript.is_file() and not any(_under(transcript, p["path"]) for p in out):
@@ -433,7 +433,7 @@ def machine(reg=None):
     from . import autostart, providers, voice
     reg = reg or board.registry()
     used = {providers.key(providers.of(p)) for p in board.projects(reg, adopt=False) if p.exists()}
-    used.add(providers.key(providers.of(None)))                       # the steward's
+    used.add(providers.key(providers.of(None)))                       # the default, for new projects
     homes = {board.home(), board.secrets(create=False)}
     keys = sorted({f.stem if f.parent == folder / "connections" else f.parent.name
                    for folder in homes for f in (folder / "connections").rglob("*.env")})
@@ -634,7 +634,7 @@ def _still_since():
 
 
 def _at_work(plan):
-    """Projects mid-work now: as the steward's watch saw them, or with a conversation written in the last two minutes.
+    """Projects mid-work now: as colony's watcher saw them, or with a conversation written in the last two minutes.
     A conversation last written before a still stop's mark ended before it: a clean stop's turns aren't mid-work. The
     mark is written after every session has ended, to the second, so a write within its second came before it."""
     busy = set(board.at_work_now())
@@ -1028,8 +1028,9 @@ def _follow(note, begun, journal, say):
     """After unpacking under another home: everything colony keeps re-pointed from the old paths to the new, in one
     pass of steps, each written to the journal as done, so a pass interrupted anywhere finishes when run again and
     nothing is done twice. Colony's records first, then what each Codex home holds, the git worktrees, then each
-    project by repoint (its program histories, the folders and keys named by a hash of its path), and the steward's."""
-    from . import console, monitor, providers, repoint
+    project by repoint (its program histories, the folders and keys named by a hash of its path), and the retired
+    steward's (R152) where an old install still has its folder."""
+    from . import console, providers, repoint, tokens
     pairs = [tuple(p) for p in begun["pairs"]]
     done = begun["done"]
 
@@ -1084,7 +1085,7 @@ def _follow(note, begun, journal, say):
 
     for old, new in moved:
         step(f"project:{new}", lambda old=old, new=new: project(old, new))
-    steward = Path(note["colony_home"]) / "monitor", monitor.home()
+    steward = Path(note["colony_home"]) / "monitor", tokens.old_steward()
     if steward[0] != steward[1]:
         step("steward", lambda: history(*steward))
     journal.unlink()

@@ -9,7 +9,7 @@ The watcher looks every CHECK seconds, with no model and no tokens (screens, /pr
 it has taken no turn for HIBERNATE seconds and nothing keeps it awake (awake() says what does: a wake of its own set, a
 helper, a background command or a turn its program runs elsewhere, something typed in its box, a turn mid-way or a
 choice on its screen, someone at its terminal, something waiting to be handed to it, a safe pause or a usage limit that
-wakes it at the reset, a close or a lead change under way). The steward never sleeps here: its mute is its own.
+wakes it at the reset, a close or a lead change under way).
 
 Asleep, its program stops (PROVIDER: Provider.hibernate, Codex's app host drained with it; the installation's repair
 host is another thing and stays up) and its tmux session closes, as `colony stop` closes one; hibernating.json in the
@@ -156,12 +156,10 @@ def held(root):
 def awake(root, now=None):
     """What keeps this project's console awake, in a few words, or None when it may sleep. Read cheapest first: most
     consoles took a turn within the day."""
-    from . import lingering, monitor
+    from . import lingering
     from . import chat
     now = time.time() if now is None else now
     root = Path(root)
-    if root.resolve() == monitor.home().resolve():
-        return "the steward"
     name = console.session_name(root)
     if not console.running(name):
         return "not running"
@@ -217,10 +215,7 @@ def cold(root, ran):
     watcher's last record of what runs, boot.json's `at`), not now, so a machine off a week doesn't put every project
     to sleep. The person, 2026-11-01: "Colony could start in first load full hybernate except for projects last active
     in the 24 hours colony was last running"."""
-    from . import monitor
     root = Path(root)
-    if root.resolve() == monitor.home().resolve():
-        return "the steward"
     if not ran:
         return "when colony last ran isn't known"
     if ran - last_turn(root, console.session_name(root)) < HIBERNATE:

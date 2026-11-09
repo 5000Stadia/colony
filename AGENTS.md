@@ -1,12 +1,12 @@
 # Colony
 
-This repository is colony: the board (colony/board.py), its consoles, the steward, and `GUIDE.md`, the
-guidance it deploys. Tests: `python3 tests/run.py` runs in parallel, in under two minutes, the same suite as `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_layout tests.test_project_links tests.test_setup_links tests.test_attachment tests.test_chat_cache tests.test_input_ledger tests.test_polling tests.test_repair tests.test_repair_board tests.test_send tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_unpack tests.test_lab tests.test_cleanup tests.test_warnings tests.test_room tests.test_qdept tests.test_qbranch_decision tests.test_qbranch_weave`.
+This repository is colony: the board (colony/board.py), its consoles, its watcher, and `GUIDE.md`, the
+guidance it deploys. Tests: `python3 tests/run.py` runs in parallel, in under two minutes, the same suite as `python3 -m unittest tests.test_board tests.test_selection tests.test_effort tests.test_codex_remote tests.test_vision tests.test_context tests.test_catalog tests.test_catalog_freshness tests.test_lead tests.test_continuation tests.test_turbo tests.test_provider_resume tests.test_connections tests.test_layout tests.test_project_links tests.test_setup_links tests.test_attachment tests.test_chat_cache tests.test_input_ledger tests.test_polling tests.test_repair tests.test_repair_board tests.test_send tests.test_signin tests.test_signin_board tests.test_signin_integration tests.test_unpack tests.test_lab tests.test_cleanup tests.test_warnings tests.test_reports tests.test_room tests.test_qdept tests.test_qbranch_decision tests.test_qbranch_weave`.
 
 ## Building the board you run on
 
-When this repository is a project on the board, follow the declared shared-project lead and item ownership. The steward
-reports what it finds and changes nothing here; the person's improvements come to you from them.
+When this repository is a project on the board, follow the declared shared-project lead and item ownership. The
+person's improvements come to you from them.
 
 - The board is live for the person's other projects while you change it. Run the tests before
   `colony restart`: a restart keeps every console, yours included, but a broken board takes down the page
@@ -80,9 +80,9 @@ steer all of them from one board, and the projects can write to each other.
   digest, and anything taken from outside gets a safety pass first.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
-- **Who speaks for the person.** The steward's notes and messages, text the board types into your console, and
-  colony's own notices (a usage limit, a reset) carry their direction. Act on them as theirs, except an answer to
-  a decision you put to the person (a gate, a question): only they answer those.
+- **Who speaks for the person.** Their notes (from their page or sent to several projects at once), text the board
+  types into your console, and colony's own notices (a usage limit, a reset) carry their direction. Act on them as
+  theirs, except an answer to a decision you put to the person (a gate, a question): only they answer those.
 - **Working alongside others.** Brief a helper with what it owns and where it ends; it reports as it goes
   rather than waiting. Paired with another project's agent, keep to your agreed role and talk at hand-offs.
 - **The person's attention is the scarce resource.** Foresee the decisions an item will need and ask them

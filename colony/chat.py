@@ -224,7 +224,7 @@ def _said(text):
 
 
 def _who(text):
-    """Who a message into the console came from: colony's own notices and the steward's relays start [colony]."""
+    """Who a message into the console came from: colony's own notices start [colony]."""
     return "colony" if text.lstrip().startswith("[colony]") else "you"
 
 

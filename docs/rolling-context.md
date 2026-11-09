@@ -1,6 +1,6 @@
 # Rolling context (R68)
 
-Colony refreshes context in the existing provider conversation. Project main agents refresh at an idle boundary after the last model request reaches 60% of the known context window. The monitor also keeps its 20-hour schedule. A refresh never deliberately replaces the conversation, restarts its console or changes its app identity.
+Colony refreshes context in the existing provider conversation. Project main agents refresh at an idle boundary after the last model request reaches 60% of the known context window. A refresh never deliberately replaces the conversation, restarts its console or changes its app identity.
 
 The agent first replies with a short carry-over of transient intent, constraints, authorization, completed or uncertain actions, and rejected approaches absent from the current Vision, roadmap, notes and gates. Colony records the reply; the agent does not need file-write permission. Missing or oversized carry-over postpones scheduled compaction. Fifteen minutes without a valid reply is a failure, not permission to proceed.
 
@@ -18,15 +18,15 @@ Native automatic compaction remains the safety mechanism during long active turn
 
 ## Boundaries and recovery
 
-Scheduling requires an idle, unattached console, no draft, no usage pause and no pending note, mail or monitor delivery. The checks run again before dispatch. Session identity is recorded from scoped provider hooks; helpers and another logical project sharing the working folder cannot replace it. The watcher processes main agents even when the monitor agent is disabled.
+Scheduling requires an idle, unattached console, no draft, no usage pause and no pending note or mail delivery. The checks run again before dispatch. Session identity is recorded from scoped provider hooks; helpers and another logical project sharing the working folder cannot replace it.
 
-State, carry-over and history live in the logical project's `.board/context*.json` / `.jsonl` and `.board/context-carried.md`; the monitor has its own `.board` under its home. `colony context` shows the current phase and reason. Each restoration's history row says what started it (`trigger`: `scheduled` or `native`), when its carry-over was recorded (`carry_at`), how many bytes of the newest exchange were trimmed, and, when it holds no carry-over, why; a change of conversation and a rejected carry-over are rows of their own. An incremental transcript index under the board home survives hook processes, so later hooks do not reread months of history. Provider transcripts are never rewritten or pruned.
+State, carry-over and history live in the logical project's `.board/context*.json` / `.jsonl` and `.board/context-carried.md`. `colony context` shows the current phase and reason. Each restoration's history row says what started it (`trigger`: `scheduled` or `native`), when its carry-over was recorded (`carry_at`), how many bytes of the newest exchange were trimmed, and, when it holds no carry-over, why; a change of conversation and a rejected carry-over are rows of their own. An incremental transcript index under the board home survives hook processes, so later hooks do not reread months of history. Provider transcripts are never rewritten or pruned.
 
 A definite failure before dispatch can retry after an hour. A dispatched request with an unknown outcome remains pending; Colony does not send it again on a timer. PreCompact alone is not proof of successful compaction. Printed restoration remains unconfirmed until transcript evidence or the subsequent completed turn; dropped output can be emitted again with the same historical marker. A restored generation waits for fresh usage and has a one-hour cooldown. If reconstructed context is still above the threshold, further scheduled refresh waits for a measured reduction, avoiding a costly repeat loop.
 
 A wedged provider is not automatically killed to recover it. Inspect `colony context`, its history and the native console to diagnose a pending/unknown operation before resuming ordinary native work. This deliberately retains the person's approved rule: no successful fresh carry-over means no scheduled compaction. There is no guaranteed daily recovery from an unhealthy provider.
 
-Claude context occupancy includes cache-read and cache-creation input. Its status line supplies the window size; a project with a custom status line that bypasses Colony may lack that telemetry, in which case the threshold is deferred rather than guessed. The monitor's existing 150k cap remains effective. Codex uses last-request usage and model window, never accumulated token spend.
+Claude context occupancy includes cache-read and cache-creation input. Its status line supplies the window size; a project with a custom status line that bypasses Colony may lack that telemetry, in which case the threshold is deferred rather than guessed. Codex uses last-request usage and model window, never accumulated token spend.
 
 ## Evidence and rollout
 
@@ -42,3 +42,13 @@ Minimal live-account scratch checks ran on 2026-10-01:
 The full regression suite passed 220 tests; 28 focused context and monitor checks passed after the final monitor-resume refinement.
 
 These are path and continuity checks, not a broad paid model comparison or a proof of long-term project success. They did not restart or migrate any live project. Colony owns merge, live rollout, app continuity checks and deployment. Existing sessions acquire new hooks through the ordinary safe launch/reload path; their conversation IDs remain unchanged. The live Claude probe verifies manual compaction plus resume; automatic mid-turn Claude compaction was not separately forced.
+
+## Measured in use (2026-11-09)
+
+Memory Research's R12 re-ran its R8 judge, unchanged, on 22 compactions made after 665d77d (colony 10, Memory Research
+10, Bookflow 2). The restore was never empty (R8's empty-restore fault didn't recur). The native summary kept 81% of
+must-keep items fully and 14% partly. The carry-over fully kept a further 4.0% pooled, against 2.6% before the fix:
+7.5% on colony's own conversations (about 1.2 items per compaction, from a restore of about 5.5K characters), 0.6% on
+Memory Research's (a 2K restore, mostly closed-topic conclusions), and 3.1% on Bookflow's 2. Reading: the summary does
+most of the work, and the carry-over is cheap and modestly useful. About 15% of items survive neither fully, mostly as
+partials. Details: Memory Research's roadmap/R12.md.

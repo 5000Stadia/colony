@@ -197,7 +197,7 @@ def _keep(path, text):
 
 def _block(have, headings):
     """Where colony's section sits in an instructions file: from its heading, or an old one, as a whole line ("## The
-    board is yours to keep healthy", the steward's own section, is not "## The board", and was cut out at every start
+    board is yours to keep healthy", another file's section, is not "## The board", and was cut out at every start
     when it was taken for it), to the next section or the end. None when it isn't there."""
     found = [re.search(rf"(?m)^{re.escape(m)}[ \t]*$", have) for m in headings]
     marker = next((f for f in found if f), None)
@@ -232,7 +232,6 @@ class Provider:
     models, efforts = (), ()           # suggestions, any value can be typed: models as (id, name) pairs
     aliases, efforts_for = {}, {}      # names it takes for models; the efforts a model takes, where they differ
     reports_cost = True                # whether consult() reports dollars, not only tokens
-    steward_model = None               # the steward's model when the person picked none (None: its Auto pick)
     console_env = {}                   # environment a console of this program starts with (PROVIDER:)
     # Waiting costs nothing (colony/waiting.py): a check before each shell command, keyed by event, as (matcher,
     # command); the tool names that run a shell command, the field saying it already runs in the background, what
@@ -241,13 +240,9 @@ class Provider:
 
     def command(self, label, s, resume=None, root=None):
         """The shell command that starts its interactive agent in tmux with the settings in `s`: provider, model,
-        effort, permissions (ask|edits|all|plan) and remote (on|off); for the steward, also autocompact. Each maps to
-        the CLI's own flags; one it has no equivalent for is ignored. Required."""
+        effort, permissions (ask|edits|all|plan) and remote (on|off). Each maps to the CLI's own flags; one it has no
+        equivalent for is ignored. Required."""
         raise NotImplementedError
-
-    def steward_command(self, label, settings, resume=None):
-        """The steward's console, which uses the installation's settings."""
-        return self.command(label, settings, resume=resume)
 
     def stop_console_host(self, root):
         """End a detached host when the person explicitly stops its console."""
@@ -298,8 +293,8 @@ class Provider:
     private_files = None
 
     def classify(self, screen):
-        """"working" | "needs you" | "idle" from its terminal screen: the watcher and the steward's wake-ups depend
-        on it, so it matches the CLI's own busy and prompt markers. Required."""
+        """"working" | "needs you" | "idle" from its terminal screen: the watcher depends on it, so it matches the
+        CLI's own busy and prompt markers. Required."""
         raise NotImplementedError
 
     def mail_problem(self, text, *, stopped=False):
@@ -417,9 +412,6 @@ class Provider:
         """Why its running console no longer matches how it should run, only its program knowing (None: it does)."""
         return None
 
-    def latest_conversation(self, folder):
-        """Its newest conversation in a folder, to resume when colony recorded none (None: start afresh)."""
-        return None
 
     def draft(self, screen):
         """What the person half-typed in its box and didn't send, from a screen captured with its styles: "" if
@@ -563,13 +555,6 @@ class Provider:
         "usage", "error"} (colony consult). A program without it isn't offered as a consultant."""
         raise NotImplementedError
 
-    def scout(self, brief, model, effort, run=None):
-        """One fresh, stateless scout for the steward: only searching the web and reading pages, held there by the
-        program itself, so strangers' text never reaches the session that speaks for the person; {"text", "error"}.
-        It runs in the research room (room.py), unscreened: its caller screens what it hands on."""
-        from . import room
-        out = room.research(brief, family=key(self), model=model, effort=effort, screen=False, spawn=run, kind="scout")
-        return {"text": out["text"], "error": out["error"]}
 
     # --- the research room (room.py): one locked-down pass, prompt in, text out
     room_sandbox = False                # whether the room wraps it in its OS sandbox (False: it keeps its own)
@@ -680,8 +665,6 @@ class ClaudeCode(Provider):
     models = [("claude-fable-5-1", "Fable 5.1"), ("claude-opus-5-5", "Opus 5.5"), ("claude-sonnet-5", "Sonnet 5"),
               ("claude-haiku-4-5-20251001", "Haiku 4.5")]
     aliases = {"fable": "Fable 5.1", "opus": "Opus 5.5", "sonnet": "Sonnet 5", "haiku": "Haiku 4.5"}
-    # PROVIDER: the steward only advises and relays (the person, 2026-11-01), so a cheaper model serves it.
-    steward_model = "claude-sonnet-5-5"
     # PROVIDER: Claude Code gives a session's helpers a 5-minute prompt cache unless told otherwise; helpers waiting
     # on long test runs (Bookflow's ~10-minute wait loops) rewrote their whole context at every resume. The 1-hour
     # cache, measured on two weeks of every project's transcripts (2026-11-01), nets about 11% of all colony spend;
@@ -920,7 +903,7 @@ class ClaudeCode(Provider):
         .claude/settings.local.json, which Claude Code reads beside the shared ones, and come out of the shared ones
         if an earlier wiring put them there."""
         block = protocol.lstrip("\n")
-        if block:                                  # nothing to deploy (the steward, whose brief is its own): left as it is
+        if block:                                  # nothing to deploy: left as it is
             if private:
                 _cut(root / "CLAUDE.md", self.HEADINGS)
             _place(root / ("CLAUDE.local.md" if private else "CLAUDE.md"), block, self.HEADINGS)
@@ -1096,13 +1079,6 @@ class ClaudeCode(Provider):
     def signin_complete(self):
         self.set_token("")                       # only after the native login has succeeded and been verified
 
-    def latest_conversation(self, folder):
-        """The conversation last active in a folder, from Claude Code's own records: for a console whose hooks
-        don't record it (the steward's)."""
-        import re as _re
-        d = self.config_home() / "projects" / _re.sub(r"[^A-Za-z0-9]", "-", str(folder))
-        files = sorted(d.glob("*.jsonl"), key=lambda f: f.stat().st_mtime) if d.exists() else []
-        return files[-1].stem if files else None
 
     def update(self):
         """Install the newest Claude Code beside the running one (its own updater)."""
@@ -2171,9 +2147,6 @@ class Codex(Provider):
                 + 'developer_instructions = "Do the task you are given within its brief, and hand in what you find and do."\n'))
         return changed
 
-    def steward_command(self, label, settings, resume=None):
-        from . import monitor
-        return self.command(label, settings, resume=resume, root=monitor.home())
 
     def stop_console_host(self, root):
         from . import codex_remote
@@ -2424,12 +2397,9 @@ class Codex(Provider):
         return "idle"
 
     def _mine(self):
-        """The folders of the projects that run on it, the steward's too where it does."""
-        from . import board, monitor
-        keep = {str(Path(p).resolve()) for p in board.projects() if of(p) is self}
-        if monitor.provider() is self:
-            keep.add(str(Path(monitor.home()).resolve()))
-        return keep
+        """The folders of the projects that run on it."""
+        from . import board
+        return {str(Path(p).resolve()) for p in board.projects() if of(p) is self}
 
     def let_go(self):
         """Its app hosts outlive their consoles by design (a restart reconnects to the turn), so one whose project no

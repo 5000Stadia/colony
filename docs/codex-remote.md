@@ -6,7 +6,7 @@ reopens; an active writer defers the move. The console and ChatGPT then attach t
 the same thread in a project-owned app server.
 
 First open the project's console with Remote Control on. That first connection
-queues a pairing offer for the monitor, even if the monitor runs through Claude.
+leaves the project's own agent a note to offer pairing.
 On the board, **Settings → Agent programs → Codex in ChatGPT** asks whether you
 want to pair now. Open the app first, then choose **Yes, pair now** to generate
 the short-lived code. **Not now** remembers your choice; **Pair with ChatGPT**

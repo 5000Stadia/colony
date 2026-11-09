@@ -45,7 +45,7 @@ def unit():
     home = os.environ.get("COLONY_BOARD_HOME")
     secrets = os.environ.get("COLONY_SECRETS_HOME")
     return ("[Unit]\n"
-            "Description=colony: the board, then its steward and the projects' consoles\n\n"
+            "Description=colony: the board, then the projects' consoles\n\n"
             "[Service]\n"
             "Type=oneshot\n"
             "RemainAfterExit=yes\n"

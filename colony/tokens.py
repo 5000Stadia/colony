@@ -1,8 +1,8 @@
 """Tokens spent, from the programs' own records: every session's transcript (Claude Code's, Codex's, those of the Codex sessions colony runs remotely), read once and
 then only as it grows, summed by the hour for each program and the folder the session ran in. Colony's Overview shows
 the last 4 hours, 24 hours and week, by program and by project, and apart from the projects' own work what colony
-itself spent: the steward, and the one-off asks it makes (consultants, judges of measures, connection audits, model
-checks) and the steward's scouts, which keep no transcript and note their own here.
+itself spent: the one-off asks it makes (consultants, judges of measures, connection audits, model checks), and the
+retired steward's sessions and scouts in the records from before R152.
 
 Colony's notes and instructions inside a project's session are part of that session, so they count as the project's.
 """
@@ -27,6 +27,11 @@ _lock = threading.Lock()
 
 def path():
     return board.home() / "usage" / "tokens.json"
+
+
+def old_steward():
+    """The retired steward's folder (R152): sessions that ran there before are still colony's own, not outside it."""
+    return board.home() / "monitor"
 
 
 def load():
@@ -221,10 +226,9 @@ def update(budget=BUDGET):
         _lock.release()
         return False
     try:
-        from . import monitor
         state, end = load(), time.time() + budget
         files, done = state["files"], True
-        place = _Places([Path(p) for p in board.projects(board.registry())], monitor.home())
+        place = _Places([Path(p) for p in board.projects(board.registry())], old_steward())
         if state.get("v", 0) < 2:                       # hours kept before worktrees were followed: theirs now
             hours = {}
             for k, v in state["hours"].items():
@@ -273,7 +277,7 @@ def _file_lock():
 
 
 def note(prog, usage, kind="scout"):
-    """An ask that keeps no transcript (the steward's scouts) notes what it spent."""
+    """An ask that keeps no transcript notes what it spent."""
     if not usage:
         return
     with _lock, board.board_lock("tokens"):           # the board's reader, in another process, writes it too
@@ -296,7 +300,7 @@ _OWNERS = {}                 # a folder's owner, kept while the projects are the
 
 def owner(cwd, roots, steward):
     """Whose a session was: a project (its own folder, a worktree inside it, or a scratch folder its agent's helper ran
-    in), colony itself (the steward, its one-off asks), or outside colony."""
+    in), colony itself (its one-off asks, the retired steward's old sessions), or outside colony."""
     key = (cwd, tuple(str(r) for r in roots), str(steward), str(board.home()))
     if key not in _OWNERS:
         if len(_OWNERS) > 5000:
@@ -332,13 +336,12 @@ SPANS = {"5-hour": 5 * 3600, "weekly": 7 * 24 * 3600}
 def spent(prog, since, now=None):
     """What each owner (project, colony itself, outside) spent of a program since a time, weighed as its limits weigh
     tokens: {owner: weight}. A window's start falls within an hour: the hour it falls in counts whole."""
-    from . import monitor
     roots = [Path(p) for p in board.projects(board.registry())]
     w, out = WEIGHTS.get(prog, (1, 0.1, 1, 5)), {}
     for k, v in load()["hours"].items():
         hour, p, cwd = k.split("|", 2)
         if p == prog and int(hour) + 3600 > since:
-            who = owner(cwd, roots, monitor.home())
+            who = owner(cwd, roots, old_steward())
             who = ("colony", "Colony itself") if who[0] == "colony" else who
             out[who] = out.get(who, 0) + sum(a * b for a, b in zip(w, v))
     return out
@@ -347,10 +350,9 @@ def spent(prog, since, now=None):
 def windows(now=None, prog=None):
     """{program: {window: total}, ("project", name): {...}, ("colony", what): {...}, ...} and the share that is cache
     reads; for one program, prog."""
-    from . import monitor
     now = now or time.time()
     roots = [Path(p) for p in board.projects(board.registry())]
-    steward = monitor.home()
+    steward = old_steward()
     rows, reads, totals = {}, {w: 0 for w, _ in WINDOWS}, {w: 0 for w, _ in WINDOWS}
     for k, v in load()["hours"].items():
         hour, prog_, cwd = k.split("|", 2)

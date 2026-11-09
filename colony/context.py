@@ -51,27 +51,30 @@ def locked(root):
         yield
 
 
-def is_monitor(root):
-    from . import monitor
-    return Path(root).resolve() == monitor.home().resolve()
-
-
 def program(root):
-    return providers.of(None if is_monitor(root) else root)
+    return providers.of(root)
 
 
 def seat(root):
-    from . import monitor
-    return monitor.name() if is_monitor(root) else console.session_name(root)
+    return console.session_name(root)
 
 
 def in_project(root, payload=None):
-    """Inherited console markers cannot make a scratch session part of this project."""
+    """Inherited console markers cannot make a scratch session part of this project. Its own folders count wherever
+    the agent has changed folder to inside them (a subfolder that is its own repository, say), but not a folder of
+    another project nested inside it: colony's own projects/ lie in colony's."""
     from . import lead
     try:
         folder = Path((payload or {}).get('cwd') or Path.cwd()).resolve()
-        allowed = [board.workdir(root), *lead.workspaces(root)]
-        return any(folder == path.resolve() for path in allowed)
+        allowed = [path.resolve() for path in (board.workdir(root), *lead.workspaces(root))]
+        if folder in allowed:
+            return True
+        homes = [path for path in allowed if path in folder.parents]
+        if not homes:
+            return False
+        home = max(homes, key=lambda path: len(path.parts))
+        others = {Path(str(p)).resolve() for p in board.projects(adopt=False)} - set(allowed)
+        return not any(o == folder or (o in folder.parents and home in o.parents) for o in others)
     except (OSError, TypeError, ValueError):
         return False
 
@@ -320,8 +323,6 @@ def occupancy(root, s, snapshot):
         data = read(file(root, 'context-usage.json'))
         if data.get('id') == s['id']:
             window = data.get('window')
-        if is_monitor(root):
-            window = min(window or 150_000, 150_000)
     return snapshot['tokens'], window
 
 
@@ -449,14 +450,22 @@ def sizes(window):
     return min(FLOOR, int(w * .3)), tuple(min(size, int(w * share)) for size, share in zip(REMIND, (.4, .5)))
 
 
+def started(job, now):
+    """When a refresh was sent into the conversation: recorded since Nov 8; before that, when its carry was written."""
+    if job.get('asked'):
+        return job['asked']
+    try:
+        return board.epoch(job['written'])
+    except (KeyError, TypeError, ValueError):
+        return now
+
+
 def close_topic(root, note, parked=False):
     """R144: the agent closed a topic. Its closing line becomes the carry-over, and the context is refreshed at the
     agent's next pause through the same refresh the size threshold uses. Returns what to tell the agent."""
     note = (note or '').strip()
     if not note:
         raise ValueError('Write what the topic settled, or which item it was parked in and its open question.')
-    if is_monitor(root):
-        raise ValueError('The steward compacts natively; nothing to close here.')
     s = session(root)
     if not s or s['provider'] != providers.key(program(root)):
         raise ValueError("This project's conversation isn't registered with colony yet; nothing to clear.")
@@ -471,7 +480,9 @@ def close_topic(root, note, parked=False):
         job = st.get('job') or {}
         mine = job.get('session') == s['id']
         if mine and job.get('phase') in ('compacting', 'prepared', 'emitted', 'unknown'):
-            raise ValueError('A refresh is already under way; close the topic again once it has finished.')
+            ago = int((time.time() - started(job, time.time())) // 60)
+            raise ValueError(f'A refresh of this conversation is under way (started {ago} minutes ago); it finishes at '
+                             'your next pause, or gives up 15 minutes after it started. Close the topic again then.')
         earlier = job.get('carry', '') if mine and job.get('closed') and job.get('phase') == 'ready' else ''
         carry = (earlier or 'Topics closed in this conversation, in the agent\'s words:') + '\n- ' + line
         if len(carry.encode()) > CARRY_BUDGET:
@@ -492,7 +503,7 @@ def reminder(root, st):
     """R144: one line on closing topics as the conversation first passes each reminder size since it was last
     compacted. Called under the lock."""
     s = session(root)
-    if is_monitor(root) or not s:
+    if not s:
         return ''
     snap = transcript(s)
     tokens, window = occupancy(root, s, snap)
@@ -546,15 +557,12 @@ def delivered(root, payload):
 
 
 def safe(root):
-    from . import mail, monitor, usage as limits
+    from . import mail, usage as limits
     name = seat(root)
     if not console.running(name) or console.attached(name) or console.drafting(name):
         return False
     if console.snapshot(root, name=name, lines=1)['state'] != 'idle' or str(root) in limits.paused():
         return False
-    if is_monitor(root):
-        queue = board.home() / 'to_monitor.jsonl'
-        return not queue.exists() or not queue.read_text().strip()
     return not any(not n['delivered_at'] and not n.get('quiet') for n in board.open_notes(root)) and not any(not m['delivered_at'] for m in mail.inbox(root))
 
 
@@ -580,8 +588,6 @@ def carry_finishing(job, snapshot):
 
 
 def tick(root):
-    if is_monitor(root):
-        return  # the steward compacts natively, at its cap: nothing typed into the conversation the person reads
     s = session(root)
     if not s or s['provider'] != providers.key(program(root)):
         return
@@ -626,6 +632,11 @@ def tick(root):
             job.update(phase='deferred', reason='No fresh carry-over arrived; conversation left intact.')
             st['retry_after'] = now + COOLDOWN
             log(root, job, 'deferred', job['reason'])
+        elif phase == 'compacting' and now - started(job, now) > TIMEOUT:
+            # typed in, but its hooks never reached colony (or it never ran): don't hold the next refresh for ever
+            job.update(phase='deferred', reason='The compaction never reported back; its carry-over is kept.')
+            st['retry_after'] = now + COOLDOWN
+            log(root, job, 'deferred', job['reason'])
         elif phase == 'due' and not reason:
             st.pop('job')
             job = {}
@@ -665,7 +676,7 @@ def tick(root):
             log(root, job, 'deferred', str(err))
         else:
             action = 'carry' if job['phase'] == 'due' else 'compact'
-            job.update(tail=recent, **(dict(phase='requested', asked=now) if action == 'carry' else dict(phase='compacting')))
+            job.update(tail=recent, asked=now, phase='requested' if action == 'carry' else 'compacting')
         atomic_json(file(root), st)
     if action and not safe(root):
         defer(root, job, 'Input became busy before dispatch; refresh postponed.')
@@ -720,8 +731,7 @@ def defer(root, job, reason, unknown=False):
 
 
 def tick_all():
-    from . import monitor
-    for root in [*board.projects(), monitor.home()]:
+    for root in board.projects():
         try:
             tick(root)
         except (OSError, ValueError, KeyError):

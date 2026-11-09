@@ -1,7 +1,7 @@
 # Auto model choices
 
 Every launcher uses `colony.selection` and an accepted exact model/effort pair:
-main agents, helpers, consultants and monitor. Pins take
+main agents, helpers and consultants. Pins take
 priority, including an explicit Ultra pin. Auto excludes Ultra and unsupported
 model/effort pairs. Providers without effort controls use explicit null effort.
 
@@ -22,7 +22,7 @@ At Balanced, role goals are these distances below the shared ceiling:
 | Role | Distance |
 | --- | ---: |
 | Consultant, step-up | 0 |
-| Monitor | 2 |
+
 | Main agent | 4 |
 | Routine helper | 10 |
 | Chores helper | 20 |
@@ -46,8 +46,8 @@ labels that exception. Chores helpers (simple work that takes minor discernment)
 which the person separated from rote, follow the goal like routine.
 
 A project inherits the colony slider unless it selects an override. Its main
-and helpers then have their own accepted Auto seats. Monitor and
-consultants use the colony slider. Previews show all positions using the same
+and helpers then have their own accepted Auto seats. Consultants use the
+colony slider. Previews show all positions using the same
 selector, including current accepted choices, estimates, shortfalls and pending
 new-model approval. Saving a slider does not remove explicit model pins.
 

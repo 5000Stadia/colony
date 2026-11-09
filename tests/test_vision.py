@@ -15,7 +15,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 from colony import board, cli, console, consult, lead, monitor, vision
-from tests.test_board import BoardBase, ROADMAP, legacy_helm
+from tests.test_board import BoardBase, ROADMAP
 
 
 class VisionTest(BoardBase):
@@ -33,7 +33,7 @@ class VisionTest(BoardBase):
         self.assertIn(value, consult.brief(self.root, 'R2', 'A decision', 'Facts'))
         self.assertIn(html.escape(value, quote=True), board.vision_box(self.root, 0))
         self.assertIn('A quiet garden companion.', self.cli('projects').stdout)
-        self.assertIn(value.replace('\n', '\n    '), self.cli('posture').stdout)
+
         self.assertIn(value, self.cli('vision').stdout)
 
     def test_legacy_intro_is_preserved_outside_vision(self):
@@ -105,7 +105,7 @@ class VisionTest(BoardBase):
         self.assertIn('After:\nAn external revision.', note['text'])
         self.assertIn('file change observed', board.thread([note]))
         with patch.object(console, 'snapshot', return_value={'state': 'idle'}), patch.object(console, 'type_into', return_value=True) as send:
-            monitor.Watcher(enabled=False).mail()
+            monitor.Watcher().mail()
         send.assert_not_called()
         board.record_ask(self.root, 'ask', 'Which chapter should come next?', explicit=True)
         result = self.cli('notes', '--deliver')
@@ -142,7 +142,7 @@ class VisionTest(BoardBase):
             vision.save(self.root, f'Revision {number}.', how='board')
         original_history = vision.history(self.root)
         with patch.object(console, 'snapshot', return_value={'state': 'idle'}), patch.object(console, 'type_into') as send:
-            monitor.Watcher(enabled=False).mail()
+            monitor.Watcher().mail()
             send.assert_not_called()
         result = self.cli('notes', '--deliver')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -212,7 +212,7 @@ class VisionTest(BoardBase):
         [note] = board.notes(self.root)
         self.assertEqual(note['author'], 'colony')
         self.assertIn('The person saved the vision on the board.', note['text'])
-        self.assertIn('A garden that waters itself.', monitor.catch_up(self.root), "the monitor still sees the person's edit")
+        self.assertEqual(vision.history(self.root)[-1]['text'], 'A garden that waters itself.', "the edit stays the person's")
         result = self.cli('notes', '--deliver')
         self.assertIn('Colony, the harness the person set up and trusts', result.stdout)
         self.assertNotIn('The person left notes', result.stdout)
@@ -293,15 +293,14 @@ class VisionTest(BoardBase):
         self.assertEqual(vision.history(self.root)[-1]['text'], 'The shared project horizon.')
         self.assertEqual(vision.history(shared)[-1]['text'], 'The shared project horizon.')
 
-    def test_observation_and_delivery_run_with_monitor_off_but_never_interrupt_work(self):
+    def test_observation_and_delivery_run_in_the_watcher_but_never_interrupt_work(self):
         vision.install(self.root)
         vision.save(self.root, 'Agreed.', how='conversation', words='Agreed.', context='Agreed in conversation.')
         self.path.write_text(vision.replace(self.path.read_text(), 'Changed outside.'))
-        watcher = monitor.Watcher(enabled=False)
-        with patch.object(console, 'snapshot', return_value={'state': 'working'}), patch.object(console, 'type_into') as send, patch.object(monitor, 'ensure') as ensure:
+        watcher = monitor.Watcher()
+        with patch.object(console, 'snapshot', return_value={'state': 'working'}), patch.object(console, 'type_into') as send:
             watcher.tick()
             send.assert_not_called()
-            ensure.assert_not_called()
         with patch.object(console, 'snapshot', return_value={'state': 'idle'}), patch.object(console, 'type_into', return_value=True) as send:
             watcher.tick()
             watcher.tick()
@@ -344,10 +343,8 @@ class VisionTest(BoardBase):
         self.assertIn("shape or revise the vision, or a nest's: `vision.md`", ' '.join(board.PROTOCOL.split()))
         self.assertIn("or the work shows the vision differently, propose a revision", " ".join(guide.split()))
         # the guide's "brainstorming never changes it" went in R141 (blind-tested: floating ideas handled alike without it)
-        for text in (vision.MIGRATION, monitor.ROLE):
-            self.assertIn('brainstorming', text)
-        for text in (vision.MIGRATION, monitor.ROLE):
-            self.assertIn('specifications', text)
+        self.assertIn('brainstorming', vision.MIGRATION)
+        self.assertIn('specifications', vision.MIGRATION)
         self.assertIn('detail that matters to a few items lives in those items', ' '.join(guide.split()))
         flat = ' '.join(guide.split())
         self.assertIn("draw its arc with the person, in this order: its end", flat, "a venture's arc: end, peak, climb, foothold")
@@ -455,7 +452,7 @@ class NestTest(BoardBase):
         self.assertIn("No nests yet", self.cli("nest").stdout)
         self.assertNotEqual(self.cli("nest", "nowhere", "--vision", "--file", "x").returncode, 0)
 
-    def test_the_steward_keeps_a_nests_standards_in_the_persons_words_and_a_newer_one_replaces_an_older(self):
+    def test_a_nest_keeps_its_standards_in_the_persons_words_and_a_newer_one_replaces_an_older(self):
         from colony import nest
         board.track(self.root)
         nest.join(self.root, "holodeck")
@@ -468,25 +465,6 @@ class NestTest(BoardBase):
         self.assertIn("said in holo-emitter", listing)
         self.assertIn("generation needs no human sign-off", board.nest_page(board.registry(), "holodeck"))
         self.assertFalse([n for n in board.notes(self.root) if "sign-off" in n["text"]])   # held, not pushed into context
-        told = self.cli("nest", "holodeck", "--tell", "2", "--to", "plants")
-        self.assertIn("is told, once", told.stdout)
-        again = self.cli("nest", "holodeck", "--tell", "2", "--to", "plants")              # never badgers
-        self.assertIn("isn't told twice", again.stdout)
-        heard = [n for n in board.notes(self.root) if "workflow, never one asset" in n["text"]]
-        self.assertEqual(len(heard), 1)
-        self.assertEqual(heard[0]["author"], "colony")
-        self.assertNotEqual(self.cli("nest", "holodeck", "--tell", "2", "--to", "nobody").returncode, 0)
-        import threading                                          # two tellings at once still tell once
-        other = Path(self.tmp.name) / "photonic"
-        other.mkdir()
-        (other / "ROADMAP.md").write_text(ROADMAP)
-        board.track(other)
-        nest.join(other, "holodeck")
-        runs = [threading.Thread(target=nest.tell, args=("holodeck", 1, other)) for _ in range(6)]
-        [r.start() for r in runs]
-        [r.join() for r in runs]
-        self.assertEqual(len([n for n in board.notes(other) if "human sign-off" in n["text"]]), 1)
-        nest.leave(other)
         nest.leave(self.root)
         self.assertIn("holodeck", nest.nests())                  # its standards keep it, with no projects left
         nest.join(self.root, "holodeck")
@@ -698,63 +676,6 @@ class ArchiveAndListTest(BoardBase):
             httpd.shutdown()
 
 
-class StewardPageTest(BoardBase):
-    def test_the_stewards_count_and_needs_cover_only_the_projects_it_follows(self):
-        board.track(self.root)
-        other = Path(self.tmp.name) / "photonic"
-        other.mkdir()
-        (other / "ROADMAP.md").write_text(ROADMAP)
-        board.track(other)
-        board.add_gate(self.root, "Which pot size?")
-        board.add_gate(other, "Which lamp?")
-        count = lambda: re.search(r"id='badge-all'[^>]*>(\d+)<", board.sidebar(board.registry(), -1)).group(1)
-        self.assertEqual(count(), "2")
-        monitor.set_posture(other, steward=False)
-        self.assertEqual(count(), "1", "left out of the steward's, out of its count")
-        needs = board.needs_you(board.registry())
-        self.assertIn("Which pot size?", needs)
-        self.assertNotIn("Which lamp?", needs)
-        self.assertIn("projects the steward doesn't follow: <a href='/?n=", needs)
-
-    def test_the_steward_page_shows_its_last_word_and_follows_only_the_projects_left_checked(self):
-        board.track(self.root)
-        other = Path(self.tmp.name) / "photonic"
-        other.mkdir()
-        (other / "ROADMAP.md").write_text(ROADMAP)
-        board.track(other)
-        monitor.said_last("**Bookflow** finished R12.\n\nNothing else needs you.")
-        page = board.monitor_page(board.registry())
-        self.assertIn("<a class='saidlast' href='/steward?view=console'>", page)
-        self.assertIn("Bookflow finished R12. Nothing else needs you.", page)
-        self.assertIn("2 of 2", page)
-        monitor.set_posture(other, steward=False)
-        self.assertFalse(monitor.involved(other))
-        legacy_helm(self)
-        self.assertFalse(monitor.helm_for(other), "left out: no wakes for it")
-        self.assertTrue(monitor.helm_for(self.root))
-        page = board.monitor_page(board.registry())
-        self.assertIn("1 of 2", page)
-        # its list of projects is All projects' (the steward's page repeated it: R126), where one left out says so
-        self.assertIn("class='prow out'", board.all_projects_page(board.registry()))
-
-    def test_nests_fold_in_the_menu_shut_unless_shown_and_open_in_all_projects(self):
-        from colony import nest
-        board.track(self.root)
-        other = Path(self.tmp.name) / "photonic"
-        other.mkdir()
-        (other / "ROADMAP.md").write_text(ROADMAP)
-        board.track(other)
-        nest.join(other, "holodeck")
-        kiln = Path(self.tmp.name) / "kiln"                # a nest of one shows its project alone: a second, to fold
-        kiln.mkdir()
-        board.track(kiln)
-        nest.join(kiln, "holodeck")
-        reg = board.registry()
-        mine = [i for i, p in enumerate(board.projects(reg)) if p.name == "photonic"][0]
-        self.assertIn("data-nest='holodeck' data-fold='list:holodeck' data-open='1'", board.all_projects_page(reg))
-        self.assertIn("localStorage.setItem('fold:'", board.all_projects_page(reg))
-
-
 class NestOrderTest(BoardBase):
     def test_the_person_can_put_the_groups_in_their_own_order_and_projects_within_keep_to_activity(self):
         from colony import nest
@@ -852,7 +773,7 @@ class PinTest(BoardBase):
         board.woke(dirs[1])
         menu = [(p.name, h) for _, p, h in board.arranged(board.projects(), theirs=False)]
         self.assertEqual(menu[:2], [("dnd", "holodeck"), ("photonic", "holodeck")], "the nest comes forward, led by what moved it")
-        self.assertEqual([h for _, _, h in board.arranged(board.projects())][0], "", "the steward's list keeps their order")
+        self.assertEqual([h for _, _, h in board.arranged(board.projects())][0], "", "the board's list keeps their order")
         nav = board.sidebar(board.registry(), -1)
         band = nav[nav.index("class='navrow'"):nav.index("class='bandpop'")]
         self.assertNotIn("nav:holodeck", band, "the band shows no nests (R135)")

@@ -14,7 +14,7 @@ from pathlib import Path
 LEVELS = ('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max')
 # Each role's goal: this far below the shared ceiling at Balanced. Rote alone has none: mechanical work takes
 # the most points per task-dollar (the person's call).
-OFFSETS = {'main': 4, 'routine': 10, 'chores': 20, 'step-up': 0, 'consultant': 0, 'monitor': 2}
+OFFSETS = {'main': 4, 'routine': 10, 'chores': 20, 'step-up': 0, 'consultant': 0}
 POSITIONS = ('Intelligence', 'Intelligence + 1', 'Intelligence + 2', 'Balanced', 'Economy − 2', 'Economy − 1', 'Economy')
 TOLERANCE = 1
 PAGES = 'https://artificialanalysis.ai/models/'
