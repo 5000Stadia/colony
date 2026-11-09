@@ -164,7 +164,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   own note, the same as one written on its page.
 - **Status reports**, from the top bar's Reports: a button (or a schedule you set: every few hours, or a time of
   day, on the days you tick) has a fresh model write where every project stands and what waits on you, numbered,
-  with a recommendation for each and its answer live under it. Earlier reports stay in the feed.
+  with a recommendation for each and its answer live under it. Earlier reports stay in the feed. Listen on any report
+  reads it aloud in colony's voice: the overview, then each item, then each project, with ⏭/⏮ stepping between them.
 - **Your verdict at each finished milestone:** colony asks once, in the same words each time, how the milestone
   turned out against how such work usually goes. It is the one view of the work getting better; skipping is fine.
 - **Idle sessions:** after a day with nothing to do, a project closes its console; its next message wakes it

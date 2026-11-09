@@ -495,6 +495,27 @@ def unseen():
     return bool(every) and _state().get("seen") != every[-1]["id"]
 
 
+def _group(need, cache):
+    """What still waits on the person for this item, as the board groups it, or None once nothing does."""
+    p = Path(need["project"])
+    if p not in cache:
+        try:
+            cache[p] = board.moments_of(board.waiting_items(p, paused_too=True))
+        except Exception:
+            cache[p] = []
+    return next((g for g in cache[p] if g[0]["key"] == need["key"]), None)
+
+
+def _ordered(rep):
+    """The report's items, each with what the writer said of it: in the writer's order, then any it left out."""
+    by_ref = {n["ref"]: n for n in rep.get("needs") or []}
+    written = {}
+    for x in (rep.get("writer") or {}).get("needs") or []:
+        if x["ref"] in by_ref:
+            written.setdefault(x["ref"], x)
+    return [(by_ref[r], written.get(r)) for r in [*written, *(r for r in by_ref if r not in written)]]
+
+
 def _controls(need, x, here, plist, cache):
     """The live answer to one item: its own controls while it waits, what was answered once it doesn't. A decision
     with options gets them as taps, each with the writer's pros and cons on it. (Whether it drew the writer's options,
@@ -504,12 +525,7 @@ def _controls(need, x, here, plist, cache):
     pid = next((i for i, q in enumerate(plist) if q.resolve() == p.resolve()), None)
     if pid is None or not p.exists():
         return False, "<p class='muted'>This project is no longer on the board.</p>"
-    if p not in cache:
-        try:
-            cache[p] = board.moments_of(board.waiting_items(p, paused_too=True))
-        except Exception:
-            cache[p] = []
-    group = next((g for g in cache[p] if g[0]["key"] == need["key"]), None)
+    group = _group(need, cache)
     if group and group[0]["kind"] == "gate" and group[0]["gate"].get("options") and not group[0]["gate"].get("points"):
         g = group[0]["gate"]
         hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(here)}'>"
@@ -572,15 +588,8 @@ def report_html(rep, plist, cache, here="/reports"):
         out.append(f"<div class='roverview'>{prose(w['overview'])}</div>")
     elif rep.get("text"):
         out.append(f"<details><summary>What the writer said</summary>{prose(rep['text'])}</details>")
-    by_ref = {n["ref"]: n for n in rep.get("needs") or []}
-    written = [x for x in w.get("needs") or [] if x["ref"] in by_ref]
-    order = [x["ref"] for x in written] + [r for r in by_ref if r not in {x["ref"] for x in written}]
-    seen_refs, items = set(), []
-    for ref in order:
-        if ref in seen_refs:
-            continue
-        seen_refs.add(ref)
-        need, x = by_ref[ref], next((x for x in written if x["ref"] == ref), None)
+    items = []
+    for need, x in _ordered(rep):
         tapped, controls = _controls(need, x, here, plist, cache)
         body = ""
         if x:
@@ -589,10 +598,7 @@ def report_html(rep, plist, cache, here="/reports"):
                 body += "<ul class='ropts'>" + "".join(
                     f"<li><b>{e(o['choice'])}</b>" + (f"<span class='rpro'>+ {e(o['pros'])}</span>" if o["pros"] else "")
                     + (f"<span class='rcon'>− {e(o['cons'])}</span>" if o["cons"] else "") + "</li>" for o in x["options"]) + "</ul>"
-            old = x.get("obvious") if isinstance(x.get("obvious"), str) else ""      # a report kept before why and recommend
-            why = x.get("why") or old or x.get("recommendation") or x.get("recommend") or ""
-            label = ("Obvious choice" if x.get("obvious") else "Recommend" if x.get("recommend") or x.get("recommendation")
-                     else "Your call")
+            label, why = _recommended(x)
             body += f"<p class='rrec'><b>{label}:</b> {e(why)}</p>" if why else ""
         title = (x and x["title"]) or need["title"]
         items.append(f"<div class='rneed'><div class='rhead'><span class='num'>{len(items) + 1}</span>"
@@ -609,6 +615,59 @@ def report_html(rep, plist, cache, here="/reports"):
     if rows:
         out.append("<h2>Projects</h2>" + "".join(rows))
     return "".join(out)
+
+
+def _recommended(x):
+    """(its label, why) for the writer's word on one item, as the page shows it."""
+    old = x.get("obvious") if isinstance(x.get("obvious"), str) else ""      # a report kept before why and recommend
+    why = x.get("why") or old or x.get("recommendation") or x.get("recommend") or ""
+    return ("Obvious choice" if x.get("obvious") else "Recommend" if x.get("recommend") or x.get("recommendation")
+            else "Your call"), why
+
+
+def _one_line(text):
+    """A line of the writer's as one line of a spoken document: no line break or heading mark to split a section."""
+    return re.sub(r"\s+", " ", text or "").lstrip("#").strip()
+
+
+def _flat(text):
+    """The writer's prose kept in one section: its paragraphs, without the heading marks that would start another."""
+    text = re.sub(r"(?m)^\s{0,3}(?:=+|-{2,})\s*$", "", text or "")
+    return re.sub(r"(?m)^\s{0,3}#+\s*", "", text)
+
+
+def audio(rep, plist):
+    """One report for the board's document player: the overview, then each item waiting on the person, then each
+    project, a section to each, so ⏭ and ⏮ step through them. An item answered since says so, without its options."""
+    from . import document_audio
+    w, cache = rep.get("writer") or {}, {}
+    title = "Status report, " + time.strftime("%A %B %-d, %-I:%M %p", time.localtime(_secs(rep["at"])))
+    items = _ordered(rep)
+    head = (f"{len(items)} {'thing waits' if len(items) == 1 else 'things wait'} on you." if items
+            else "Nothing was waiting on you.")
+    out = [f"# {title}", _flat(w.get("overview") or rep.get("text")), head]
+    for n, (need, x) in enumerate(items, 1):
+        live = Path(need["project"]).exists() and _group(need, cache) is not None
+        out.append(f"## {n}. {_one_line((x and x['title']) or need['title'])}")
+        out.append(f"{need['name']}, {_kind(need)}." + ("" if live else " No longer waiting on you."))
+        if x:
+            out.append(_one_line(x.get("situation")))
+            if live:
+                out += [f"{_one_line(o['choice'])}." + (f" For: {_one_line(o['pros'])}." if o.get("pros") else "")
+                        + (f" Against: {_one_line(o['cons'])}." if o.get("cons") else "") for o in x.get("options") or []]
+            label, why = _recommended(x)
+            out.append(f"{label}: {_one_line(why)}" if why else "")
+    status = {x["name"]: x["status"] for x in w.get("projects") or []}
+    for pr in rep.get("projects") or []:
+        out.append(f"## {_one_line(pr['name'])}, {pr['state']}"
+                   + (f", {pr['waiting']} waiting on you" if pr.get("waiting") else ""))
+        out.append(_flat(status.get(pr["name"])))
+    return document_audio.ingest("\n\n".join(s for s in out if s.strip()), title)
+
+
+def _listen(rep):
+    return (f"<button type='button' class='repplay' data-url='/reports/audio?r={board.e(rep['id'])}' "
+            f"aria-label='Read this report aloud'>{board.ICONS['play']}<span>Listen</span></button>")
 
 
 def _meta(rep):
@@ -634,10 +693,11 @@ def feed_html(reg):
         out.append("<p class='muted'>No reports yet. New report writes one now.</p>")
     for i, rep in enumerate(every):
         if i == 0:
-            out.append(f"<article class='card report'><div class='rmeta muted'>{board.e(_meta(rep))}</div>"
+            out.append(f"<article class='card report'><div class='rmeta muted'><span>{board.e(_meta(rep))}</span>{_listen(rep)}</div>"
                        f"{report_html(rep, plist, cache)}</article>")
         else:
-            out.append(f"<details class='card report old' data-k='rep-{board.e(rep['id'])}'><summary>{board.e(_meta(rep))}</summary>"
+            out.append(f"<details class='card report old' data-k='rep-{board.e(rep['id'])}'><summary><span>{board.e(_meta(rep))}</span>"
+                       f"{_listen(rep)}</summary>"
                        f"{report_html(rep, plist, cache)}</details>")
     return "".join(out)
 
@@ -660,6 +720,20 @@ def schedule_form(sched):
             "<button>Save</button></form>")
 
 
+# Listen on a report: the board's document player reads it, a section to each part (its bar steps and holds). In the
+# folded summary the tap only plays, never opens or folds the report.
+LISTEN = """
+document.getElementById('reports').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button.repplay'); if (!b) return;
+  ev.preventDefault(); ev.stopPropagation();
+  if (!window.colonyPlayer || b.disabled) return;
+  const label = b.querySelector('span'); b.disabled = true; label.textContent = 'Loading…';
+  const ok = await colonyPlayer.document(b.dataset.url);
+  b.disabled = false; label.textContent = ok ? 'Listen' : 'Try again';
+});
+"""
+
+
 def page(reg):
     from .board import KEEP_CURRENT, shell
     seen()
@@ -667,4 +741,4 @@ def page(reg):
     bar = ("<div class='card rbar'><form method='post' action='/reports/new'><button>New report</button></form>"
            f"<details class='rsched'><summary>Automatic: {board.e(describe(sched))}</summary>{schedule_form(sched)}</details></div>")
     return shell(reg, board.REPORTS_PAGE, "<h1>Status reports</h1>" + bar + f"<div id='reports'>{feed_html(reg)}</div>"
-                 f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('reports'), '/reports/feed');</script>")
+                 f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('reports'), '/reports/feed');{LISTEN}</script>")

@@ -4317,10 +4317,12 @@ PLAYER = """
   }
   async function readDocument(url) {
     const u = new URL(url, location.href);
-    if (u.origin !== new URL(location.href).origin || u.pathname !== '/open' || u.searchParams.get('audio') !== '1') return false;
+    // a document in a project, or a status report (read in colony's voice, its parts as sections)
+    const report = u.pathname === '/reports/audio';
+    if (u.origin !== new URL(location.href).origin || !(report || (u.pathname === '/open' && u.searchParams.get('audio') === '1'))) return false;
     rerun = null; prime(); stepIn(true); hush(true);
     const mine = opening, controller = new AbortController(); documentRequest = controller;
-    N = {id: 'document:' + mine, p: u.searchParams.get('p'), name: 'Document', document: true, pending: true,
+    N = {id: 'document:' + mine, p: u.searchParams.get('p') || '', name: report ? 'Status report' : 'Document', document: true, pending: true,
       tapped: true, sections: [], blocks: [], j: 0, piece: 0};
     playing = true; paused = false; why = null; loading = true; now = null; via = ''; humSync('a document'); changed();
     let got = null;
@@ -10470,6 +10472,25 @@ class Handler(BaseHTTPRequestHandler):
         if url.path in ("/reports", "/reports/feed"):            # status reports (R150)
             from . import reports
             return self._send(200, (reports.page(reg) if url.path == "/reports" else reports.feed_html(reg)).encode())
+        if url.path == "/reports/audio":                         # one report for the document player, in colony's voice
+            from . import reports, voice
+            rid = (urllib.parse.parse_qs(url.query).get("r") or [""])[0]
+            rep = next((r for r in reports.reports() if r.get("id") == rid), None)
+            if not rep:
+                return self._send(404, b"no such report")
+            home = colony_project(plist)
+            key = str(plist.index(home)) if home else ""
+            data = reports.audio(rep, plist)
+            data.update(key=key, project="colony", voice=voice_of(key, home)[0] if home else _voices()["voice"],
+                        kokoro=voice.ready())
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            return self.wfile.write(body)
         if url.path in ("/steward", "/monitor"):       # the steward's page, retired (R152): old links land on the front page
             return self._redirect("/")
         if url.path == "/status":
@@ -12212,6 +12233,9 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 .rdays { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px } .rday { gap:3px !important }
 .report .rmeta, .report.old > summary { font-size:13px } .report.old > summary { cursor:pointer; color:var(--muted) }
 .roverview { font-size:15.5px } .rwriting { color:var(--muted); font-style:italic }
+.report .rmeta, .report.old > summary { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:4px 10px }
+.repplay { display:inline-flex; align-items:center; gap:6px; min-height:36px; padding:4px 12px; font-size:13px; flex:none }
+.repplay svg { width:14px; height:14px }
 .rneed { border-top:1px solid var(--line); padding:12px 0 } .rhead { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 8px }
 .rhead .muted { font-size:12.5px } .rneed p { margin:6px 0 }
 .ropts { margin:6px 0; padding-left:18px } .ropts li { margin:4px 0 } .ropts .rpro, .ropts .rcon { display:block; font-size:13.5px }

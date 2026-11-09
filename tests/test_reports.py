@@ -3,6 +3,7 @@ import json
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -187,6 +188,47 @@ class ReportTest(BoardBase):
     def test_a_schedule_just_set_never_fires_for_a_slot_already_past(self):
         reports.set_schedule("hours", 1, "00:00", range(7))
         self.assertFalse(reports.check(now=time.time() + 5, writer=self.writer(self.reply([]))))
+
+    def test_each_report_is_heard_by_parts_overview_then_each_item_then_each_project(self):
+        reply = self.reply([{"ref": "n2", "title": "Cactus", "situation": "It is root-bound.\n\n## not a part", "obvious": False,
+                             "options": [{"choice": "Yes", "pros": "room to grow", "cons": "a shock"}],
+                             "recommend": "Yes", "why": "it has no room left."},
+                            {"ref": "n1", "title": "Fern pot", "situation": "It outgrew its pot.",
+                             "options": [{"choice": "Clay", "pros": "breathes", "cons": ""}], "recommend": "Clay", "why": "it breathes."}])
+        reports.start("button", writer=self.writer(reply), wait=True)
+        reports.start("button", writer=self.writer(self.reply([])), wait=True)
+        first, newest = reports.reports()
+        board.answer_gate(self.root, self.gate["id"], "Plastic")
+        spoken = reports.audio(first, board.projects(board.registry()))
+        titles = [s["title"] for s in spoken["sections"]]
+        self.assertTrue(titles[0].startswith("Status report, "))
+        self.assertEqual(titles[1:], ["1. Cactus", "2. Fern pot", "plants, " + first["projects"][0]["state"] + ", 2 waiting on you"])
+        text = lambda i: " ".join(b["text"] for b in spoken["blocks"][spoken["sections"][i]["start"]:spoken["sections"][i]["end"]])
+        self.assertIn("The plants are growing.", text(0))
+        self.assertIn("2 things wait on you.", text(0))
+        self.assertIn("Yes. For: room to grow. Against: a shock.", text(1), "an item still waiting: its options, read")
+        self.assertIn("not a part", text(1), "the writer's words never start a section of their own")
+        self.assertIn("Recommend: it has no room left.", text(1))
+        self.assertIn("No longer waiting on you.", text(2), "answered since the report: said so")
+        self.assertNotIn("For: breathes", text(2), "and its options are not read")
+        self.assertIn("Building the water log.", text(3))
+        html = reports.feed_html(board.registry())
+        for rep in (first, newest):
+            self.assertIn(f"class='repplay' data-url='/reports/audio?r={rep['id']}'", html, "a Listen on every report")
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        base = f"http://127.0.0.1:{httpd.server_address[1]}"
+        got = json.loads(urllib.request.urlopen(f"{base}/reports/audio?r={first['id']}").read())
+        self.assertEqual([s["title"] for s in got["sections"]], titles)
+        self.assertIn("voice", got)
+        with self.assertRaises(urllib.error.HTTPError) as no:
+            urllib.request.urlopen(f"{base}/reports/audio?r=nothing")
+        self.assertEqual(no.exception.code, 404)
+        self.assertIn("u.pathname === '/reports/audio'", urllib.request.urlopen(base + "/reports").read().decode(),
+                      "the board's player takes a report as a document")
 
     def test_off_by_default_and_the_page_saves_a_schedule_and_starts_a_report(self):
         self.assertEqual(reports.schedule()["mode"], "off")
