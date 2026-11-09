@@ -379,7 +379,7 @@ def page_point(html, model, effort, url, date):
         score = _number(_field(own, 'intelligenceIndex')[1], ((), ('value',)), 'The Intelligence Index')
         listed, cost = _field(own, 'intelligenceIndexCostPerTask')
         if not listed and score is None:
-            readings.add((None, None, 'unstated', _page_price(own)))      # not run yet: the page says so, no failure
+            readings.add((None, None, 'unstated', _page_price(own)))      # not scored there (an older setting not re-run on a new index, say): no failure
             continue
         if not listed:
             raise ValueError('No cost per Intelligence Index task on the page')
@@ -509,5 +509,5 @@ def health(entries=None, today=None):
               for _, model, label, _ in bench.lineup() if model not in priced]
     waiting = len(last.get('unmeasured') or [])
     summary = (f"{last.get('measured', 0)} of {pages} model pages measured on {day}"
-               + (f", {waiting} not run there yet" if waiting else '') if pages else 'no model-page read yet')
+               + (f", {waiting} with no score there" if waiting else '') if pages else 'no model-page read yet')
     return problems, notes, summary

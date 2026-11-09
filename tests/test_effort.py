@@ -306,7 +306,7 @@ class PagePointTest(unittest.TestCase):
         for cost in (None, {'cost': {'total': None}}):
             self.assertIsNone(self.read(changed(intelligenceIndexCostPerTask=cost), 'claude-sonnet-5-5-high', 'high'))
         not_run = {**{k: v for k, v in own.items() if k != 'intelligenceIndexCostPerTask'},
-                   'intelligenceIndex': None, 'intelligenceIndexEvaluations': []}       # how a page shows a pair not run yet
+                   'intelligenceIndex': None, 'intelligenceIndexEvaluations': []}       # how a page shows a pair with no score
         self.assertIsNone(self.read(streamed(other, not_run), 'claude-sonnet-5-5-high', 'high'))
 
     def test_without_the_estimated_flag_the_runs_listed_show_a_measured_index(self):
