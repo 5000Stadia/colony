@@ -372,6 +372,53 @@ def merge(workspace, target):
                           text=True, capture_output=True)
 
 
+INSTRUCTIONS = ('AGENTS.md', 'CLAUDE.md')
+
+
+@contextmanager
+def instructions_aside(workspace, root=None):
+    """Colony's wiring rewrites a project's tracked AGENTS.md or CLAUDE.md in place (a guidance change, dev mode), and
+    git refuses a merge that would touch a file changed locally, so catch-up stalled on generated text (colony-codex's
+    dev report, Nov 6 and 9). Around the merge, that local text is set aside: a copy is kept in the board's home, the
+    files go back to HEAD, and afterwards each gets its local text back where the merge left the tracked file as it
+    was. Where the merge changed it, the project is wired again (root), writing colony's part onto the new text, and
+    the copy stays for anything that was more than colony's."""
+    workspace = Path(workspace)
+    dirty = [n for n in INSTRUCTIONS if git(workspace, 'ls-files', '--', n, check=False)
+             and git(workspace, 'diff', '--name-only', 'HEAD', '--', n, check=False)]
+    if not dirty:
+        yield
+        return
+    before = git(workspace, 'rev-parse', 'HEAD')
+    saved = {n: (workspace / n).read_bytes() if (workspace / n).exists() else None for n in dirty}
+    keep = board.home() / 'instructions-before-sync'
+    keep.mkdir(parents=True, exist_ok=True)
+    stamp = board.now().replace(':', '')
+    for n, text in saved.items():
+        if text is not None:
+            (keep / f"{stamp}-{hashlib.sha1(str(workspace).encode()).hexdigest()[:8]}-{n}").write_bytes(text)
+    git(workspace, 'checkout', 'HEAD', '--', *dirty)
+    try:
+        yield
+    finally:
+        after = git(workspace, 'rev-parse', 'HEAD', check=False)
+        rewire = False
+        for n, text in saved.items():
+            if after == before or (git(workspace, 'rev-parse', f'{before}:{n}', check=False)
+                                   == git(workspace, 'rev-parse', f'{after}:{n}', check=False)):
+                if text is None:
+                    (workspace / n).unlink(missing_ok=True)
+                else:
+                    (workspace / n).write_bytes(text)
+            else:
+                rewire = True
+        if rewire and root is not None:
+            try:
+                board.wire(root)
+            except Exception:
+                pass                          # the next wiring (a restart, the console's start) writes it
+
+
 def conflicted(root, item, workspace, before, target, generation, *, member=None):
     """Record a conflicted merge's evidence, always leaving the workspace at its checkpoint."""
     try:
@@ -557,15 +604,16 @@ def sync_item(root, item, *, actor=None):
             prior = value.get('conflict') or {}
             if prior.get('checkpoint') == before and prior.get('target') == target:
                 raise ValueError(value['sync_error'])
-            result = merge(workspace, target)
-            if result.returncode:
-                if git(workspace, 'ls-files', '-u', check=False):
-                    error = conflicted(root, item, workspace, before, target, g['generation'])
-                    if git(workspace, 'rev-parse', 'HEAD') != before:
-                        raise ValueError('The engagement merge did not restore its checkpoint; inspect the workspace.')
-                    raise ValueError(error)
-                git(workspace, 'merge', '--abort', check=False)
-                raise ValueError(result.stderr.strip() or result.stdout.strip())
+            with instructions_aside(workspace):
+                result = merge(workspace, target)
+                if result.returncode:
+                    if git(workspace, 'ls-files', '-u', check=False):
+                        error = conflicted(root, item, workspace, before, target, g['generation'])
+                        if git(workspace, 'rev-parse', 'HEAD') != before:
+                            raise ValueError('The engagement merge did not restore its checkpoint; inspect the workspace.')
+                        raise ValueError(error)
+                    git(workspace, 'merge', '--abort', check=False)
+                    raise ValueError(result.stderr.strip() or result.stdout.strip())
         value.update(base=target, plan_revision=revision(root), synced_at=board.now())
         value.pop('sync_error', None)
         if value.get('conflict'):
@@ -735,12 +783,13 @@ def _engage_member(root, *, mark):
             conflict = value.get('conflict') or {}
             if conflict.get('checkpoint') == before and conflict.get('target') == target:
                 return value['sync_error'], None
-            result = merge(workspace, target)
-            if result.returncode:
-                if git(workspace, 'ls-files', '-u', check=False):
-                    return conflicted(root, None, workspace, before, target, g['generation'], member=mine), None
-                git(workspace, 'merge', '--abort', check=False)
-                return 'Engagement sync could not finish: ' + (result.stderr.strip() or result.stdout.strip()), None
+            with instructions_aside(workspace, root):
+                result = merge(workspace, target)
+                if result.returncode:
+                    if git(workspace, 'ls-files', '-u', check=False):
+                        return conflicted(root, None, workspace, before, target, g['generation'], member=mine), None
+                    git(workspace, 'merge', '--abort', check=False)
+                    return 'Engagement sync could not finish: ' + (result.stderr.strip() or result.stdout.strip()), None
         done = [iid for iid in completed if iid not in value.get('looked_items', [])
                 and g['assignments'].get(iid, {}).get('owner') != mine]
         subjects = catch_up_subjects(workspace, previous, target, mine)

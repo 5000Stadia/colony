@@ -532,6 +532,35 @@ class LeadTest(unittest.TestCase):
         lead.acknowledge_engagement(self.root, token)
         self.assertEqual(lead.engage(self.root), '')
 
+    def test_engagement_sets_generated_instructions_aside_around_its_merge(self):
+        # colony-codex's dev report: a member's tracked AGENTS.md, rewired in place by colony, refused its catch-up merge
+        self.pair()
+        (self.root / 'AGENTS.md').write_text('instructions v1\n')
+        lead.tested(self.root, self.commit(self.root, 'Tracked instructions'), 'passed')
+        branch = self.base / 'helper-work'
+        lead.git(self.root, 'worktree', 'add', '-b', 'helper-existing', str(branch))
+        (self.helper / '.board' / 'settings.json').write_text(json.dumps(dict(workdir=str(branch))))
+        wired = 'instructions v1\nwired locally by colony\n'
+        (branch / 'AGENTS.md').write_text(wired)
+        # the merge leaves the tracked instructions as they were: the local text comes back as it was
+        (self.root / 'completed.txt').write_text('completed')
+        lead.tested(self.root, self.commit(self.root, 'Completed garden feature'), 'passed')
+        self.assertIn('Completed garden feature', lead.engage(self.helper, mark=False))
+        self.assertTrue((branch / 'completed.txt').exists())
+        self.assertEqual((branch / 'AGENTS.md').read_text(), wired)
+        # the merge changes them: the project is wired again on the new text, and the local text is kept aside
+        (self.root / 'AGENTS.md').write_text('instructions v2\n')
+        lead.tested(self.root, self.commit(self.root, 'New guidance'), 'passed')
+        with patch.object(board, 'wire') as wire:
+            note = lead.engage(self.helper, mark=False)
+        self.assertIn('New guidance', note)
+        self.assertNotIn('could not finish', note)
+        [(called, ), _] = wire.call_args
+        self.assertEqual(Path(called), self.helper)
+        self.assertEqual((branch / 'AGENTS.md').read_text(), 'instructions v2\n')
+        kept = (board.home() / 'instructions-before-sync').glob('*-AGENTS.md')
+        self.assertIn(wired, [k.read_text() for k in kept])
+
     def test_outgoing_lead_receives_changes_already_landed_on_canonical_main(self):
         self.pair()
         g = lead.switch(self.root, self.helper)

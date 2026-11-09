@@ -1,5 +1,6 @@
 """Shared vision: live text, scoped migration, and delivery without approval state."""
 import concurrent.futures
+import subprocess
 import re
 import json
 import time
@@ -831,3 +832,24 @@ class WeakenedTest(BoardBase):
         test.unlink()
         self.commit("Tests moved")
         self.assertIn("deleted tests/test_pots.py", weakened.weakened(self.root, "HEAD"))
+
+    def test_a_commit_put_to_one_seat_is_not_put_again_where_it_is_merged_in(self):
+        from colony import weakened
+        test = self.root / "tests" / "test_pots.py"
+        test.parent.mkdir()
+        test.write_text("def test_size():\n    assert size(1) == 2\n    assert size(2) == 4\n")
+        (self.root / ".gitignore").write_text(".board/\n")             # each seat keeps its own board, as real ones do
+        self.git("rm", "-r", "-q", "--cached", "--ignore-unmatch", ".board")
+        self.commit("tests for pots")
+        seat = self.root.parent / "plants-codex"
+        subprocess.run(["git", "clone", "-q", str(self.root), str(seat)], check=True)
+        (seat / ".board").mkdir(exist_ok=True)
+        weakened.check(self.root); weakened.check(seat)
+        test.write_text(test.read_text().replace("    assert size(2) == 4\n", ""))
+        self.commit("Pots size right")
+        weakened.check(self.root)
+        self.assertEqual(len(board.notes(self.root)), 1)
+        subprocess.run(["git", "-C", str(seat), "fetch", "-q", "origin"], check=True)
+        subprocess.run(["git", "-C", str(seat), "merge", "-q", "--ff-only", "FETCH_HEAD"], check=True)
+        weakened.check(seat)
+        self.assertEqual(board.notes(seat), [], "the lead's seat had it; the helper that merged it in isn't told again")

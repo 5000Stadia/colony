@@ -26,6 +26,7 @@ FORCED = re.compile(r"\b(it|test|describe)\.only\(|^\s*assert\s+True\b|\bassert\
                     r"\|\|\s*true\b|\bsys\.exit\(0\)")
 REASON = re.compile(r"\b(tests?|tested|testing|assert\w*|skip\w*|xfail)\b", re.I)
 MOST = 50                    # commits read at once, after a long gap
+TOLD = 5000                  # commits remembered as already put to an agent
 
 
 def git(root, *args):
@@ -72,6 +73,22 @@ def weakened(root, commit):
     return out
 
 
+def first_telling(commit):
+    """True the first time a commit is put to any agent, by its full hash: a shared project's seats read the same
+    commits, so one put to its lead and answered there was put again to a helper that merged it in, and reviewed
+    afresh (colony-codex's dev report, Nov 9). Kept for the last TOLD commits."""
+    with board.board_lock("weakened"):
+        path = board.home() / "weakened-told.json"
+        try:
+            told = json.loads(path.read_text())
+        except (OSError, ValueError):
+            told = []
+        if commit in told:
+            return False
+        path.write_text(json.dumps((told + [commit])[-TOLD:]))
+        return True
+
+
 def check(root):
     """Called every few seconds per project: each commit since the last look that weakens its tests and does not say
     why is put to the agent, once."""
@@ -93,7 +110,7 @@ def check(root):
     for c in reversed(commits):
         found = weakened(root, c)
         said = git(root, "log", "-1", "--format=%B", c)
-        if found and not REASON.search(said):
+        if found and not REASON.search(said) and first_telling(c):
             board.add_note(root, None, f"Commit {c[:7]} ({said.splitlines()[0][:60] if said else ''}) weakened its tests "
                            f"and its message gives no reason: {'; '.join(found)}. If the code was what needed fixing, "
                            "restore them; if the tests were wrong, say why with colony noted.", author="colony", kind="weakened")
