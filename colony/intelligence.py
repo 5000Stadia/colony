@@ -382,7 +382,13 @@ def page_point(html, model, effort, url, date):
             raise ValueError('No cost per Intelligence Index task on the page')
         cost = _number(cost, (('cost', 'total'), ('total',), ('cost',), ()), 'The cost per task')
         flagged, estimated = _field(own, 'intelligenceIndexIsEstimated')
-        readings.add((score, cost, estimated if flagged and isinstance(estimated, bool) else 'unstated', _page_price(own)))
+        if not (flagged and isinstance(estimated, bool)):
+            # Since Nov 2026 the page drops that flag and lists the runs the index is made of instead: an index whose
+            # every evaluation carries its score is measured; without them, the page doesn't say.
+            listed, runs = _field(own, 'intelligenceIndexEvaluations')
+            estimated = False if listed and isinstance(runs, list) and runs and all(
+                isinstance(r, dict) and r.get('score') is not None for r in runs) else 'unstated'
+        readings.add((score, cost, estimated, _page_price(own)))
     if len(readings) > 1:
         raise ValueError(f'The page carries conflicting measurements for {slug}')
     score, cost, estimated, price = readings.pop()

@@ -291,7 +291,10 @@ class PagePointTest(unittest.TestCase):
         without = lambda key: streamed(other, {k: v for k, v in own.items() if k != key})
         cases = {'No claude-sonnet-5-5-high measurement': '<html><body>Just a moment...</body></html>',
                  'No explicit Intelligence Index version': streamed(own, other, version=None),
-                 'whether its index is measured': without('intelligenceIndexIsEstimated'),
+                 'whether its index is measured': streamed(other, {k: v for k, v in own.items()
+                                                                  if k not in ('intelligenceIndexIsEstimated', 'intelligenceIndexEvaluations')}),
+                 'whether its index is measured$': streamed(other, {**{k: v for k, v in own.items() if k != 'intelligenceIndexIsEstimated'},
+                                                                   'intelligenceIndexEvaluations': [{'slug': 'gdp-pdf', 'score': None}]}),
                  'estimated, not measured': changed(intelligenceIndexIsEstimated=True),
                  'No cost per Intelligence Index task': without('intelligenceIndexCostPerTask'),
                  'shape colony does not read': changed(intelligenceIndexCostPerTask={'usd': 0.88}),
@@ -302,6 +305,15 @@ class PagePointTest(unittest.TestCase):
                 self.read(html, 'claude-sonnet-5-5-high', 'high')
         for cost in (None, {'cost': {'total': None}}):
             self.assertIsNone(self.read(changed(intelligenceIndexCostPerTask=cost), 'claude-sonnet-5-5-high', 'high'))
+
+    def test_without_the_estimated_flag_the_runs_listed_show_a_measured_index(self):
+        # Artificial Analysis dropped intelligenceIndexIsEstimated in Nov 2026 (every page read failed on the 8th);
+        # its pages list the evaluations the index is made of instead, each with its score
+        own, other = fixture_models()
+        bare = {k: v for k, v in own.items() if k != 'intelligenceIndexIsEstimated'}
+        self.assertTrue(bare.get('intelligenceIndexEvaluations'), 'the real page lists its runs')
+        point = self.read(streamed(other, bare), 'claude-sonnet-5-5-high', 'high')
+        self.assertEqual((point['score'], point['cost']), (46.7533528066958, 0.8844498581005511))
 
 
 class PageRefreshTest(unittest.TestCase):
