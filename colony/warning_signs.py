@@ -675,8 +675,12 @@ def ask_verdicts(root):
         return []
     path.write_text(json.dumps({"finished": sorted(set(asked) | set(done))}))
     return [board.add_gate(root, f"{root.name} finished {m}, {done[m]['title']}. {VERDICT_QUESTION}",
-                           why="Your verdict at each milestone is the one way colony can see the work getting better "
-                               "(your choice, Nov 8). A few words help, and skipping is fine.",
+                           # whose question it is and why it is here: said as their choice, it had them asking
+                           # whether they had set it up (2026-11-10); they skipped that question and its default stood
+                           why="Colony asks this, not the project, once as each milestone finishes: your verdict is "
+                               "the one way colony can see the work getting better over the months. It is here as the "
+                               "default of a question you skipped on Nov 8, not a choice you made. A few words help, "
+                               "and skipping is fine.",
                            options=VERDICTS, default=NO_VERDICT, verdict=m) for m in new]
 
 

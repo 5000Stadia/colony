@@ -96,11 +96,17 @@ class ReportTest(BoardBase):
         self.assertIn("In progress: water log", facts["text"])
         self.assertEqual(facts["projects"][0]["waiting"], 2)
 
-    def test_a_paused_projects_items_are_gathered_and_said_to_be_held(self):
+    def test_a_paused_project_needs_nothing_of_the_person_and_says_what_it_holds(self):
+        """The person, 2026-11-10: a project they paused doesn't need them in that stasis (nine of a report's
+        twenty-one items were one paused project's)."""
+        reports.start("button", writer=self.writer("I could not do it."), wait=True)
         board.pause_project(self.root)
         facts = reports.gather()
-        self.assertEqual(len(facts["needs"]), 2)
-        self.assertIn("paused by you", facts["text"])
+        self.assertEqual(facts["needs"], [])
+        self.assertIn("paused by you: it needs nothing of you until you resume it, and holds 2 for then", facts["text"])
+        self.assertEqual((facts["projects"][0]["waiting"], facts["projects"][0]["held"]), (0, 2))
+        html = reports.feed_html(board.registry())          # a report from before the pause: its items folded, held
+        self.assertEqual((html.count("<div class='rneed'>"), html.count("Held while this project is paused.")), (0, 4))
 
     def test_the_report_shows_the_writers_words_with_each_items_live_answer(self):
         reply = self.reply([{"ref": "n2", "title": "Cactus", "situation": "It is root-bound.", "obvious": False,
@@ -135,6 +141,18 @@ class ReportTest(BoardBase):
         board.answer_gate(self.root, self.gate["id"], "Plastic")
         html = reports.feed_html(board.registry())
         self.assertIn("Your answer: Plastic", html)
+        # the person, 2026-11-10: answered questions fold away, each to its title and what was answered
+        done = html[html.index("<details class='rneed done'"):]
+        self.assertIn("<span class='rdone'>Your answer: Plastic</span></summary>", done[:done.index("</details>")])
+        self.assertEqual(html.count("<div class='rneed'>"), 1, "the one still waiting stays open")
+        # tapped again (a tap that showed nothing was tapped three times): one answer, one note; another is a change
+        notes = lambda: [n["text"] for n in board.notes(self.root) if (n.get("anchor") or {}).get("gate") == self.gate["id"]]
+        board.answer_gate(self.root, self.gate["id"], "Plastic")
+        self.assertEqual(len(notes()), 1)
+        board.answer_gate(self.root, self.gate["id"], "Clay")
+        self.assertEqual(len(notes()), 2)
+        self.assertIn("They changed their answer: it was \"Plastic\"", notes()[-1])
+        self.assertIn("This one stands", notes()[-1])
         self.assertIn("Which pot for the fern?", html)
         self.assertIn(f"name='gate' value='{self.other['id']}'", html)
         self.assertIn("What the writer said", html)

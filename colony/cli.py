@@ -610,6 +610,7 @@ def cmd_gate(a):
         print(str(err), file=sys.stderr)
         return 2
     gid = gate["id"]
+    board.turn_gate(root, gid)           # this turn's question in Chat, if it asks one, is this decision
     if a.reframes:                       # the old question comes off their list: this one says it whole
         try:
             board.withdraw_gate(root, a.reframes, f"Asked again as {gid}, with what it was missing")
@@ -1134,6 +1135,7 @@ def cmd_turn(a):
             return 0
     from . import context
     payload.setdefault("hook_event_name", "Stop")
+    opened = board.take_turn_gates(root)            # the gates this turn opened: its question in Chat is theirs
     if context.carry_reply(root, a.console or providers.key(context.program(root)), payload):
         return 0
     key, text = context.program(root).turn_text(payload)      # PROVIDER: its last words as handed over, else its transcript
@@ -1142,7 +1144,7 @@ def cmd_turn(a):
     if not text.strip():
         board.hold_needs_you(root)
     elif board.take_needs_you(root):
-        board.record_ask(root, key, text, explicit=True)
+        board.record_ask(root, key, text, explicit=True, gates=opened)
     board.said_reply(root, text)                    # the agent's answer to the person's own words, if they spoke
     from . import continuation
     continuation.after_turn(root)

@@ -4,6 +4,7 @@ Chat reads with the phone's own voice."""
 import hashlib
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -267,9 +268,15 @@ def speak(text, voice=None, ahead=False, gone=None):
         try:
             with _lock:                                  # one at a time: the worker reads one line, answers one
                 if not out.exists():
-                    got = _ask({"text": text, "voice": voice, "out": str(out)})
+                    # written beside it and moved into place whole: an ask for the same clip waiting its turn takes
+                    # the file the moment it is there, and took it half-written, so the clip stopped short and the
+                    # reading went on to the next (2026-11-10: six pairs of asks in six, at speeds that catch the voice up)
+                    part = out.with_name("making-" + out.name)
+                    got = _ask({"text": text, "voice": voice, "out": str(part)})
                     if got.get("error"):
+                        part.unlink(missing_ok=True)
                         return None
+                    os.replace(part, out)
         finally:
             _free()
     def made(f):                                         # another ask may have trimmed it a moment ago

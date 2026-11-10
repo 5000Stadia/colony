@@ -410,7 +410,9 @@ def _need_text(ref, p, group):
 def gather(since=None):
     """The facts a report is written from: {"text": as the writer reads them, "projects": [{path, name, state}],
     "needs": [{ref, project, name, kind, key, gate, title}]}. Every project on the board in its order; every moment
-    waiting on the person (paused projects' too, said to be held), each with a ref."""
+    waiting on the person, each with a ref. A project the person paused waits on nothing until they resume it: what
+    it holds is counted on its own line and never listed (the person, 2026-11-10: paused by their choice, it doesn't
+    need them in that stasis)."""
     from . import console
     reg = board.registry()
     cutoff = _secs(since) if since else time.time() - LATELY
@@ -424,7 +426,8 @@ def gather(since=None):
             road = board.roadmap(p)
             its = board.items(road)
             times = board.item_times(p)
-            groups = board.moments_of(board.waiting_items(p, paused_too=True))
+            groups = board.moments_of(board.waiting_items(p))
+            held = len(board.moments_of(board.waiting_items(p, paused_too=True))) if state == "paused" else 0
         except Exception:
             continue
         doing = [board.plain(it["text"]) for it in its.values() if it["state"] == "doing"]
@@ -448,8 +451,9 @@ def gather(since=None):
             needs.append({"ref": ref, "project": str(p), "name": board.name_of(p), "kind": w["kind"], "key": w["key"],
                           "gate": w["gate"]["id"] if w["kind"] == "gate" else None, "title": _cut(title, 200),
                           "text": _need_text(ref, p, group)})
-        projects.append({"path": str(p), "name": board.name_of(p), "state": state, "waiting": len(refs)})
-        block = [f"## {board.name_of(p)} · {state}" + (" (paused by you: it holds what waits on you until you resume it)"
+        projects.append({"path": str(p), "name": board.name_of(p), "state": state, "waiting": len(refs), "held": held})
+        block = [f"## {board.name_of(p)} · {state}" + (f" (paused by you: it needs nothing of you until you resume it"
+                                                       f"{f', and holds {held} for then' if held else ''})"
                                                        if state == "paused" else "")]
         if road.get("goal"):
             block.append("Vision: " + _cut(road["goal"], CUT["goal"]))
@@ -500,7 +504,7 @@ def _group(need, cache):
     p = Path(need["project"])
     if p not in cache:
         try:
-            cache[p] = board.moments_of(board.waiting_items(p, paused_too=True))
+            cache[p] = board.moments_of(board.waiting_items(p))
         except Exception:
             cache[p] = []
     return next((g for g in cache[p] if g[0]["key"] == need["key"]), None)
@@ -525,6 +529,8 @@ def _controls(need, x, here, plist, cache):
     pid = next((i for i, q in enumerate(plist) if q.resolve() == p.resolve()), None)
     if pid is None or not p.exists():
         return False, "<p class='muted'>This project is no longer on the board.</p>"
+    if board.paused(p):
+        return False, "<p class='muted'>Held while this project is paused.</p>"
     group = _group(need, cache)
     if group and group[0]["kind"] == "gate" and group[0]["gate"].get("options") and not group[0]["gate"].get("points"):
         g = group[0]["gate"]
@@ -601,15 +607,21 @@ def report_html(rep, plist, cache, here="/reports"):
             label, why = _recommended(x)
             body += f"<p class='rrec'><b>{label}:</b> {e(why)}</p>" if why else ""
         title = (x and x["title"]) or need["title"]
-        items.append(f"<div class='rneed'><div class='rhead'><span class='num'>{len(items) + 1}</span>"
-                     f"<b>{e(title)}</b> <span class='muted'>{e(need['name'])} · {e(_kind(need))}</span></div>"
-                     f"{body}<div class='ranswer'>{controls}</div></div>")
+        head = (f"<span class='num'>{len(items) + 1}</span><b>{e(title)}</b> "
+                f"<span class='muted'>{e(need['name'])} · {e(_kind(need))}</span>")
+        if Path(need["project"]).exists() and _group(need, cache) is not None:
+            items.append(f"<div class='rneed'><div class='rhead'>{head}</div>{body}<div class='ranswer'>{controls}</div></div>")
+        else:           # answered since (or gone): folded to its title and what was answered, opened to read the rest
+            said = re.sub(r"<[^>]+>", " ", controls).strip()
+            items.append(f"<details class='rneed done' data-k='rn-{e(rep.get('id', ''))}-{e(need['ref'])}'><summary class='rhead'>{head}"
+                         f"<span class='rdone'>{said}</span></summary>{body}<div class='ranswer'>{controls}</div></details>")
     out.append(f"<h2>Needs you <span class='muted'>({len(items)})</span></h2>" + ("".join(items) if items else
                "<p class='muted'>Nothing was waiting on you.</p>"))
     status = {x["name"]: x["status"] for x in w.get("projects") or []}
     rows = []
     for pr in rep.get("projects") or []:
-        state = pr["state"] + (f" · {pr['waiting']} waiting on you" if pr.get("waiting") else "")
+        state = pr["state"] + (f" · {pr['waiting']} waiting on you" if pr.get("waiting") else "") + (
+            f" · holds {pr['held']} until you resume it" if pr.get("held") else "")
         rows.append(f"<div class='rproj'><div><b>{e(pr['name'])}</b> <span class='muted'>{e(state)}</span></div>"
                     + (prose(status[pr["name"]]) if status.get(pr["name"]) else "") + "</div>")
     if rows:

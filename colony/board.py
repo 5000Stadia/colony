@@ -1275,11 +1275,54 @@ def _restated(question, gs):
 
 
 def settled_on_board(ask, gs):
-    """Every question the turn asked repeats a gate that was already open when it asked, and since settled."""
+    """Every question the turn asked repeats a gate that was already open when it asked, and since settled; or the
+    turn opened gates itself, and each is settled."""
+    own = _own_gates(ask, gs)
+    if own:
+        return all(g["answer"] for g in own)
     qs = questions(ask["text"])
     at = ask["at"]
     return bool(qs) and all(any(g.get("at", "") <= at and g["answer"] and (g["answered_at"] or "") > at
                                 for g in _restated(q, gs)) for q in qs)
+
+
+def _own_gates(ask, gs):
+    """The gates a turn's question is about by its own word: the ones it opened, and any it names where it asks
+    (its last paragraph: "It's on your board as g3ec7ae89")."""
+    last = ([b for b in re.split(r"\n\s*\n", ask["text"]) if b.strip()] or [""])[-1]
+    return [g for g in gs if g["id"] in ask.get("gates", ()) or re.search(rf"\b{re.escape(g['id'])}\b", last)]
+
+
+def covering(ask, gs):
+    """The gates on the person's list now that a turn's question only repeats: the ones that turn opened itself (it
+    put the decision on their board, then asked it in Chat), else the ones every question in it restates. One
+    decision is one thing waiting, answered on the gate; listed beside its gate, the person saw it twice, and again
+    each time a later turn asked it once more (2026-11-10: three projects, each doubled)."""
+    open_ = [g for g in gs if due(g)]
+    own = _own_gates(ask, gs)
+    if own:
+        return [g for g in own if due(g)]
+    qs = questions(ask["text"])
+    return [g for q in qs for g in _restated(q, open_)] if qs and all(_restated(q, open_) for q in qs) else []
+
+
+def turn_gate(root, gate_id):
+    """`colony gate` opened one in the turn now running."""
+    path = Path(root) / ".board" / "turn-gates"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as fh:
+        fh.write(gate_id + "\n")
+
+
+def take_turn_gates(root):
+    """The gates the turn just ended opened; said once, for that turn."""
+    path = Path(root) / ".board" / "turn-gates"
+    try:
+        ids = path.read_text().split()
+    except OSError:
+        return []
+    path.unlink(missing_ok=True)
+    return ids
 
 
 def questions(text):
@@ -1329,15 +1372,18 @@ def drop_held_needs_you(root):
         pass
 
 
-def record_ask(root, key, text, explicit=False):
+def record_ask(root, key, text, explicit=False, gates=()):
     """One entry per turn: the turn's whole text. A newer question replaces an unanswered older one. A turn whose
-    only questions are open gates restated asks nothing new: the gates already wait on the person."""
+    only questions are open gates restated asks nothing new: the gates already wait on the person. `gates`: the ones
+    this turn opened itself, which its question is taken to be about (covering)."""
     if not text or (not explicit and not asks_question(text)) or any(e.get("key") == key for e in read(root, "asks.jsonl") if key):
         return None
     if not explicit and all(restates_gate(q, root) for q in questions(text) or [text]):
         return None
     answer_asks(root, "superseded by a later turn")
     ask = {"type": "ask", "id": "a" + random_secrets.token_hex(4), "at": now(), "key": key, "text": text.strip()}
+    if gates:
+        ask["gates"] = list(gates)
     until = hours.held_until(epoch(ask["at"]))       # asked at night: the person's when their hours begin
     if until:
         ask["held_until"] = until
@@ -2103,10 +2149,16 @@ def _answer_gate(root, gate_id, text, *, tell, decisions, via=None):
         raise ValueError("This gate has no consultant points.")
     elif not text:
         raise ValueError("Give your answer to this gate.")
+    # their own earlier answer: the same again is the same tap again (a tap that showed nothing was tapped three times
+    # in a second, each its own note to the agent, 2026-11-10), and another is said to the agent as the change it is
+    was = gate["answer"] if gate["answer"] and gate.get("answered_by") not in ("colony", "agent") and not gate.get("points") else ""
+    if was and was == text:
+        return gate
     answer["note_id"] = "n" + random_secrets.token_hex(4) if tell else None
     append(root, "gates.jsonl", answer)
     if tell:
-        _gate_note(root, gate, answer["note_id"], answer["text"], answer["at"], author="person")
+        changed = f"\n(They changed their answer: it was \"{was}\" at {on_day(gate['answered_at'])}. This one stands.)" if was else ""
+        _gate_note(root, gate, answer["note_id"], answer["text"] + changed, answer["at"], author="person")
     return answer
 
 
@@ -3517,8 +3569,10 @@ PLAYER = """
   const herald = () => { try { return localStorage.getItem('announcer') || ''; } catch (e) { return ''; } };
   const named = (name, tapped) => !tapped && (said !== name || Date.now() - saidAt > 120e3);
   const abs = (u) => new URL(u, location.href).href;
+  // &w=1: a phone keeps a clip a day, and may have kept one handed over half-written before 2026-11-10; a new address
+  // has it fetched afresh (the board's own copy is by voice and words, so nothing is made again)
   const clip = (p, v) => '/voice?v=' + encodeURIComponent(p.startsWith(NAME) && herald() || v || 'am_echo') + via
-    + '&t=' + encodeURIComponent(p.replace(NAME, '').trim());
+    + '&w=1&t=' + encodeURIComponent(p.replace(NAME, '').trim());
   const piecesOf = (r, j) => (r.named && !j ? [NAME + r.name + '.'] : []).concat(chunks(r.blocks[j].text));
   // the clips made already: going on to one of them is no wait, so the button stays as it is
   const ready = new Set();
@@ -4800,9 +4854,15 @@ document.addEventListener('submit', async (ev) => {
   rule.textContent = `.need:has(input[name=gate][value="${CSS.escape(gate)}"]), .card.gate:has(input[name=gate][value="${CSS.escape(gate)}"]),
     details.need[data-k="g${CSS.escape(gate)}"] { display:none !important }`;
   document.head.appendChild(rule);
-  const r = await fetch('/answer', {method: 'POST', body: new URLSearchParams(new FormData(f)), redirect: 'manual'}).catch(() => null);
-  if (r && (r.ok || r.type === 'opaqueredirect')) return;
+  // in a status report the item stays where it is, so it says what was answered in place of its options: left as it
+  // was, a tap looked like nothing had happened, and Send on the empty box below it met an error (the person, 2026-11-10)
+  const body = new URLSearchParams(new FormData(f)), inReport = f.closest('.ranswer'), kept = inReport && [...inReport.childNodes];
+  if (inReport) { const said = document.createElement('div'); said.className = 'pre'; said.textContent = 'Your answer: ' + (body.get('text') || '');
+    inReport.replaceChildren(said); }
+  const r = await fetch('/answer', {method: 'POST', body, redirect: 'manual'}).catch(() => null);
+  if (r && (r.ok || r.type === 'opaqueredirect')) { if (inReport && inReport.closest('.rneed')) inReport.closest('.rneed').classList.add('answered'); return; }
   rule.remove();
+  if (inReport) inReport.replaceChildren(...kept);
   const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: the board could not be reached. Tap again.';
   f.closest('.gatechoices') ? f.closest('.gatechoices').after(p) : f.after(p);
 }, true);
@@ -8591,7 +8651,7 @@ def waiting_items(p, snap=None, paused_too=False):
             out.append({"kind": "screen", "key": key, "lines": snap["lines"],
                         "summary": "needs you in its console: " + " / ".join(snap["lines"][-2:])})
     out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]}
-            for a in asks(p, gs) if not a["held"]]
+            for a in asks(p, gs) if not a["held"] and not covering(a, gs)]
     from . import lead, progress
     shared = lead.group(p)
     primary = not shared or shared['lead'] == str(p.resolve())
@@ -11304,6 +11364,8 @@ class Handler(BaseHTTPRequestHandler):
                      f"If it asks something or leaves it unclear, answer them, then ask the decision again with what it was "
                      f"missing: colony gate \"the question\" --reframes {g['id']} --told \"your answer to them\" (with --why, "
                      f"--option, --recommended, --default as fit).", author="person")
+        elif path == "/answer" and form.get("reply"):
+            pass                                           # Send on an empty box: nothing was said, so back to the page
         elif path == "/answer":
             try:
                 decisions = {k.removeprefix("point_"): v for k, v in form.items() if k.startswith("point_")}
@@ -12278,6 +12340,9 @@ a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 .rhead .muted { font-size:12.5px } .rneed p { margin:6px 0 }
 .ropts { margin:6px 0; padding-left:18px } .ropts li { margin:4px 0 } .ropts .rpro, .ropts .rcon { display:block; font-size:13.5px }
 .ropts .rpro { color:var(--accent) } .ropts .rcon { color:var(--flag) } .rrec { background:var(--sunk); border-radius:8px; padding:8px 10px }
+.rneed.answered > :not(.rhead):not(.ranswer) { display:none } details.rneed > summary { cursor:pointer; list-style:none }
+details.rneed > summary::-webkit-details-marker { display:none }
+.rdone { flex-basis:100%; min-width:0; max-width:100%; color:var(--muted); font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 .ranswer { margin-top:8px } .need.bare { border-top:0; padding:0 } .rproj { border-top:1px solid var(--line); padding:8px 0 } .rproj p { margin:4px 0 }
 .navfoot a.reportsbtn.new { color:var(--accent); font-weight:600 }
 .rtaps button.choice b { display:block } .rtaps .rpro, .rtaps .rcon, .rtaps .rstands { display:block; font-size:13px; margin-top:2px }

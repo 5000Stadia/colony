@@ -1671,6 +1671,37 @@ class ChatTest(BoardBase):
             r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host}))
             self.assertEqual((r.status, r.read(), r.headers["Content-Type"]), (200, b"ID3mp3", "audio/mpeg"))
 
+    def test_a_clip_is_never_handed_over_half_written(self):
+        """The person, 2026-11-10: at high speeds a reading was cut off and went on to the next. The page asks for a
+        clip twice when the listening catches the voice up (once ahead, once to play it), and the second ask took the
+        file while the first was still writing it."""
+        from colony import voice
+        half, rest = threading.Event(), threading.Event()
+
+        def ask(line):
+            with open(line["out"], "wb") as fh:
+                fh.write(b"ID3 first half ")
+                fh.flush()
+                half.set()
+                rest.wait(10)
+                fh.write(b"second half")
+            return {}
+        got = {}
+        with patch.object(voice, "ready", return_value=True), patch.object(voice, "_ask", ask):
+            first = threading.Thread(target=lambda: got.__setitem__("ahead", voice.speak("Caught up with.", "am_echo", ahead=True)), daemon=True)
+            first.start()
+            self.assertTrue(half.wait(10))
+            second = threading.Thread(target=lambda: got.__setitem__("played", voice.speak("Caught up with.", "am_echo")), daemon=True)
+            second.start()
+            second.join(0.5)
+            self.assertTrue(second.is_alive(), "it waits for the whole clip")
+            self.assertIsNone(voice.speak("Caught up with.", "am_echo", gone=lambda: True), "and nothing half-made is there to take")
+            rest.set()
+            first.join(10), second.join(10)
+        self.assertEqual({k: v.read_bytes() for k, v in got.items()},
+                         {"ahead": b"ID3 first half second half", "played": b"ID3 first half second half"})
+        self.assertFalse(list(got["ahead"].parent.glob("making-*")))
+
     def test_a_clip_skipped_past_isnt_made_and_the_one_listened_to_comes_first(self):
         """R150, the person's report of 2026-11-09: skipping past several left each skipped clip made in turn."""
         import socket
@@ -1751,10 +1782,11 @@ class ChatTest(BoardBase):
         if not node:
             self.skipTest("no node here to parse it")
         with tempfile.TemporaryDirectory() as d:
-            f = Path(d) / "player.js"
-            f.write_text(board.player_js())
-            r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr[:600])
+            for name, script in (("player.js", board.player_js()), ("answers.js", board.ANSWERS)):
+                f = Path(d) / name
+                f.write_text(script)
+                r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, name + ": " + r.stderr[:600])
 
     def test_each_voices_sample_is_made_once_and_kept_for_good(self):
         from colony import voice
@@ -3566,6 +3598,34 @@ class MonitorTest(BoardBase):
                      text=ask["text"] + " And which county should I start with?"))
         self.assertIn("a3", [a["id"] for a in board.asks(self.root)], "a question of its own keeps it open")
 
+    def test_a_decision_and_the_chat_question_about_it_are_one_thing_waiting(self):
+        """2026-11-10: a turn that put a decision on the person's board and asked it in Chat was listed twice, as
+        the gate and as the question, on three projects at once."""
+        board.append(self.root, "gates.jsonl", {"type": "gate", "id": "g1", "at": board.now(),
+                     "question": "The draft of what agents say in Chat: deploy it to every project as written?"})
+        board.turn_gate(self.root, "g1")
+        opened = board.take_turn_gates(self.root)
+        self.assertEqual((opened, board.take_turn_gates(self.root)), (["g1"], []), "said once, for that turn")
+        ask = board.record_ask(self.root, "t1", "Shall I put it in, or do you want to reword it first?", explicit=True, gates=opened)
+        self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:g1"], "one thing waits: the gate")
+        self.assertEqual([a["id"] for a in board.asks(self.root)], [ask["id"]], "the turn still waits on them")
+        # a later turn says once more that the same decision is waiting, in its own words: still one
+        again = board.record_ask(self.root, "t2", "Still waiting on you: the draft of what agents say in Chat, "
+                                 "deploy it to every project as written?", explicit=True)
+        self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:g1"])
+        named = board.record_ask(self.root, "t2b", "Colony wants your own sense.\n\n**How did it turn out: better or worse?** "
+                                 "It's on your board as g1.", explicit=True)
+        self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:g1"], "it names the gate where it asks")
+        # a question of its own, beside a gate from an earlier turn, is its own thing
+        other = board.record_ask(self.root, "t3", "Which voice do you want for the sample?", explicit=True)
+        self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:g1", "ask:" + other["id"]])
+        # the gate answered: the question its turn asked is answered with it
+        board.answer_asks(self.root, "superseded")
+        board.append(self.root, "asks.jsonl", dict(ask, id="a9", key="t9"))
+        board.append(self.root, "gates.jsonl", {"type": "answer", "of": "g1", "at": board.now(), "author": "person", "text": "Both"})
+        self.assertEqual((board.asks(self.root), board.waiting_items(self.root)), ([], []))
+        self.assertTrue(again)
+
     def test_what_waits_is_counted_alike_in_every_view(self):
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
         board.record_ask(self.root, "t1", "Which format do you want?")
@@ -4898,6 +4958,11 @@ class NeedsYouTest(BoardBase):
             self.assertIn("Keep the old export?", board.needs_you(board.registry()), "left as it was: theirs again")
             self.post(port, "/answer", p=0, gate="g1", text="Yes, keep it", back="/monitor")
             self.assertNotIn("Keep the old export?", board.needs_you(board.registry()))
+            # the person, 2026-11-10: an option tapped in a status report, then Send on the empty box under it, met
+            # "Gate answer not saved". Nothing typed is nothing said: back to the page, the answer as it was
+            self.post(port, "/answer", p=0, gate="g1", text="", reply="1", back="/monitor")
+            self.assertEqual(next(g for g in board.gates(self.root) if g["id"] == "g1")["answer"], "Yes, keep it")
+            self.assertIn("inReport.replaceChildren(said)", board.ANSWERS, "and the report says what was answered, in place")
         finally:
             httpd.shutdown()
             httpd.server_close()
