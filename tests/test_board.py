@@ -1286,6 +1286,14 @@ class ChatTest(BoardBase):
         self.assertIn("'Replying to “' + firstWords(text, 2) + '”'", board.CHAT, "above the box: a word or two")
         self.assertIn("if (r && r.ok) { answering(''); mine.sent = Date.now(); return setTimeout(refresh, 600); }", board.CHAT,
                       "sent: it's done (and when, should it never reach the conversation)")
+        # listening with text on, the player's box stands in for the page's (which is hidden): ↩ goes to the box shown,
+        # and that box sends the reply's first words too
+        self.assertIn("body.gcon #composer { display:none }", board.CSS)
+        self.assertIn("const theirs = !!(P && P.reply && P.reply(key, said));", board.CHAT)
+        self.assertIn("if (!theirs) { answering(said); ta.focus(); }", board.CHAT)
+        self.assertIn("reply(key, text) { if (gc.hidden) return false;", board.PLAYER)
+        self.assertIn("const sent = (re ? '(Replying to: \"' + re.words + '\")\\n' : '') + text;", board.PLAYER)
+        self.assertIn("new URLSearchParams({p: t.key, text: sent})", board.PLAYER)
 
     def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
         board.track(self.root)

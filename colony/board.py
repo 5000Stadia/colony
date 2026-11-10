@@ -4557,6 +4557,11 @@ PLAYER = """
       if (s && playing && following() && !N.document && String(N.p) === String(v.key)) showHere(); },
     setMode(m) { try { localStorage.setItem('automode', m); } catch (e) {} draw(); if (view) view.mark(); heed(); humSync('a mode chosen'); },
     leave() { follow(null); view = null; },
+    // Chat's ↩ while the player's box stands in for the page's: taken here (true), or left to the page's own box
+    reply(key, text) { if (gc.hidden) return false;
+      const w = String(text).split(/\\s+/).filter(Boolean), p = listed().find((x) => String(x.key) === String(key)); if (!w.length || !p) return false;
+      reTo = {key: p.key, words: w.slice(0, 8).join(' ') + (w.length > 8 ? '…' : ''), more: w.length > 4};
+      anchor = {key: p.key, name: p.name, chosen: true}; keepDraft(); gcDraw(); reDraw(); gta.focus(); return true; },
     // where a chat's project is being read: the reply and part, playing or held
     of(name, key) { if (!N || N.document || (key === undefined ? N.name !== name : String(N.p) !== String(key))) return null; const s = N.blocks[N.j] || {};
       return {active: true, playing, paused, loading, t: N.t, k: s.k}; },
@@ -4597,7 +4602,7 @@ PLAYER = """
   // Chat page it stands in for the page's own box; Auto off, or reading aloud alone, the page's box is as it was.
   const gc = document.createElement('form'); gc.id = 'gc'; gc.className = 'gc'; gc.hidden = true;
   gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gcbox'><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
-    + "<div class='gcfiles' hidden></div><div class='gcrow'><button type='button' class='gcattach' aria-label='Attach photos or files'>+</button><input type='file' multiple hidden>"
+    + "<div class='gcfiles' hidden></div><div class='gcfiles gcre' hidden></div><div class='gcrow'><button type='button' class='gcattach' aria-label='Attach photos or files'>+</button><input type='file' multiple hidden>"
     + "<textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div></div>";
   document.body.appendChild(gc);
   const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
@@ -4610,6 +4615,17 @@ PLAYER = """
     if (fs.length && !anchor) anchor = target();             // a file ties it to where it is going, as a word does
     placed(); };
   on(gfile, 'change', chosen);
+  // ↩ under a reply in Chat, while this box stands in for the page's own: what is sent next answers that reply, its first
+  // words going with the message, and the box keeps its project until it is sent or ×. The page's own box alone knew of
+  // ↩, and it is hidden while this one is shown: listening, the person's ↩ did nothing they could see, and no message of
+  // theirs ever carried a reply's words (2026-11-10)
+  const gre = gc.querySelector('.gcre'); let reTo = null;       // {key, words}
+  const reDraw = () => { gre.hidden = !reTo; gre.innerHTML = '';
+    if (reTo) { const w = reTo.words.split(' '), n = document.createElement('span');
+      n.textContent = '↩ Replying to “' + w.slice(0, 4).join(' ') + (w.length > 4 || reTo.more ? '…' : '') + '”';
+      const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.setAttribute('aria-label', 'Not a reply');
+      x.addEventListener('click', () => { reTo = null; reDraw(); gta.focus(); }); gre.append(n, x); }
+    placed(); };
   const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
   let anchor = null, gcTyping = false, ridef = 0;          // anchor: {key, name, chosen} the words are for
   try { const was = JSON.parse(sessionStorage.getItem('gc') || 'null'); if (was) { anchor = was.to; gta.value = was.text || ''; } } catch (e) {}
@@ -4641,6 +4657,7 @@ PLAYER = """
     glist.hidden = false; });
   on(glist, 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return;
     const p = listed().find((x) => x.key === li.dataset.k); if (p) anchor = {key: p.key, name: p.name, chosen: true};
+    if (p && reTo && String(reTo.key) !== String(p.key)) { reTo = null; reDraw(); }      // a reply is to its own project
     glist.hidden = true; keepDraft(); placed(); });
   on(document, 'click', (ev) => { if (!glist.hidden && !ev.target.closest('#gc')) glist.hidden = true; });
   // typing on a phone, the box rides the keyboard: placed where the visible part of the page ends, the player out of the way
@@ -4671,9 +4688,12 @@ PLAYER = """
     const t = target(), text = gta.value.trim(), fs = [...gfile.files];
     if (!text && !fs.length) return;
     if (!t) { gto.click(); return; }                          // nowhere to send yet: the list, to choose
-    const body = new FormData(); body.append('p', t.key); body.append('text', text); fs.forEach((f) => body.append('file', f));
+    const re = reTo && String(reTo.key) === String(t.key) && text ? reTo : null;
+    const sent = (re ? '(Replying to: "' + re.words + '")\\n' : '') + text;
+    const body = new FormData(); body.append('p', t.key); body.append('text', sent); fs.forEach((f) => body.append('file', f));
     gta.value = ''; gfile.value = ''; chosen(); anchor = null; keepDraft(); grow(); gta.blur(); gsaid.textContent = 'Sending to ' + t.name + '…'; placed();
-    const r = await fetch('/chat/send', {method: 'POST', body: fs.length ? body : new URLSearchParams({p: t.key, text})}).catch(() => null);
+    const r = await fetch('/chat/send', {method: 'POST', body: fs.length ? body : new URLSearchParams({p: t.key, text: sent})}).catch(() => null);
+    if (r && r.ok && reTo === re) { reTo = null; reDraw(); }
     if (r && r.ok) { gsaid.textContent = 'Sent to ' + t.name; after(() => { if (gsaid.textContent === 'Sent to ' + t.name) gsaid.textContent = ''; }, 4000); return; }
     // not sent: the words come back, still for that project
     gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = {key: t.key, name: t.name, chosen: true}; keepDraft(); grow(); placed();
@@ -6432,7 +6452,18 @@ CHAT = """
     if (more) { shown = +more.dataset.n; tag = ''; moving = 0; more.textContent = 'Loading…'; refresh(); return; }
     if (ev.target.closest('button.vset')) { sheet.hidden = !sheet.hidden; return; }
     const rp = ev.target.closest('button.reply');
-    if (rp) { const s = box.querySelector(`.say[data-t="${CSS.escape(rp.dataset.t)}"]`); answering(s ? s.innerText : ''); ta.focus(); return; }
+    if (rp) {
+      // its words however the phone gives them, its time failing those: a tap on ↩ always says what is being answered,
+      // in the box that is shown (the player's, while it stands in for this page's). What the phone did goes to the log.
+      const s = box.querySelector(`.say[data-t="${CSS.escape(rp.dataset.t)}"]`), acts = rp.closest('.turnacts');
+      const when = acts && acts.querySelector('.stamp') ? acts.querySelector('.stamp').textContent.trim() : '';
+      const said = (s ? (s.innerText || s.textContent || '') : '').trim() || (when ? 'your message of ' + when : 'your last message');
+      const theirs = !!(P && P.reply && P.reply(key, said));
+      if (!theirs) { answering(said); ta.focus(); }
+      setTimeout(() => { const el = theirs ? document.querySelector('#gc .gcre') : replying, q = el.getBoundingClientRect();
+        fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify({when: 'reply-tap', box: theirs ? 'player' : 'page', found: !!s,
+          shown: !el.hidden && q.height > 0, top: Math.round(q.top), inner: innerHeight, path: location.pathname + location.search})})}).catch(() => {}); }, 1200);
+      return; }
     const cp = ev.target.closest('button.copy');
     if (cp) {                            // the reply as text, code and all; a plain-http page has no clipboard API
       const text = [...box.querySelectorAll(`.say[data-t="${CSS.escape(cp.dataset.t)}"]`)].map((x) => x.innerText).join('\\n\\n');
@@ -11839,6 +11870,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .gcfiles { margin:0 0 4px 14px; padding:2px 4px 2px 10px; width:max-content; max-width:calc(100% - 28px); font-size:12.5px; border-radius:8px;
   background:var(--card); border:1px solid var(--line); display:flex; align-items:center; gap:4px; white-space:nowrap }
 .gcfiles[hidden] { display:none } .gcfiles span { overflow:hidden; text-overflow:ellipsis }
+.gcre { color:var(--accent); background:color-mix(in srgb, var(--accent) 8%, var(--card)); border-color:color-mix(in srgb, var(--accent) 35%, var(--line)) }
 .gc .gcfiles button { width:26px; height:26px; min-height:26px; padding:0; flex:none; border:0; border-radius:50%; background:transparent;
   color:var(--muted); font-size:17px; line-height:1; cursor:pointer }
 .gc .gcsend { width:36px; height:36px; min-height:36px; padding:0; border-radius:50%; border:0; background:var(--accent); color:var(--card); font-size:18px; flex:none }
