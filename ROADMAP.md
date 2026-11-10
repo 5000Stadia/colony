@@ -198,6 +198,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 
 - [x] R72 Auto keeps consultants and the step-up helper at the shared Intelligence Index ceiling at all seven…
 - [x] R73 Restoration skips repeating a carry-over whose ID is already present in the native compaction summa…
+- [x] R153 Model data from Artificial Analysis's new free list: only the models colony weighs, no page reading
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar
 
