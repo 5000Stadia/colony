@@ -8,9 +8,10 @@ if (!window.colonyMedia) {
   const pdfLibrary = () => library ||= import('/static/pdfjs/6.4.299/pdf.mjs').then((pdf) => {
     pdf.GlobalWorkerOptions.workerSrc = '/static/pdfjs/6.4.299/pdf.worker.mjs'; return pdf;
   });
+  // A file of a project, at the opener: by the project's name (n, what the board writes) or its menu place (p, older links).
   const trusted = (source) => {
     const u = new URL(source, location.href);
-    if (u.origin !== location.origin || u.pathname !== '/open' || !u.searchParams.has('f') || !u.searchParams.has('p') || u.searchParams.has('u')) throw Error('File unavailable');
+    if (u.origin !== location.origin || u.pathname !== '/open' || !u.searchParams.has('f') || !(u.searchParams.has('n') || u.searchParams.has('p')) || u.searchParams.has('u')) throw Error('File unavailable');
     return u.href;
   };
   const documentTask = async (source) => {

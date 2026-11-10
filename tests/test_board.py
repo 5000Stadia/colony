@@ -10712,6 +10712,28 @@ class ChatMediaTest(BoardBase):
         self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
         return f'http://127.0.0.1:{server.server_address[1]}'
 
+    def test_the_viewer_accepts_the_address_the_board_writes_for_a_project_file(self):
+        """The preview and the viewer check a file's address before fetching it. The board began naming a project in
+        that address (n) where it had given its menu place (p), the check kept asking for p, and every PDF preview
+        in Chat read 'Open PDF to view' for ten days: the browser tests that draw one don't run by default. So the
+        check itself runs here against the address the board writes."""
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('Node is needed to run the viewer address check')
+        from colony import media
+        source = media.asset('media.js')[0].decode()
+        check = source[source.index('const trusted = '):].split('\n  };\n', 1)[0] + '\n  };'
+        written = html.unescape(re.search(r"data-src='([^']+)'", board.chat_prose('[PDF](three-pages.pdf)', 0, self.root)).group(1))
+        cases = {'written': written, 'older': '/open?p=3&f=a.pdf', 'no project': '/open?f=a.pdf', 'an address': '/open?n=x&f=a.pdf&u=http://x',
+                 'another page': '/chat?n=x&f=a.pdf', 'elsewhere': 'https://example.com/open?n=x&f=a.pdf'}
+        script = ("const location = {href: 'http://board.test/?n=x', origin: 'http://board.test'};\n" + check +
+                  "\nconst out = {}; for (const [k, v] of Object.entries(" + json.dumps(cases) + ")) { try { trusted(v); out[k] = true; } catch (e) { out[k] = false; } }"
+                  "\nconsole.log(JSON.stringify(out));")
+        result = subprocess.run([node, '-e', script], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {'written': True, 'older': True, 'no project': False, 'an address': False,
+                                                     'another page': False, 'elsewhere': False})
+
     def test_media_previews_and_controls_keep_the_existing_file_boundary(self):
         from colony import media
         text = board.chat_prose('![Picture](wide.svg)\n\n[PDF](three-pages.pdf)\n\n| A | B |\n|---|---|\n| 1 | 2 |', 0, self.root)
