@@ -134,7 +134,12 @@ class RefreshEvidenceTest(unittest.TestCase):
 
 # ---------------------------------------------------------------- Artificial Analysis' free list
 
+import argparse
+import contextlib
+import html
+import io
 import json
+import socket
 import time
 import urllib.error
 from unittest.mock import patch
@@ -238,7 +243,7 @@ class FreeListTest(BoardBase):
         self.assertNotIn("id='gpt-6-sol'", page, 'no card for a model left out')
 
     def test_a_retired_address_says_so_and_the_doctor_sees_the_data_go_stale(self):
-        from colony import bench, board
+        from colony import bench, board, cli
         bench.refresh(self.opener)
         gone = lambda req, timeout: (_ for _ in ()).throw(urllib.error.HTTPError(req.full_url, 410, 'Gone', {}, None))
         out = bench.refresh(gone)
@@ -251,5 +256,21 @@ class FreeListTest(BoardBase):
             f"Artificial Analysis hasn't answered since {today} (Artificial Analysis retired this address (410): "
             "colony/bench.py AA_URL needs its new one); Auto chooses on the scores and prices of that day"])
         self.assertEqual(len(policy.pairs(bench.standings())), 5, 'the last reply still stands')
+        # where model health is seen: the Models page and the doctor, once the data is days old
+        stale = dict(bench.fetched(), last=time.strftime('%Y-%m-%d', time.gmtime(time.time() - 5 * 86400)))
+        (board.home() / 'bench' / 'fetched.json').write_text(json.dumps(stale))
+        page = html.unescape(board.models_page(board.registry()))
+        self.assertIn("Model data:</strong> Artificial Analysis hasn't answered since " + stale['last'], page)
+        self.assertIn("GPT-6.2 Luna has no cost per task from Artificial Analysis yet", page)
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = str(sock.getsockname()[1])
+        (board.home() / 'server.json').write_text(json.dumps(['--port', port]))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.cmd_doctor(argparse.Namespace(tests=False))
+        self.assertEqual(code, 1)
+        self.assertIn(f"PROBLEM model data: Artificial Analysis hasn't answered since {stale['last']}", out.getvalue())
+        self.assertIn("note  model data: GPT-6.2 Luna has no cost per task", out.getvalue())
         shapeless = lambda req, timeout: Reply(dict(status=200, models=[]))
         self.assertIn("shape colony doesn't know", bench.refresh(shapeless)['error'])
