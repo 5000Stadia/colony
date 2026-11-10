@@ -439,6 +439,24 @@ def _quiet(said, h, now):
     return abs(h["tokens"] - said["tokens"]) < RESAY * max(said["tokens"], 1)
 
 
+def shrunk_at(root, files, since, tokens):
+    """When the pass landed: the first commit since `since` whose files are SHRINK smaller than `tokens`, or None
+    while the shrink is only in the working tree. Not the files' last commit: a file edited daily (the roadmap) has
+    one, unrelated, before the pass is committed (seen Nov 2) and many after it."""
+    for line in board.git(root, "log", "--reverse", f"--since={int(since)}", "--format=%H %ct", "--", *files).splitlines():
+        sha, _, at = line.partition(" ")
+        toks = sum(len(board.git(root, "show", f"{sha}:{f}").encode()) // 4 for f in files)
+        if toks <= (1 - SHRINK) * tokens:
+            return int(at)
+    return None
+
+
+def pass_cost(hours, t0, t1):
+    """The project's input from t0 to t1: each hour's by the part of it inside, not whole hours (Nov 2's 12-minute
+    pass was charged its whole hour of every session's work, 100M tokens, which put the check's estimates up 4x)."""
+    return sum(v * max(0, min(int(h) + 3600, t1) - max(int(h), t0)) / 3600 for h, v in hours.items())
+
+
 def _follow(root, past, data, size, now, state):
     """What came of each suggestion: the person's answer to the gate citing it, a pass taken (it shrank), and once
     MEASURE_AFTER has passed, what the pass cost and saved, told to the agent once."""
@@ -459,13 +477,12 @@ def _follow(root, past, data, size, now, state):
                     break
         if "taken" not in s:
             _, toks = size(files)
-            if toks <= (1 - SHRINK) * s["tokens"]:
-                t1 = int(board.git(root, "log", "-1", "--format=%ct", "--", *files).strip() or now)
-                t0 = board.epoch(s["chose"]["answered"]) if s.get("chose", {}).get("answered") else said_at
-                cost = (sum(v for h, v in data.get("hours", {}).items() if t0 - 3600 < int(h) <= t1)
-                        if t1 - t0 <= PASS_SPAN else None)       # shrunk in the course of other work: no pass cost
-                s["taken"] = {"type": "taken", "key": key, "when": t1, "cost": cost, "tokens": toks}
-                _log(root, s["taken"])
+            t0 = board.epoch(s["chose"]["answered"]) if s.get("chose", {}).get("answered") else said_at
+            t1 = shrunk_at(root, files, t0, s["tokens"]) if toks <= (1 - SHRINK) * s["tokens"] else None
+            if t1:
+                cost = pass_cost(data.get("hours", {}), t0, t1) if t1 - t0 <= PASS_SPAN else None   # shrunk in the
+                s["taken"] = {"type": "taken", "key": key, "when": t1, "cost": cost, "tokens": toks}  # course of other work:
+                _log(root, s["taken"])                                                                # no cost of its own
         if "taken" in s and now - s["taken"]["when"] >= MEASURE_AFTER:
             days = {d: v for d, v in data.get("days", {}).items() if int(d) >= s["taken"]["when"]}
             if not days:

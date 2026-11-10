@@ -250,13 +250,25 @@ class CheckTest(Base):
         gate = board.add_gate(self.root, "Take a cleanup pass on docs/guide.md first?", why=f"cleanup {note['id']}",
                               default="Skip for now and carry on")
         board.answer_gate(self.root, gate["id"], "Take it", tell=False)
-        (self.root / "docs" / "guide.md").write_text("guide line\n" * 200)       # the pass: half the size
-        subprocess.run(["git", "-C", str(self.root), "commit", "-qam", "Trim the guide"], check=True, capture_output=True)
+        t0 = board.epoch(board.gates(self.root)[-1]["answered_at"])
+        state = cleanup.load()                                       # every session's input: 1,000 tokens a second
+        state["projects"][str(self.root)]["hours"] = {str(int(t0 // 3600 * 3600 + 3600 * k)): 3_600_000 for k in range(-3, 4)}
+        board.save_json(cleanup.ledger_path(), state)
+        guide = self.root / "docs" / "guide.md"
+        def commit(text, message, after):
+            guide.write_text(text)
+            env = dict(os.environ, GIT_COMMITTER_DATE=f"@{int(t0 + after)} +0000", GIT_AUTHOR_DATE=f"@{int(t0 + after)} +0000")
+            subprocess.run(["git", "-C", str(self.root), "commit", "-qam", message], check=True, capture_output=True, env=env)
+        commit(guide.read_text() + "one more line\n", "An unrelated edit", 300)      # the file's commits go on around it
+        commit("guide line\n" * 200, "Trim the guide", 1800)                      # the pass: half the size
+        commit("guide line\n" * 201, "Another edit", 3000)
         self.finish("R3")
         cleanup.check(self.root, now + 60)
         rec = cleanup.history(self.root)["startup"]
         self.assertEqual((rec["chose"]["answer"], rec["chose"]["by"]), ("Take it", "person"))
-        self.assertEqual(rec["taken"]["tokens"], len("guide line\n") * 200 // 4)
+        self.assertEqual(rec["taken"]["tokens"], len("guide line\n") * 201 // 4)
+        self.assertEqual(rec["taken"]["when"], int(t0 + 1800), "the pass's own commit, not the file's last")
+        self.assertAlmostEqual(rec["taken"]["cost"], 1_800_000, delta=1000, msg="its half hour, not the hours around it")
         later = now + 8 * DAY                                                       # a week of reading after the pass
         days = {}
         for k in range(7):
@@ -269,7 +281,7 @@ class CheckTest(Base):
         cleanup.check(self.root, later)
         rec = cleanup.history(self.root)["startup"]
         self.assertLess(rec["measured"]["after"], rec["measured"]["before"])
-        self.assertEqual(rec["measured"]["cost"], 7_000_000)
+        self.assertAlmostEqual(rec["measured"]["cost"], 1_800_000, delta=1000)
         self.assertIn("measured since it shrank", self.notes()[-1]["text"])
         self.assertIn("calib", json.loads((self.root / ".board" / "cleanup.json").read_text()))
 
