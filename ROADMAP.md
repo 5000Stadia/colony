@@ -146,7 +146,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 
 - [x] R35 Ready to publish
 - [x] R102 A colony showcase
-- [~] R125 A fresh install reaches a working board — a short recheck on Claude remains; the steward choice at install goes with R152 (related: R130, R152)
+- [~] R125 A fresh install reaches a working board — a short recheck on Claude remains (related: R130, R152)
 - [x] R126 Overview, Roadmap, Library and Showcase
 - [x] R128 Pictures, PDFs and tables in Chat open full screen
 - [x] R129 What the person asked colony-codex directly during Claude's pause
@@ -225,7 +225,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 
 - [x] R137 Waiting costs nothing
 - [x] R138 A helper never wakes its lead just to say it is still waiting
-- [~] R139 When a cleanup pass pays — each project's check suggests a pass when it clearly pays; its first, on this file, taken; on hold: colony measures that pass's payback itself after a week of reading (Nov 9) and notes it here, then done (related: R143, R140)
+- [x] R139 When a cleanup pass pays — the per-project check; its first pass (the roadmap) measured: paid back in about 2.75 weeks
 - [~] R144 Topics closed as they end — the agent closes each topic as the conversation moves on (`colony topic-closed`, settled or parked), and colony clears it from context at the next pause, with a relevance-steered summary; reminded at two sizes; watched live, not blind-tested (the person's call) (related: R139, R143)
 - [x] R143 A small roadmap
 - [x] R132 A bar for a creative item, picked by the person from real examples
