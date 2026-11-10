@@ -3,7 +3,8 @@
 A command an agent put in the background, or a helper it started, can outlive its use: a waiter whose run ended
 elsewhere, a test server, a helper stuck on nothing. Age says nothing about it (Bookflow's suites run 4-6 hours, a
 builder helper 10), so colony watches what each does. A command is quiet while it and everything it started gain no
-CPU time and write nothing (to its output file, a pipe, anywhere: the kernel counts each process's writes); a
+CPU time and write nothing (to its output file, a pipe, anywhere: the kernel counts each process's writes, and its
+wake-ups to itself are told apart from output); a
 helper is quiet while its own transcript is not written and no command of the project's is stirring. Once something has been quiet two hours and the agent has sat idle half an hour (with
 nothing typed in its box and no one looking at it), colony types one line into its console naming what is quiet,
 so the agent stops what is done and leaves what is meant to stay. Each thing is named once, ever: that memory is the
@@ -56,12 +57,32 @@ def _cmdline(pid):
         return ""
 
 
+_io = {}                     # (pid, its start) -> [bytes written, write calls, bytes counted as output]
+
+
 def _written(pid):
-    """Bytes a process has written so far, wherever to, from /proc: a pipe's progress shows without reading it."""
+    """Bytes a process has written so far as output, wherever to, from /proc: a pipe's progress shows without reading
+    it. A program's wake-ups to itself are not output: between two looks, writes of exactly 8 bytes each (an eventfd)
+    or 1 each (a pipe to itself) are left out. A Codex run stuck waiting on its input made 12 such writes a minute and
+    nothing else (measured 2026-11-09), so by the bytes alone it never looked quiet: four of Bookflow's sat 20 hours
+    unnamed."""
     try:
-        return int(next(l for l in Path(f"/proc/{pid}/io").read_text().splitlines() if l.startswith("wchar:")).split()[1])
-    except (OSError, StopIteration, ValueError, IndexError):
+        io = dict(l.split(": ") for l in Path(f"/proc/{pid}/io").read_text().splitlines())
+        wrote, calls, start = int(io["wchar"]), int(io["syscw"]), (_stat(pid) or (0,))[0]
+    except (OSError, KeyError, ValueError):
         return 0
+    if len(_io) > 4000:
+        for k in [k for k in _io if (_stat(k[0]) or (None,))[0] != k[1]]:
+            del _io[k]
+    was = _io.get((pid, start))
+    if not was:
+        _io[(pid, start)] = [wrote, calls, wrote]
+        return wrote
+    grew, by = wrote - was[0], calls - was[1]
+    if grew and not (by > 0 and grew in (by, 8 * by)):
+        was[2] += grew
+    was[0], was[1] = wrote, calls
+    return was[2]
 
 
 def _entry(pid, what):

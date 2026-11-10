@@ -2244,6 +2244,40 @@ class LingeringTest(BoardBase):
             self.assertFalse(any("progress.py" in x for x in typed))
 
 
+    def test_a_programs_wake_ups_to_itself_are_not_output_so_a_run_stuck_on_its_input_looks_quiet(self):
+        """Bookflow, 2026-11-09: four Codex runs waiting on an input that never ended sat 20 hours and were never named.
+        Each wrote 8 bytes to an eventfd every 5 s, and any byte written had counted as work."""
+        from colony import lingering as L
+        if not hasattr(os, "eventfd"):
+            self.skipTest("no eventfd here")
+        done = Path(self.tmp.name) / "woke"
+        child = subprocess.Popen([sys.executable, "-c", (
+            "import os, sys\n"
+            "e = os.eventfd(0)\n"
+            "for line in sys.stdin:\n"
+            "    if line.strip() == 'wake':\n"
+            "        for _ in range(5): os.eventfd_write(e, 1)\n"
+            "        os.mkdir(sys.argv[1])\n"
+            "    else:\n"
+            "        os.write(1, b'x' * 78)\n"), str(done)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.addCleanup(child.kill)
+        child.stdin.write(b"say\n"); child.stdin.flush()
+        self.assertEqual(len(child.stdout.read(78)), 78)
+        first = L._written(child.pid)
+        self.assertGreaterEqual(first, 78, "what it wrote before colony first looked counts")
+        child.stdin.write(b"wake\n"); child.stdin.flush()
+        for _ in range(500):
+            if done.exists():
+                break
+            time.sleep(0.01)
+        self.assertTrue(done.exists())
+        self.assertEqual(L._written(child.pid), first, "five 8-byte wake-ups are not output")
+        child.stdin.write(b"say\n"); child.stdin.flush()
+        self.assertEqual(len(child.stdout.read(78)), 78)
+        self.assertEqual(L._written(child.pid), first + 78, "progress written to a pipe still is")
+        entry = L._entry(child.pid, "codex exec")
+        self.assertEqual(entry["wrote"], first + 78)
+
     def test_what_an_ended_console_left_running_is_found_with_no_tokens_and_told_once_or_listed_with_stop(self):
         # 2026-10-28: 15 scopes still running from consoles that had ended, 1.3 GB, the oldest from Oct 3. The person:
         # "a very low profile system that can quickly identify that ... that takes no tokens"; their choice, "Tell, and
