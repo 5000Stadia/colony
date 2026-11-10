@@ -85,6 +85,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R3 Review only where the person declared risk
 - [x] R4 Every part as a claim tested against a single agent
 - [x] R5 The guide
+- [ ] R154 What the person hears: an item's shape, not each nail — proposed, waiting on the person's reading of the draft: the deployed block says what Chat carries (an item starting, something to weigh, an item done, each sized), and Chat folds the lines said between steps. Why: a day of one project's chat buried each item's shape under 280 mid-work messages. (related: R144, R96)
 
 ## M2 — The board: every project on one page
 
