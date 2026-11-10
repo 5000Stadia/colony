@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from colony import board, console, context, monitor
+from colony import board, console, context, monitor, signin, tokens
 from colony.codex_transfer import atomic_json
 
 
@@ -20,6 +20,10 @@ class ContextTest(unittest.TestCase):
         self.env = patch.dict(os.environ, COLONY_BOARD_HOME=str(Path(self.tmp.name) / 'home'),
                               COLONY_PROJECT=str(self.root), COLONY_CONSOLE=console.session_name(self.root))
         self.env.start(); self.addCleanup(self.env.stop)
+        # The watcher's sign-in recheck and the usage count run on threads that outlive a test: they then read the next
+        # test's home, or write into one being removed (a cleanup failure seen 2026-11-10). Each has its own tests.
+        for module, name in ((signin, 'request_check'), (tokens, 'update')):
+            held = patch.object(module, name); held.start(); self.addCleanup(held.stop)
         board.save_registry({'projects': [], 'settings': {'provider': 'codex', 'messaging': False}})
         self.path = self.root / 'rollout.jsonl'; self.path.touch()
         self.s = dict(provider='codex', id='exact-id', path=str(self.path))

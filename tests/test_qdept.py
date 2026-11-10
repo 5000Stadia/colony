@@ -486,6 +486,22 @@ class QDept(Base):
         with self.assertRaises(KeyError):
             board.project_settings(self.root, {"research_source": "../etc"})
 
+    def test_looking_before_researching_finds_the_shelfs_guide(self):
+        """An agent that looks in the library before researching is shown the curated guide on its subject."""
+        for asked in ("memory architecture", "agent memory guide", "a vector store for recall", "compaction"):
+            self.assertEqual([g["title"] for g in qdept.shelf_look(asked)], ["Agent memory architecture"], asked)
+        for asked in ("memory leak in a C program", "payment providers for small shops", "architecture", ""):
+            self.assertEqual(qdept.shelf_look(asked), [], asked)
+        import contextlib, io
+        from colony import cli
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["research", "memory", "architecture"])
+        self.assertEqual(code, 0)
+        first = out.getvalue().splitlines()[0]
+        self.assertTrue(first.startswith("guide  Agent memory architecture"), first)
+        self.assertIn(str(qdept.shelf_dir() / "memory.md"), first)
+
     def test_seed_shelf_carries_no_project_labels(self):
         text = (qdept.SEED / "memory.md").read_text()
         self.assertNotIn("observed in", text)

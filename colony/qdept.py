@@ -214,6 +214,19 @@ def term_hit(term, text):
     return re.search(pattern, text, re.I) is not None
 
 
+def shelf_look(query):
+    """The curated guides a few words point at, for an agent that looks before researching: one of a guide's match
+    terms is in the words, or two of the words are in its title and terms."""
+    from . import research
+    want = research.words(query)
+    out = []
+    for entry in curated().values():
+        named = len(want & research.words(f"{entry['title']} {' '.join(entry['terms'])}"))
+        if any(term_hit(t, query) for t in entry["terms"]) or named >= 2:
+            out.append(entry)
+    return out
+
+
 def match(text):
     """The first curated entry one of whose terms is in text, as (id, term), or None."""
     for eid, entry in curated().items():

@@ -946,8 +946,14 @@ def cmd_research(a):
             return 2
         return 0
     found = research.look(" ".join(a.words)) if a.words else research.entries()[:20]
+    from . import qdept
+    guides = qdept.shelf_look(" ".join(a.words)) if a.words else list(qdept.curated().values())
+    for g in guides:                                    # first: a guide kept from measured outcomes beats a quick search
+        print(f"guide  {g['title']} — a guide Q Branch keeps from measured outcomes; read it first: {g['path']}")
     for r in found:
         print(research.line(r))
+    if not found and guides:
+        return 0
     if not found:
         print("Nothing in the library on that." if a.words else "The library is empty.")
     else:

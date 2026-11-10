@@ -60,7 +60,8 @@ nothing of the project in its subject or requirements:
     Decisions:
     - Which store for recalled notes? Default: plain Markdown files in the repository.
 
-Colony researches it before the item starts and hands you the result then. Later, when a change brings in a decision
+Colony researches it while the item before it is built, or as it starts when nothing was being built: never hold an
+item for its research. Start it when its turn comes; a note says the guide is coming, then where it is. Later, when a change brings in a decision
 the research should cover and doesn't, and its answer could change what you do, add that decision line: only it is
 researched. Rewording, a changed default or new detail runs nothing.
 
