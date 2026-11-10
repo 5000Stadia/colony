@@ -9108,6 +9108,17 @@ class LineTest(BoardBase):
         self.assertEqual(self.keys(self.line()), [f"s{t}-4", f"s{t}-8"])
         # one already heard stays heard, and is no part of the reply played again
         self.assertNotIn(f"s{t}-6", [k for x in board.heard_list(board.projects(board.registry()))["heard"] for k, _ in x["b"]])
+        # a turn that said only working notes (at work, or cut short by the next message) keeps its latest open: the
+        # row under it (copy, reply, read aloud) always has a message to take
+        u = self.at(11, 0)
+        self.talk(self.root, ("you", u, "And the docs?"), ("say", self.at(11, 1), "Reading the docs folder first."),
+                  ("step", self.at(11, 2), "ls docs"), ("say", self.at(11, 3), "Two pages name the old flag: fixing both."),
+                  ("step", self.at(11, 4), "sed -i s/a/b/ docs/*.md"))
+        mine = board.chat_feed("0", self.root).split("And the docs?")[1]
+        self.assertEqual(mine.count("class='say'"), 1)
+        self.assertIn("Two pages name the old flag", mine.split("class='say'")[1].split("class='turnacts'")[0])
+        self.assertIn("<li class='note'>Reading the docs folder first.</li>", mine)
+        self.assertIn(f"<button class='reply' data-t='{u}'", mine)
 
     def test_a_first_seen_historical_session_starts_at_its_end_and_keeps_new_work(self):
         path = self.talk(self.root, ('you', self.at(8, 0), 'Old work'), ('say', self.at(8, 1), 'Old reply'))

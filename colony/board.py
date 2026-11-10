@@ -5729,16 +5729,22 @@ def chat_feed(key, root, shown=SHOWN):
         elif t["from"] == "compact":
             out.append("<div class='msg colony'>The conversation was compacted here</div>")
         run, last_step = [], max((j for j, (kind, _) in enumerate(t["items"]) if kind == "step"), default=-1)
+        notes = {j for j, (kind, text) in enumerate(t["items"]) if kind == "say" and j < last_step and a_note(text)}
+        # a turn never folds all it said: where every line was a working note (a turn at work, or one cut short by the
+        # next message), the latest stays open. With none open, the turn showed only "Ran 9 commands", and ↩ and copy
+        # under it had nothing to take (the person, 2026-11-10: the reply button did nothing)
+        if notes and all(j in notes for j, (kind, _) in enumerate(t["items"]) if kind == "say"):
+            notes.discard(max(notes))
         for j, (kind, text) in enumerate(t["items"] + [("end", "")]):
             # a working note (one short line, work going on after it) folds with the work around it; the newest line of
             # a turn at work has nothing after it yet, so it shows until more work comes
-            if kind == "step" or (kind == "say" and j < last_step and a_note(text)):
+            if kind == "step" or j in notes:
                 run.append((kind, text))
                 continue
             if run:
                 steps = [x for kind_, x in run if kind_ == "step"]
-                notes = len(run) - len(steps)
-                line = " · ".join(filter(None, [chat.worked(steps) if steps else "", f"{notes} note{'s' if notes != 1 else ''}" if notes else ""]))
+                noted = len(run) - len(steps)
+                line = " · ".join(filter(None, [chat.worked(steps) if steps else "", f"{noted} note{'s' if noted != 1 else ''}" if noted else ""]))
                 out.append(f"<details class='ran' data-k='r{k}-{j}'><summary>{e(line)}</summary><ul>"
                            + "".join(f"<li class='note'>{e(x.strip())}</li>" if kind_ == "say" else f"<li>{e(x)}</li>" for kind_, x in run)
                            + "</ul></details>")

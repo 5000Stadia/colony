@@ -63,7 +63,10 @@ def blocker(root, snap=None):
     if paused:
         window = paused.get('window', 'usage')
         reset = usage.when(paused.get('resets_at'))
-        return {'code': 'usage-pause', 'reason': f"recipient is in its configured {window} safe-pause window; resets {reset}"}
+        # colony won't start it before the reset, but a recipient the person is working with reads its mail at its next
+        # turn: said so, since "delayed; resets Saturday" was relayed to the person as a project paused until then
+        return {'code': 'usage-pause', 'reason': f"recipient is in its configured {window} safe-pause window (resets {reset}): "
+                                                 "colony won't start it for this before then; it reads it at its next turn, which can be sooner"}
     if snap and snap.get('delivery_blocker'):
         known = snap['delivery_blocker']
         return {'code': known.get('code', ''), 'reason': known['reason']}

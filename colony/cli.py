@@ -1585,7 +1585,7 @@ def cmd_send(a):
           + (" (as plain mail: it says no reply is needed)" if a.ask and not m["ask"] else "")
           + (" (dev report: quiet, it waits for their next turn)" if m.get("dev") else ""))
     if delivery.get('status') == 'delayed':
-        print(f"delivery delayed: {delivery['reason']}")
+        print(f"{'delivery may wait' if delivery.get('code') == 'usage-pause' else 'delivery delayed'}: {delivery['reason']}")
     return 0
 
 
@@ -1599,7 +1599,7 @@ def cmd_reply(a):
         raise SystemExit(str(err))
     print(f"reply to {a.id}: queued {m['id']} to {m['to']} for session handoff")
     if m.get('delivery', {}).get('status') == 'delayed':
-        print(f"delivery delayed: {m['delivery']['reason']}")
+        print(f"{'delivery may wait' if m['delivery'].get('code') == 'usage-pause' else 'delivery delayed'}: {m['delivery']['reason']}")
     return 0
 
 
