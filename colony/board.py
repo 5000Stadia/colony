@@ -3528,11 +3528,12 @@ PLAYER = """
   const keyOf = (u) => u.replace('&auto=1', '');  // a clip is the same clip, read by itself or on a tap
   const making = new Map();
   const cancelClips = () => { making.forEach((x) => x.controller && x.controller.abort()); making.clear(); };
-  const make = (p, v) => { const u = abs(clip(p, v)), key = keyOf(u);
+  // pre: made ahead of the listening, so the board makes it after the clip being waited for
+  const make = (p, v, pre) => { const u = abs(clip(p, v)), key = keyOf(u);
     if (kept.has(key)) return Promise.resolve();
     if (making.has(key)) return making.get(key).promise;
     const request = {controller: typeof AbortController === 'undefined' ? null : new AbortController()};
-    request.promise = fetch(u, request.controller ? {signal: request.controller.signal} : {}).then((r) => r.ok ? r.blob() : null).then((b) => {
+    request.promise = fetch(u + (pre ? '&pre=1' : ''), request.controller ? {signal: request.controller.signal} : {}).then((r) => r.ok ? r.blob() : null).then((b) => {
       if (request.controller && request.controller.signal.aborted) return;
       if (!b) { failed.add(key); return; }
       kept.set(key, URL.createObjectURL(b)); ready.add(key);
@@ -3563,6 +3564,11 @@ PLAYER = """
     if (bs) { const r = {name: info.name, named: named(info.name, false), blocks: wantedKeys(x).map((k) => bs.find((b) => b.k === k)).filter(Boolean)};
       r.blocks.forEach((b, j) => piecesOf(r, j).filter((p) => p.trim()).forEach((p) => { if (out.length < AHEAD) out.push([p, info.voice]); })); }
     return out; };
+  // The person moved (⏭, ⏮, a section, another reply): the clips asked for from where they were and not wanted from
+  // where they are now are let go, so the board makes the one they are on first and then the next (the person,
+  // 2026-11-09: skipping past several left the board making each skipped one in turn before the one they were on).
+  const letGoStale = () => { const want = new Set(upcoming().map(([p, v]) => keyOf(abs(clip(p, v)))));
+    making.forEach((x, key) => { if (!want.has(key)) { if (x.controller) x.controller.abort(); making.delete(key); } }); };
   function warm() {
     if (warming || (playing && loading && !(paused && why === 'dictation'))) return;
     if (!N && (!L.ready || !able() || mode() === 'text' || opened)) return;
@@ -3570,7 +3576,7 @@ PLAYER = """
     const ahead = upcoming(), next = ahead.find(([p, v]) => { const key = keyOf(abs(clip(p, v))); return !kept.has(key) && !failed.has(key); });
     if (next) {
       warming = true;
-      make(next[0], next[1]).then(() => { warming = false; warm(); });
+      make(next[0], next[1], true).then(() => { warming = false; warm(); });
       return;
     }
     const x = !N ? nextUp() : !N.document && ahead.length < AHEAD && nextAfter();
@@ -3814,7 +3820,7 @@ PLAYER = """
     const parts = piecesOf(N, j).filter((p) => p.trim());
     from = Math.min(from, Math.max(0, parts.length - 1));
     hush(true); N.j = j; N.piece = from; partBegan = Date.now(); rememberTextTarget(); playing = true; paused = false; why = null; now = null; sent = -1; said = N.name; saidAt = Date.now();
-    resting = 0; humSync('a reply');
+    resting = 0; humSync('a reply'); letGoStale();
     loading = !N.silent && !(N.kokoro && parts[from] && ready.has(keyOf(abs(clip(parts[from], N.kvoice))))); save(); changed();
     if (!parts.length) return done(j);
     const shown = showHere(), x = !N.document && j + 1 >= N.blocks.length && nextAfter();
@@ -4174,10 +4180,12 @@ PLAYER = """
     const u = get('lineundo'), live = !!(u && Date.now() - u.at < 600e3);
     $('.cpundo').hidden = !live; if (live) $('.cpundo span').textContent = 'Cleared ' + u.n + (u.n === 1 ? ' reply' : ' replies');
   }
-  const place = () => { if (N && N.seat === 'heard' && rerun) return ' · ' + (rerun.total - rerun.rest.length) + ' of ' + rerun.total;
+  // How many replies come after the one being read, and nothing else (the person, 2026-11-09: "3 of 7" didn't say what
+  // it counted): those still to be read in this run, and any reading ⏮ went back from.
+  const comesAfter = (n) => ' · ' + (n ? n + ' more' : 'last one');
+  const place = () => { if (N && N.seat === 'heard' && rerun) return comesAfter(rerun.rest.length);
     if (!S || !N || N.tapped || !S.begun.has(N.id)) return '';
-    const left = visible().filter((x) => S.want.has(id(x)) && !S.begun.has(id(x))).length;
-    return ' · ' + S.begun.size + ' of ' + (S.begun.size + left); };
+    return comesAfter(ahead.length + visible().filter((x) => S.want.has(id(x)) && !S.begun.has(id(x))).length); };
   function drawTextFollow() {
     const inChat = readingFollow.inChat(), target = textTarget();
     const message = !aloud() ? 'Auto text follow is off' : autoPaused() ? 'Auto is paused; new replies queue'
@@ -10100,6 +10108,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _left(self):
+        """Whether whoever asked has closed the connection: nothing more to read on it, where a waiting one has none
+        yet and a next request has bytes."""
+        import select
+        import socket
+        try:
+            return bool(select.select([self.connection], [], [], 0)[0]) and \
+                self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+        except (OSError, ValueError):
+            return True
+
     def _send(self, code, body):
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -10314,7 +10333,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, opener.sweep(reg).encode())
         if url.path == "/voice":                      # a few sentences in Kokoro's voice, made here (or kept)
             from . import voice
-            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0])
+            # a clip asked for and then skipped past isn't made: the page drops its ask, and its place in the line goes
+            clip = voice.speak((q.get("t") or [""])[0], (q.get("v") or ["bm_fable"])[0], ahead=bool(q.get("pre")), gone=self._left)
+            if not clip and self._left():
+                self.close_connection = True
+                return
             ask = self.headers.get("Range", "")
             voice.heard(ask + (" auto" if q.get("auto") else ""), self.headers.get("User-Agent", ""), bool(clip))
             if not clip:

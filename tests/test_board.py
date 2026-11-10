@@ -1671,6 +1671,91 @@ class ChatTest(BoardBase):
             r = urllib.request.urlopen(urllib.request.Request(url, headers={"Host": host}))
             self.assertEqual((r.status, r.read(), r.headers["Content-Type"]), (200, b"ID3mp3", "audio/mpeg"))
 
+    def test_a_clip_skipped_past_isnt_made_and_the_one_listened_to_comes_first(self):
+        """R150, the person's report of 2026-11-09: skipping past several left each skipped clip made in turn."""
+        import socket
+        from colony import voice
+        made, going, free = [], threading.Event(), threading.Event()
+
+        def ask(line):
+            made.append(line["text"])
+            if len(made) == 1:                        # the first holds the voice until the others are all in line
+                going.set()
+                free.wait(10)
+            Path(line["out"]).write_bytes(b"ID3mp3")
+            return {}
+
+        def waiting(n):
+            for _ in range(200):
+                if len(voice._asks) >= n:
+                    return True
+                time.sleep(0.02)
+            return False
+        left, got = threading.Event(), {}
+
+        def say(text, **how):
+            t = threading.Thread(target=lambda: got.__setitem__(text, voice.speak(text, "am_echo", **how)), daemon=True)
+            t.start()
+            return t
+        with patch.object(voice, "ready", return_value=True), patch.object(voice, "_ask", ask):
+            threads = [say("Being made.")]
+            self.assertTrue(going.wait(10))
+            for n, (text, how) in enumerate([("Skipped past.", dict(gone=left.is_set)), ("Listened to earlier.", {}),
+                                             ("Made ahead.", dict(ahead=True)), ("Listened to now.", {})], 1):
+                threads.append(say(text, **how))
+                self.assertTrue(waiting(n), text)
+            left.set()                                # the page dropped its ask for the one skipped past
+            threads[1].join(10)
+            self.assertIsNone(got["Skipped past."])
+            free.set()
+            for t in threads:
+                t.join(10)
+            self.assertEqual(made, ["Being made.", "Listened to now.", "Listened to earlier.", "Made ahead."],
+                             "the newest one listened to first, the one made ahead last, the skipped one never")
+            self.assertEqual((voice._asks, voice._serving), ([], []))
+            # over the wire: a page that closes its ask while it waits for the voice is seen to have left
+            from http.server import ThreadingHTTPServer
+            server = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.shutdown)
+            host = f"127.0.0.1:{server.server_address[1]}"
+            seen = {}
+
+            def standin(text, v, ahead=False, gone=None):
+                seen["ahead"], seen["open"] = ahead, gone()
+                client.close()
+                for _ in range(200):
+                    if gone():
+                        break
+                    time.sleep(0.02)
+                seen["closed"] = gone()
+                seen["done"] = True
+            with patch.object(voice, "speak", standin):
+                client = socket.create_connection(server.server_address)
+                client.sendall(f"GET /voice?v=am_echo&t=Hello&pre=1 HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+                for _ in range(200):
+                    if seen.get("done"):
+                        break
+                    time.sleep(0.02)
+            self.assertEqual(seen, {"ahead": True, "open": False, "closed": True, "done": True})
+        js = board.player_js()
+        self.assertIn("letGoStale();", js, "a move drops the asks the new place has no use for")
+        self.assertIn("make(next[0], next[1], true)", js, "a clip made ahead says so")
+        self.assertIn("const comesAfter = (n) => ' · ' + (n ? n + ' more' : 'last one');", js,
+                      "the bar counts the replies after the one being read, not a place in a total")
+        self.assertNotIn("' of ' + rerun.total", js)
+
+    def test_the_players_script_parses(self):
+        """A name declared twice stops the whole player loading, and nothing else here runs its script (2026-11-09)."""
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("no node here to parse it")
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "player.js"
+            f.write_text(board.player_js())
+            r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr[:600])
+
     def test_each_voices_sample_is_made_once_and_kept_for_good(self):
         from colony import voice
         made = []

@@ -2,6 +2,7 @@
 paid for. Optional: `colony voice --setup` installs it in colony's own folder, apart from colony's Python; without it,
 Chat reads with the phone's own voice."""
 import hashlib
+import itertools
 import json
 from pathlib import Path
 import re
@@ -32,6 +33,7 @@ SAMPLE = ("Here's how I sound. The quick brown fox jumps over the lazy dog, and 
 IDLE = 600                 # seconds without a word before Kokoro is let go: its memory back, a moment's start next time
 KEEP = 300                 # clips kept, newest first: a reply played again plays at once
 _lock, _worker = threading.Lock(), {}
+_line, _asks, _serving, _order = threading.Condition(), [], [], itertools.count(1)
 
 
 def folder():
@@ -213,8 +215,40 @@ def spoken(text):
     return re.sub(r" ([.,!?;:])", r"\1", re.sub(r"[ \t]+", " ", text)).strip()
 
 
-def speak(text, voice=None):
-    """An MP3 of the text in the voice: kept, so the same words again come at once. None where it can't be made."""
+def _turn(out, ahead, gone):
+    """Wait for the voice, which makes one clip at a time. The clip being listened to comes before one made ahead of
+    the listening; of those listened to, the newest ask first, since that is what the person went on to; those made
+    ahead, in the order asked. An asker who has left (they skipped on, or closed the page) gives up its place, so
+    nothing is made for a clip no one waits for. True: the voice is this ask's, to give back with _free. False: the
+    clip was made meanwhile. None: the asker left."""
+    n = next(_order)
+    me = (1, n) if ahead else (0, -n)
+    with _line:
+        _asks.append(me)
+        try:
+            while True:
+                if out.exists():
+                    return False
+                if gone and gone():
+                    return None
+                if not _serving and min(_asks) == me:
+                    _serving.append(me)
+                    return True
+                _line.wait(0.1 if gone else 1)
+        finally:
+            _asks.remove(me)
+            _line.notify_all()
+
+
+def _free():
+    with _line:
+        _serving.clear()
+        _line.notify_all()
+
+
+def speak(text, voice=None, ahead=False, gone=None):
+    """An MP3 of the text in the voice: kept, so the same words again come at once. None where it can't be made, or
+    where the asker left before its turn (gone, a check the asker gives; ahead: made ahead of the listening)."""
     voice = voice if voice in dict(VOICES) else DEFAULT
     text = spoken(" ".join(text.split()))[:1200]
     if not text or not ready():
@@ -226,11 +260,18 @@ def speak(text, voice=None):
     out = kept / (hashlib.sha1(f"{voice}\n{text}\nlead\n".encode()).hexdigest() + ".mp3")
     if out.exists():
         return out
-    with _lock:                                          # one at a time: the worker reads one line, answers one
-        if not out.exists():
-            got = _ask({"text": text, "voice": voice, "out": str(out)})
-            if got.get("error"):
-                return None
+    mine = _turn(out, ahead, gone)
+    if mine is None:
+        return None
+    if mine:
+        try:
+            with _lock:                                  # one at a time: the worker reads one line, answers one
+                if not out.exists():
+                    got = _ask({"text": text, "voice": voice, "out": str(out)})
+                    if got.get("error"):
+                        return None
+        finally:
+            _free()
     def made(f):                                         # another ask may have trimmed it a moment ago
         try:
             return f.stat().st_mtime
