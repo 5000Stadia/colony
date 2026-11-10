@@ -310,6 +310,14 @@ def commits(root, items):
     when each item was first said to be built. Returns (signals, commit times)."""
     out = git(root, "log", "--reverse", "--no-color", "--format=%H%x1f%aI%x1f%s")
     sigs, times = [], []
+    # Three faults a research project's finished milestone showed (2026-11-10: ten signals, none of them rework):
+    # an item named twice in a commit counted twice; another project's item ("a brief on Shop R8") counted as this
+    # one's; and a passing mention ("R12 started ... R8's judge unchanged") counted as R8 worked again.
+    try:
+        names = [board.name_of(q) for q in board.projects(board.registry()) if Path(q).resolve() != Path(root).resolve()]
+    except Exception:
+        names = []
+    theirs = re.compile(r"\b(?:" + "|".join(re.escape(n) for n in names if n) + r")(?:'s)?\s+(R\d+)\b") if names else None
     for line in out.splitlines():
         try:
             h, at, subj = line.split("\x1f", 2)
@@ -318,7 +326,11 @@ def commits(root, items):
         t = stamp(at)
         times.append(t)
         ev = {"type": "commit", "ref": h[:12], "line": short(subj, 300)}
-        refs = [r for r in REF.findall(subj) if r in items]
+        foreign = set(theirs.findall(subj)) if theirs else set()
+        refs = list(dict.fromkeys(r for r in REF.findall(subj) if r in items and r not in foreign))
+        lead = re.match(r"\W*(R\d+)\b", subj)
+        # the item a commit works on: the one it leads with, or the only one it names
+        worked = {lead[1]} if lead else set(refs) if len(refs) == 1 else set()
         for r in refs:
             if BUILT.search(subj) and not items[r].get("built"):
                 items[r]["built"] = at
@@ -337,7 +349,7 @@ def commits(root, items):
         flagged = False
         for r in refs:
             done = items[r].get("done")
-            if done and t > stamp(done) and h[:12] != items[r].get("done_commit") and CHURN.search(subj):
+            if done and t > stamp(done) and h[:12] != items[r].get("done_commit") and CHURN.search(subj) and r in worked:
                 sigs.append(signal(root, "friction", "finished item worked again", at, subj, ev, r, explicit=False))
                 flagged = True
             elif ((not done or t < stamp(done)) and stamp(items[r].get("started") or items[r]["created"]) <= t

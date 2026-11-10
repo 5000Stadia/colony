@@ -62,8 +62,8 @@ class Watcher:
                 measures.check(p)               # its measures, taken by colony at each push and milestone finished
                 from . import hints
                 hints.check(p)                  # a milestone finished: the plan's shape hints, once, quietly
-                from . import warning_signs
-                warning_signs.ask_verdicts(p)   # and the person's verdict on it, once (R146)
+                # (colony no longer asks the person for a verdict at each milestone: stopped on their word,
+                # 2026-11-10, until the need and the method are talked through with them, R146)
                 from . import cleanup
                 cleanup.check(p)                # an item finished: a cleanup pass that clearly pays, said once (R139)
                 from . import weakened

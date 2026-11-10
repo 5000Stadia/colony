@@ -124,7 +124,9 @@ def tick(now=None):
         away = "" if hours.active() else (f" The person is away{' until ' + hours.at_day(board.epoch(until)) if until else ''}: "
                                           "take what doesn't need them.")
         text = (f"[colony] Idle, with roadmap items that can start: {', '.join(items[:6])}"
-                f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision. "
+                f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision; "
+                # the moment an item starts unasked is this one (R154): its shape reaches the person before the work does
+                f"as it starts, tell the person its shape (roadmap.md, Starting an item). "
                 # a hold said only in the reply is read by no one: the next commit would wake it for the same item
                 f"If something holds one, record it where it lasts: a decision for the person as a gate on it "
                 f"(colony gate ... --item {items[0]}), anything else as \"on hold: why\" in its text.{away}")

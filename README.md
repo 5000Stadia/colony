@@ -57,8 +57,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   Esc/Tab/arrows, full screen). Sessions run in tmux, so closing the page stops nothing, and
   `tmux attach -t board-…` reaches the same session from a terminal.
 - **Chat**, beside each console: the conversation as the Claude app shows it, your messages
-  in bubbles, the agent's replies in full, each run of work folded to a line ("Ran 6 commands, edited 2 files")
-  that opens to the steps (a background command shows once it finishes), and a choice on its screen as buttons. What you
+  in bubbles, the agent's replies in full, each run of work folded to a line ("Ran 6 commands, edited 2 files · 2 notes")
+  that opens to the steps and the short working notes the agent said between them (reading aloud leaves those
+  out; a background command shows once it finishes), and a choice on its screen as buttons. What you
   send goes into its console; sent while it works, it shows faded as queued until the agent takes it up. Claude Code
   holds it in its queue, with **Send now** and **Edit or reorder**. Codex takes it into the running turn, or, behind
   a `!` shell command, as soon as that ends. It reads
@@ -166,8 +167,6 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   day, on the days you tick) has a fresh model write where every project stands and what waits on you, numbered,
   with a recommendation for each and its answer live under it. Earlier reports stay in the feed. Listen on any report
   reads it aloud in colony's voice: the overview, then each item, then each project, with ⏭/⏮ stepping between them.
-- **Your verdict at each finished milestone:** colony asks once, in the same words each time, how the milestone
-  turned out against how such work usually goes. It is the one view of the work getting better; skipping is fine.
 - **Idle sessions:** after a day with nothing to do, a project closes its console; its next message wakes it
   in the same conversation. Notes and mail held by your project pause let it sleep and wait until you resume it.
   While asleep its Claude or ChatGPT app connection sleeps too; the board can still wake it.

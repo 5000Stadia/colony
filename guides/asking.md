@@ -4,6 +4,9 @@ Foresee the decisions an item will need and ask them together, each with a defau
 and none where skipping would publish, send or spend: that waits for their answer.
 A question that matters only later waits for its moment.
 
+Something to weigh that is not yet a decision (real options, a shape that could go more than one way, a finding that
+moves the plan): tell them in Chat, the options a line each and yours, before you build on one.
+
 A decision for the person: `colony gate "the question" --item R4 --why "what depends on it"` (if reversible,
 `--default "what stands if they skip it"`); where it has clear answers, `--option "..."` for each and
 `--recommended "..."` for yours: they answer with a tap. The answer arrives as a note. A question whose moment is

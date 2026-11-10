@@ -5167,6 +5167,16 @@ LINE_EVERY = 5               # seconds between the feeder's looks at every proje
 UNDO = 600                   # seconds a Clear can be undone
 CLAIM = 60                   # seconds a device reading by itself holds what lands for it, from its last look
 MARKS = ("heard", "skipped", "seen", "cleared")
+NOTE = 280                    # a line said between steps, this short and on one line, is a working note (a_note)
+
+
+def a_note(text):
+    """A working note: one short line an agent says between steps (what it found, what it does next). Chat folds it
+    with the work around it, and reading aloud leaves it out, once a step has followed it in its turn (R154: a day of
+    one project's chat was 291 messages, 216 of them such lines, and each item's shape was lost among them). A longer
+    message mid-work is a report, and a turn's last words are its reply: both stay."""
+    text = text.strip()
+    return bool(text) and len(text) <= NOTE and "\n" not in text
 
 
 def line_since():
@@ -5243,6 +5253,9 @@ def _marked(kept, row, at):
     elif how == "cleared" and k:
         kept["cleared"].setdefault(k, []).append(row.get("clear"))
         kept["clears"].setdefault(row.get("clear"), iso_epoch(row.get("at", "")))
+    elif how == "folded" and k:                  # a working note folded with the work: out of the line, never "recent"
+        kept["marks"].setdefault(k, how)
+        kept["folded"].add(k)
     elif how in MARKS and k:
         kept["marks"].setdefault(k, how)
         kept["recent"].append((iso_epoch(row.get("at", "")), k, how))
@@ -5254,7 +5267,7 @@ def heard_state(root):
     """What of the project's line was heard, skipped or seen (the first mark of each part), cleared (by which Clear), and
     which Clears were undone."""
     return _record(Path(root) / ".board" / "heard.jsonl",
-                   lambda: {"marks": {}, "cleared": {}, "undone": set(), "clears": {}, "recent": []}, _marked)
+                   lambda: {"marks": {}, "cleared": {}, "undone": set(), "clears": {}, "recent": [], "folded": set()}, _marked)
 
 
 def _gone(hs, k):
@@ -5404,10 +5417,14 @@ def _feed_file(root, st, since):
                     try:
                         # Each batch fits the native Chat reader's tail and entry limits. Its turn continues in st.
                         evs = chat.events(st["provider"], scratch)
-                        rows = _parts_of(evs, st, since, known, [], root)
+                        notes = []
+                        rows = _parts_of(evs, st, since, known, [], root, notes)
                         if rows:
                             append_rows(root, "line.jsonl", rows)
                             known.update(r["k"] for r in rows)
+                        notes = [k for k in notes if k in known]
+                        if notes:                # out of the line, as Chat folds them; one being read ends as marked elsewhere
+                            append_rows(root, "heard.jsonl", [{"k": k, "how": "folded", "at": now(), "dev": "colony"} for k in notes])
                     finally:
                         chat.forget(scratch)
                     out.seek(0)
@@ -5439,7 +5456,7 @@ def _feed_file(root, st, since):
             scratch.unlink(missing_ok=True)
 
 
-def _parts_of(evs, st, since, known, fresh, root=None):
+def _parts_of(evs, st, since, known, fresh, root=None, folded=None):
     """A transcript's new events, as the line's rows: its prose part by part with the keys and times Chat gives them (a
     turn begun by the person's message, colony's or a compaction, its items counted in order), going on from the turn
     the last look ended in. What colony's notices carried over a refresh is never read aloud."""
@@ -5457,6 +5474,12 @@ def _parts_of(evs, st, since, known, fresh, root=None):
         t["n"] += 1
         t["last"] = at or t["last"]
         k = f"s{t['at']}-{j}"
+        if kind == "step" and t.get("notes"):          # work went on after them: they were working notes (a_note)
+            if folded is not None:
+                folded.extend(t["notes"])
+            t["notes"] = []
+        elif kind == "say" and a_note(text):
+            t.setdefault("notes", []).append(k)
         if kind != "say" or t.get("carry") or not t["at"] or k in known or k in have or iso_epoch(when) < since:
             continue
         if words := spoken_text(text):
@@ -5631,7 +5654,7 @@ def heard_list(plist, most=20):
                 if k in rec["rows"]:
                     latest[rec["rows"][k]["t"]] = (when, n, how)
             for turn, (when, n, how) in latest.items():
-                ks = rec["turns"][turn]
+                ks = [k for k in rec["turns"][turn] if k not in hs["folded"]] or rec["turns"][turn]
                 got.append({"p": str(i), "t": turn, "b": [[k, rec["rows"][k]["at"]] for k in ks], "at": rec["rows"][ks[0]]["at"],
                             "w": rec["rows"][ks[0]]["w"], "h": when, "n": n, "how": how})
         if any(x["p"] == str(i) for x in got):
@@ -5644,8 +5667,9 @@ def heard_list(plist, most=20):
 def line_text(root, keys=(), turn=""):
     """A reply's words as the line keeps them: the parts asked for, or all of one turn's, in order."""
     with _RECLOCK:
-        rec = line_rows(root)
-        ks = list(rec["turns"].get(turn, [])) if turn else [k for k in keys if k in rec["rows"]]
+        rec, folded = line_rows(root), heard_state(root)["folded"]
+        ks = ([k for k in rec["turns"].get(turn, []) if k not in folded] or list(rec["turns"].get(turn, []))) if turn \
+            else [k for k in keys if k in rec["rows"]]
         where = [(k, rec["rows"][k]["pos"], rec["rows"][k]["at"]) for k in ks]
     out = []
     try:
@@ -5704,14 +5728,20 @@ def chat_feed(key, root, shown=SHOWN):
                        f"<div>{e(body)}</div></details>")
         elif t["from"] == "compact":
             out.append("<div class='msg colony'>The conversation was compacted here</div>")
-        run = []
+        run, last_step = [], max((j for j, (kind, _) in enumerate(t["items"]) if kind == "step"), default=-1)
         for j, (kind, text) in enumerate(t["items"] + [("end", "")]):
-            if kind == "step":
-                run.append(text)
+            # a working note (one short line, work going on after it) folds with the work around it; the newest line of
+            # a turn at work has nothing after it yet, so it shows until more work comes
+            if kind == "step" or (kind == "say" and j < last_step and a_note(text)):
+                run.append((kind, text))
                 continue
             if run:
-                out.append(f"<details class='ran' data-k='r{k}-{j}'><summary>{e(chat.worked(run))}</summary>"
-                           f"<ul>{''.join(f'<li>{e(x)}</li>' for x in run)}</ul></details>")
+                steps = [x for kind_, x in run if kind_ == "step"]
+                notes = len(run) - len(steps)
+                line = " · ".join(filter(None, [chat.worked(steps) if steps else "", f"{notes} note{'s' if notes != 1 else ''}" if notes else ""]))
+                out.append(f"<details class='ran' data-k='r{k}-{j}'><summary>{e(line)}</summary><ul>"
+                           + "".join(f"<li class='note'>{e(x.strip())}</li>" if kind_ == "say" else f"<li>{e(x)}</li>" for kind_, x in run)
+                           + "</ul></details>")
                 run = []
             if kind == "say":
                 when = (t.get("times") or [])[j] if j < len(t.get("times") or []) else t.get("last") or t["at"]
@@ -11773,6 +11803,7 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
 .chat details.ran[open] > summary::after { content:' ⌄' } .chat details.ran > summary::-webkit-details-marker { display:none }
 .chat details.ran ul { margin:2px 0 4px; padding-left:22px; font:12.5px/1.5 ui-monospace,monospace; color:var(--muted) }
 .chat details.ran li { overflow-wrap:anywhere }
+.chat details.ran li.note { list-style:none; margin:6px 0 2px -22px; font:14.5px/1.45 var(--sans, system-ui, sans-serif); color:var(--ink) }
 .chat .msg.you.pending { opacity:.6 } .chat .msg.you.pending::after { content:' · queued'; font-size:12px; color:var(--muted) }
 .chat .turnacts { display:flex; gap:4px; margin-top:-4px } .chat .turnacts button { display:inline-flex; align-items:center; justify-content:center } .chat .turnacts button[hidden] { display:none } .chat .stamp { font-size:10.5px; color:var(--muted); opacity:.8; white-space:nowrap }
 .chat .turnacts .stamp { margin-left:auto; align-self:center; padding-right:4px } .chat .msg.you .stamp { display:block; text-align:right; margin-top:2px }

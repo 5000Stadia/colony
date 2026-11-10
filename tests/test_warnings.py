@@ -80,6 +80,23 @@ class FakeLabeller:
 
 
 class ViewsTest(Base):
+    def test_an_item_only_mentioned_is_not_worked_again(self):
+        """A research project's finished milestone, 2026-11-10: ten signals, none of them rework. An item named twice
+        counted twice, another project's item counted as this one's, and a passing mention counted as work."""
+        self.plan({"R1": (" ", "Seeds"), "R2": (" ", "Soil"), "R3": (" ", "Water")}, T0)
+        self.plan({"R1": ("x", "Seeds"), "R2": ("x", "Soil"), "R3": (" ", "Water")}, T0 + 3600, msg="R1 and R2 done")
+        day = T0 + 2 * 86400
+        self.commit("R1: fix the seed tray again, as R1's check asked", day)             # leads with it, named twice: once
+        self.commit("R3 started: fix its feed; R2's mix unchanged", day + 60)             # R2 only mentioned
+        self.commit("Ledger: fix the rows for R1 and R2", day + 120)                      # leads with neither, names two
+        self.commit("Fix the label on R2's bag", day + 180)                               # the only item it names
+        with patch.object(ws.board, "projects", return_value=[self.root, self.base / "shop"]), \
+                patch.object(ws.board, "name_of", side_effect=lambda q: Path(q).name):
+            self.commit("A brief on shop R2: fix its wording", day + 240)                 # another project's R2
+            p = self.project(self.build())
+        again = [(s["item"], s["evidence"]["line"][:12]) for s in p["signals"] if s["kind"] == "finished item worked again"]
+        self.assertEqual(again, [("R1", "R1: fix the "), ("R2", "Fix the labe")])
+
     def test_views_are_kept_apart_and_never_added_up(self):
         self.plan({"R1": (" ", "Seeds"), "R2": (" ", "Soil"), "R3": (" ", "Water")}, T0)
         self.plan({"R1": ("x", "Seeds"), "R2": ("~", "Soil"), "R3": (" ", "Water")}, T0 + 3600)

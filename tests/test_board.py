@@ -9080,6 +9080,35 @@ class LineTest(BoardBase):
             return File(fh) if Path(name) == path and args and args[0] == 'rb' else fh
         return patch('builtins.open', side_effect=opened)
 
+    def test_a_working_note_folds_with_the_work_in_chat_and_leaves_the_line(self):
+        """R154: one short line said between steps is the agent's working note. Chat folds it with the work around it
+        and reading aloud leaves it out; a report mid-work, and the turn's last words, stay."""
+        report = "Where things stand:\n- the download is merged\n- the page waits on you"
+        self.assertTrue(board.a_note("Reading the client page's checks next, since two of them changed."))
+        self.assertFalse(board.a_note(report))
+        self.assertFalse(board.a_note("x" * (board.NOTE + 1)))
+        t = self.at(10, 0)
+        self.talk(self.root, ("you", t, "Go"), ("say", self.at(10, 1), "Reading the setup script first."),
+                  ("step", self.at(10, 2), "cat setup.sh"), ("say", self.at(10, 3), "It never closes its input: fixing that."),
+                  ("step", self.at(10, 4), "sed -i s/a/b/ setup.sh"), ("say", self.at(10, 5), report),
+                  ("step", self.at(10, 6), "pytest"), ("say", self.at(10, 7), "Tests are running; I'll read the result next."))
+        board.line_feed(self.root)
+        got = self.line()
+        self.assertEqual(self.keys(got), [f"s{t}-4", f"s{t}-6"], "the report and the newest line wait to be heard; the two notes don't")
+        self.assertEqual(board.heard_state(self.root)["folded"], {f"s{t}-0", f"s{t}-2"})
+        self.assertEqual([r["text"][:5] for r in board.line_text(self.root, turn=t)], ["Where", "Tests"], "a tapped reply leaves them out too")
+        feed = board.chat_feed("0", self.root)
+        self.assertIn("Ran 2 commands · 2 notes", feed)
+        self.assertIn("<li class='note'>It never closes its input: fixing that.</li>", feed)
+        self.assertEqual(feed.count("class='say'"), 2, "the report and the newest line, open")
+        self.assertIn("Tests are running", feed.split("class='say'")[-1])
+        # more work comes: the line that was newest was a note after all, and leaves the line unheard
+        self.talk(self.root, ("step", self.at(10, 8), "cat result.txt"), ("say", self.at(10, 9), "All pass. The setup script closes its input now."))
+        board.line_feed(self.root)
+        self.assertEqual(self.keys(self.line()), [f"s{t}-4", f"s{t}-8"])
+        # one already heard stays heard, and is no part of the reply played again
+        self.assertNotIn(f"s{t}-6", [k for x in board.heard_list(board.projects(board.registry()))["heard"] for k, _ in x["b"]])
+
     def test_a_first_seen_historical_session_starts_at_its_end_and_keeps_new_work(self):
         path = self.talk(self.root, ('you', self.at(8, 0), 'Old work'), ('say', self.at(8, 1), 'Old reply'))
         with path.open('r+b') as fh:                  # a large historic tool row, without allocating it
@@ -9269,8 +9298,8 @@ class LineTest(BoardBase):
 
     def test_arrival_is_judged_by_each_parts_own_time_not_its_turns(self):
         # a turn begun at 10:00 whose second part came at 10:20: Auto armed at 10:10 reads that part, as it landed after
-        self.talk(self.root, ("you", self.at(10, 0), "long job"), ("say", self.at(10, 1), "Starting."),
-                  ("step", self.at(10, 2), "make"), ("say", self.at(10, 20), "Done after the build."))
+        self.talk(self.root, ("you", self.at(10, 0), "long job"), ("say", self.at(10, 1), "Starting.\nThe build is the long part."),
+                  ("step", self.at(10, 2), "make"), ("say", self.at(10, 20), "Done after the build."))   # (two lines: no working note)
         [reply] = self.line(dev="phone", arm=self.at(10, 10))["line"]
         self.assertEqual(reply["b"], [[f"s{self.at(10, 0)}-0", self.at(10, 1)], [f"s{self.at(10, 0)}-2", self.at(10, 20)]],
                          "each part with its own time, the step between counted as Chat counts it")

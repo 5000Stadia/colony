@@ -68,6 +68,14 @@ researched. Rewording, a changed default or new detail runs nothing.
 
 First decide the item's brief: its details file and its related items' — read those, nothing more.
 
+Tell the person as it starts, in Chat, in five short lines at most: what it is; why now; what it rests on or changes
+among the other items; what done looks like; what it will ask of them. They are the architect, you the builder: they
+weigh the design, and the nails are yours. How it is built (what runs meanwhile, tests, commits, files) stays in the
+item's notes, said to them only where it is the thing to weigh; name things by what they are, not by number.
+
+While you build, a line between steps is your working note, and it steers you: one short line, what you found or
+what you do next and why. Chat folds those away with the work, so what they must see goes in a message of its own.
+
 Where an item first sets a look, sound or voice (shaders and textures, music, a fiction or marketing voice) whose
 style the person hasn't yet described or shown, good can't be reached until you align on it, since taste is hard to
 put in words: ask them for at least one real example of the quality and taste they want, kept as a link that sets
@@ -75,6 +83,8 @@ the bar for what they name in it, not a model to copy. Only the look waits: buil
 ones.
 
 ## Finishing an item
+
+Tell the person in three lines: what stands now, and how to see it.
 
 Before calling it done, see whether finishing it shows something the vision needs that has no place on the roadmap, and give it one.
 
