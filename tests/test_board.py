@@ -62,9 +62,6 @@ class BoardBase(unittest.TestCase):
         evidence = patch.object(intelligence, 'bundled_records', return_value=[])
         evidence.start()
         self.addCleanup(evidence.stop)  # each test supplies its own evidence, independent of shipped snapshots
-        refresh = patch.object(intelligence, 'refresh_due', return_value=False)
-        refresh.start()
-        self.addCleanup(refresh.stop)
         from colony import connections
         looking = patch.object(connections, 'refresh_personal')   # never asks the real `claude` for its connectors
         looking.start()
@@ -3011,22 +3008,22 @@ class GlanceTest(BoardBase):
         by = {(x["model"], x["variant"]): x for x in bench.standings()}
         self.assertIsNone(by[("claude-sonnet-5", "high")]["cost"], "another benchmark's cost is never compared")
         tiers = bench.tiers_for("claude")
-        self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "max"),
-                         "the smartest model at max for rare judgement")
+        self.assertEqual((tiers["step-up"]["model"], tiers["step-up"]["effort"]), ("claude-opus-5-5", "high"),
+                         "the smartest measured pair for rare judgement: max isn't measured here, so it isn't weighed")
         self.assertEqual(tiers["rote"]["model"], "claude-haiku-4-5-20251001",
                          "per dollar on the index's own points: the lowest score isn't worth nothing (20/$0.10 beats 51/$1.34)")
-        self.assertEqual((tiers["chores"]["model"], tiers["chores"]["effort"]), ("claude-opus-5-5", "low"),
-                         "the cheapest pair within twenty points of the ceiling: Haiku's 20 is too far below")
+        self.assertEqual((tiers["chores"]["model"], tiers["chores"]["effort"]), ("claude-opus-5-5", "medium"),
+                         "the cheapest measured pair within twenty points of the ceiling: Haiku's 20 is too far below")
         self.assertEqual((tiers["routine"]["model"], tiers["routine"]["effort"]), ("claude-opus-5-5", "medium"),
                          "the cheapest pair meeting the routine intelligence goal")
         self.assertIn("claude-sonnet-5", bench.unmeasured("claude"), "no index yet: shown as not measured, never picked")
         c = bench.card("claude-opus-5-5")
-        self.assertIn("xhigh", c["untested"], "estimated efforts are still labelled as not directly measured")
+        self.assertIn("xhigh", c["untested"], "an effort not measured is listed as untested")
         self.assertTrue(any("high over medium" in n for n in c["notes"]), "where more effort pays")
         self.assertIn("claude-sonnet-5", bench.pending())
         self.assertIn("gpt-6-astra", bench.pending(), "no records yet: pending")
         page = board.models_page(board.registry())
-        for want in ("Auto roles", "Intelligence against task cost", "id='claude-opus-5-5'", "<polyline", "Estimated",
+        for want in ("Auto roles", "Intelligence against task cost", "id='claude-opus-5-5'", "<polyline", "Measured",
                      "No comparable Intelligence Index evidence yet"):
             self.assertIn(want, page)
         self.assertNotIn("Fable 5.1 · effort not stated</a>", page, "not in the comparison")
@@ -3044,8 +3041,8 @@ class GlanceTest(BoardBase):
         rote = (self.root / ".claude" / "agents" / "colony-rote.md").read_text()
         self.assertIn("model: claude-haiku-4-5-20251001", rote)
         chores = (self.root / ".claude" / "agents" / "colony-chores.md").read_text()
-        self.assertIn("model: claude-opus-5-5\neffort: low", chores)
-        self.assertIn("effort: max", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
+        self.assertIn("model: claude-opus-5-5\neffort: medium", chores)
+        self.assertIn("effort: high", (self.root / ".claude" / "agents" / "colony-stepup.md").read_text())
         claude_md = (self.root / "CLAUDE.md").read_text()
         self.assertIn(f"`{board.GUIDES}/`", claude_md, "the guides' folder reaches the agent as an absolute path")
         self.assertIn("brief or run helpers, or pair with another project's agent: `helpers.md`", " ".join(claude_md.split()))

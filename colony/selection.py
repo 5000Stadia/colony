@@ -154,7 +154,6 @@ def price_change(before, after):
     result = {'before': list(old) if old is not None else None, 'after': list(new) if new is not None else None}
     if any((v or {}).get('policy') == 'intelligence-goal-v2' for v in (before, after)):
         result['task'] = {label: (value or {}).get('evidence', {}).get('cost') for label, value in (('before', before), ('after', after))}
-        result['task_estimated'] = any((v or {}).get('estimated') for v in (before, after))
     return result
 
 

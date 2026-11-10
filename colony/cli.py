@@ -33,7 +33,7 @@ waits on them for, its roadmap, and their words to one project or many at once.
     colony migrate --list | --pack DIR | --unpack ARCHIVE [--force]   carry colony to a fresh install: what it takes, in
                                     one archive, and back in place there as if it had just restarted
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
-                                    fetch pulls Artificial Analysis' data (API, then model pages); key reads the key from stdin
+                                    fetch pulls Artificial Analysis' free list (scores, cost per task, prices); key reads the key from stdin
     colony models [set TIER MODEL EFFORT | reset TIER]  this project's helper tiers (routine, step-up, chores, rote)
     colony turbo [--nothing]        each program's pace this week, and what turbo is doing about it; --nothing (a
                                     project's agent): nothing worth doing, so no more from turbo until its roadmap changes
@@ -525,8 +525,7 @@ def cmd_doctor(a):
         print(f"ok    model data: {summary}")
     for note in notes:
         print(f"note  model data: {note}")
-    problems += [f"model data: {t}: colony's page reader (colony/intelligence.py, page_point) needs a look"
-                 for t in trouble]
+    problems += [f"model data: {t}" for t in trouble]
     from . import turbo
     for k, p in providers.PROVIDERS.items():
         if providers.usable(p):
@@ -863,16 +862,13 @@ def cmd_bench(a):
         return 0
     if a.what == "fetch":
         out = bench.refresh()
-        from . import intelligence, selection
-        pages = intelligence.refresh() if intelligence.refresh_due() else None     # the volumes, read with the prices
+        from . import selection
         selection.reconcile()
-        if pages:
-            print(f"{pages['measured']} of {pages['pages']} model pages read"
-                  + (f"; {len(pages['errors'])} failed, the first: {pages['errors'][0]['detail']}" if pages["errors"] else ""))
         if out["error"]:
             print(f"colony: {out['error']}", file=sys.stderr)
             return 1
-        print(f"{out['models']} models from Artificial Analysis; {out['added']} new record(s); matched: "
+        print(f"{out['models']} models from Artificial Analysis (Intelligence Index {out['version'] or 'unversioned'}); "
+              f"{out['added']} record(s) for the lineup; matched: "
               f"{', '.join(out['matched']) or 'none'}" + (f"; not in their data: {', '.join(out['missing'])}" if out["missing"] else ""))
         return 0
     if a.what == "discover":

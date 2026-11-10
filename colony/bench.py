@@ -52,32 +52,52 @@ def snapshots_dir():
     return board.home() / "bench" / "artificial-analysis"
 
 
-def snapshot():
-    """The latest Artificial Analysis reply kept on this machine, and the day it came: ([], None) if none reads."""
+def _latest():
     snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
     if not snaps:
-        return [], None
+        return None, None
     try:
-        data = json.loads(snaps[-1].read_text())
+        return json.loads(snaps[-1].read_text()), snaps[-1].stem[:10]
     except (OSError, ValueError):
+        return None, None
+
+
+def snapshot():
+    """The latest Artificial Analysis reply kept on this machine, and the day it came: ([], None) if none reads.
+    Kept as {"intelligence_index_version": 5, "data": [...]}; a reply kept before Nov 2026 is the bare list."""
+    data, day = _latest()
+    if isinstance(data, dict):
+        data = data.get("data")
+    if not isinstance(data, list):
         return [], None
-    return ([e for e in data if isinstance(e, dict)] if isinstance(data, list) else []), snaps[-1].stem[:10]
+    return [e for e in data if isinstance(e, dict)], day
+
+
+def version():
+    """The Intelligence Index version the latest reply measured with ("v5"), or None when it doesn't say."""
+    data, _ = _latest()
+    v = data.get("intelligence_index_version") if isinstance(data, dict) else None
+    return f"v{v}" if isinstance(v, (int, float, str)) and str(v).strip() else None
 
 
 def api_records():
     """The latest Artificial Analysis reply, read as records for today's lineup: derived each time from what came,
     so a better reading of names applies to it at once."""
+    return _api_rows([mid for _, mid, _, _ in lineup()])
+
+
+def _api_rows(ids):
     snaps = sorted(snapshots_dir().glob("*.json")) if snapshots_dir().exists() else []
-    ids = [mid for _, mid, _, _ in lineup()]
-    # the same snapshot read for the same lineup gives the same records: read again only when either changes
+    # the same snapshot read for the same models gives the same records: read again only when either changes
     key = (str(snaps[-1]), snaps[-1].stat().st_mtime, tuple(ids)) if snaps else None
-    if key and _api.get("key") == key:
-        return list(_api["rows"])
+    if key and key in _api:
+        return list(_api[key])
     data, date = snapshot()
-    if not data:
-        return []
-    rows = records_from(data, ids, date)[0]
-    _api.update(key=key, rows=rows)
+    rows = records_from(data, ids, date, version())[0] if data else []
+    if key:
+        if len(_api) > 8:
+            _api.clear()
+        _api[key] = rows
     return list(rows)
 
 
@@ -129,7 +149,7 @@ def add(rows):
     return added, bad
 
 
-def lineup():
+def runnable():
     """Every model the board can run now: (provider key, model id, its name, its effort levels)."""
     from . import providers
     out = []
@@ -139,6 +159,38 @@ def lineup():
         for mid, label in providers.available(p):
             out.append((key, mid, label, providers.efforts_of(p, mid)))
     return out
+
+
+def line(model):
+    """A model's line and its version within it: gpt-6.1-sol is the Sol line at 6.1, claude-opus-5-5 the Opus line
+    at 5.5 (a date suffix is no version)."""
+    ps = pieces(model)
+    return tuple(p for p in ps if not p.isdigit()), tuple(int(p) for p in ps if p.isdigit())
+
+
+def superseded(models=None):
+    """The runnable models a newer version of their own line replaces, from the same program, once Artificial
+    Analysis has scored that newer version: a provider keeps offering its older models for a while, and the
+    measurements of them stop (GPT-5.6 Sol beside GPT-6 Sol and GPT-6.1 Sol). They stay runnable by name; they are
+    no longer weighed, read or shown."""
+    models = runnable() if models is None else models
+    scored = {r["model"] for r in _api_rows([mid for _, mid, _, _ in models])
+              if r["domain"] == "overall" and INDEX in r["benchmark"].lower()}
+    out = set()
+    for k, mid, _, _ in models:
+        own, version = line(mid)
+        if version and any(k2 == k and line(m2)[0] == own and line(m2)[1] > version and m2 in scored
+                           for k2, m2, _, _ in models):
+            out.add(mid)
+    return out
+
+
+def lineup():
+    """The models colony weighs, reads and shows: every model the board can run now, less those a newer version of
+    their own line has replaced (superseded)."""
+    models = runnable()
+    old = superseded(models)
+    return [x for x in models if x[1] not in old]
 
 
 UNSTATED = "effort not stated"
@@ -269,7 +321,7 @@ def per(benchmark):
 
 
 def name(model):
-    return next((label for _, mid, label, _ in lineup() if mid == model), model)
+    return next((label for _, mid, label, _ in runnable() if mid == model), model)
 
 
 def entry_name(e):
@@ -434,7 +486,10 @@ def plan_text(root):
 
 # ---------------------------------------------------------------- Artificial Analysis, the one source
 
-AA_URL = "https://artificialanalysis.ai/api/v2/data/llms/models"
+# Their free list (the legacy /api/v2/data/llms/models was retired on Nov 4, 2026): 200 models a page, 100 requests
+# a day; each model carries its Intelligence Index and that index's cost per task.
+AA_URL = "https://artificialanalysis.ai/api/v2/language/models/free"
+AA_PAGES = 20                                 # a bound on pages per fetch, far above the 4 it takes
 AA_STEPS = [("Create a free account at Artificial Analysis", "https://artificialanalysis.ai/login"),
             ("In its Insights Platform, generate an API key (the free API: intelligence, speed and pricing data)", None),
             ("Paste the key below and save it; colony keeps it on this machine only", None),
@@ -466,22 +521,33 @@ def set_key(key):
 
 
 def aa_get(key=None, opener=None):
-    """Artificial Analysis' model data, with the key (theirs asks us to cache it, so callers keep what comes back).
-    Returns (models, None) or ([], why it failed)."""
+    """Artificial Analysis' model data, every page of it, with the key (theirs asks us to cache it, so callers keep
+    what comes back). Returns ({"intelligence_index_version", "data"}, None) or ({}, why it failed)."""
     import urllib.error
     import urllib.request
     key = key or aa_key()
     if not key:
-        return [], "no Artificial Analysis key is connected (Settings)"
-    req = urllib.request.Request(AA_URL, headers={"x-api-key": key, "User-Agent": "colony"})
+        return {}, "no Artificial Analysis key is connected (Settings)"
+    out = {"intelligence_index_version": None, "data": []}
     try:
-        with (opener or urllib.request.urlopen)(req, timeout=30) as r:
-            return json.loads(r.read().decode()).get("data") or [], None
+        for page in range(1, AA_PAGES + 1):
+            req = urllib.request.Request(AA_URL + (f"?page={page}" if page > 1 else ""),
+                                         headers={"x-api-key": key, "User-Agent": "colony"})
+            with (opener or urllib.request.urlopen)(req, timeout=30) as r:
+                body = json.loads(r.read().decode())
+            if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+                return {}, "Artificial Analysis answered in a shape colony doesn't know (colony/bench.py, aa_get)"
+            out["intelligence_index_version"] = out["intelligence_index_version"] or body.get("intelligence_index_version")
+            out["data"] += body["data"]
+            if not (body.get("pagination") or {}).get("has_more"):
+                return out, None
+        return out, None
     except urllib.error.HTTPError as err:
-        return [], {401: "the key was refused (401): reconnect it in Settings", 429: "over the daily limit (429): try tomorrow"}.get(
+        return {}, {401: "the key was refused (401): reconnect it in Settings", 429: "over the daily limit (429): try tomorrow",
+                    410: "Artificial Analysis retired this address (410): colony/bench.py AA_URL needs its new one"}.get(
             err.code, f"Artificial Analysis answered {err.code}")
     except (OSError, ValueError) as err:
-        return [], f"couldn't reach Artificial Analysis ({err.__class__.__name__})"
+        return {}, f"couldn't reach Artificial Analysis ({err.__class__.__name__})"
 
 
 def status():
@@ -553,8 +619,12 @@ def claim(entry, lineup_models):
     return min(hits, key=lambda h: len(h[1])) if hits else None
 
 
-def records_from(data, lineup_models, date):
-    """Artificial Analysis' entries as records for the models in the lineup; which of theirs matched nothing."""
+COST = "Cost per Intelligence Index task"
+
+
+def records_from(data, lineup_models, date, version=None):
+    """Artificial Analysis' entries as records for the models in the lineup; which of theirs matched nothing.
+    The Intelligence Index carries the version the reply names, and its cost per task comes with it."""
     rows, matched, unmatched, unknown = [], set(), [], set()
     for entry in data:
         hit = claim(entry, lineup_models)
@@ -574,33 +644,69 @@ def records_from(data, lineup_models, date):
                 unknown.add(field)
                 continue
             dom, bench_, unit = AA_FIELDS[field]
-            rows.append(dict(base, benchmark=bench_, domain=dom, value=value, unit=unit))
-        price = (entry.get("pricing") or {}).get("price_1m_blended_3_to_1")
+            rows.append(dict(base, benchmark=bench_, domain=dom, value=value, unit=unit,
+                             version=version if field == "artificial_analysis_intelligence_index" else None))
+        cost = ((entry.get("artificial_analysis_intelligence_index_cost") or {}).get("cost_per_task") or {}).get("total_cost")
+        if cost is not None:
+            rows.append(dict(base, benchmark=COST, domain="cost", value=cost, unit="usd", version=version))
+        pr = entry.get("pricing") or {}
+        price = pr.get("price_1m_blended_3_to_1")
+        if price is None and pr.get("price_1m_input_tokens") is not None and pr.get("price_1m_output_tokens") is not None:
+            price = (3 * pr["price_1m_input_tokens"] + pr["price_1m_output_tokens"]) / 4      # their 3:1 blend
         if price is not None:
             rows.append(dict(base, benchmark="Price per 1M tokens (blended 3:1)", domain="cost", value=price, unit="usd"))
-        if entry.get("median_output_tokens_per_second") is not None:
-            rows.append(dict(base, benchmark="Output speed", domain="latency", value=entry["median_output_tokens_per_second"], unit="tokens/s"))
-        if entry.get("median_time_to_first_token_seconds") is not None:
-            rows.append(dict(base, benchmark="Time to first token", domain="latency", value=entry["median_time_to_first_token_seconds"], unit="s"))
+        speed = entry.get("performance") or entry
+        if speed.get("median_output_tokens_per_second") is not None:
+            rows.append(dict(base, benchmark="Output speed", domain="latency", value=speed["median_output_tokens_per_second"], unit="tokens/s"))
+        if speed.get("median_time_to_first_token_seconds") is not None:
+            rows.append(dict(base, benchmark="Time to first token", domain="latency", value=speed["median_time_to_first_token_seconds"], unit="s"))
     return rows, sorted(matched), unmatched, sorted(unknown)
+
+
+def market():
+    """Every model the latest reply scores with a cost per task, beyond the lineup: (name, maker, index, cost),
+    for the chart's look at the whole field. Nothing is weighed from it."""
+    data, _ = snapshot()
+    mine = [mid for _, mid, _, _ in lineup()]
+    out = []
+    for entry in data:
+        score = (entry.get("evaluations") or {}).get("artificial_analysis_intelligence_index")
+        cost = ((entry.get("artificial_analysis_intelligence_index_cost") or {}).get("cost_per_task") or {}).get("total_cost")
+        if (isinstance(score, (int, float)) and isinstance(cost, (int, float)) and cost > 0
+                and not claim(entry, mine)):
+            out.append((str(entry.get("name") or entry.get("slug")), str((entry.get("model_creator") or {}).get("name") or ""),
+                        score, cost))
+    return out
 
 
 def refresh(opener=None):
     """Fetch Artificial Analysis' data for the lineup and keep it; say what came, what matched, what didn't."""
-    data, err = aa_get(opener=opener)
+    reply, err = aa_get(opener=opener)
     out = {"at": board.now(), "error": err}
     if not err:
         snap = snapshots_dir() / f"{board.now()[:19].replace(':', '')}.json"      # their reply, kept as it came
         snap.parent.mkdir(parents=True, exist_ok=True)
-        snap.write_text(json.dumps(data))
+        snap.write_text(json.dumps(reply))
         models = [mid for _, mid, _, _ in lineup()]
-        rows, matched, unmatched, unknown = records_from(data, models, board.now()[:10])
-        out.update(models=len(data), matched=matched, missing=[m for m in models if m not in matched],
-                   unmatched=len(unmatched), unknown_fields=unknown, added=len(rows))
-    p = board.home() / "bench" / "fetched.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(out, indent=1))
+        rows, matched, unmatched, unknown = records_from(reply["data"], models, board.now()[:10], version())
+        out.update(models=len(reply["data"]), version=version(), matched=matched,
+                   missing=[m for m in models if m not in matched], unmatched=len(unmatched), unknown_fields=unknown,
+                   added=len(rows))
+    # the day data last came, so a fetch that keeps failing is seen (the retired address failed silently for days)
+    out["last"] = out["at"][:10] if not err else (fetched().get("last") or snapshot()[1])
+    path = board.home() / "bench" / "fetched.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1))
     return out
+
+
+def fetched():
+    """The last fetch: {at, error, last (the day data last came), ...}, or {} before the first."""
+    try:
+        out = json.loads((board.home() / "bench" / "fetched.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
 
 
 def days_since_fetch():

@@ -376,6 +376,9 @@ class FourthTierTest(BoardBase):
         from colony import bench, intelligence
         self.bench = bench
         rows = intelligence.records(json.loads(Path(bench.__file__).with_name('data').joinpath('aa-pairs.json').read_text()))
+        # Sonnet 5.5 at low, measured: the value pick, below chores' own goal (the shipped pairs lack it)
+        rows += intelligence.records([dict(model='claude-sonnet-5-5', effort='low', score=35.66, cost=0.32, price=None,
+                                           version='v4.3.2', date='2026-10-01', url='https://artificialanalysis.ai/models/x')])
         models = [('claude', 'claude-opus-5-5'), ('claude', 'claude-sonnet-5-5'), ('codex', 'gpt-6-astra'), ('codex', 'gpt-6.1-sol')]
         levels = ['low', 'medium', 'high', 'xhigh', 'max']
         for obj, name, value in [(bench, 'records', lambda: rows),

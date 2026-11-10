@@ -197,6 +197,11 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   and `colony projects` lists them with their goals, so an agent asks rather than guesses. Sends report
   queued status; known delivery or reply delays return the reason to the sender. Mail stays queued for
   retry, and a session handoff is recorded separately from an answer.
+- **Models chosen from evidence:** Auto picks each role's model and effort from Artificial Analysis's
+  Intelligence Index and cost per task (a free key, in Settings), among the models your programs can run; an
+  older version a newer one has replaced is left out, and a setting they don't measure isn't weighed. The
+  Models page shows the picks, each model's measured settings, and intelligence against cost, with a switch
+  that shows every other model they score, in grey.
 - **Turbo:** when a program's weekly usage runs more than 5 points behind pace (from day 2, aiming for 99%
   the hour before the reset), its projects with queued work are turned up, each as it ticks: stronger
   models, going deeper on its agreed work, research on a topic you type. Alongside the work, never instead

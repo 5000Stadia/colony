@@ -347,7 +347,7 @@ class Watcher:
                 signin.observe(providers.key(provider), problem, marker)
 
     def models_daily(self):
-        from . import bench, intelligence
+        from . import bench
         if board.registry()["settings"]["auto_update"]:
             for p in providers.PROVIDERS.values():
                 if providers.usable(p):
@@ -359,9 +359,7 @@ class Watcher:
         providers.discover(calls=False)                  # files each program keeps: nothing is called
         bench.lineup_changed()
         if bench.aa_key() and bench.days_since_fetch() >= 0.9:
-            bench.refresh()     # one request a day (the free API allows 1,000): new scores, filled gaps, prices
-        if intelligence.refresh_due():
-            intelligence.refresh()
+            bench.refresh()     # once a day, a few requests (the free API allows 100): new scores, costs, prices
         from . import selection
         selection.reconcile()
         board.rewire_projects()                         # after the updates and the data: each project's files, its helpers' tiers with them

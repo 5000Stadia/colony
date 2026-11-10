@@ -8938,7 +8938,7 @@ def model_changes(pending_only=False):
             task_note = f"Benchmark USD/task: {describe(task.get('before'))} → {describe(task.get('after'))}"
             if task.get('before') and task.get('after') is not None:
                 task_note += f" ({(task['after'] / task['before'] - 1) * 100:+.1f}%)"
-            task_note += (' (includes estimates). ' if prices.get('task_estimated') else '. ')
+            task_note += '. '
         before, after = prices.get('before'), prices.get('after')
         if before is None or after is None:
             return task_note + 'Token-price change unknown (missing price data).'
@@ -9045,6 +9045,11 @@ def models_page(reg):
             rows.append(f"<tr><th>{e(family)} · {e(role)}</th><td>{e(desc)}<div class='muted'>Accepted: {e(accepted)}</div></td></tr>")
     cards = ''.join(model_card(bench.card(mid, entries)) for _, mid, _, _ in bench.lineup())
     title = f'{ceiling:.2f}' if ceiling is not None else 'unavailable'
+    old = bench.superseded()
+    runs = '; '.join(f"{e(providers.PROVIDERS[k].label)}: " + ', '.join(e(label) for f, mid, label, _ in bench.runnable()
+                                                                    if f == k and mid not in old) for k in families)
+    runs = (f"<p>Colony can run, and weighs: {runs}." + (" Left out for a newer version of their own, still runnable "
+            "by name: " + ', '.join(e(bench.name(m)) for m in sorted(old)) + "." if old else '') + "</p>") if families else ''
     problems, notes, _ = intelligence.health(entries)
     health = (f"<p><strong style='color:var(--flag)'>Model data:</strong> {e('; '.join(problems + notes))}.</p>"
               if problems or notes else '')
@@ -9053,11 +9058,11 @@ def models_page(reg):
                "stronger models runs two positions toward Intelligence while its program's turbo is on.</p>") if families else ''
     return shell(reg, -2, model_changes() + "<header><h1>Models</h1><p>Artificial Analysis Intelligence Index and cost per benchmark task. "
                  f"Shared runnable intelligence ceiling: <strong>{title}</strong>. "
-                 "Scores within one point count as equal; the cheaper pair wins. Estimates are labelled and can participate. "
-                 "Cost per task is the token volume a page last measured at today's price. "
-                 "Usage never lowers an Auto goal. <a href='/settings'>Change the Auto slider in Settings</a>.</p>" + health + "</header>"
+                 "Scores within one point count as equal; the cheaper pair wins. Every index and cost per task is "
+                 "Artificial Analysis's own measurement; a setting they don't measure isn't weighed. "
+                 "Usage never lowers an Auto goal. <a href='/settings'>Change the Auto slider in Settings</a>.</p>" + runs + health + "</header>"
                  "<h2>Auto roles</h2><div class='card'><table class='bench'>" + ''.join(rows) + "</table></div>"
-                 "<h2>Intelligence against task cost</h2><div class='card'>" + effort_chart(entries) + "</div>"
+                 "<h2>Intelligence against task cost</h2><div class='card'>" + effort_chart(entries, bench.market()) + "</div>"
                  "<h2>Model evidence</h2>" + cards)
 
 
@@ -9078,22 +9083,10 @@ def model_card(c):
         if not point:
             continue
         cost = f"${point['cost']:.4g}" if point['cost'] is not None else 'Unknown'
-        kind = 'Estimated' if point['estimated'] else 'Carried' if point.get('carried') else 'Measured'
-        sources = []
-        for metric, evidence in point['evidence'].items():
-            if not evidence:
-                continue
-            link = f"<a href='{e(evidence.get('url') or '')}' rel='noopener' target='_blank'>Artificial Analysis</a>"
-            if evidence.get('estimated'):
-                sources.append(f"<li>{e(metric)}: {e(json.dumps(evidence['derivation'], ensure_ascii=False))}</li>")
-            elif evidence.get('carried'):
-                d = evidence['derivation']
-                sources.append(f"<li>{e(metric)}: token volume {link} measured {e(evidence['date'])}, at today's "
-                               f"${d['price']:g} per 1M tokens (API, {e(d['price_date'])})</li>")
-            else:
-                warning = (evidence.get('derivation') or {}).get('warning')
-                sources.append(f"<li>{e(metric)}: {link}" + (' API' if evidence.get('source', '').endswith('(API)') else '')
-                               + f", {e(evidence['date'])}" + (f"; {e(warning)}" if warning else '') + "</li>")
+        kind = 'Measured'
+        sources = [f"<li>{e(metric)}: <a href='{e(evidence.get('url') or '')}' rel='noopener' target='_blank'>Artificial "
+                   f"Analysis</a>" + (' API' if evidence.get('source', '').endswith('(API)') else '') + f", {e(evidence['date'])}</li>"
+                   for metric, evidence in point['evidence'].items() if evidence]
         rows.append(f"<tr><th>{e(entry['variant'])}</th><td>{point['score']:.2f}</td><td>{cost}</td>"
                     f"<td>{kind}<details><summary>Evidence · {e(point['version'])}</summary><ul>{''.join(sources)}</ul></details></td></tr>")
     table = ("<table class='bench'><tr><th>Effort</th><th>Intelligence Index</th><th>USD/task</th><th>Evidence</th></tr>"
@@ -9101,9 +9094,10 @@ def model_card(c):
     return f"<div class='card' id='{e(c['model'])}'><h3>{e(c['name'])}</h3>{table}</div>"
 
 
-def effort_chart(entries):
+def effort_chart(entries, others=()):
     """Each model's effort levels as points of cost per task (across, doubling each step) against overall score
-    (up), joined in order: where the line climbs, more effort pays; where it runs flat, it only costs more."""
+    (up), joined in order: where the line climbs, more effort pays; where it runs flat, it only costs more. With
+    others (every model Artificial Analysis scores, bench.market()), a switch shows the whole field behind them."""
     import math
     from . import bench
     pts = [dict(x, overall=x['pair']['score'], cost=dict(value=x['pair']['cost'], unit='usd', benchmark='Cost per Intelligence Index task'))
@@ -9111,28 +9105,43 @@ def effort_chart(entries):
     if not pts:
         return "<p class='muted'>No model has both a comparable Intelligence Index and cost per task yet.</p>"
     W, H, L, B = 640, 300, 44, 34
-    lo, hi = math.log2(min(x["cost"]["value"] for x in pts)), math.log2(max(x["cost"]["value"] for x in pts))
-    X = lambda v: L + (W - L - 12) * ((math.log2(v) - lo) / ((hi - lo) or 1))
-    Y = lambda s: H - B - (H - B - 12) * s / 100
-    colours = ["var(--accent)", "var(--flag)", "#6b7fd7", "#c46fa0", "#4aa3a8", "#a88b3c", "#7a7a7a", "#b3261e", "#3b8f3b"]
-    out, legend = [], []
-    for i, mid in enumerate(dict.fromkeys(x["model"] for x in pts)):
-        mine = sorted((x for x in pts if x["model"] == mid), key=lambda x: x["cost"]["value"])
-        col = colours[i % len(colours)]
-        out.append(f"<polyline fill='none' stroke='{col}' stroke-width='2' points='"
-                   + " ".join(f"{X(x['cost']['value']):.0f},{Y(x['overall']):.0f}" for x in mine) + "'/>")
-        out += [f"<circle cx='{X(x['cost']['value']):.0f}' cy='{Y(x['overall']):.0f}' r='4' fill='{col}'><title>"
-                f"{e(bench.entry_name(x))}: Intelligence Index {x['overall']}, ${x['cost']['value']:.2f} {bench.cost_label(x['cost'])}</title></circle>"
-                + f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['variant'])}</text>"
-                for x in mine]
-        legend.append(f"<span><i style='background:{col}'></i>{e(bench.name(mid))}</span>")
-    ticks = "".join(f"<text x='{L - 6}' y='{Y(s) + 4:.0f}' text-anchor='end'>{s}</text>" for s in (0, 50, 100))
-    step = max(1, round((hi - lo) / 5)) if hi > lo else 1
-    xt = "".join(f"<text x='{X(2 ** k):.0f}' y='{H - 12}' text-anchor='middle'>${2 ** k:g}</text>"
-                 for k in range(math.floor(lo), math.ceil(hi) + 1, step) if lo <= k <= hi)
-    return (f"<div class='mapwrap'><svg class='chart' viewBox='0 0 {W} {H}' width='{W}' height='{H}'>{ticks}{xt}"
-            f"<text x='{L + 8}' y='12' class='axis'>Intelligence Index (0–100)</text><text x='{W - 12}' y='{H - 2}' text-anchor='end' class='axis'>"
-            f"{bench.cost_label(pts[0]['cost'])}, doubling each step</text>{''.join(out)}</svg></div><div class='legend chartkey'>{''.join(legend)}</div>"
+    colours = ["var(--accent)", "var(--flag)", "#6b7fd7", "#c46fa0", "#4aa3a8", "#a88b3c", "#8e5bd0", "#b3261e", "#3b8f3b"]
+
+    def draw(rest):
+        costs = [x["cost"]["value"] for x in pts] + [c for *_, c in rest]
+        lo, hi = math.log2(min(costs)), math.log2(max(costs))
+        X = lambda v: L + (W - L - 12) * ((math.log2(v) - lo) / ((hi - lo) or 1))
+        Y = lambda s: H - B - (H - B - 12) * s / 100
+        out = [f"<circle class='other' cx='{X(c):.0f}' cy='{Y(score):.0f}' r='3'><title>{e(name)}"
+               + (f", {e(maker)}" if maker else '') + f": Intelligence Index {score}, ${c:.2f} cost per task</title></circle>"
+               for name, maker, score, c in rest]
+        for i, mid in enumerate(dict.fromkeys(x["model"] for x in pts)):
+            mine = sorted((x for x in pts if x["model"] == mid), key=lambda x: x["cost"]["value"])
+            col = colours[i % len(colours)]
+            out.append(f"<polyline fill='none' stroke='{col}' stroke-width='2' points='"
+                       + " ".join(f"{X(x['cost']['value']):.0f},{Y(x['overall']):.0f}" for x in mine) + "'/>")
+            out += [f"<circle cx='{X(x['cost']['value']):.0f}' cy='{Y(x['overall']):.0f}' r='4' fill='{col}'><title>"
+                    f"{e(bench.entry_name(x))}: Intelligence Index {x['overall']}, ${x['cost']['value']:.2f} {bench.cost_label(x['cost'])}</title></circle>"
+                    + ("" if rest else f"<text x='{X(x['cost']['value']):.0f}' y='{Y(x['overall']) - 8:.0f}' text-anchor='middle'>{e(x['variant'])}</text>")
+                    for x in mine]
+        ticks = "".join(f"<text x='{L - 6}' y='{Y(s) + 4:.0f}' text-anchor='end'>{s}</text>" for s in (0, 50, 100))
+        step = max(1, round((hi - lo) / 5)) if hi > lo else 1
+        xt = "".join(f"<text x='{X(2 ** k):.0f}' y='{H - 12}' text-anchor='middle'>${2 ** k:.2g}</text>"
+                     for k in range(math.floor(lo), math.ceil(hi) + 1, step) if lo <= k <= hi)
+        return (f"<div class='mapwrap'><svg class='chart' viewBox='0 0 {W} {H}' width='{W}' height='{H}'>{ticks}{xt}"
+                f"<text x='{L + 8}' y='12' class='axis'>Intelligence Index (0–100)</text><text x='{W - 12}' y='{H - 2}' text-anchor='end' class='axis'>"
+                f"{bench.cost_label(pts[0]['cost'])}, doubling each step</text>{''.join(out)}</svg></div>")
+
+    legend = "".join(f"<span><i style='background:{colours[i % len(colours)]}'></i>{e(bench.name(mid))}</span>"
+                     for i, mid in enumerate(dict.fromkeys(x["model"] for x in pts)))
+    chart = draw([])
+    if others:
+        chart = (f"<div class='chartsw'><label class='chartall'><span>Every model Artificial Analysis scores "
+                 f"({len(others)} more, in grey; nothing outside colony's is weighed)</span><input type='checkbox' role='switch'>"
+                 f"<span class='cptoggle' aria-hidden='true'></span></label><div class='mine'>{chart}</div>"
+                 f"<div class='all'>{draw(list(others))}</div></div>")
+    return (chart + f"<div class='legend chartkey'>{legend}"
+            + ("<span><i class='otherkey'></i>Other models</span>" if others else "") + "</div>"
             + ("<p class='muted'>A model's effort levels share its price per token, so they stack at one price: "
                "higher effort spends more tokens a task, which this data doesn't give.</p>" if bench.pricing(pts[0]["cost"]) else ""))
 
@@ -12140,6 +12149,12 @@ table.bench tr + tr { border-top:1px solid var(--line) } table.bench td.sc { tex
 table.bench td.gap { text-align:right; color:var(--muted) } table.best th { width:7em } table.best td { white-space:normal }
 svg.chart text { font-size:11px; fill:var(--muted) } svg.chart .axis { font-size:11px } .chartkey { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:6px }
 .chartkey i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; vertical-align:middle }
+svg.chart circle.other { fill:var(--muted); opacity:.45 } .chartkey i.otherkey { background:var(--muted); opacity:.45 }
+.chartall { position:relative; display:flex; align-items:center; gap:12px; margin:0 0 10px; font-size:14px; color:var(--muted); cursor:pointer }
+.chartall > span:first-child { flex:1 } .chartall input { position:absolute; opacity:0; width:1px; height:1px; pointer-events:none }
+.chartall input:checked + .cptoggle { background:var(--accent) } .chartall input:checked + .cptoggle::after { left:23px }
+.chartall input:focus-visible + .cptoggle { outline:2px solid var(--accent); outline-offset:2px }
+.chartsw .all, .chartsw:has(.chartall input:checked) .mine { display:none } .chartsw:has(.chartall input:checked) .all { display:block }
 ol.steps { margin:6px 0 10px; padding-left:20px } ol.steps li { margin:3px 0 }
 a.modelinfo { font-size:13px; text-decoration:none; white-space:nowrap }
 .timer { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap } .timer.running { color:var(--accent) } .done-group > .ms { padding:6px 0 0 12px } .item .body { padding:4px 0 6px 18px } .item .body p { margin:4px 0 }
