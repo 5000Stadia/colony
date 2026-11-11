@@ -104,10 +104,17 @@ def vision_mark(root):
     return hashlib.sha1(" ".join((road["vision"] or road["goal"] or "").split()).encode()).hexdigest()[:12]
 
 
+def kept_at(root):
+    """Where a plan's settled hints are kept: beside the plan, so every member of a shared project reads the same
+    judgements and a new lead inherits them."""
+    from . import lead
+    return lead.plan_root(root)
+
+
 def settled(root):
     """Hints the agent settled under the present vision, each with its reasoning: {key: {"why", "at"}}."""
     mark, out = vision_mark(root), {}
-    for e in board.read(root, "hints-kept.jsonl"):
+    for e in board.read(kept_at(root), "hints-kept.jsonl"):
         if e.get("vision") == mark:
             out[e["key"]] = e
     return out
@@ -115,7 +122,7 @@ def settled(root):
 
 def keep(root, key, why):
     """The agent's reasoned judgement that a hint's shape is right: not raised again until the vision changes."""
-    board.append(root, "hints-kept.jsonl", {"type": "keep", "key": key, "why": why.strip(), "at": board.now(),
+    board.append(kept_at(root), "hints-kept.jsonl", {"type": "keep", "key": key, "why": why.strip(), "at": board.now(),
                                             "vision": vision_mark(root)})
 
 
@@ -126,7 +133,8 @@ def open_hints(root, every=None):
 
 def check(root):
     """Called every few seconds per project: when a milestone has newly finished, the agent hears the plan's open
-    shape hints once, quietly, as plain facts (nothing when there are none, or all are settled)."""
+    shape hints once, quietly, as plain facts (nothing when there are none, or all are settled). In a shared project
+    only the lead hears: each member keeps its own record of what had finished, so a new lead hears from the next one."""
     path = Path(root) / ".board" / "hints.json"
     road = board.roadmap(root)
     finished = sorted(m["id"] for m in road["milestones"] if m["items"] and all(i["state"] == "done" for i in m["items"]))
@@ -141,6 +149,9 @@ def check(root):
         path.write_text(json.dumps({"finished": finished}))
     if not new:
         return
+    from . import lead
+    if lead.info(root)["lead"] != str(Path(root).resolve()):
+        return          # a shared project's plan is its lead's to judge: the lead hears, a helper is spared the turn
     found = open_hints(root)
     if found:
         board.add_note(root, None, f"{', '.join(new)} finished. Shape hints, read by rule from the plan (yours to judge; "

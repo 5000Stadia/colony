@@ -220,6 +220,26 @@ class LeadTest(unittest.TestCase):
         self.assertIn('canonical Vision/roadmap changed', lead.engage(self.root))
         self.assertEqual(lead.git(self.root, 'rev-parse', 'HEAD'), self.initial)
 
+    def test_a_finished_milestone_tells_the_plans_shape_hints_to_the_lead_only(self):
+        from colony import hints
+        self.pair()
+        later = PLAN.replace('- [ ] R9 Experiments', '- [x] R9 Experiments\n- [x] R10 a\n- [x] R11 b')
+        (self.root / 'ROADMAP.md').write_text(later)
+        for member in (self.root, self.helper):
+            hints.check(member)                                    # the first look: what had finished isn't news
+        (self.root / 'ROADMAP.md').write_text(later.replace('- [ ] R4 Sharing', '- [x] R4 Sharing'))
+        for member in (self.helper, self.root, self.helper):
+            hints.check(member)
+        told = lambda member: [n['text'] for n in board.notes(member) if 'Shape hints' in n['text']]
+        self.assertEqual(told(self.helper), [], 'a judgement on the plan is not put to a helper')
+        self.assertEqual(len(told(self.root)), 1)
+        self.assertIn('later-done:M9', told(self.root)[0])
+        with patch.dict(os.environ, {'COLONY_PROJECT': str(self.helper)}), patch('sys.stderr', io.StringIO()) as err:
+            self.assertEqual(cli.main(['hint', 'keep', 'later-done:M9', 'mine to say']), 1)
+        self.assertIn('Only garden', err.getvalue())
+        hints.keep(self.root, 'later-done:M9', 'Later keeps what was set aside and then done')
+        self.assertEqual(hints.open_hints(self.helper), [], 'every member reads the judgements kept beside the plan')
+
     def test_one_plan_owner_inheritance_and_generation(self):
         self.pair()
         active = lead.start_item(self.root, 'R2', actor=self.root)

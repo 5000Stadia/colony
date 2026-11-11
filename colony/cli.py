@@ -807,6 +807,12 @@ def cmd_hint(a):
         if not a.key or not a.why:
             print('usage: colony hint keep KEY "why its shape stays"', file=sys.stderr)
             return 2
+        from . import lead
+        try:
+            lead.require_lead(root, root)      # settling a hint is a judgement on the plan: the lead's
+        except ValueError as err:
+            print(err, file=sys.stderr)
+            return 1
         hints.keep(root, a.key, a.why)
         print(f"settled {a.key}: not raised again until the vision changes")
         return 0
