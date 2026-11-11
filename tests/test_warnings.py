@@ -175,6 +175,29 @@ class ReopenedTest(Base):
         self.assertEqual(len(bulk), 4)
         self.assertFalse(any(s["explicit"] for s in bulk))
 
+    def test_a_helper_seat_on_a_shared_plan_does_not_repeat_the_leads_signals(self):
+        from colony import lead
+        self.plan({"R1": (" ", "Seeds")}, T0)
+        self.plan({"R1": ("x", "Seeds")}, T0 + 3600, msg="R1 done")
+        self.plan({"R1": ("~", "Seeds")}, T0 + 7200, msg="R1: the seeds rot, back to it")
+        seat = self.base / "garden-helper"
+        subprocess.run(["git", "clone", "-q", str(self.root), str(seat)], check=True, capture_output=True)
+        with patch.object(lead, "plan_root", return_value=self.root):
+            rep = ws.build(roots=[self.root, seat], now=T0 + 30 * WEEK, scan=False)
+        self.assertEqual([s["kind"] for s in self.project(rep)["signals"]], ["reopened"])
+        self.assertEqual(rep["projects"][str(seat)]["signals"], [], "the same history, counted in the plan's folder only")
+        rep = ws.build(roots=[self.root, seat], now=T0 + 30 * WEEK, scan=False)
+        self.assertEqual([s["kind"] for s in rep["projects"][str(seat)]["signals"]], ["reopened"],
+                         "two projects with plans of their own each keep theirs")
+
+    def test_colonys_own_answer_tagged_dev_is_not_a_dev_report(self):
+        here = Path(ws.__file__).resolve().parent.parent.name
+        mail = [dict(type="message", dev=True, id="m1", at=iso(T0), text="The pause notice was wrong", **{"from": "garden"}),
+                dict(type="message", dev=True, id="m2", at=iso(T0 + 60), text="Fixed and deployed", **{"from": here})]
+        with patch.object(ws, "jsonl", return_value=mail):
+            sigs = ws.dev_reports({"garden": self.root, here: self.base / here})
+        self.assertEqual([s["evidence"]["ref"] for s in sigs], ["m1"])
+
 
 class LabelTest(Base):
     def setUp(self):

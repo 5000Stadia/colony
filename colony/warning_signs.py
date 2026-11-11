@@ -401,11 +401,31 @@ def dev_reports(names):
     here = Path(__file__).resolve().parent.parent
     sigs = []
     for m in jsonl(here / ".board" / "mail.jsonl"):
-        if m.get("type") == "message" and m.get("dev") and m.get("from") in names:
+        # colony's own mail tagged dev is its answer to a report, not a report
+        if m.get("type") == "message" and m.get("dev") and m.get("from") in names and m["from"] != here.name:
             root = names[m["from"]]
             sigs.append(signal(root, "friction", "dev report", m.get("at"), m.get("text") or "",
                                {"type": "mail", "ref": m.get("id"), "line": short(m.get("text"), EXCERPT)}))
     return sigs
+
+
+def counted_once(read):
+    """A helper seat on a shared plan reads the lead's history too, so every signal there came out twice: what the
+    plan's own folder already carries is counted there only."""
+    from . import lead
+    by_root = {str(Path(k).resolve()): k for k in read}
+
+    def same(s):
+        return s["view"], s["kind"], s["item"], s["at"], s["text"]
+    for k, p in read.items():
+        try:
+            plan = by_root.get(str(lead.plan_root(k).resolve()))
+        except Exception:
+            continue
+        if plan in (None, k) or "signals" not in p or "signals" not in read[plan]:
+            continue
+        held = {same(s) for s in read[plan]["signals"]}
+        p["signals"] = [s for s in p["signals"] if same(s) not in held]
 
 
 # ----------------------------------------------------------------------------------------------------- exposure
@@ -778,6 +798,7 @@ def build(roots=None, now=None, scan=True, budget=None):
             read[str(r)] = read_project(r, now, guides)
         except Exception as err:             # one project's records unreadable: said, the rest go on
             read[str(r)] = {"root": str(r), "name": r.name, "error": err.__class__.__name__}
+    counted_once(read)
     names = {p["name"]: Path(k) for k, p in read.items()}
     for s in dev_reports(names):
         if "signals" in read.get(s["project"], {}):
