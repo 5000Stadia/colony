@@ -23,10 +23,8 @@ person's improvements come to you from them.
 - Once a week, run `colony friction` and read its list for shared causes: which are colony's shape, which are
   inherent and colony could support. Report the reading to the person; nothing is built from it by itself (bugs
   are fixed as they arrive; a change of shape is proposed, and only where its result is likely or obvious). Weigh
-  taking something out as readily as adding. Every fourth reading is a cleaning one: for what fired, read where it
-  fired and judge whether it helped or got in the way; propose removing what gets in the way, or weighs on every
-  turn for no result. Not firing is no reason to cut: a dormant part weighs nothing and may serve a weaker model or
-  the rare case it was made for. Keep a weekly wake for it: `colony wake --every 7d`.
+  taking something out as readily as adding. Every fourth reading is a cleaning one, by the test
+  in roadmap/R158.md. Keep a weekly wake for it: `colony wake --every 7d`.
 ## This project is part of a colony
 
 The colony is the person's set of projects, each with its own agent (you are this project's). They follow and
