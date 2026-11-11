@@ -11,7 +11,7 @@ waits on them for, its roadmap, and their words to one project or many at once.
     colony restart                  reload the board with its code as it is now (consoles keep running)
     colony stop                     end the board and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
-    colony friction [--since DATE]  the friction on record in one list, to read for shared causes
+    colony friction [--since DATE]  for developing colony: the friction on record in one list, read for shared causes
     colony projects                 every project on the board, its console state and latest line
     colony rename "NAME" [--why W]  change this project's own name on the board
     colony send NAME "TEXT" [--ask] a message to another project's agent; --ask expects an answer

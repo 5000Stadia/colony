@@ -266,7 +266,6 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony board [--lan]     start the board (this machine only; --lan: every device on your home network too)
     colony restart           reload the board after a change; consoles keep running
     colony doctor            is everything up and wired? what to do if not
-    colony friction          the friction on record in one list, to read for shared causes
     colony urls              where the board answers
     colony remote            the board from your own devices, anywhere, through Tailscale
     colony peek NAME [-n N]  a project's state and its last lines
@@ -350,6 +349,8 @@ review](https://www.coderabbit.ai/blog/opus-5-5-model-review);
 [Anthropic's Opus 5.5 page](https://www.anthropic.com/claude-opus-5-5).
 
 ## More
+
+Developing colony itself: `colony friction` prints the friction on record across your projects (their reports to colony, your corrections, questions asked again, agents' own statements of a mistake) in one list, for the agent working on colony to read once a week for shared causes. It is a developer's tool for improving colony, not part of using it: no project is asked to run it.
 
 Tests: `python3 tests/run.py` runs the whole suite in parallel, in under two minutes (`python3 -m unittest` with the modules listed in CLAUDE.md runs the same tests one after another). They start no real agent.
 
