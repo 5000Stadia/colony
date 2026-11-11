@@ -198,6 +198,83 @@ class ReopenedTest(Base):
             sigs = ws.dev_reports({"garden": self.root, here: self.base / here})
         self.assertEqual([s["evidence"]["ref"] for s in sigs], ["m1"])
 
+    def test_only_the_persons_own_words_are_read_from_an_answer_or_a_reply_on_a_decision(self):
+        self.plan({"R1": (" ", "Seeds")}, T0)
+        b, q = self.root / ".board", "Was the count wrong again?"
+        wrapped = f'The person replied on "{q}" (still open): %s\nIf it asks something, ask the decision again.'
+        rows = [dict(type="gate", id="g1", at=iso(T0), question=q, item="R1"),
+                dict(type="answer", of="g1", at=iso(T0 + 60), author="agent",
+                     text="Withdrawn by the agent: Asked again as g2, with what it was missing")]
+        (b / "gates.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        notes = [dict(type="note", id="n1", at=iso(T0 + 10), author="person", anchor={"gate": "g1", "item": "R1"},
+                      text=f'On "{q}": Yes'),
+                 dict(type="note", id="n2", at=iso(T0 + 20), author="person", text=wrapped % "What does this mean",
+                      anchor={"gate": "g1", "item": "R1", "asked": "What does this mean"}),
+                 dict(type="note", id="n3", at=iso(T0 + 30), author="person", text=wrapped % "No, that is not what I asked",
+                      anchor={"gate": "g1", "item": "R1", "asked": "No, that is not what I asked"})]
+        (b / "notes.jsonl").write_text("".join(json.dumps(r) + "\n" for r in notes))
+        sigs = [s for s in self.project(self.build())["signals"] if s["evidence"]["type"] in ("note", "answer")]
+        self.assertEqual([(s["evidence"]["ref"], s["text"]) for s in sigs], [("n3", "No, that is not what I asked")],
+                         "the agent's question, colony's instructions and a withdrawal are not the person's words")
+
+
+class FrictionListTest(Base):
+    def gather(self, roots, since):
+        from colony import lead
+        here = Path(ws.__file__).resolve().parent.parent.name
+        mail = [dict(type="message", dev=True, id="m1", at=iso(T0 + WEEK), text="The pause notice was wrong",
+                     to=here, **{"from": "garden"}),
+                dict(type="message", dev=True, id="m2", at=iso(T0 + WEEK + 60), text="Fixed", to="garden", re="m1",
+                     **{"from": here})]
+        real = ws.jsonl
+        with patch.object(ws, "jsonl", side_effect=lambda p: mail if Path(p).name == "mail.jsonl" else real(p)), \
+                patch.object(lead, "plan_root", return_value=self.root):
+            return ws.friction(roots, since=since, now=T0 + 30 * WEEK)
+
+    def test_the_list_gathers_each_source_once_under_its_heading_and_says_what_it_cannot_show(self):
+        self.plan({"R1": (" ", "Seeds")}, T0)
+        self.plan({"R1": ("x", "Seeds")}, T0 + 3600, msg="R1 done")
+        self.plan({"R1": ("~", "Seeds")}, T0 + 7200, msg="R1: the seeds rot, back to it")
+        seat = self.base / "garden-helper"
+        subprocess.run(["git", "clone", "-q", str(self.root), str(seat)], check=True, capture_output=True)
+        b = self.root / ".board"
+        for name, rows in (
+                ("gates.jsonl", [dict(type="gate", id="g1", at=iso(T0), question="Which bed first?", item="R1"),
+                                 dict(type="gate", id="g2", at=iso(T0 + WEEK), question="Which bed first?", item="R1",
+                                      reframes="g1", told="The north bed gets more sun")]),
+                ("line.jsonl", [dict(k="a", t=iso(T0 - 5 * WEEK), text="That was my mistake, long ago."),
+                                dict(k="b", t=iso(T0 + WEEK), text="The beds are dug. I misread the plan, so two are short.")]),
+                ("messages.jsonl", [dict(type="message", at=iso(T0 + WEEK), text="No, that is not what I asked")])):
+            (b / name).write_text("".join(json.dumps(r) + "\n" for r in rows))
+        rows = self.gather([self.root, seat], T0 - 86400)
+        self.assertEqual(sorted((r["group"], r["project"]) for r in rows),
+                         [(g, "garden") for g in ("asked", "dev", "owned", "said", "work")],
+                         "each source once; the helper seat's copy of the reopened item is not listed")
+        by = {r["group"]: r for r in rows}
+        self.assertEqual(by["dev"]["note"], "answered in m2", "colony's own answer is the report's answer, not a report")
+        self.assertIn("I misread the plan", by["owned"]["text"])
+        self.assertEqual(by["asked"]["ref"], "g2 after g1")
+        text = ws.friction_text(rows, T0 - 86400)
+        for _, title in ws.GROUPS[:4] + ws.GROUPS[5:]:
+            self.assertIn(f"{title} (1)", text)
+        self.assertNotIn(ws.GROUPS[4][1], text, "a heading with nothing under it is left out")
+        self.assertTrue(text.endswith(ws.UNSEEN))
+        self.assertEqual(self.gather([self.root, seat], T0 + 2 * WEEK), [], "what came before the date is left out")
+        self.assertEqual(self.gather([seat], T0 - 86400), [], "a helper seat alone lists only its own")
+
+    def test_the_command_lists_this_projects_own_and_every_projects_from_colonys(self):
+        import argparse, contextlib, io
+        from colony import cli
+        self.plan({"R1": (" ", "Seeds")}, T0)
+        for own, scope in ((None, "garden"), (self.root, "every project")):
+            out = io.StringIO()
+            with patch.object(board, "root_of", return_value=self.root), \
+                    patch.object(board, "colony_project", return_value=own), contextlib.redirect_stdout(out):
+                cli.cmd_friction(argparse.Namespace(since="2026-01-01"))
+            self.assertTrue(out.getvalue().startswith(f"Friction on record since 2026-01-01, {scope}: "), out.getvalue()[:90])
+        with patch.object(board, "root_of", return_value=self.root), self.assertRaises(SystemExit):
+            cli.cmd_friction(argparse.Namespace(since="last week"))
+
 
 class LabelTest(Base):
     def setUp(self):

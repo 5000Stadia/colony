@@ -266,6 +266,7 @@ the consultants' checking round. Choices and revisions stay in the decision's re
     colony board [--lan]     start the board (this machine only; --lan: every device on your home network too)
     colony restart           reload the board after a change; consoles keep running
     colony doctor            is everything up and wired? what to do if not
+    colony friction          the friction on record in one list, to read for shared causes
     colony urls              where the board answers
     colony remote            the board from your own devices, anywhere, through Tailscale
     colony peek NAME [-n N]  a project's state and its last lines

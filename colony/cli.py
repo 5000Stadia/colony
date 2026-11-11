@@ -11,6 +11,7 @@ waits on them for, its roadmap, and their words to one project or many at once.
     colony restart                  reload the board with its code as it is now (consoles keep running)
     colony stop                     end the board and every project console
     colony doctor [--tests]         is everything up and wired? what to do if not
+    colony friction [--since DATE]  the friction on record in one list, to read for shared causes
     colony projects                 every project on the board, its console state and latest line
     colony rename "NAME" [--why W]  change this project's own name on the board
     colony send NAME "TEXT" [--ask] a message to another project's agent; --ask expects an answer
@@ -457,6 +458,18 @@ def cmd_restart(a):
         return 1
     print("the board restarted; consoles were not touched")
     return 0
+
+
+def cmd_friction(a):
+    """The friction on record, as one list (R158): every project's from colony's own project, else this project's.
+    No model is called; the reading is the caller's."""
+    from . import board, warning_signs as ws
+    root, own = Path(board.root_of()), board.colony_project()
+    since = ws.stamp(a.since + "T00:00:00+00:00") if a.since else time.time() - ws.FRICTION_DAYS * 86400
+    if since is None:
+        raise SystemExit("--since takes a date, as 2026-11-01.")
+    everything = own is not None and root.resolve() == own.resolve()
+    print(ws.friction_text(ws.friction(None if everything else [root], since), since, None if everything else root.name))
 
 
 def cmd_doctor(a):
@@ -1972,6 +1985,9 @@ def main(argv=None):
     p.set_defaults(fn=cmd_voice)
     p = sub.add_parser("doctor"); p.add_argument("--tests", action="store_true", help="also run the test suite")
     p.set_defaults(fn=cmd_doctor)
+    p = sub.add_parser("friction", help="the friction on record in one list, to read for shared causes")
+    p.add_argument("--since", help="a date, as 2026-11-01 (two weeks back unless said)")
+    p.set_defaults(fn=cmd_friction)
     sub.add_parser("whoami").set_defaults(fn=cmd_whoami)
     p = sub.add_parser('rename', help="change this project's own name on the board")
     p.add_argument('name'); p.add_argument('--why', default=''); p.set_defaults(fn=cmd_rename)

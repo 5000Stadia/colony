@@ -20,6 +20,9 @@ person's improvements come to you from them.
   program, then confirming each model with a trivial call, where it has no command that lists them).
 - This repository's origin is public: push at milestones or a coherent set of finished work, after checking
   what goes out (the person's rule); anything else that leaves the machine is the person's call.
+- Once a week, run `colony friction` and read its list for shared causes: which are colony's shape, which are
+  inherent and colony could support. Report the reading to the person; nothing is built from it by itself (bugs
+  are fixed as they arrive, a change of shape is proposed). Keep a weekly wake for it: `colony wake --every 7d`.
 ## This project is part of a colony
 
 The colony is the person's set of projects, each with its own agent (you are this project's). They follow and

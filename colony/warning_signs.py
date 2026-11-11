@@ -372,12 +372,22 @@ def words(root, items):
     for m in jsonl(b / "messages.jsonl"):
         if m.get("type") == "message":
             said.append((m.get("at"), m.get("text") or "", {"type": "message", "ref": m.get("at")}))
+    gates = jsonl(b / "gates.jsonl")
+    asked = {g.get("id"): g.get("question") or "" for g in gates if g.get("type") == "gate"}
     for n in jsonl(b / "notes.jsonl"):
         if n.get("type") == "note" and n.get("author", "person") == "person":
-            item = (n.get("anchor") or {}).get("item") if isinstance(n.get("anchor"), dict) else None
-            said.append((n.get("at"), n.get("text") or "", {"type": "note", "ref": n.get("id"), "item": item}))
-    for g in jsonl(b / "gates.jsonl"):
-        if g.get("type") == "answer":
+            anchor = n.get("anchor") if isinstance(n.get("anchor"), dict) else {}
+            text = n.get("text") or ""
+            # their answer or reply on a decision arrives wrapped in the agent's question and colony's own
+            # instructions, and those were being matched as their words: only what they wrote is read
+            wrap = f"On \"{asked.get(anchor.get('gate'), '')}\": "
+            if isinstance(anchor.get("asked"), str):
+                text = anchor["asked"]
+            elif anchor.get("gate") and text.startswith(wrap):
+                text = text[len(wrap):]
+            said.append((n.get("at"), text, {"type": "note", "ref": n.get("id"), "item": anchor.get("item")}))
+    for g in gates:
+        if g.get("type") == "answer" and g.get("author") not in ("agent", "colony"):   # a withdrawal, a default that stood
             said.append((g.get("at"), g.get("text") or "", {"type": "answer", "ref": g.get("of")}))
     for at, text, ev in said:
         if not at or not text.strip() or text.lstrip().startswith("[colony]"):
@@ -632,6 +642,108 @@ def costs(state, roots, landed):
     return out
 
 
+# ------------------------------------------------------------------------------------- friction, on demand (R158)
+
+FRICTION_DAYS = 14
+# an agent saying, in a reply the board kept, that it got something wrong or should have gone another way
+OWNED = re.compile(r"\b(?:I was wrong|my mistake|my error|my fault|I made a mistake|I should have|I shouldn't have|I misread"
+                   r"|I mis(?:counted|stated|judged|took|understood)|wrong of me|I overlooked|I failed to|I never checked"
+                   r"|I gave you a wrong|I (?:had|got) (?:\w+ ){0,3}wrong|was my (?:mistake|error|fault)|I missed\b"
+                   r"|my (?:\w+ ){0,3}was (?:wrong|broken|off|mistaken)"
+                   r"|I told you (?:\w+ ){0,6}(?:wrong|was not true|wasn't true)|a better (?:way|approach) would have been)",
+                   re.I)
+PERSON = ("the person's words, perhaps a correction", "the person's word after it was built",
+          "the person's words in the plan", "the person's words in a commit")
+GROUPS = (("dev", "Dev reports to colony, with colony's answer where one is found"),
+          ("said", "The person's corrections"),
+          ("asked", "Questions put to the person again in a new form"),
+          ("owned", "Agents' own statements of a mistake, from their replies"),
+          ("maybe", "The person's words that may be a correction (matched by phrase: many are not)"),
+          ("work", "Work redone, from the plan and the commits"))
+UNSEEN = ("What this list cannot show: friction no one noticed or reported, which is found only by counting what was "
+          "done; whether a fix held; what each entry cost; what the person typed straight into a console; and "
+          "projects that send no reports. The reading is yours: group by cause, judge which are colony's and which "
+          "are inherent, and report to the person. Nothing is built from a list by itself.")
+
+
+def dev_answers():
+    """{dev report id: colony's answer to it}: the reply linked to it, else colony's next mail to its sender."""
+    here = Path(__file__).resolve().parent.parent
+    mail = [m for m in jsonl(here / ".board" / "mail.jsonl") if m.get("type") == "message"]
+    out = {}
+    for m in mail:
+        if not m.get("dev") or m.get("from") == here.name:
+            continue
+        linked = next((r for r in mail if r.get("from") == here.name and r.get("re") == m.get("id")), None)
+        after = next((r for r in mail if r.get("from") == here.name and r.get("to") == m.get("from")
+                      and (r.get("at") or "") > (m.get("at") or "")), None)
+        out[m.get("id")] = (f"answered in {linked.get('id')}" if linked else
+                            f"colony wrote next in {after.get('id')}, not linked" if after else "no answer found")
+    return out
+
+
+def friction(roots=None, since=None, now=None):
+    """What is on record of friction since a time, as rows for one reading across reports: the signals this file
+    already reads, the questions asked again, and agents' own statements of a mistake. No model is called and nothing
+    is kept. Given roots, only theirs."""
+    from . import lead
+    now = now or time.time()
+    since = now - FRICTION_DAYS * 86400 if since is None else since
+    want = [Path(r) for r in (roots if roots is not None else projects())]
+    plans = []
+    for r in want:                           # a helper seat alone: its lead is read too, so its copies can be told
+        try:
+            plan = lead.plan_root(r)
+        except Exception:
+            continue
+        if plan.resolve() not in [w.resolve() for w in want + plans] and plan.is_dir():
+            plans.append(plan)
+    read = readings(want + plans, now, guidance())
+    answers, rows = dev_answers(), []
+
+    def row(group, at, name, text, ref, note=""):
+        if (stamp(at) or 0) >= since:
+            rows.append({"group": group, "at": iso(stamp(at)), "project": name, "text": short(text, 170), "ref": ref,
+                         "note": note})
+    for r in want:
+        p = read.get(str(r), {})
+        seen = set()
+        for s in p.get("signals", []):
+            if (s["kind"], s["at"], s["text"]) in seen:
+                continue
+            seen.add((s["kind"], s["at"], s["text"]))
+            ref = str(s["evidence"].get("ref") or "")
+            group = ("dev" if s["kind"] == "dev report" else "said" if s["kind"] == "the person's correction" else
+                     "maybe" if s["kind"] in PERSON else "work")
+            row(group, s["at"], p["name"], s["text"], (s["item"] + " " if s["item"] else "") + ref[:19],
+                answers.get(ref, "no answer found") if group == "dev" else s["kind"] if group == "work" else "")
+        for g in jsonl(r / ".board" / "gates.jsonl"):
+            if g.get("type") == "gate" and g.get("reframes"):
+                row("asked", g.get("at"), r.name, g.get("question"), f"{g.get('id')} after {g['reframes']}",
+                    "told: " + short(g["told"], 110) if g.get("told") else "")
+        said = set()
+        for line in jsonl(r / ".board" / "line.jsonl"):
+            hit = OWNED.search(line.get("text") or "")
+            if hit:
+                text = " ".join(line["text"][max(0, hit.start() - 60):hit.end() + 110].split())
+                if text not in said:
+                    said.add(text)
+                    row("owned", line.get("t") or line.get("at"), r.name, text, "reply " + str(line.get("t") or "")[:16])
+    return sorted(rows, key=lambda x: x["at"])
+
+
+def friction_text(rows, since, scope=None):
+    """The list as plain text, grouped by where each entry comes from, ending with what it cannot show."""
+    out = [f"Friction on record since {iso(since)[:10]}, {scope or 'every project'}: {len(rows)} entries."]
+    for key, title in GROUPS:
+        mine = [x for x in rows if x["group"] == key]
+        if mine:
+            out += ["", f"{title} ({len(mine)})"]
+            out += [f"  {x['at'][5:10]}  {x['project'][:18]:<18}  {x['text']}  [{x['ref']}" +
+                    (f"; {x['note']}" if x["note"] else "") + "]" for x in mine]
+    return "\n".join(out + ["", UNSEEN])
+
+
 # ------------------------------------------------------------------------------------------------- the reading
 
 def read_project(root, now=None, guides=None):
@@ -683,6 +795,22 @@ def read_project(root, now=None, guides=None):
             "exposure": expo, "commit_times": times,
             "clean": [{"item": r, "text": short(it["text"], 240)} for r, it in sorted(items.items())
                       if it.get("done") and not any(s["item"] == r for s in sigs)]}
+
+
+def readings(roots, now, guides):
+    """Every project's reading, each signal counted once, with the dev reports it sent."""
+    read = {}
+    for r in roots:
+        try:
+            read[str(r)] = read_project(r, now, guides)
+        except Exception as err:             # one project's records unreadable: said, the rest go on
+            read[str(r)] = {"root": str(r), "name": r.name, "error": err.__class__.__name__}
+    counted_once(read)
+    names = {p["name"]: Path(k) for k, p in read.items()}
+    for s in dev_reports(names):
+        if "signals" in read.get(s["project"], {}):
+            read[s["project"]]["signals"].append(s)
+    return read
 
 
 def ask_verdicts(root):
@@ -792,17 +920,7 @@ def build(roots=None, now=None, scan=True, budget=None):
            "thresholds": {"min_events": MIN_EVENTS, "window": WINDOW, "min_base": MIN_BASE,
                           "min_friction": MIN_FRICTION, "ratio": RATIO, "margin": MARGIN, "min_finished": MIN_FINISHED},
            "guidance_versions": [h for _, h in guides]}
-    read = {}
-    for r in roots:
-        try:
-            read[str(r)] = read_project(r, now, guides)
-        except Exception as err:             # one project's records unreadable: said, the rest go on
-            read[str(r)] = {"root": str(r), "name": r.name, "error": err.__class__.__name__}
-    counted_once(read)
-    names = {p["name"]: Path(k) for k, p in read.items()}
-    for s in dev_reports(names):
-        if "signals" in read.get(s["project"], {}):
-            read[s["project"]]["signals"].append(s)
+    read = readings(roots, now, guides)
     cost = costs(scan_costs(budget=budget) if scan else {}, roots,
                  {k: p.get("commit_times") for k, p in read.items() if p.get("commit_times")})
     for k, p in read.items():
