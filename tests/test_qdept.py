@@ -29,6 +29,7 @@ class Fake:
     def __init__(self):
         self.calls = []
         self.fail = set()
+        self.refuse = None                    # a why the core gives for not weaving finding 1
 
     def __call__(self, cmd, input, **kw):
         mode, inp = cmd[-1], json.loads(input)
@@ -49,6 +50,8 @@ class Fake:
             out = Path(inp["out"])
             out.mkdir(parents=True, exist_ok=True)
             (out / "addendum.md").write_text(f"- {inp['decision']}: the default holds ({inp['default']}).\n")
+        elif mode == "learn" and self.refuse:
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"woven": [], "not_woven": [{"n": 1, "why": self.refuse}]}), "")
         elif mode == "learn":
             return subprocess.CompletedProcess(cmd, 0, json.dumps({"woven": [{"n": 1, "edition": 2}], "not_woven": []}), "")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -445,6 +448,31 @@ class QDept(Base):
         self.assertEqual(inp["out"], str(self.root / ".board" / "qbranch" / "R1"))
         self.look()
         self.assertEqual(self.jobs(), [])
+
+    def test_a_finding_refused_for_its_form_is_told_and_read_again_once_fixed(self):
+        self.curated_done()
+        self.assertIn("(80 words at most)", self.notes()[1])                    # the limit is in the question
+        long = "- " + "word " * 90 + "https://example.org/long\n"
+        self.details("R1", "## For the guide\n- A short one that passes: https://example.org/a\n" + long)
+        self.look()
+        self.fake.refuse = "candidate text must contain 1 to 80 words"
+        self.work()
+        told = self.notes()[-1]
+        self.assertIn("finding 1: candidate text must contain 1 to 80 words", told)
+        self.assertIn("read again", told)
+        before = len(self.fake.calls)
+        self.look()
+        self.assertEqual(self.jobs(), [])                                       # unchanged section: not sent again
+        self.details("R1", "## For the guide\n- A short one that passes: https://example.org/a\n"
+                           "- The long one, shortened: https://example.org/long\n")
+        self.fake.refuse = None
+        self.look()
+        self.assertEqual(self.jobs(), [("learn", "R1")])
+        self.work()
+        self.assertEqual(len(self.fake.calls), before + 1)
+        self.assertEqual(self.fake.calls[-1][1]["candidates"],                  # only the fixed one: the other was sent
+                         [{"text": "The long one, shortened", "url": "https://example.org/long"}])
+        self.assertTrue(self.rec("R1")["curated"]["answered"])
 
     def test_nothing_for_the_guide_runs_nothing(self):
         self.curated_done()

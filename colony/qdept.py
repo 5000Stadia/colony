@@ -611,6 +611,12 @@ def _learn_job(root, iid, job, run):
     _record_run(root, iid, "learn", "done" if code == 0 else "failed", used, woven=result.get("woven", []),
                 not_woven=result.get("not_woven", []), error=err.strip()[-300:] if code else None)
     update(root, lambda s: s["items"][iid]["curated"].update(learned=board.now()))
+    form = [x for x in result.get("not_woven", []) if isinstance(x, dict) and str(x.get("why", "")).startswith("candidate ")]
+    if form:
+        body = section(board.item_details(root, iid), "For the guide") or ""
+        whys = "; ".join(f"finding {x.get('n')}: {x['why']}" for x in form)
+        note(root, iid, REFUSED.format(iid=iid, whys=whys, title=cur.get("title", "")))
+        update(root, lambda s: s["items"][iid]["curated"].update(answered=None, refused=body))
 
 
 def name_or(root):
@@ -636,8 +642,13 @@ UPKEEP = ("{iid} is done, and it was handed the curated guide \"{title}\". Answe
           "it fits only your project, or if nothing backs it: a finding from your build must have held up in it, and "
           "one from your search needs a primary source (the maker's own docs, code or paper) that your build didn't "
           "contradict. Where the guide's advice failed you, that is a finding too. If something passes, add a "
-          "`## For the guide` section to {details}: each finding in one or two generic sentences with its source URL, "
-          "saying whether your build tested it, at most three. If not, add nothing (the default).")
+          "`## For the guide` section to {details}: each finding in one or two generic sentences (80 words at most) "
+          "with its source URL, saying whether your build tested it, at most three. If not, add nothing (the default).")
+# A finding refused for its form used to be dropped unsaid (a project's dev report, 2026-11-11: two findings over the
+# limit, one missing from the guide for four days). Its agent hears why, and the section is read again once it changes.
+REFUSED = ("{iid}'s `## For the guide` section: {whys}, so not added to the curated guide \"{title}\". A finding is "
+           "80 words at most, with its source URL. Fix it in that section and it is read again; leave the others as "
+           "they are.")
 
 
 def _deliver_guide(root, iid, rec):
@@ -796,12 +807,14 @@ def _look(root, its):
         cur = rec.get("curated") or {}
         if cur.get("asked") and not cur.get("answered"):
             body = section(board.item_details(root, iid), "For the guide")
-            if body is None:
+            if body is None or body == cur.get("refused"):      # refused for its form: waits until the section changes
                 continue
-            found = candidates(body)
+            sent = cur.get("sent") or []
+            found = [c for c in candidates(body) if c["text"] not in sent]      # what was sent before isn't sent twice
             if found:
                 enqueue({"kind": "learn", "root": str(root), "item": iid, "candidates": found})
-            update(root, lambda s, n=len(found): s["items"][iid]["curated"].update(answered=board.now(), candidates=n))
+            update(root, lambda s, n=len(found), t=sent + [c["text"] for c in found]:
+                   s["items"][iid]["curated"].update(answered=board.now(), candidates=n, sent=t))
 
 
 # ---------------------------------------------------------------- what the board shows
