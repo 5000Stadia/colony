@@ -8519,6 +8519,56 @@ class ResearchTest(BoardBase):
         self.assertEqual([x["id"] for x in research.look("gmail mcp server")], [r["id"], older["id"]],
                          "the better match first, then the newer")
 
+    # ---- the research flag (R159): one line to the agent as a flagged item starts; colony researches nothing itself
+
+    def _plan(self, *lines):
+        (self.root / "ROADMAP.md").write_text("# P\n\n## M1 — First\n\n" + "\n".join(lines) + "\n")
+
+    def _flag_notes(self):
+        return [n["text"] for n in board.notes(self.root) if n.get("kind") == "research"]
+
+    def test_a_flagged_item_is_told_once_as_it_starts_with_its_question(self):
+        from colony import research
+        (self.root / "roadmap").mkdir(exist_ok=True)
+        (self.root / "roadmap" / "R2.md").write_text(
+            "# R2\n\n## Research\nTrigger: Stale.\nSubject: how do small apps keep a queue across restarts?\n"
+            "Requirements: one machine\n\n## Notes\nnot part of it\n")
+        self._plan("- [~] R1 Under way before the first look (research)", "- [ ] R2 A queue (research)", "- [ ] R3 Plain")
+        research.check(self.root)
+        self.assertEqual(self._flag_notes(), [], "a first look says nothing about what was already under way")
+        self._plan("- [~] R1 Under way before the first look (research)", "- [~] R2 A queue (research)", "- [~] R3 Plain")
+        research.check(self.root)
+        said = self._flag_notes()
+        self.assertEqual(len(said), 1, "the flagged item only; the unflagged one starts unsaid")
+        self.assertIn("R2 is flagged for research (how do small apps keep a queue across restarts?).", said[0])
+        for part in ('colony research "a few words"', "read the sources themselves", "colony research --add FILE",
+                     "fresh-eyes.md"):
+            self.assertIn(part, said[0])
+        self.assertNotIn("not part of it", said[0])
+        note = [n for n in board.notes(self.root) if n.get("kind") == "research"][0]
+        self.assertFalse(note.get("quiet"), "it has to arrive before the design")
+        self.assertEqual(note["anchor"], {"item": "R2"})
+        self._plan("- [~] R1 Under way before the first look (research)", "- [ ] R2 A queue (research)", "- [~] R3 Plain")
+        research.check(self.root)
+        self._plan("- [~] R1 Under way before the first look (research)", "- [~] R2 A queue (research)", "- [~] R3 Plain")
+        research.check(self.root)
+        self.assertEqual(len(self._flag_notes()), 1, "said once, however often the item is started again")
+
+    def test_a_flag_without_a_section_is_still_said_and_research_off_says_nothing(self):
+        from colony import research
+        self._plan("- [ ] R1 A thing (research)", "- [ ] R2 Another (research)")
+        research.check(self.root)
+        self._plan("- [~] R1 A thing (research)", "- [ ] R2 Another (research)")
+        research.check(self.root)
+        self.assertIn("R1 is flagged for research. Before you design it", self._flag_notes()[0])
+        board.project_settings(self.root, {"research": "off"})
+        self._plan("- [~] R1 A thing (research)", "- [~] R2 Another (research)")
+        research.check(self.root)
+        self.assertEqual(len(self._flag_notes()), 1, "off for this project: nothing said")
+        its = board.items(board.roadmap(self.root))
+        self.assertIn(">research</span>", research.badge(its["R1"]))
+        self.assertEqual(research.badge({"research": False}), "")
+
     def test_the_same_report_added_again_revises_its_entry_instead_of_standing_beside_it(self):
         from datetime import date
         from colony import research

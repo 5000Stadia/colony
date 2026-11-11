@@ -46,12 +46,11 @@ When you write or update a roadmap item, name the decisions it turns on, each wi
 Flag the item (research) when a decision answers yes to Stale or Thin, and write its Research section: the trigger,
 the subject in generic words, the requirements, and each such decision with what you'd do without research. Exact
 facts behind one decision: look them up while you work, no flag. If the project's product is figures or evidence kept
-current from sources (an atlas, a dataset, a tracker), it gets a standing source entry for where they live and how
+current from sources (an atlas, a dataset, a tracker), keep one library entry for where they live and how
 they mislead, not flags item by item. High stakes alone are no reason: they set how deep, not whether. No yes: no
 flag; your default stands.
 
-The flag is `(research)` on the item's line, beside `(related: ...)`; the section goes in `roadmap/R#.md`, with
-nothing of the project in its subject or requirements:
+The flag is `(research)` on the item's line, beside `(related: ...)`; the section goes in `roadmap/R#.md`:
 
     ## Research
     Trigger: Stale: memory tooling for coding agents moved this year.
@@ -60,10 +59,8 @@ nothing of the project in its subject or requirements:
     Decisions:
     - Which store for recalled notes? Default: plain Markdown files in the repository.
 
-Colony researches it while the item before it is built, or as it starts when nothing was being built: never hold an
-item for its research. Start it when its turn comes; a note says the guide is coming, then where it is. Later, when a change brings in a decision
-the research should cover and doesn't, and its answer could change what you do, add that decision line: only it is
-researched. Rewording, a changed default or new detail runs nothing.
+Colony researches nothing for it. When you mark the item in progress, a note says its question back to you: do the
+research then, before you design (`fresh-eyes.md`).
 
 ## Starting an item
 

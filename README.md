@@ -230,8 +230,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **A wiser colony:** what one project learns, the next starts with. When you correct an agent, it may
   propose a one-sentence lesson keyed to the colony action it's about; you adopt it with a tap on Needs you, and
   agents see it each time they take that action (`colony lesson`). Research one project did is kept for all in a
-  shared library with a date to look again (`colony research "words"`, `--add FILE`). Web research runs in a
-  locked room (`colony room`): prompt in, text out, with search and page reading only, in an OS sandbox that sees
+  shared library with a date to look again (`colony research "words"`, `--add FILE`). An agent can flag a
+  roadmap item for research; as the item starts, colony tells it to look there and research what is missing. Web
+  research runs in a locked room (`colony room`): prompt in, text out, with search and page reading only, in an OS sandbox that sees
   only its own folder and public names. Every call is logged, and the result is screened for text aimed at the
   reading agent before one with tools reads it. Your standing orders to a
   project are kept by colony and handed back at every session start, after a compaction too (`colony rule`).

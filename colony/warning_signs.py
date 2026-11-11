@@ -100,7 +100,6 @@ CANNOT_SHOW = [
     "which guides an agent actually opened, or what colony's notes changed: neither is recorded per item",
     "edits to the always-loaded protocol inside colony/board.py: they share commits with the rest of board.py",
     "which model or tier worked an item: transcripts are not tied to items",
-    "Q Branch briefs handed at an item's start: not recorded yet; research library entries naming an item stand in",
     "the person's words typed straight into a console: only those sent through the board (messages, notes, answers) "
     "are read, since a transcript doesn't tell the person's typing from colony's",
     "a project whose roadmap isn't in git: its items have no history to read",

@@ -68,8 +68,8 @@ class Watcher:
                 cleanup.check(p)                # an item finished: a cleanup pass that clearly pays, said once (R139)
                 from . import weakened
                 weakened.check(p)               # a commit that weakens its tests without saying why, put to its agent
-                from . import qdept
-                qdept.check(p)                  # R131: an item started or finished: Q Branch's research and guides
+                from . import research
+                research.check(p)               # R159: a flagged item started: its agent is told to look and research
             except Exception:
                 pass
             snap = console.snapshot(p, lines=4)

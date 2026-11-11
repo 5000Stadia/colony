@@ -105,3 +105,69 @@ def show(rid, today=None):
 
 def remove(rid):
     (folder() / f"{rid}.json").unlink()
+
+
+# ---------------------------------------------------------------- the research flag (R159)
+# An item's agent may mark it `(research)` on its roadmap line, with a `## Research` section in its details file that
+# names the question (guides/roadmap.md says when). Colony runs no research for it: when the item is marked in
+# progress, its agent is told once, at that moment, to look here, research what is missing and add what it finds.
+# Said with the task, not kept as standing text: the form that was measured to reach the act (roadmap/R131.md).
+
+START = ("{iid} is flagged for research{question}. Before you design it: look in the library (`colony research \"a few "
+         "words\"`), research what it doesn't cover and read the sources themselves, not only search results "
+         "({guide} says how), then add what another project could reuse (`colony research --add FILE`). The calls "
+         "are yours.")
+
+
+def flag_on(root):
+    """The flag's line for this project: on unless its person turned Research off."""
+    return board.project_settings(root)[1].get("research") != "off"
+
+
+def question(root, iid):
+    """What the item's `## Research` section asks: its `Subject:` line, else its first line; "" without a section."""
+    m = re.search(r"^##\s+Research\s*$", board.item_details(root, iid) or "", re.M | re.I)
+    if not m:
+        return ""
+    rest = board.item_details(root, iid)[m.end():]
+    end = re.search(r"^#{1,2}\s", rest, re.M)
+    lines = [l.strip() for l in (rest[:end.start()] if end else rest).splitlines() if l.strip()]
+    for l in lines:
+        s = re.match(r"^(?:[-*]\s*)?\**subject\**\s*:\s*(.+)$", l, re.I)
+        if s:
+            return s[1].strip()
+    return lines[0][:300] if lines else ""
+
+
+def _flag_path(root):
+    return Path(root) / ".board" / "research-flag.json"
+
+
+def check(root):
+    """Called every few seconds per project by the watcher: a flagged item newly in progress is told the line, once."""
+    root = Path(root)
+    its = board.items(board.roadmap(root))
+    now = {i: it["state"] for i, it in its.items()}
+    try:
+        was = json.loads(_flag_path(root).read_text())
+    except (OSError, ValueError):
+        board.save_json(_flag_path(root), {"states": now, "told": {}})     # first look: what was before isn't news
+        return
+    before, told = was.get("states", {}), was.get("told", {})
+    if before == now:
+        return
+    if flag_on(root):
+        for iid, it in its.items():
+            if it.get("research") and now[iid] == "doing" and before.get(iid) != "doing" and iid not in told:
+                q = question(root, iid)
+                board.add_note(root, {"item": iid}, START.format(
+                    iid=iid, question=f" ({q})" if q else "",
+                    guide=board.GUIDES / "fresh-eyes.md"), author="colony", kind="research")
+                told[iid] = board.now()
+    board.save_json(_flag_path(root), {"states": now, "told": told})
+
+
+def badge(it):
+    """A short marker on a flagged item's row."""
+    return (" <span class='badge' title='Its agent flagged it for research: told to look in the library and research "
+            "what it lacks as the item starts'>research</span>") if it.get("research") else ""

@@ -1,4 +1,4 @@
-"""The safety lines every research report and outside find carries (turbo's research, the research room, Q Branch).
+"""The safety lines every research report and outside find carries (turbo's research, the research room).
 
 They outlived the steward's supports list (retired with the steward, R152): what others found online is offered with
 a warning that it may be hostile, and adopted only after the agent adopting it vets it.
