@@ -8139,7 +8139,11 @@ class PhonePageTest(HoursBase):
         # the top of the stack": it sits on whatever is below it (the player, the box, or beside the player's ♪)
         self.assertIn(".chat details.needs { position:fixed", board.CSS)
         self.assertIn("bottom:calc(var(--stk, 64px) + 4px)", board.CSS)
-        self.assertIn("html.cpsmall .chat details.needs { right:calc(var(--pillw, 54px) + 18px) }", board.CSS, "beside the pill, however wide")
+        self.assertIn("html.cpsmall .chat details.needs:not([open]) { right:calc(var(--pillw, 54px) + 18px) }", board.CSS,
+                      "folded to its line, beside the pill, however wide")
+        self.assertIn("html.cpsmall .chat details.needs[open] { bottom:calc(var(--stko, 64px) + 4px)", board.CSS,
+                      "open, the full width above the pill: beside a wide one it was left half the screen")
+        self.assertIn("'--stko', Math.round(lift + bar.offsetHeight)", board.PLAYER)
         self.assertIn("'--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight))", board.PLAYER, "on the player, or on the box where it is shut")
         # an answer typed in it: the keyboard parts the visible part from the page, which hid it and took the typing
         # (the person: "if I tap it it immediately ejects focus and I can't type anything"); it stays, at the top

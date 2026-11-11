@@ -4451,6 +4451,8 @@ PLAYER = """
     document.documentElement.classList.toggle('apart', !plain); document.documentElement.classList.toggle('cpsmall', mini && !bar.hidden);
     document.documentElement.style.setProperty('--stk', Math.round(lift + (mini ? 8 : bar.offsetHeight)) + 'px');
     document.documentElement.style.setProperty('--pillw', (mini ? pill.offsetWidth : 0) + 'px');
+    // opened beside a wide pill ("Auto · 0") it was left half the screen: open, it takes the full width, above the pill
+    document.documentElement.style.setProperty('--stko', Math.round(lift + bar.offsetHeight) + 'px');
     // never over a box, a field or a button (a fresh install's test: the ♪ sat on a reply's Send at a desk, and on the Add
     // project form on a phone): with one under it, the pill steps aside until the page has moved on
     bar.classList.toggle('cpaside', mini && !bar.hidden && fieldUnder(pill));
@@ -11793,7 +11795,8 @@ blockquote { margin:10px 0; padding:2px 0 2px 12px; border-left:3px solid var(--
   margin:0 auto; max-height:calc(100dvh - var(--stk, 64px) - 120px); overflow:auto; overscroll-behavior:contain;
   box-shadow:0 4px 18px rgba(0,0,0,.16) }
 .chat:has(details.needs)::after { content:''; display:block; flex:none; height:var(--ndh, 0px) }
-.chat details.needs:not([open]) { padding:2px 12px } html.cpsmall .chat details.needs { right:calc(var(--pillw, 54px) + 18px) }
+.chat details.needs:not([open]) { padding:2px 12px } html.cpsmall .chat details.needs:not([open]) { right:calc(var(--pillw, 54px) + 18px) }
+html.cpsmall .chat details.needs[open] { bottom:calc(var(--stko, 64px) + 4px); max-height:calc(100dvh - var(--stko, 64px) - 120px) }
 html.atend, html.atend body { overscroll-behavior-y:none }
 html.apart .chat details.needs, body.gctyping .chat details.needs, body.typing .chat details.needs { display:none }
 html.answering .chat details.needs { display:block; z-index:60 }
