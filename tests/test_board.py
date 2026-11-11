@@ -5977,6 +5977,10 @@ class UsageTest(BoardBase):
                           "where each program's week is", "wait for them"):
                 self.assertIn(words, note["text"])
             self.assertEqual(usage.check(), [], "told once")
+            why = mail.blocker(self.root)["reason"]
+            for words in ("its week pause", "50% of any program's week", "Codex's week is past that"):
+                self.assertIn(words, why, "a sender is told which program's week holds a project that runs on another")
+            self.assertNotIn("safe-pause window", why)
             weeks["codex"]["weekly"]["resets_at"] = time.time() - 1
             self.assertEqual([w for _, w in usage.check()], ["resumed"])
             self.assertIn("the week it paused at has reset", board.notes(self.root)[-1]["text"])
