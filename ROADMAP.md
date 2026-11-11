@@ -240,7 +240,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R155 Are colony, the business project and the books project growing into one another? A report, not a plan — three assessments written apart, joined and presented with every difference named: they share a way of working, not a product; keep each whole and join at a few named points; nothing planned and no items opened in any project (related: R149)
 - [x] R156 An audit of colony as a whole: what makes it effective, what gets in the way, and whether any part should be built differently. A short report, not a plan — the core is sound and well used (plain files, lasting consoles, one seam between programs, decisions with defaults, mail, the plan); what weighs on it is one file doing three jobs, instructions said in several places, and adding faster than checking what pays. Proposed, not built: split the big file, a pass of subtraction on the texts, count before building and once after (related: R131, R154)
 - [x] R157 A commit chained to a piped test run is turned back
-- [~] R158 `colony friction`: the friction on record in one list, run on demand, for a reading across reports — no model run, no words in any agent's context, nothing runs it by itself (related: R146, R148)
+- [x] R158 `colony friction`: the friction on record in one list, run on demand, for a reading across reports — no model run, no words in any agent's context, nothing runs it by itself (related: R146, R148)
 
 ## M6 — Later
 
