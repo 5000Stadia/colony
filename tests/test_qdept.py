@@ -474,6 +474,18 @@ class QDept(Base):
                          [{"text": "The long one, shortened", "url": "https://example.org/long"}])
         self.assertTrue(self.rec("R1")["curated"]["answered"])
 
+    def test_the_learn_step_reads_a_long_items_end(self):
+        self.assertEqual(qdept.outcome_text("a" * 20000), "a" * 20000)
+        long = "START " + "x" * 40000 + " THE ANSWER"
+        cut = qdept.outcome_text(long)
+        self.assertTrue(cut.startswith("START ") and cut.endswith(" THE ANSWER"))
+        self.assertLess(len(cut), 24100)
+        self.curated_done()
+        self.details("R1", "word " * 3000 + "THE RESULT CAME LAST.\n\n## For the guide\n- A finding: https://example.org/a\n")
+        self.look()
+        self.work()
+        self.assertIn("THE RESULT CAME LAST.", self.fake.calls[-1][1]["outcome"]["built"])
+
     def test_nothing_for_the_guide_runs_nothing(self):
         self.curated_done()
         self.details("R1", "## For the guide\nNothing.\n")

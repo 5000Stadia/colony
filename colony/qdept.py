@@ -597,7 +597,7 @@ def _learn_job(root, iid, job, run):
     usage = work / "usage.jsonl"
     (work / "cwd").mkdir()
     names = private(root)
-    inp = {"out": cur["out"], "shelf_dir": str(shelf_dir()), "outcome": {"built": f"{it['text']}\n\n{details}"[:6000],
+    inp = {"out": cur["out"], "shelf_dir": str(shelf_dir()), "outcome": {"built": outcome_text(f"{it['text']}\n\n{details}"),
                                                                        "rework": ""},
            "label": name_or(root), "private": names, "candidates": job["candidates"], "runner": runners(),
            "screen": True, "cwd": str(work / "cwd"), "source_ledger": str(folder() / "ledger.json")}
@@ -617,6 +617,15 @@ def _learn_job(root, iid, job, run):
         whys = "; ".join(f"finding {x.get('n')}: {x['why']}" for x in form)
         note(root, iid, REFUSED.format(iid=iid, whys=whys, title=cur.get("title", "")))
         update(root, lambda s: s["items"][iid]["curated"].update(answered=None, refused=body))
+
+
+def outcome_text(text, most=24000):
+    """What the learn step reads of a finished item: all of it up to `most` characters, and past that its start and
+    its end, since a long item's answer comes last. (It was cut at 6,000, mid-sentence, before the result that
+    reversed what the step then wrote into a guide: a project's dev report, 2026-11-11.)"""
+    if len(text) <= most:
+        return text
+    return text[:most // 3] + "\n\n[… the middle is left out …]\n\n" + text[-(2 * most // 3):]
 
 
 def name_or(root):
