@@ -220,7 +220,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R105 A shared research library
 - [x] R106 Standing rules that survive compaction
 - [x] R107 The board checks ready work
-- [~] R131 Q Branch, colony's research department — the item's agent flags research as it writes the item, and the pass runs when the item before it starts, so one restrained guide (the curated library entry, or one research pass) is ready on arrival; an item that used a guide is asked at its finish what belongs in it, a light model weaves that into one section, and worthy guides ship with colony; adopted as colony's own feature, on for every project with a per-project off; builds after Friday's reset
+- [x] R131 Q Branch, colony's research department (removed by R159)
 - [x] R146 Knowing whether colony's changes helped — a warning system read from what colony already records: outcomes, friction and cost kept apart, labels with evidence, a frozen ruler, exposure marked; shaped with colony-codex; builds after Friday's reset (related: R131, R144)
 - [x] R147 Research in a locked room — one standard way any agent or helper researches the open web: prompt in, text out, a profile per provider, an OS sandbox that sees only its workspace, every call logged, output screened before an agent with tools reads it; Q Branch its first user; builds after Friday's reset (related: R75, R131)
 - [x] R148 Dev mode: projects report where colony's shape gets in their way
@@ -241,6 +241,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R156 An audit of colony as a whole: what makes it effective, what gets in the way, and whether any part should be built differently. A short report, not a plan — the core is sound and well used (plain files, lasting consoles, one seam between programs, decisions with defaults, mail, the plan); what weighs on it is one file doing three jobs, instructions said in several places, and adding faster than checking what pays. Proposed, not built: split the big file, a pass of subtraction on the texts, count before building and once after (related: R131, R154)
 - [x] R157 A commit chained to a piped test run is turned back
 - [x] R158 `colony friction`: the friction on record in one list, run on demand, for a reading across reports — no model run, no words in any agent's context, nothing runs it by itself (related: R146, R148)
+- [~] R159 The research flag on the library; the research department removed — an agent flags an item, and colony says one line as it starts: look in the library, research what it lacks, add what you find; no pass, shelf or guide upkeep (related: R105, R131)
 
 ## M6 — Later
 
