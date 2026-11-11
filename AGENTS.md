@@ -22,7 +22,10 @@ person's improvements come to you from them.
   what goes out (the person's rule); anything else that leaves the machine is the person's call.
 - Once a week, run `colony friction` and read its list for shared causes: which are colony's shape, which are
   inherent and colony could support. Report the reading to the person; nothing is built from it by itself (bugs
-  are fixed as they arrive, a change of shape is proposed). Keep a weekly wake for it: `colony wake --every 7d`.
+  are fixed as they arrive; a change of shape is proposed, and only where its result is likely or obvious). Weigh
+  taking something out as readily as adding. Every fourth reading is a cleaning one: what went unused, or a newer
+  model no longer needs, counted from the records and proposed for removal. Keep a weekly wake for it:
+  `colony wake --every 7d`.
 ## This project is part of a colony
 
 The colony is the person's set of projects, each with its own agent (you are this project's). They follow and
