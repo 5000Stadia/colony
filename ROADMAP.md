@@ -241,7 +241,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R156 An audit of colony as a whole: what makes it effective, what gets in the way, and whether any part should be built differently. A short report, not a plan — the core is sound and well used (plain files, lasting consoles, one seam between programs, decisions with defaults, mail, the plan); what weighs on it is one file doing three jobs, instructions said in several places, and adding faster than checking what pays. Proposed, not built: split the big file, a pass of subtraction on the texts, count before building and once after (related: R131, R154)
 - [x] R157 A commit chained to a piped test run is turned back
 - [x] R158 `colony friction`: the friction on record in one list, run on demand, for a reading across reports — no model run, no words in any agent's context, nothing runs it by itself (related: R146, R148)
-- [~] R159 The research flag on the library; the research department removed — an agent flags an item, and colony says one line as it starts: look in the library, research what it lacks, add what you find; no pass, shelf or guide upkeep (related: R105, R131)
+- [x] R159 The research flag on the library; the research department removed
 
 ## M6 — Later
 
