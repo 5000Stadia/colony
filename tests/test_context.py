@@ -725,6 +725,50 @@ class WaitingTest(unittest.TestCase):
         self.assertEqual(self.run_hook("someone", json.dumps(self.payload("claude", "sleep 30"))), "")
         self.assertEqual(self.run_hook(None, json.dumps(self.payload("claude", "sleep 30"))), "")
 
+    def test_a_commit_chained_to_a_piped_test_run_is_turned_back(self):
+        # R157: the pipe reports its reader's status, so the commit follows `tail`, not the tests
+        from colony import waiting
+        msg = "git commit -qm 'a change'"
+        turned_back = [
+            f"python3 tests/run.py 2>&1 | tail -3 && {msg}",                 # the case the first count missed
+            f"python3 -m unittest tests.test_board | tail -5 && git add -A && {msg}",
+            f"python -m pytest -q 2>&1 | tail -2; git add src && {msg}",
+            f"cd app && npm test 2>&1 | grep -E 'pass|fail'\ngit add -A\n{msg}",
+            f"pytest -q |& tee out.log && {msg}",
+            f"if cargo test 2>&1 | tail -1; then {msg}; fi",
+            f"go test ./... | head -20 || exit 1; git -C /repo commit -qm x",
+            "pytest -q 2>&1 | tail -3 && git commit -qm x -F - <<'EOF'\nthe message\nEOF",
+            f"out=$(pytest -q 2>&1 | tail -3); echo \"$out\"; {msg}"]
+        let_through = [
+            f"python3 tests/run.py && {msg}",
+            f"python3 tests/run.py > out.txt 2>&1 && {msg}",
+            f"set -o pipefail; python3 tests/run.py 2>&1 | tail -3 && {msg}",
+            f"pytest -q | tail -3; test ${{PIPESTATUS[0]}} -eq 0 && {msg}",
+            f"pytest --co -q 2>&1 | tail -2; {msg}",
+            f"pytest --collect-only -q | tail -1 && {msg}",
+            "python3 tests/run.py 2>&1 | tail -3",
+            f"pytest -q tests && git status --short | grep -c M; {msg}",
+            f"git status | tail -3 && {msg}",
+            f"pytest -q || echo failed; {msg}",
+            "cat > notes.md <<'EOF'\npytest | tail -3 && git commit -m x\nEOF\nls",
+            "pytest -q 2>&1 | tail -3 && git log --oneline | grep commit"]
+        for command in turned_back:
+            with self.subTest(command=command):
+                self.assertTrue(waiting.commits_unread(command))
+        for command in let_through:
+            with self.subTest(command=command):
+                self.assertFalse(waiting.commits_unread(command))
+        for program, allowed in (("claude", ""), ("codex", "{}")):
+            said = json.loads(self.run_hook(program, json.dumps(self.payload(program, turned_back[0]))))
+            self.assertEqual(said["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertEqual(said["hookSpecificOutput"]["permissionDecisionReason"], waiting.UNREAD)
+            self.assertEqual(self.run_hook(program, json.dumps(self.payload(program, let_through[1]))), allowed)
+        # in the background it commits over the failure just the same; and the refusal says the free way
+        said = self.run_hook("claude", json.dumps(self.payload("claude", turned_back[0], run_in_background=True)))
+        self.assertIn("deny", said)
+        self.assertIn("on their own exit status", waiting.UNREAD)
+        self.assertIn("set -o pipefail", waiting.UNREAD)
+
     def test_the_installed_command_answers_through_the_cli(self):
         import subprocess, sys
         from colony import providers
