@@ -85,7 +85,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R3 Review only where the person declared risk
 - [x] R4 Every part as a claim tested against a single agent
 - [x] R5 The guide
-- [~] R154 What the person hears: an item's shape, not each nail — built; the day's watch (Nov 11) found the person shown about a quarter of the words per step of work, and notes reading as notes, but the one item started that day did not open with its shape. Not done: next, the same count over every project's items started since Nov 10 (wake Nov 14). Built: the roadmap and asking guides say what Chat carries (an item starting, something to weigh, an item done, each sized) and what a line between steps is; the idle wake asks for an item's shape as it starts; Chat folds working notes with the work, and reading aloud leaves them out. (related: R144, R96, R140)
+- [~] R154 What the person hears: an item's shape, not each nail — on hold: built and in use; what is left is a count that needs more items started than there are yet (wake Sat Nov 14, 9 AM). The day's watch (Nov 11) found the person shown about a quarter of the words per step of work, and notes reading as notes, but the one item started that day did not open with its shape. Not done: next, the same count over every project's items started since Nov 10 (wake Nov 14). Built: the roadmap and asking guides say what Chat carries (an item starting, something to weigh, an item done, each sized) and what a line between steps is; the idle wake asks for an item's shape as it starts; Chat folds working notes with the work, and reading aloud leaves them out. (related: R144, R96, R140)
 
 ## M2 — The board: every project on one page
 
