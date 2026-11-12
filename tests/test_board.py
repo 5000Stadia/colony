@@ -1642,6 +1642,11 @@ class ChatTest(BoardBase):
             self.assertEqual(board.mail_by_turn(self.root, near), {0: "plants asks:\nWhich pot?", 2: "plants writes:\nLater news"},
                              "notices close together: each letter once, under its own")
         self.assertIn("const body = new FormData(form)", board.CHAT, "sent at once: the box clears before the board answers")
+        # the editor open on a phone: the floating message boxes and the player sat over it (the person's screenshot)
+        self.assertIn("body:has(.qeditor) .gc, body:has(.qeditor) .composer, body:has(.qeditor) .cplayer, body:has(.qeditor) .toend "
+                      "{ display:none }", board.CSS, "they step aside while the queue is edited")
+        self.assertIn("if (editor) return;", board.CHAT, "a second tap on Edit doesn't take back what is already out")
+        self.assertIn("held.hidden = true; placeBar();", board.CHAT, "an earlier refusal is cleared, and the bar goes with the editor open")
 
     def test_a_message_sent_mid_turn_shows_at_once_as_queued_then_where_the_agent_took_it_up(self):
         from colony import chat

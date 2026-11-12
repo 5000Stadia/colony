@@ -6352,10 +6352,12 @@ CHAT = """
   new MutationObserver(placeBar).observe(box, {childList: true}); placeBar();
   qbar.querySelector('.qnow').addEventListener('click', async () => { qbar.remove(); await qpost({action: 'now'}); setTimeout(refresh, 800); });
   qbar.querySelector('.qedit').addEventListener('click', async () => {
+    if (editor) return;                                    // already open: a second take-back would find its own text half-typed
     const was = [...box.querySelectorAll('.msg.queued')].map((m) => m.textContent);
     const r = await qpost({action: 'back'});
     if (!r || !r.ok) { held.hidden = false; held.textContent = 'Not taken back: something is half-typed in its console.'; return; }
     box.classList.add('editingq'); editor = document.createElement('div'); editor.className = 'qeditor'; box.after(editor);
+    held.hidden = true; placeBar();                        // an earlier refusal no longer stands, and the bar goes while it's open
     let items = was.slice();
     const draw = () => { editor.innerHTML = "<p class='muted'>Out of the queue while you edit: nothing goes until Done.</p>";
       items.forEach((text, i) => { const row = document.createElement('div'); row.className = 'qrow';
@@ -11846,6 +11848,9 @@ html.answering .chat details.needs { display:block; z-index:60 }
 .chat .qbar { align-self:flex-end; display:flex; gap:6px; margin-top:-6px } .chat .qbar button { min-height:30px; padding:2px 12px;
   border-radius:999px; border:1px solid var(--line); background:var(--card); color:var(--accent); font-size:13px }
 .chat.editingq .msg.queued { display:none }
+/* while the queue is edited, the message boxes and the player step aside: they float over where the editor sits (the
+   person's screenshot, Nov 12), and nothing could be sent meanwhile, the queue's words being in the console's box */
+body:has(.qeditor) .gc, body:has(.qeditor) .composer, body:has(.qeditor) .cplayer, body:has(.qeditor) .toend { display:none }
 .qeditor { max-width:760px; margin:8px auto; padding:10px; border:1px solid var(--accent); border-radius:14px; background:var(--card) }
 .qeditor .qrow { display:flex; flex-direction:column; gap:4px; margin:8px 0 } .qeditor textarea { flex:1; font:inherit; padding:8px;
   border-radius:10px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
