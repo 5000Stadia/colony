@@ -19,6 +19,9 @@ const base = process.argv[2], artifacts = process.env.COLONY_TEST_ARTIFACTS;
       await page.setViewportSize({width: 390, height: 844});
       const button = page.locator(`[data-media=${kind}] .media-expand`).nth(index);
       await button.scrollIntoViewIfNeeded();
+      // The fixed composer can still cover a button that is in view; the click then scrolls it clear by itself.
+      // Let that scroll happen first, so the position measured is the one the person taps from.
+      await button.click({trial: true});
       const before = await page.evaluate(() => ({y: scrollY, anchor: document.getElementById('media-anchor').getBoundingClientRect().top, composer: document.getElementById('media-composer').getBoundingClientRect().top}));
       await button.click(); await page.waitForSelector('.media-viewer[open]');
       if (kind === 'pdf') await page.waitForSelector('.media-content canvas', {timeout: 30000});
