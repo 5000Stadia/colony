@@ -242,6 +242,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R157 A commit chained to a piped test run is turned back
 - [x] R158 `colony friction`: the friction on record in one list, run on demand, for a reading across reports — no model run, no words in any agent's context, nothing runs it by itself (related: R146, R148)
 - [x] R159 The research flag on the library; the research department removed
+- [x] R160 The Inbox: what needs the person, one item at a time, in an order that is built in; and no choice made by omission
 
 ## M6 — Later
 
