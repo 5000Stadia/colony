@@ -244,6 +244,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R159 The research flag on the library; the research department removed
 - [x] R160 The Inbox: what needs the person, one item at a time, in an order that is built in; and no choice made by omission
 - [x] R161 The page follows the voice by a switch the person sets, in place of rules that guessed when to: on, it goes to what is being read from anywhere; off, the page is never moved; leaving that chat by hand turns it off
+- [x] R162 A link to a project's site is looked at when it is tapped: up, the person is sent on; down, colony starts it with the command the project gave, with no agent; what cannot open is said to them on a page
 
 ## M6 — Later
 
