@@ -838,12 +838,27 @@ class ServingTest(BoardBase):
         self.assertIsNone(self.serving.of(other))
         self.assertTrue(self.serving.remove(self.root, 8767))
         self.assertEqual(self.now, {8443: 8766}, "--off PORT ends that one only")
+        # an address given up is never handed to another project: a link kept to it (a showcase entry, a bookmark)
+        # opened the next project's site. The project that had it gets it back for the same port.
+        third = Path(self.tmp.name) / "third"; third.mkdir()
+        board.track(third)
+        self.assertEqual(self.serving.add(third, 6000), "https://colony.tail1.ts.net:8446/", "not 8444 or 8445: others had them")
+        self.assertEqual(self.serving.add(third, 6001), "https://colony.tail1.ts.net:8447/")
+        self.assertEqual(self.serving.add(self.root, 8767), "https://colony.tail1.ts.net:8445/", "served again: the address it had")
+        self.serving.remove(self.root, 8767)
+        self.serving.remove(third)
+        self.assertEqual(self.now, {8443: 8766})
         self.serving.remove(self.root)
         self.assertEqual(self.now, {})
         self.assertEqual(self.serving.records(), {})
         # a record from before a project could serve several: one row, read as a list of one
         (board.home() / "served.json").write_text(json.dumps({str(self.root.resolve()): {"port": 8766, "https": 8443}}))
         self.assertEqual(self.serving.served(self.root), [("https://colony.tail1.ts.net:8443/", 8766)])
+        self.assertEqual(self.serving.add(self.root, 8766), "https://colony.tail1.ts.net:8443/")
+        # one served before addresses were kept, then ended: still its own, not the next project's
+        (board.home() / "served-past.json").unlink()
+        self.serving.remove(self.root)
+        self.assertEqual(self.serving.add(third, 6000), "https://colony.tail1.ts.net:8444/", "not 8443")
         self.assertEqual(self.serving.add(self.root, 8766), "https://colony.tail1.ts.net:8443/")
         self.certs = False
         with self.assertRaises(ValueError) as said:

@@ -7,7 +7,10 @@ has an address of its own (one project served three story boards side by side, a
 turn, so the person's link showed another board), and a port another project serves is refused, naming it (one
 project's host came up on a port colony had served for another's, which crash-looped). Kept across restarts by
 tailscaled itself; looked at again as the board starts and every few minutes while it runs, so certificates turned on
-later are taken up with no restart; a project's goes when it leaves the board.
+later are taken up with no restart; a project's goes when it leaves the board. An address once given is its project's
+for good (past): links to it are kept in showcase entries, mail and the person's own bookmarks, and one given up was
+handed to the next project that asked, so a project's saved link opened another project's site. Given up, it answers
+nothing until the same project serves the same local port again.
 
 R119. The person, via Bookflow (2026-10-28): "Yes: turn it on, Colony builds shared https serving", and "We want to do
 this without any friction whatsoever on install, it should just work out of the box."
@@ -40,6 +43,28 @@ def records():
 def _save(rows):
     board.home().mkdir(parents=True, exist_ok=True)
     _path().write_text(json.dumps(rows, indent=1))
+
+
+def _past_path():
+    return board.home() / "served-past.json"
+
+
+def past():
+    """{https port: [project folder, the local port it was given for]}: every address ever given, kept after its
+    serving ends, so no other project is given it. What is served now is in it whether or not it was written down."""
+    try:
+        out = {int(h): list(v) for h, v in json.loads(_past_path().read_text()).items()}
+    except (OSError, ValueError, TypeError):
+        out = {}
+    for k, rs in records().items():
+        for r in rs:
+            out[r["https"]] = [k, r["port"]]
+    return out
+
+
+def _remember(held):
+    board.home().mkdir(parents=True, exist_ok=True)
+    _past_path().write_text(json.dumps({str(h): v for h, v in sorted(held.items())}, indent=1))
 
 
 def ready():
@@ -98,15 +123,22 @@ def add(root, port):
             if k != key and r["port"] == port:
                 raise ValueError(f"port {port} is served for {board.name_of(Path(k))} at {tailscale.url(r['https'])}: "
                                  "listen on a free port, and serve that")
-    now = tailscale.served()
+    now, held = tailscale.served(), past()
     mine = next((r["https"] for r in rows.get(key, []) if r["port"] == port), None)
+    if not mine:                          # served before and ended: the address it had, unless something else has it now
+        mine = next((h for h, (k, p) in sorted(held.items())
+                     if k == key and p == port and (now.get(h) == port or (h not in now and not _taken(h)))), None)
     used = {r["https"] for rs in rows.values() for r in rs if r["https"] != mine} | {h for h in now if h != mine}
-    https = mine if mine else next(h for h in range(tailscale.FIRST, tailscale.FIRST + 200) if h not in used and not _taken(h))
+    free = [h for h in range(tailscale.FIRST, tailscale.FIRST + 200) if h not in used and h != mine]
+    # one never given to anyone; with all 200 given, one whose serving ended (the old way, and far off)
+    https = mine or next((h for h in free if h not in held and not _taken(h)), None) or next(h for h in free if not _taken(h))
     err = tailscale.serve(https, port)
     if err:
         raise ValueError(f"tailscale serve: {err}")
     rows[key] = [r for r in rows.get(key, []) if r["port"] != port] + [{"port": port, "https": https}]
     _save(rows)
+    held[https] = [key, port]
+    _remember(held)
     return tailscale.url(https)
 
 
@@ -115,6 +147,8 @@ def remove(root, port=None):
     leaving the board). Whether anything was served."""
     rows, key = records(), str(Path(root).resolve())
     had = [r for r in rows.get(key, []) if port is None or r["port"] == int(port)]
+    if had:
+        _remember(past())                 # whose it was outlasts the serving (one served before addresses were kept, too)
     for r in had:
         tailscale.unserve(r["https"])
     if had:
