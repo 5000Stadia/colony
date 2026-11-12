@@ -28,62 +28,63 @@ const assert = require('node:assert/strict'), fs = require('node:fs');
     clip:colonyPlayer.state().clip,waiting:colonyPlayer.state().waiting,mode:colonyPlayer.mode(),auto:colonyPlayer.auto(),
     sounds:fixtureSaid.length,audio:fixtureAudioCalls.length}));
   const manual=async()=>{await page.locator('#fixture-manual').click();await page.waitForURL('**/fixture/reading-manual');};
-  const jump=async()=>{const before=await snapshot(),marks=heard;await page.getByRole('button',{name:'Return to reading',exact:true}).click();
-    await page.waitForURL('**/fixture/reading-chat');await page.waitForFunction(()=>document.querySelector('#chat')?.dataset.key==='0');
-    assert.deepEqual(await snapshot(),before,'Return preserves current audio, queue, mode and Auto');assert.equal(heard,marks);};
+  const on=()=>page.evaluate(()=>colonyPlayer.following());
+  const pressed=()=>page.locator('.cpbar .cpfollow').getAttribute('aria-pressed');
+  const inChat=async()=>{await page.waitForURL('**/fixture/reading-chat');await page.waitForFunction(()=>document.querySelector('#chat')?.dataset.key==='0');};
   try{
     await page.goto(base+'/fixture/reading-chat');await page.waitForFunction(()=>colonyPlayer.state().playing);
-    assert.equal(await page.evaluate(()=>colonyReadingFollow.grace()),5);
-    assert.equal(await page.locator('.cpbar .cptextstatus').evaluate(e=>e.classList.contains('held')),false);
-    assert.equal(await page.locator('.cpreturn').isVisible(),false);await shot('follow-ready');
+    // The switch: a button of its own in the bar, on to begin with. No wait to set, no Return beside it.
+    assert.equal(await on(),true);assert.equal(await pressed(),'true');
+    const box=await page.locator('.cpbar .cpfollow').boundingBox();assert(box.width>=40&&box.height>=40);
+    assert.equal(await page.locator('.cppill button').count(),0,'no button nested in the pill');
+    assert.equal(await page.locator('.cpgrace').count(),0);assert.equal(await page.locator('.cpreturn').count(),0);await shot('follow-on');
     await page.locator('.cpwhat').click();await page.locator('.cpsetopen').click();
-    assert.equal(await page.locator('.cpgrace').inputValue(),'5');await page.locator('.cpgrace').selectOption('20');
-    assert.equal(await page.evaluate(()=>localStorage.getItem('followGrace')),'20');await shot('follow-delay');await page.locator('.cpgrab').click();
-    assert.equal(await page.locator('.cpbar .cptextstatus').evaluate(e=>e.classList.contains('held')),true);
-    await shot('follow-held');await page.clock.fastForward(15000);assert.equal(await page.locator('.cpbar .cptextstatus').evaluate(e=>e.classList.contains('held')),true);
-    await page.clock.fastForward(6000);assert.equal(await page.locator('.cpbar .cptextstatus').evaluate(e=>e.classList.contains('held')),false,'status updates at the selected expiry');
-    await page.reload();await page.waitForFunction(()=>colonyPlayer.state().playing);assert.equal(await page.evaluate(()=>colonyReadingFollow.grace()),20,'custom duration persists');
-    await manual();assert(await page.locator('.cpreturn').isVisible());
-    const box=await page.locator('.cpreturn').boundingBox();assert(box.width>=44&&box.height>=44);
-    assert.equal(await page.locator('.cpbar .cptextstatus svg').getAttribute('width'),'18');
-    assert.equal(await page.locator('.cppill button').count(),0,'status creates no nested button');
-    await page.clock.fastForward(25000);assert(page.url().endsWith('/fixture/reading-manual'),'normal browsing stays outside Chat after expiry');
-    assert.equal(await page.locator('.cpbar .cptextstatus').evaluate(e=>e.classList.contains('held')),true);
-    await jump();
-    await page.evaluate(()=>colonyPlayer.setMode('audio'));await manual();await jump();
-    assert.equal(await page.evaluate(()=>colonyPlayer.mode()),'audio');
-    assert.equal(await page.locator('.cpbar .cptextstatus').evaluate(e=>e.classList.contains('held')),true);
-    // A single reply finishes while away: keep the same Return control beside the resting Auto bubble.
-    await manual();await page.evaluate(()=>fixtureSaid.findLast(u=>u.text.includes('First part')).onend());
-    await page.waitForFunction(()=>!colonyPlayer.state().reading);assert(await page.locator('.cpreturn').isVisible());
-    const ret=await page.locator('.cpreturn').boundingBox(),pill=await page.locator('.cppill').boundingBox();
-    assert(ret.x+ret.width<=pill.x+2 && pill.x-(ret.x+ret.width)<=8,'separate Return is immediately left of the Auto bubble');
-    if(process.env.COLONY_TEST_ARTIFACTS){fs.mkdirSync(process.env.COLONY_TEST_ARTIFACTS,{recursive:true});await page.screenshot({path:process.env.COLONY_TEST_ARTIFACTS+'/return-bubble-390.png'});}
-    await page.locator('.cppill').click();await page.locator('.cpsw').click();await page.locator('.cpgrab').click();
-    assert.equal(await page.evaluate(()=>colonyPlayer.busy()),false,'completed idle Return also works with Auto off');
-    assert(await page.locator('.cpreturn').isVisible());
-    await jump();assert.equal(await page.evaluate(()=>colonyPlayer.state().reading),null,'returning to the last reply never restarts it');
-    assert(await page.locator('[data-k=part1]').evaluate(e=>e.classList.contains('reading')),'idle Return focuses the saved part, including audio-only');
-    // Documents retain that Chat target and keep playing through an explicit Return.
-    await page.evaluate(()=>colonyPlayer.document('/open?p=0&f=listening.md&audio=1'));
-    await page.evaluate(()=>colonyNav.go('/open?p=0&f=listening.md'));await page.waitForURL('**/open?p=0&f=listening.md');
-    assert(await page.locator('.cpreturn').isVisible());const documentState=await snapshot();await jump();
-    assert.deepEqual(await snapshot(),documentState);assert(await page.evaluate(()=>colonyPlayer.state().document));
-    await page.evaluate(()=>{colonyPlayer.skip();colonyPlayer.skip();colonyPlayer.setMode('both');
-      colonyPlayer.read({key:'0',name:'plants',href:'/fixture/reading-chat',kokoro:false},[{t:'A',k:'part1',text:'First part. Another sentence.'}]);});
-    await page.evaluate(()=>colonyNav.go('/fixture/reading-renamed'));await page.waitForURL('**/fixture/reading-renamed');
-    assert(await page.evaluate(()=>colonyPlayer.of('Renamed plants','0')),'renaming a label does not lose reading identity');
+    assert.deepEqual(await page.locator('.cpseg button').allTextContents(),['Aloud','Text only'],'Audio only is the switch now');
+    await page.locator('.cpgrab').click();
+    // Leaving the chat being read, by hand, turns it off: the sound goes on and the page stays where the person went.
+    const was=await snapshot();await manual();const before=await snapshot(),marks=heard;
+    assert.equal(await on(),false);assert.equal(await pressed(),'false');
+    assert.deepEqual({...before,audio:0},{...was,audio:0},'the reading goes on as it was: only the switch changed');
+    await page.clock.fastForward(25000);assert(page.url().endsWith('/fixture/reading-manual'),'off, the page is never moved');await shot('follow-off');
+    // Tapped on: at what is being read at once, the sound untouched.
+    await page.locator('.cpbar .cpfollow').click();await inChat();
+    assert.equal(await on(),true);assert.equal(await pressed(),'true');assert.deepEqual(await snapshot(),before);assert.equal(heard,marks);
     assert(await page.locator('[data-k=part1]').evaluate(e=>e.classList.contains('reading')));
+    // Tapped off in its own chat, it stays off through a reload; tapped on again there, nothing moves.
+    await page.locator('.cpbar .cpfollow').click();assert.equal(await on(),false);
+    await page.reload();await page.waitForFunction(()=>colonyPlayer.state().playing);assert.equal(await on(),false,'the switch is kept on this device');
+    await page.locator('.cpbar .cpfollow').click();assert.equal(await on(),true);assert(page.url().endsWith('/fixture/reading-chat'));
+    // The same project under a new label is still the chat being read; another project's chat, reached by hand, is not.
+    await page.evaluate(()=>colonyNav.go('/fixture/reading-renamed'));await page.waitForURL('**/fixture/reading-renamed');
+    await page.waitForFunction(()=>document.querySelector('[data-k=part1]')?.classList.contains('reading'));
+    assert(await page.evaluate(()=>colonyPlayer.of('Renamed plants','0')),'renaming a label does not lose reading identity');
+    assert.equal(await on(),true);
     await page.evaluate(()=>colonyNav.go('/fixture/reading-other'));await page.waitForURL('**/fixture/reading-other');
+    await page.waitForFunction(()=>!colonyPlayer.following());
     assert.equal(await page.evaluate(()=>colonyPlayer.of('plants','1')),null,'a duplicate label belongs to a different project key');
     assert.equal(await page.locator('.say.reading').count(),0,'the other project is not marked active');
-    await manual();await jump();
-    // Pending Return is a single explicit intent; a newer gesture cancels its view change.
-    await manual();let requested,release;const loading=new Promise(ok=>requested=ok),gate=new Promise(ok=>release=ok);
-    await page.route('**/fixture/reading-chat',async r=>{requested();await gate;await r.continue();});
-    await page.locator('.cpreturn').click();await loading;await page.touchscreen.tap(330,360);release();
-    await page.waitForFunction(()=>!document.documentElement.classList.contains('going'));
-    assert(page.url().endsWith('/fixture/reading-manual'),'new interaction revokes a pending Return');
-    assert.deepEqual(errors,[]);console.log('PASS text-follow settings, status and persistent Return');
-  }catch(e){console.error('Page errors:',errors);throw e;}finally{await browser.close();}
+    assert(page.url().endsWith('/fixture/reading-other'));
+    // Audio only, a mode chosen before the switch existed, is the switch off; tapped on, it is Aloud with follow.
+    await page.locator('.cpbar .cpfollow').click();await inChat();
+    await page.evaluate(()=>colonyPlayer.setMode('audio'));assert.equal(await pressed(),'false');
+    await page.locator('.cpbar .cpfollow').click();assert.equal(await page.evaluate(()=>colonyPlayer.mode()),'both');assert.equal(await on(),true);
+    // Paused, a change of page leaves it on, and Play brings the page to the reply.
+    await page.getByRole('button',{name:'Pause',exact:true}).click();await manual();assert.equal(await on(),true);
+    await page.getByRole('button',{name:'Play',exact:true}).click();await inChat();
+    // Words typed on the page and not sent keep it there; sent or cleared, the next part brings the page along.
+    await page.evaluate(()=>fixtureSaid.findLast(u=>u.text.includes('First part')).onend());
+    await page.waitForFunction(()=>!colonyPlayer.state().reading);
+    await page.goto(base+'/fixture/reading-manual');assert.equal(await on(),true,'with nothing being read, going elsewhere leaves it on');
+    const sw=await page.locator('.cpfollowidle').boundingBox(),pill=await page.locator('.cppill').boundingBox();
+    assert(sw.x+sw.width<=pill.x+2&&pill.x-(sw.x+sw.width)<=8,'at rest the switch is immediately left of the pill');await shot('follow-idle');
+    await page.evaluate(()=>{document.querySelector('main').insertAdjacentHTML('beforeend',"<textarea id='typed'></textarea>");
+      const t=document.getElementById('typed');t.value='half an answer';
+      colonyPlayer.read({key:'0',name:'plants',href:'/fixture/reading-chat',kokoro:false},[
+        {t:'B',k:'part1',text:'First part. Another sentence.'},{t:'B',k:'part2',text:'Second part. More sentences.'}]);});
+    await page.waitForFunction(()=>colonyPlayer.state().playing);await page.clock.fastForward(3000);
+    assert(page.url().endsWith('/fixture/reading-manual'),'typed words are not taken with the page');assert.equal(await on(),true);
+    await page.evaluate(()=>{document.getElementById('typed').value='';fixtureSaid.findLast(u=>u.text.includes('First part')).onend();});
+    await inChat();assert.equal(await page.evaluate(()=>colonyPlayer.state().reading.k),'part2');
+    assert.deepEqual(errors,[]);console.log('PASS the follow switch: on, off, left by hand, kept, and typed words');
+  }catch(e){console.error('Page errors:',errors);console.error('Player:',await page.evaluate(()=>({url:location.href,state:window.colonyPlayer&&colonyPlayer.state(),follow:window.colonyPlayer&&colonyPlayer.following()})));throw e;}finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

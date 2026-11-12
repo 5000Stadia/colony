@@ -60,36 +60,32 @@ const assert = require('node:assert/strict');
     const initial=await geometry();
     assert.equal(initial.text,sentence(12),'initial speech boundary highlights a deep sentence');
     assert(initial.top>=initial.wanted-4&&initial.bottom<=initial.visibleBottom,'initial sentence is visible: '+JSON.stringify(initial));
-    // First hold a sentence already being heard: no pending sentence-turn timer can mask a bad refocus.
-    // Then cover playback progressing while the person's hold is active.
-    for(const [direction,next,progress] of [[-1,12,false],[1,12,false],[-1,13,true],[1,14,true]]){
-      await page.mouse.move(180,300);await page.mouse.wheel(0,direction*100000);await page.waitForTimeout(150);
-      await page.touchscreen.tap(320,300);
-      assert(await page.evaluate(()=>colonyReadingFollow.remaining()>0),'trusted scroll/touch holds following');
-      const before=(await geometry()).y;
-      if(progress)await advance(next); await page.waitForTimeout(100);
-      const held=await geometry();
-      assert.equal(held.text,sentence(next),'the real highlight tracks the current sentence during the hold');
-      assert(Math.abs(held.y-before)<2,'playback leaves the user scroll position during the hold');
-      assert(direction<0?held.top>held.visibleBottom:held.bottom<held.wanted,'fixture scrolls above/below the current sentence');
-      // No subsequent speech boundary: expiry itself must restore the latest sentence, in either direction.
-      await page.clock.fastForward(5100);
-      await check(next,`Refocus from ${direction<0?'above':'below'} ${progress?'after playback advances':'within the same sentence'}`);
-      assert(await page.evaluate(()=>colonyReadingFollow.canFollow()),'the refocus scroll does not create another hold');
-    }
-    await manual(); await advance(17); await page.clock.fastForward(6000);
-    assert(page.url().endsWith('/fixture/reading-manual'),'grace expiry with continued playback leaves non-Chat browsing alone');
+    // Scrolled away while one sentence is still being heard: nothing brings the page back by a clock.
+    const away=async direction=>{await page.mouse.move(180,300);await page.mouse.wheel(0,direction*100000);await page.waitForTimeout(150);
+      await page.touchscreen.tap(320,300);return (await geometry()).y;};
+    let y=await away(-1);await page.clock.fastForward(6000);await page.waitForTimeout(100);
+    let held=await geometry();
+    assert.equal(held.text,sentence(12));assert(Math.abs(held.y-y)<2,'the page stays where the person scrolled while the same sentence is heard');
+    assert(held.top>held.visibleBottom,'fixture scrolled above the current sentence');
+    // The next sentence, with the switch on, is brought into view at once: no wait after the touch.
+    await advance(13);await page.waitForTimeout(450);held=await geometry();
+    assert.equal(held.text,sentence(13));
+    assert(held.top>=held.wanted-4&&held.bottom<=held.visibleBottom,'the next sentence is in view after scrolling up: '+JSON.stringify(held));
+    // Scrolled on past it, a sentence that is not below the view moves nothing; the switch tapped off and on shows it.
+    y=await away(1);await advance(14);await page.waitForTimeout(150);held=await geometry();
+    assert.equal(held.text,sentence(14),'the highlight tracks the current sentence');assert(Math.abs(held.y-y)<2);
+    await page.locator('.cpbar .cpfollow').click();assert.equal(await page.evaluate(()=>colonyPlayer.following()),false);
+    await page.locator('.cpbar .cpfollow').click();await check(14,'The switch turned on in its chat');
+    // Left by hand while it reads: off, and playback going on leaves the person there.
+    await manual();assert.equal(await page.evaluate(()=>colonyPlayer.following()),false);
+    await advance(17);await page.clock.fastForward(6000);
+    assert(page.url().endsWith('/fixture/reading-manual'),'off: continued playback leaves the page alone');
     const before=await snapshot();
-    await page.getByRole('button',{name:'Return to reading',exact:true}).click();await page.waitForURL('**/fixture/reading-chat');
+    await page.locator('.cpbar .cpfollow').click();await page.waitForURL('**/fixture/reading-chat');
     await page.waitForFunction(()=>document.querySelector('#chat')?.dataset.key==='0');
-    await check(17,'Return after off-Chat playback');
-    assert.deepEqual(await snapshot(),before,'Return restores the sentence without changing playback, queue, mode or Auto');
-    // A later gesture still revokes a Return whose replacement Chat has not arrived.
-    await manual();let requested,release;const loading=new Promise(ok=>requested=ok),gate=new Promise(ok=>release=ok);
-    await page.route('**/fixture/reading-chat',async r=>{requested();await gate;await r.continue();});
-    await page.locator('.cpreturn').click();await loading;await page.touchscreen.tap(330,360);release();
-    await page.waitForFunction(()=>!document.documentElement.classList.contains('going'));
-    assert(page.url().endsWith('/fixture/reading-manual'),'new interaction revokes pending Return');
-    assert.deepEqual(errors,[]);console.log('PASS current-sentence refocus and Return');
+    await check(17,'The switch turned on from another page');
+    const plain=x=>({...x,state:{...x.state,story:null}});              // the switch itself is noted in the player's log
+    assert.deepEqual(plain(await snapshot()),plain(before),'turning it on shows the sentence without changing playback, queue, mode or Auto');
+    assert.deepEqual(errors,[]);console.log('PASS the sentence being read: no clock, the next sentence, and the switch');
   }catch(e){console.error('Page errors:',errors);console.error('Geometry:',await geometry());throw e;}finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

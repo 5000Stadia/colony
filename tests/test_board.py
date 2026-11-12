@@ -1233,11 +1233,11 @@ class ChatTest(BoardBase):
         self.assertIn("const grow = () => { if (gc.hidden) return;", page)
         self.assertIn("else requestAnimationFrame(() => grow())", page)
         self.assertIn("x.addEventListener('click', () => { gfile.value = ''; chosen(); }); gfiles.append(n, x);", page)
-        # held back by a touch, the read-along looks again once the page is let be, while the same part plays
-        self.assertIn("if (!canFollow()) { later(s, readingFollow.remaining()); return null; }", page)
-        # a tap on the player's own controls (Skip) isn't the person taking the page: the text follow carries on to the next
+        # whether the page follows what is read is the person's switch (R161): no clock, no wait after a touch
+        self.assertIn("const following = () => mode() !== 'audio' && followOn();", page)
+        self.assertNotIn("followGrace", page); self.assertNotIn("remaining()", page + board.CHAT)
+        # a tap on the player's own controls (Skip) leaves a scroll the reading began alone
         self.assertIn("if (ev.target && ev.target.closest && ev.target.closest('#cplayer')) return;", page)
-        self.assertIn("refocus = setTimeout(() => { if (el.classList.contains('reading')) focus(k, go); }", board.CHAT)
         self.assertIn("<body data-project='plants'>", page, "a project's page says whose it is, by name")
         self.assertIn("'page:' + proj", page, "each project's last page is kept, and going to it goes back there")
 
@@ -8314,8 +8314,8 @@ class PhonePageTest(HoursBase):
         self.assertNotIn(".cpnext::before", board.CSS, "Skip is plain: no rainbow ring for Auto")
         self.assertNotIn(".cphold::before", board.CSS)
         self.assertIn("next", board.ICONS)
-        # a tap on Next (or the rest of the player) isn't a finger moving the page: the page goes on with what is read
-        self.assertIn("if (!explicit && !mayFollow()) { refocus = setTimeout", board.CHAT)
+        # the page goes on with what is read wherever follow is on (R161): the chat keeps no wait after a touch
+        self.assertNotIn("mayFollow", board.CHAT); self.assertIn("const follow = P.following();", board.CHAT)
 
     def test_each_question_in_a_chats_needs_you_can_be_read_aloud(self):
         # the person: "a small play button in the needs you box questions by each individual question heading"
@@ -9687,7 +9687,11 @@ class LineTest(BoardBase):
     def test_the_player_is_the_line_a_pill_at_rest_and_a_bar_while_reading(self):
         js, chat, css = board.player_js(), board.CHAT, board.CSS
         # gone (plan §3): ■ everywhere, the inline Auto and its menu, Read from and Across, the ⚙ in the bar
-        for gone in ("PICON.stop", "cpstop", "cpcog", "Read from", "Across", "cpsource", "cpfollow"):
+        for gone in ("PICON.stop", "cpstop", "cpcog", "Read from", "Across", "cpsource"):
+            self.assertNotIn(gone, js)
+        # the follow switch is back, as a button of its own beside the pill and in the bar (R161), not nested in the pill
+        self.assertIn("<div class='cpminirow'>\" + FOLLOW('cpfollowidle') + \"<button type='button' class='cppill'", js)
+        for gone in ("cpreturn", "cpgrace", "cptextstatus", "Audio only"):
             self.assertNotIn(gone, js)
         for gone in ("automenu", "button.auto", "P.stop", "button.cont", "button.hold", "button.skip"):
             self.assertNotIn(gone, chat)
@@ -11971,10 +11975,10 @@ class ProjectRenameRetryTest(unittest.TestCase):
 
 
 class ReadingFollowTest(BoardBase):
-    def test_production_gesture_clock_and_programmatic_scroll(self):
+    def test_a_touch_stops_a_scroll_the_reading_began_and_no_clock_is_kept(self):
         node = shutil.which('node')
         if not node:
-            self.skipTest('Node is needed for the production reading-follow clock')
+            self.skipTest('Node is needed for the production reading-follow module')
         result = subprocess.run([node, str(ROOT / 'tests/reading_follow.js')], input=board.player_js(), text=True,
                                 capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -12017,23 +12021,23 @@ class ReadingFollowTest(BoardBase):
         return f'http://127.0.0.1:{server.server_address[1]}'
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
-    def test_phone_auto_navigation_and_chat_follow_wait_five_seconds_after_interaction(self):
+    def test_phone_follow_goes_from_anywhere_when_on_never_when_off_and_lets_go_when_left(self):
         base = self.serve_reading()
         result = subprocess.run(['node', str(ROOT / 'tests/reading_follow_browser.js'), base],
                                 text=True, capture_output=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('PASS five-second Auto reading grace', result.stdout)
+        self.assertIn('PASS follow by the switch: from anywhere when on, never when off, off when left by hand', result.stdout)
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
-    def test_phone_text_follow_setting_status_and_return_keep_audio_state(self):
+    def test_phone_follow_switch_on_off_left_by_hand_and_kept(self):
         base = self.serve_reading()
         result = subprocess.run(['node', str(ROOT / 'tests/reading_controls_browser.js'), base], text=True,
                                 capture_output=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('PASS text-follow settings, status and persistent Return', result.stdout)
+        self.assertIn('PASS the follow switch: on, off, left by hand, kept, and typed words', result.stdout)
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
-    def test_phone_refocus_and_return_restore_current_sentence_in_long_reply(self):
+    def test_phone_current_sentence_in_long_reply_follows_without_a_clock(self):
         paragraphs = ''.join(
             f'<p>Paragraph {i} opens with a quiet walk beside the river and a patient look at the hills. '
             f'Current sentence number {i} follows the winding trail toward the distant lighthouse and its sheltered garden.</p>'
@@ -12043,7 +12047,7 @@ class ReadingFollowTest(BoardBase):
         result = subprocess.run(['node', str(ROOT / 'tests/reading_refocus_browser.js'), base], text=True,
                                 capture_output=True, timeout=45)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('PASS current-sentence refocus and Return', result.stdout)
+        self.assertIn('PASS the sentence being read: no clock, the next sentence, and the switch', result.stdout)
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST'), 'requires isolated Chrome/Playwright')
     def test_phone_collapsed_auto_pause_keeps_arrivals_until_explicit_resume(self):

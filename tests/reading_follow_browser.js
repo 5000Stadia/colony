@@ -43,94 +43,56 @@ const fs = require('node:fs');
     if (first) { first = false; requested(); await held; }
     await route.continue();
   });
+  const watch = () => page.evaluate(() => { window.fixtureScrolls = [];
+    if (!window.fixtureWatched) { window.fixtureWatched = true; const original = window.scrollBy;
+      window.scrollBy = (...args) => { fixtureScrolls.push(args); return original.apply(window, args); }; } });
+  const manual = async () => { await page.locator('#fixture-manual').click(); await page.waitForURL('**/fixture/reading-manual'); };
+  const on = () => page.evaluate(() => colonyPlayer.following());
   try {
+    // Follow on, a reply being read from another page: the page is on its way to that reply's chat as the part begins.
     await page.goto(base + '/fixture/reading-source');
     await page.waitForFunction(() => fixtureSaid.some(x => x.text.includes('First part')));
-    await page.evaluate(() => fixtureSaid.find(x => x.text.includes('First part')).onend());
-    await Promise.race([arrived, new Promise((_, fail) => setTimeout(() => fail(new Error('Auto navigation did not start')), 7000))]);
-    await page.mouse.move(200, 500); await page.mouse.wheel(0, 300); await page.waitForTimeout(60);
-    assert.equal(await page.evaluate(() => colonyReadingFollow.canFollow()), false);
-    await page.evaluate(() => fixtureNow += 4000);
-    await page.touchscreen.tap(210, 490);
-    assert.equal(await page.evaluate(() => colonyReadingFollow.remaining()), 5000, 'repeated touch extends the grace');
-    await page.evaluate(() => fixtureNow += 1000);
-    release(); await page.waitForFunction(() => !document.documentElement.classList.contains('going'));
-    assert(page.url().endsWith('/fixture/reading-source'), 'Auto fetch must not commit after a recent scroll/touch');
-    assert.equal(await page.evaluate(() => colonyPlayer.state().reading.k), 'part2', 'held navigation preserves the current audio part');
+    await Promise.race([arrived, new Promise((_, fail) => setTimeout(() => fail(new Error('Follow did not start')), 7000))]);
+    // A scroll and a touch while it is on its way hold nothing: there is no wait after the person's hand any more.
+    await page.mouse.move(200, 500); await page.mouse.wheel(0, 300); await page.touchscreen.tap(210, 490);
+    release(); await page.waitForURL('**/fixture/reading-chat');
+    await page.waitForFunction(() => document.querySelector('[data-k=part1]')?.classList.contains('reading'));
     assert.equal(await page.evaluate(() => colonyPlayer.state().playing), true);
-    assert.equal(await page.evaluate(() => colonyReadingFollow.remaining()), 4000);
-    await page.evaluate(() => fixtureNow += 4001);
-    assert.equal(await page.evaluate(() => colonyReadingFollow.canFollow()), true);
-    // Natural part completion retries normal Auto follow after the grace, without changing the selected reply.
+    assert.equal(await on(), true, 'a page the reading opened leaves the switch on');
+    // In its chat, the next part is brought into view at once, a touch just before or not.
+    await watch(); await page.touchscreen.tap(120, 260);
+    await page.evaluate(() => fixtureSaid.find(x => x.text.includes('First part')).onend());
+    await page.waitForFunction(() => colonyPlayer.state().reading.k === 'part2' && fixtureScrolls.length > 0);
+    await page.waitForFunction(() => document.querySelector('[data-k=part2]').classList.contains('reading'));
+    // Tapped off: the reading goes on, and nothing moves or marks the page.
+    await page.locator('.cpbar .cpfollow').click(); assert.equal(await on(), false); await watch();
     await page.evaluate(() => fixtureSaid.find(x => x.text.includes('Second part')).onend());
-    await page.waitForURL('**/fixture/reading-chat');
-    await page.waitForFunction(() => document.querySelector('#chat') && colonyPlayer.state().reading.k === 'part3');
-    await page.waitForTimeout(100);
-    assert.equal(await page.evaluate(() => colonyReadingFollow.canFollow()), true, 'programmatic reading scroll must not create its own hold');
-    // Ordinary navigation still acts on the same click that starts the grace.
-    await page.locator('#fixture-manual').click(); await page.waitForURL('**/fixture/reading-manual');
-    assert.equal(await page.evaluate(() => colonyReadingFollow.canFollow()), false);
-    await page.evaluate(() => {
-      fixtureNow += 20000;
-      fixtureSaid.find(x => x.text.includes('Third part')).onend();
-    });
-    await page.waitForFunction(() => colonyPlayer.state().reading.k === 'part4');
-    assert(page.url().endsWith('/fixture/reading-manual'), 'Auto must leave non-Chat browsing alone beyond five seconds');
-    assert.equal(await page.evaluate(() => colonyReadingFollow.inChat()), false);
-    // Real History playback is an explicit choice, but audio-only keeps the current view.
-    await page.evaluate(() => colonyPlayer.setMode('audio'));
+    await page.waitForFunction(() => colonyPlayer.state().reading.k === 'part3'); await page.waitForTimeout(100);
+    assert.equal(await page.evaluate(() => fixtureScrolls.length), 0, 'off: no scroll at a new part');
+    assert.equal(await page.locator('.say.reading').count(), 0);
+    // Off, a reply played from History is heard where the person is.
+    await manual();
     const historyPlay = async () => {
       await page.locator('.cpwhat').click(); await page.locator('.cpheardopen').click();
       await page.locator('.cpheardrows li').first().click();
       await page.waitForFunction(() => colonyPlayer.state().reading.k === 'explicit');
     };
-    await historyPlay();
-    assert(page.url().endsWith('/fixture/reading-manual'), 'audio-only History playback does not navigate');
-    await page.evaluate(() => colonyPlayer.setMode('both'));
-    await historyPlay(); await page.waitForURL('**/fixture/reading-chat');
-    await page.waitForFunction(() => document.querySelector('#chat') && colonyPlayer.state().reading.k === 'explicit');
-    assert.equal(await page.evaluate(() => colonyReadingFollow.canFollow()), false, 'explicit History bypasses its click grace without clearing it');
-    // The actual Chat sentence/section scroll helpers respect a later real user movement.
-    await page.mouse.move(120, 260); await page.mouse.wheel(0, -10000); await page.waitForTimeout(120);
-    await page.touchscreen.tap(120, 260);
-    await page.evaluate(() => window.scrollTo({top: scrollY, behavior: 'instant'}));
-    await page.waitForTimeout(60);
-    // Observe actual production scroll requests while preserving the browser's native implementation.
-    const before = await page.evaluate(() => { window.fixtureScrolls = []; const original = window.scrollBy; window.scrollBy = (...args) => { fixtureScrolls.push({args,allowed:colonyPlayer.canFollow(),left:colonyReadingFollow.remaining()}); return original.apply(window, args); }; return scrollY; });
-    await page.evaluate(() => {
-      const u = fixtureSaid.findLast(x => x.text.includes('Opening sentence'));
-      u.onboundary({charIndex: u.text.indexOf('Last sentence')});
-    });
-    await page.waitForTimeout(100);
-    const after = await page.evaluate(() => ({y: scrollY, left: colonyReadingFollow.remaining()}));
-    assert(Math.abs(after.y - before) < 2, 'sentence follow stays still during interaction grace: ' + JSON.stringify({before, after}));
-    assert.equal(await page.evaluate(() => fixtureScrolls.length), 0, 'no sentence scroll request during the grace');
-    await page.evaluate(() => {
-      fixtureNow += 5001;
-      const u = fixtureSaid.findLast(x => x.text.includes('Opening sentence'));
-      u.onboundary({charIndex: 0}); u.onboundary({charIndex: u.text.indexOf('Last sentence')});
-    });
-    assert.equal(await page.evaluate(() => colonyPlayer.canFollow()), true, 'after grace Chat following is allowed again');
-    assert.equal(await page.evaluate(() => colonyReadingFollow.canFollow()), true, 'resumed sentence scroll does not re-arm its own hold');
-    assert.equal(await page.evaluate(() => colonyPlayer.state().reading.k), 'explicit');
+    await historyPlay(); await page.waitForTimeout(100);
+    assert(page.url().endsWith('/fixture/reading-manual'), 'off: History playback does not move the page');
+    // Tapped on: the page goes to what is being read, and to each part after it.
+    await page.locator('.cpbar .cpfollow').click(); await page.waitForURL('**/fixture/reading-chat');
+    await page.waitForFunction(() => document.querySelector('[data-k=explicit]')?.classList.contains('reading'));
     if (process.env.COLONY_TEST_ARTIFACTS) {
       fs.mkdirSync(process.env.COLONY_TEST_ARTIFACTS, {recursive: true});
       await page.screenshot({path: process.env.COLONY_TEST_ARTIFACTS + '/reading-follow-390.png'});
     }
-    await page.locator('#fixture-manual').click(); await page.waitForURL('**/fixture/reading-manual');
-    await page.evaluate(() => { fixtureNow += 20000; fixtureSaid.findLast(x => x.text.includes('Opening sentence')).onend(); });
-    await page.waitForFunction(() => colonyPlayer.state().reading.k === 'explicit2');
-    assert(page.url().endsWith('/fixture/reading-manual'), 'later parts of explicit History playback do not retain the initial navigation permission');
-    let releaseText, sawText;
-    textGate = new Promise(ok => { releaseText = ok; }); const loadingText = new Promise(ok => { sawText = ok; }); textRequested = sawText;
-    await page.locator('.cpwhat').click(); await page.locator('.cpheardopen').click(); await page.locator('.cpheardrows li').first().click();
-    await loadingText;
-    await page.touchscreen.tap(120, 200); await page.evaluate(() => fixtureNow += 20000); releaseText();
-    await page.waitForFunction(() => colonyPlayer.state().reading.k === 'explicit');
-    assert(page.url().endsWith('/fixture/reading-manual'), 'a later user action revokes a History jump whose text was still loading');
-    // Once NAV commits the DOM, a touch may hold following but must not leave dependency scripts half initialized.
-    await page.evaluate(() => colonyNav.go('/fixture/reading-chat'));
-    await page.waitForURL('**/fixture/reading-chat'); await page.evaluate(() => fixtureNow += 5001);
+    // Leaving that chat by hand while it reads turns the switch off: later parts leave the person where they went.
+    await manual(); assert.equal(await on(), false);
+    await page.evaluate(() => fixtureSaid.findLast(x => x.text.includes('Opening sentence')).onend());
+    await page.waitForFunction(() => colonyPlayer.state().reading.k === 'explicit2'); await page.waitForTimeout(100);
+    assert(page.url().endsWith('/fixture/reading-manual'));
+    // A page the reading opens finishes loading its scripts even where a touch lands while one is still awaited.
+    await page.evaluate(() => colonyPlayer.setFollow(true)); await page.waitForURL('**/fixture/reading-chat');
     let releaseDependency, gotDependency;
     const dependency = new Promise(ok => { releaseDependency = ok; }), dependencyRequested = new Promise(ok => { gotDependency = ok; });
     await page.route('**/fixture/reading-dependency.js', async route => { gotDependency(); await dependency; await route.fulfill({contentType:'application/javascript',body:'window.fixtureDependencyReady=true;'}); });
@@ -139,7 +101,8 @@ const fs = require('node:fs');
     await page.touchscreen.tap(120, 200); releaseDependency(); await page.evaluate(() => fixturePendingNav);
     assert.equal(await page.evaluate(() => fixtureDependencyReady && fixtureActivated === 1), true, 'later scripts initialize after a touch during an awaited dependency');
     assert(page.url().endsWith('/fixture/reading-external'));
+    assert.equal(await on(), true);
     assert.deepEqual(errors, []);
-    console.log('PASS five-second Auto reading grace, delayed navigation, explicit choices and sentence following');
+    console.log('PASS follow by the switch: from anywhere when on, never when off, off when left by hand');
   } catch (e) { console.error('Page errors:', errors); console.error('Player:', await page.evaluate(() => ({url: location.href, state: window.colonyPlayer && colonyPlayer.state(), chat: !!document.getElementById('chat')}))); throw e; } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exitCode = 1; });

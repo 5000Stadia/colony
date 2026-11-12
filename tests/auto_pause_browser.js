@@ -41,8 +41,8 @@ const assert = require('node:assert/strict'), fs = require('node:fs');
   const queued=()=>page.evaluate(()=>({auto:colonyPlayer.auto(),held:colonyPlayer.autoPaused(),mode:colonyPlayer.mode(),
     waiting:colonyPlayer.state().waiting,reading:colonyPlayer.state().reading,sounds:fixtureSaid.length}));
   const layout=async()=>{
-    const pill=await page.locator('.cppill').boundingBox(),ret=await page.locator('.cpreturn').boundingBox();
-    assert(ret&&ret.x+ret.width<=pill.x+2&&pill.x-(ret.x+ret.width)<=8,'Return stays immediately left of the pill');
+    const pill=await page.locator('.cppill').boundingBox(),sw=await page.locator('.cpfollowidle').boundingBox();
+    assert(sw&&sw.x+sw.width<=pill.x+2&&pill.x-(sw.x+sw.width)<=8,'the follow switch stays immediately left of the pill');
   };
   try{
     await page.goto(base+'/fixture/reading-chat');await page.locator('.cppill').waitFor();await openMenu();await menuButton(pause,'Pause Auto');

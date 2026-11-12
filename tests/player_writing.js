@@ -29,7 +29,7 @@ const program = source.slice(start, end) + '\nlet drawnSheet = "", clearOnly = n
   + 'const voicing = {' + source.slice(voiceStart, voiceEnd) + '};\n'
   + source.slice(allowStart, allowEnd) + source.slice(restoreStart, restoreEnd) + `
   window.testPlayer = {
-    returning: returnToReading, target: textTarget, showHere, view(v) {view=v;}, of(key, name) {return observer.of(name,key);},
+    follow: setFollow, following, left(key) { byHand = true; arrived(key); }, showHere, view(v) {view=v;}, of(key, name) {return observer.of(name,key);},
     arrivals, start, begin, done, hold, skip, previous, rest, warm, document: readDocument, section: documentSection, auto: setAloud, clear: clearShown, play: playFrom,
     autoPaused: () => autoPaused(), setAutoPaused: yes => setAutoPaused(yes),
     replay(x) { return again(x, L.projects[x.p] || {}); },
@@ -60,7 +60,7 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const flush = async () => { for (let n = 0; n < 30; n++) await Promise.resolve(); };
 function browser(kokoro, restore = '', stored = {}) {
   let time = Date.parse('2026-10-29T18:00:00Z'), serial = 0;
-  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [], navigations = [], spoken = []; let gestureVersion = 0;
+  const timers = new Map(), sounds = [], resumed = [], audios = [], marks = [], fetches = [], navigations = [], spoken = [];
   let failing = false, voicePlan = null;      // clips fetched over the network that fail to play; /voice answers
   class Events {
     constructor() { this.listeners = new Map(); }
@@ -71,7 +71,8 @@ function browser(kokoro, restore = '', stored = {}) {
   const document = new Events();
   document.activeElement = null;
   document.body = {classList: {contains: () => false}};
-  document.querySelector = () => null;
+  document.querySelector = () => null; let typed = [];
+  document.querySelectorAll = () => typed;
   const storage = new Map([['aloud', '1'], ['automode', 'audio'], ...Object.entries(stored)]);
   const lockScreen = {handlers: {}, setActionHandler(a, h) { this.handlers[a] = h; }};
   if (restore) {
@@ -115,7 +116,7 @@ function browser(kokoro, restore = '', stored = {}) {
   const nav = {keep: {add: Events.prototype.addEventListener, st: setTimeout, ct: clearTimeout, si: () => 0},
     go: (url, how) => {navigations.push({url, how}); return navigation && navigation.promise;}, prefetch() {}};
   window.colonyNav = nav;
-  window.colonyReadingFollow = {canFollow: () => true, inChat: () => true, remaining: () => 0, version: () => gestureVersion};
+  window.colonyReadingFollow = {inChat: () => true};
   const context = vm.createContext({window, document, colonyNav: nav, Audio,
     SpeechSynthesisUtterance: class {constructor(text) {this.text = text;}},
     navigator: {mediaSession: lockScreen}, AbortController, location: {href: 'http://board/', pathname: '/', search: ''}, URL, URLSearchParams,
@@ -153,7 +154,7 @@ function browser(kokoro, restore = '', stored = {}) {
     parts(x, ks) { x.b = ks.map(k => [k, x.b[0][1]]); api.words(x.t, ks.map(k => ({k, text: k + ' part. More words.'}))); },
     marked: () => marks.map(m => [m.get('how'), JSON.parse(m.get('keys'))['0'].join(',')]),
     failClips(yes) { failing = yes; }, voiceFails(n) { voicePlan = {fails: n, count: 0}; },
-    async hide(yes) { document.hidden = yes; document.emit('visibilitychange'); await flush(); }, player: () => audios[0], hum: () => audios[1], box, row, storage, marks, fetches, navigations, gesture() {gestureVersion++;},
+    async hide(yes) { document.hidden = yes; document.emit('visibilitychange'); await flush(); }, player: () => audios[0], hum: () => audios[1], box, row, storage, marks, fetches, navigations, typed(xs) {typed = xs;},
     offset(value) { if (value !== undefined) audios[0].currentTime = value; return audios[0].currentTime; },
     captureEnd() { return kokoro ? audios[0].onended : speech.last.onend; },
     voiceRequest(text) { const d = deferred(); requests.set('voice:' + text, d); return d; },
@@ -869,31 +870,36 @@ const cases = {
     b.api.section(1); await b.end(); assert.equal(b.api.state().t, 'B');
   },
 
-  async 'Return navigates without changing audio state or mode'(b) {
+  async 'follow turned on shows what is being read at once, and changes nothing about the sound'(b) {
     const xs = await b.line(['A', 'B']); await b.api.start(xs[0]);
-    const before = b.api.state(), sound = b.sounds.length, marks = b.marks.length, focused = [];
+    const sound = b.sounds.length, marks = b.marks.length, focused = [];
     b.api.view({key: '0', name: 'Renamed label', focus: (...args) => focused.push(args)});
-    assert.equal(await b.api.returning(), true);
-    assert.equal(b.storage.get('automode'), 'audio'); assert.equal(b.sounds.length, sound); assert.equal(b.marks.length, marks);
-    assert.deepEqual(b.api.state(), before); assert.equal(focused[0][0], 'A'); assert.equal(focused[0][2], true);
+    assert.equal(b.api.following(), false, 'the old Audio only is follow off'); b.api.follow(true);
+    assert.equal(b.api.following(), true); assert.equal(b.storage.get('automode'), 'both');
+    assert.equal(b.sounds.length, sound); assert.equal(b.marks.length, marks); assert.equal(b.api.state().t, 'A');
+    assert.equal(focused[0][0], 'A'); assert.equal(b.navigations.length, 0, 'already in its chat: no page change');
   },
-  async 'Return target survives final reply completion'(b) {
-    const xs = await b.line(['A']); await b.api.start(xs[0]); await b.end();
-    assert.equal(b.api.state().t, null); const sound = b.sounds.length, marks = b.marks.length;
-    assert.equal(b.api.target().k, 'A'); await b.api.returning();
-    assert.equal(b.api.state().t, null); assert.equal(b.sounds.length, sound); assert.equal(b.marks.length, marks);
+  async 'follow on opens the chat being read from anywhere; off, the page is never moved'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); assert.equal(b.navigations.length, 0);
+    b.api.follow(true); assert.equal(b.navigations.at(-1).url, '/plants'); assert.equal(b.navigations.at(-1).how.automatic, true);
+    b.api.follow(false); const n = b.navigations.length; await b.api.showHere(); b.api.done(0); await flush();
+    assert.equal(b.navigations.length, n); assert.equal(b.storage.get('follow'), 'false');
   },
-  async 'document playback keeps the previous Chat return target'(b) {
+  async 'words typed on the page and not sent keep it where it is'(b) {
     const xs = await b.line(['A']); await b.api.start(xs[0]);
-    const doc = b.document(), p = doc.play(); doc.resolve(); await p;
-    const before = b.api.state(), sound = b.sounds.length;
-    assert.equal(b.api.target().k, 'A'); await b.api.returning();
-    assert.deepEqual(b.api.state(), before); assert.equal(b.sounds.length, sound); assert.equal(b.navigations.at(-1).url, '/plants');
+    b.typed([{value: 'half an answer', defaultValue: ''}]); b.api.follow(true); assert.equal(b.navigations.length, 0);
+    b.typed([{value: 'as it came', defaultValue: 'as it came'}]); await b.api.showHere(); assert.equal(b.navigations.length, 1);
   },
-  async 'new interaction revokes a pending Return focus'(b) {
-    const xs = await b.line(['A']); await b.api.start(xs[0]); const pending = b.navigation();
-    const focus = []; b.api.view({key: '0', name: 'Plants', focus: (...args) => focus.push(args)});
-    const jump = b.api.returning(); b.gesture(); pending.resolve(); assert.equal(await jump, false); assert.equal(focus.length, 0);
+  async 'a page changed by hand while a reply is read turns follow off; its own chat keeps it on'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); b.api.follow(true);
+    b.api.left('0'); assert.equal(b.api.following(), true, 'the chat being read');
+    b.api.left('1'); assert.equal(b.api.following(), false, "another project's chat"); assert.equal(b.storage.get('follow'), 'false');
+    b.api.follow(true); b.api.left(null); assert.equal(b.api.following(), false, 'a page that is no chat');
+  },
+  async 'paused, or with nothing being read, a change of page leaves follow on'(b) {
+    await b.line([]); b.storage.set('automode', 'both'); b.api.left(null); assert.equal(b.api.following(), true);
+    const xs = await b.line(['A']); await b.api.start(xs[0]); b.api.hold(true); b.api.left('1');
+    assert.equal(b.api.following(), true);
   },
   async 'reading identity uses project keys despite duplicate and renamed labels'(b) {
     const xs = await b.line(['A']); await b.api.start(xs[0]); b.storage.set('automode', 'both'); const focus = [];
@@ -901,13 +907,6 @@ const cases = {
     assert.equal(focus.length, 0); assert.equal(b.api.of('1', 'Plants'), null);
     b.api.view({key: '0', name: 'New name', focus: (...args) => focus.push(args)}); await b.api.showHere();
     assert.equal(focus[0][0], 'A'); assert(b.api.of('0', 'New name'));
-  },
-
-  async 'Return keeps its last target while the next reply words load'(b) {
-    const xs = await b.line(['A', 'B'], false), next = b.text('B'); await b.api.start(xs[0]); await b.end();
-    assert.equal(b.api.state().t, null); assert.equal(b.api.target().k, 'A'); const sound = b.sounds.length;
-    await b.api.returning(); assert.equal(b.sounds.length, sound); assert.equal(b.api.target().k, 'A');
-    next.resolve(); await flush(); assert.equal(b.api.state().t, 'B'); assert.equal(b.api.target().k, 'B');
   },
 
   async 'History plays from the tapped reply on to the newest, then the reading it stepped in front of'(b) {
@@ -928,10 +927,10 @@ const cases = {
     b.api.done(0); await flush(); missing.resolve([]); await flush();
     assert.equal(b.api.state().t, 'h3');
   },
-  async 'only the tapped History reply is an explicit page jump; the rest follow as Auto does'(b) {
+  async 'a History reply tapped, and the rest of its run, follow as Auto does'(b) {
     await b.line([]); b.storage.set('automode', 'both');
     await b.api.replayFrom([b.row('h1'), b.row('h2')], 0); await flush();
-    assert.equal(b.navigations.at(-1).how.automatic, false);
+    assert.equal(b.navigations.at(-1).how.automatic, true);
     b.api.done(0); await flush(); assert.equal(b.api.state().t, 'h2');
     assert.equal(b.navigations.at(-1).how.automatic, true);
   },

@@ -81,14 +81,12 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   Pictures and PDFs have Download; closing returns to the same reading position. Files opened from Showcase
   and Library use these controls too. Reader tables scroll within their own area, and Back and Project links
   keep the reader with the project it came from.
-- **Auto follows your place:** text follows playback only while Chat is open, with five seconds to browse
-  after a touch or scroll by default; change that delay in the playback settings. Audio may continue elsewhere
-  without bringing you back to Chat. Refocusing returns to the current highlighted sentence within a reply.
-  Crossed-out headphones indicate Text only mode.
-  A small status icon shows when text following is held, and a separate
-  Return button stays visible away from Chat and takes you to the current or last played message without
-  changing the audio mode. History opens at the bottom, with the newest entries last. Selecting a History
-  item returns to that entry when text is enabled; audio-only playback leaves the view alone. Typing holds
+- **Follow is a switch you set:** the mark beside the headphones (and in the bar while something is read). On,
+  the page goes to what is being read, from anywhere on the board, and to each sentence within a reply. Off, the
+  page is never moved and the sound goes on. It turns itself off when you change the page by hand, while a reply
+  is being read, to anywhere but that reply's chat; tap it on and you are back at the sentence being read. Words
+  you typed on a page and have not sent keep the page where it is. Crossed-out headphones indicate Text only
+  mode. History opens at the bottom, with the newest entries last. Typing holds
   playback while its bounded audio buffer keeps preparing, ready to resume from cached or in-flight clips.
   The Auto menu has a large Pause/Resume button: new replies keep queuing during a pause, ready when you resume.
 - **Project names:** use the pencil beside a name to change it. Its agent is told to carry the name through
