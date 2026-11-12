@@ -224,6 +224,45 @@ def shown_for(pid, root, iid):
     return "".join(out[:3])
 
 
+def spoken(x):
+    """A card as the player reads it, by its ▷, in its project's voice: whose it is and what kind of thing, its
+    deadline, then what the card puts to the person. As a reply is read: no code, a link as its words, an address as
+    "the link", a roadmap number with its name. A console's screen is not for the ear, so that card only says where."""
+    p, group, w, now = x["root"], x["group"], x["group"][0], clock()
+    name = board.name_of(p)
+    said = [f"{name} needs you in its console." if w["kind"] == "screen" else f"{name}." if w["kind"] == "verify"
+            else f"{name}, {KIND.get(w['kind'], w['kind'])}."]             # a sign-off says what it is itself
+    if x["by"] is not None:
+        said.append(f"{'Was due' if now > x['by'] else 'Due'} {day(x['by'])}.")
+    if w["kind"] == "gate":
+        said.append(board.gate_spoken(w["gate"]))
+    elif w["kind"] == "choice":
+        shown = [o for o in w["options"] if not re.match(r"(?:[☐☑] )?(?:type something|chat about this)", o, re.I)]
+        said += list(w["question"]) + ["The choices: " + "; ".join(shown) + "."]
+    elif w["kind"] == "ask":
+        said.append(w["ask"]["text"])
+    elif w["kind"] == "checkpoint":
+        c = w["checkpoint"]
+        said += [c.get("outcome") or "", c.get("definition") or "", c.get("check") or ""]
+    for it in (y["item"] for y in group if y["kind"] == "verify"):
+        said.append(f"Ready for your OK: {it['what']}")
+        if it.get("check"):
+            said.append(f"To check: {it['check']}")
+    text = board.spoken_text("\n\n".join(t.strip() for t in said if t and t.strip()))
+    return board.speak_items(board.no_addresses(text), p, [])
+
+
+def play_button(x):
+    """▷ on a card: its words go to the board's player, read in the project's own voice (its pinned one, else the
+    colony's), as a ▷ under a reply in Chat is."""
+    from . import voice
+    e, p = board.e, x["root"]
+    t = "i" + board.hashlib.sha1(",".join(x["keys"]).encode()).hexdigest()[:10]
+    return (f"<button type='button' class='inplay' data-p='{x['pid']}' data-name='{e(board.name_of(p))}' "
+            f"data-voice='{e(board.voice_of(x['pid'], p)[0])}' data-kokoro='{1 if voice.ready() else 0}' data-t='{t}' "
+            f"data-say='{e(spoken(x))}' aria-label='Read this aloud'>{board.ICONS['play']}</button>")
+
+
 def card(x, back="/inbox"):
     """One entry as the person meets it: whose it is, how long it has waited, its deadline, everything to judge it by,
     its answers, then the two ways to put it off."""
@@ -236,7 +275,8 @@ def card(x, back="/inbox"):
         due = (f"<span class='due{' near' if now >= x['by'] - x['rise'] else ''}'>"
                f"{'Was due' if now > x['by'] else 'Due'} {e(day(x['by']))}</span>")
     head = (f"<div class='inhead'><a class='inproj' href='{board.project_url(p)}'>{e(board.name_of(p))}</a>"
-            f"<span class='muted'>{e(KIND.get(w['kind'], w['kind']))} · waiting {e(waited(x['since'], now))}</span>{due}</div>")
+            f"<span class='muted'>{e(KIND.get(w['kind'], w['kind']))} · waiting {e(waited(x['since'], now))}</span>{due}"
+            f"{play_button(x)}</div>")
     item = w["gate"].get("item") if w["kind"] == "gate" else w["item"]["id"] if w["kind"] == "verify" else None
     extra = ""
     if item:
@@ -287,8 +327,25 @@ def html(reg):
     return "".join(out)
 
 
+# ▷ on the card: a tap reads it; on the one being read, ❚❚ holds it and ▷ goes on from where it stopped (as under a
+# reply in Chat). It has no page to follow to, so the Inbox stays where it is while it is read.
+PLAY = """
+(() => { const box = document.getElementById('inbox'), ICON = @ICON@; if (!box) return;
+  const P = () => window.colonyPlayer, of = (b) => P() && P().of(b.dataset.name, b.dataset.p);
+  box.addEventListener('click', (ev) => { const b = ev.target.closest('button.inplay'); if (!b || !P()) return;
+    const s = of(b);
+    if (s && s.t === b.dataset.t) return P().hold(s.playing && !s.paused);
+    P().read({key: b.dataset.p, name: b.dataset.name, href: '', kvoice: b.dataset.voice, kokoro: b.dataset.kokoro === '1'},
+      [{t: b.dataset.t, k: b.dataset.t, at: '', text: b.dataset.say}]); });
+  setInterval(() => { box.querySelectorAll('button.inplay').forEach((b) => { const s = of(b), on = s && s.playing && s.t === b.dataset.t;
+    const st = !on || s.paused ? 'play' : s.loading ? 'load' : 'pause';
+    if (b.dataset.on !== st) { b.dataset.on = st; b.innerHTML = ICON[st]; } }); }, 400);
+})();
+""".replace("@ICON@", board.json.dumps({k: board.ICONS[k] for k in ("play", "pause", "load")}))
+
+
 def page(reg):
     return board.shell(reg, board.NEEDS_PAGE,
                        f"<h1>Inbox</h1><div id='inbox'>{html(reg)}</div>"
                        f"<script>{board.KEEP_CURRENT}if (!document.querySelector('.incard')) "
-                       "keepCurrent(document.getElementById('inbox'), '/inbox/feed');</script>")
+                       f"keepCurrent(document.getElementById('inbox'), '/inbox/feed');{PLAY}</script>")

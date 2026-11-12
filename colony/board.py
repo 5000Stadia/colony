@@ -5911,10 +5911,13 @@ def gate_spoken(gate):
     said = [gate["question"], gate.get("why") or "",
             f"Its default: {gate['default']}." if gate.get("default") and not opts else "",
             ("The choices: " + "; ".join(opts) + ".") if opts else ""]
-    said = " ".join(x.strip() for x in said if x.strip())
-    # an address is not spelled out: a web one is "the link", a long path its last name
+    return no_addresses(" ".join(x.strip() for x in said if x.strip()))
+
+
+def no_addresses(said):
+    """Words for the voice with no address spelled out: a web one is "the link", a long path its last name."""
     said = re.sub(r"https?://\S+?(?=[.,;:)]?(\s|$))", "the link", said)
-    return re.sub(r"\b[\w.-]+(?:/[\w.-]+){2,}/?", lambda m: m.group().rstrip("/").rsplit("/", 1)[-1], said)
+    return re.sub(r"(?<![\w/.~-])(?:~?/)?[\w.-]+(?:/[\w.-]*\w){2,}/?", lambda m: m.group().rstrip("/").rsplit("/", 1)[-1], said)
 
 
 def tasks_html(tasks, shown=15):
@@ -12565,6 +12568,8 @@ details.rneed > summary::-webkit-details-marker { display:none }
 .rtaps .rpro { color:var(--accent) } .rtaps .rcon { color:var(--flag) } .rtaps .rstands { color:var(--muted); font-style:italic }
 .incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard[style] { --accent:var(--pc); border-top:3px solid var(--pc) } @media (prefers-color-scheme: dark) { .incard[style] { --accent:var(--pcd); border-top-color:var(--pcd) } } .incard .need { border-top:0; padding:0 } .incard .need > .who, .incard form.clear { display:none }
 .inhead { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:10px; font-size:14px }
+.inhead .inplay { flex:none; margin-left:auto; align-self:center; width:38px; height:38px; min-height:38px; padding:0; border:0; border-radius:50%;
+  background:transparent; color:var(--accent); display:inline-flex; align-items:center; justify-content:center } .inhead .inplay svg { width:21px; height:21px }
 .inhead .inproj { font-weight:700; font-size:16px; text-decoration:none } .due { font-weight:600 } .due.near { color:var(--flag) }
 p.due { margin:6px 0 } .inabout { margin:0 0 10px; font-size:14px } .inabout a { display:block; overflow-wrap:anywhere }
 .inabout a.open, .incard .ready a.open { margin:8px 0 4px; padding:9px 12px; border-radius:10px; text-align:center;

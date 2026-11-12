@@ -111,7 +111,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
   **Needs you**, the glowing count first in the top bar, opens the **Inbox**: one item fills the page, with what you
   need to judge it (why it is asked, the item it belongs to, what the project showed for it, a demo's address and its
-  pictures one tap away) and its answers. Answer, and the next appears. The order is built in: an item with a
+  pictures one tap away) and its answers. **▷** on the card reads it aloud in its project's voice. Answer, and the
+  next appears. The order is built in: an item with a
   deadline leads from the day before it, the nearest first; then whatever has waited longest. **Skip for now** sends an
   item to the bottom of the stack; **Hide until** takes it off every list until the day you pick. **See all** opens the
   whole list, project by project. Colony's own notices

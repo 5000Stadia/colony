@@ -8228,6 +8228,89 @@ class InboxTest(HoursBase):
             self.assertNotIn("Reminders are built.", page)
             self.assertIn("<a class='shot'", board.needs_you(board.registry()), "the list gains the same")
 
+    def two_cards(self):
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log"))
+        with self.clock(9):
+            board.add_gate(self.root, "Email or **SMS**?", "R3", "See https://plants.example/x first.",
+                           options=["Email", "SMS"], recommended="Email")
+        with self.clock(10):
+            board.mark_ready(self.root, "R2", "The water log is built.",
+                             f"Open it and add a day. Pictures: {self.root.resolve()}/notes/screens/.")
+
+    def test_a_card_is_read_aloud_by_its_play_button_in_its_projects_voice(self):
+        # the person's ask (Chat, 2026-11-12; my reading in roadmap/R164.md): ▷ on each Inbox item, in its project's voice
+        from colony import inbox, voice
+        self.two_cards()
+        with self.clock(12):
+            gate, ready = inbox.stack(board.registry())
+            self.assertEqual(inbox.spoken(gate), "plants, a decision.\n\nEmail or SMS? See the link first. "
+                                                 "The choices: Email, recommended; SMS.")
+            self.assertEqual(inbox.spoken(ready), "plants.\n\nReady for your OK: The water log is built.\n\n"
+                                                  "To check: Open it and add a day. Pictures: screens.",
+                             "a sign-off says what it is once; a folder is its name")
+            page = self.top()
+            self.assertIn("<button type='button' class='inplay' data-p='0' data-name='plants' "
+                          f"data-voice='{board.default_voice()}' data-kokoro='0' data-t='i", page)
+            self.assertIn("data-say='plants, a decision.\n\nEmail or SMS? See the link first.", page)
+            self.assertEqual(page.count("class='inplay'"), 1, "one card, one button")
+            board.choose_voice(0, self.root, "bf_emma")                  # a voice of its own: that one, not the colony's
+            with patch.object(voice, "ready", return_value=True):
+                self.assertIn("data-voice='bf_emma' data-kokoro='1'", self.top())
+            # a deadline is said after whose it is
+            board.add_gate(self.root, "File by Friday?", by=self.at(12) + 3600)
+            due = inbox.stack(board.registry())[0]
+            self.assertRegex(inbox.spoken(due), r"^plants, a decision\.\n\nDue [^\n]+\.\n\nFile by Friday\?$")
+        self.assertIn("P().read({key: b.dataset.p, name: b.dataset.name, href: '', kvoice: b.dataset.voice", inbox.PLAY,
+                      "no page to follow to: the Inbox stays while it is read")
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_a_tap_on_a_cards_play_button_reads_it_and_a_second_tap_holds_it(self):
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome',
+    headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required']});
+  const page = await browser.newPage({viewport: {width: 390, height: 844}});
+  const base = process.argv[1];
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  // five seconds of silence, as a clip the player can play
+  const n = 40000, wav = Buffer.alloc(44 + n, 0x80);
+  wav.write('RIFF', 0); wav.writeUInt32LE(36 + n, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+  wav.write('data', 36); wav.writeUInt32LE(n, 40);
+  const asked = [];
+  await page.route('**/voice?**', (route) => { asked.push(new URL(route.request().url()).searchParams);
+    route.fulfill({status: 200, contentType: 'audio/wav', body: wav}); });
+  await page.goto(base + '/inbox');
+  const b = page.locator('.incard .inhead button.inplay');
+  const box = await b.boundingBox(), head = await page.locator('.incard .inhead').boundingBox();
+  assert(box.width >= 36 && box.height >= 36, 'a thumb can hit it: ' + JSON.stringify(box));
+  assert(box.x + box.width <= head.x + head.width + 1 && box.x + box.width <= 390, 'inside the card on a phone: ' + JSON.stringify(box));
+  await b.click();
+  await page.waitForFunction(() => { const s = window.colonyPlayer.state(); return s.reading && s.playing && !s.paused; });
+  const st = await page.evaluate(() => window.colonyPlayer.state());
+  assert(st.reading.id === '0|' + await b.getAttribute('data-t'), 'the card is what is read: ' + JSON.stringify(st.reading));
+  await page.waitForFunction(() => document.querySelector('button.inplay').dataset.on === 'pause', null, {timeout: 8000});
+  assert(asked.length && asked[0].get('v') === 'bf_emma', 'in the voice the project has: ' + asked.map((a) => a.get('v')));
+  assert(asked[0].get('t').startsWith('plants, a decision.'), 'whose it is comes first: ' + asked[0].get('t'));
+  assert(new URL(page.url()).pathname === '/inbox', 'the Inbox stays where it is: ' + page.url());
+  await b.click();
+  await page.waitForFunction(() => window.colonyPlayer.state().paused && document.querySelector('button.inplay').dataset.on === 'play');
+  await b.click();
+  await page.waitForFunction(() => !window.colonyPlayer.state().paused && document.querySelector('button.inplay').dataset.on === 'pause');
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        from colony import voice
+        self.two_cards()
+        board.choose_voice(0, self.root, "bf_emma")
+        patcher = patch.object(voice, "ready", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 class PhonePageTest(HoursBase):
     """The board laid out for a phone first (the design review of the person's board, 2026-10-19): what changed since
