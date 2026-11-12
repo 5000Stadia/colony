@@ -901,6 +901,12 @@ const cases = {
     const xs = await b.line(['A']); await b.api.start(xs[0]); b.api.hold(true); b.api.left('1');
     assert.equal(b.api.following(), true);
   },
+  async 'a document being read aloud moves no page and leaves the switch as it is'(b) {
+    const xs = await b.line(['A']); await b.api.start(xs[0]); b.api.follow(true); const n = b.navigations.length;
+    const doc = b.document(), p = doc.play(); doc.resolve(); await p; assert.equal(b.api.state().document, true);
+    b.api.left(null); assert.equal(b.api.following(), true, 'leaving while a document is read is not leaving a chat being read');
+    await b.api.showHere(); assert.equal(b.navigations.length, n, 'a document has no chat to go to');
+  },
   async 'reading identity uses project keys despite duplicate and renamed labels'(b) {
     const xs = await b.line(['A']); await b.api.start(xs[0]); b.storage.set('automode', 'both'); const focus = [];
     b.api.view({key: '1', name: 'Plants', focus: (...args) => focus.push(args)}); await b.api.showHere();
