@@ -1447,13 +1447,15 @@ def gates(root):
                 later = {iid for iid, it in items(roadmap(root)).items() if it["state"] == "todo"}
             g["waits_for"] = g["when"] if g["when"] in later else None
         g["held"] = g["held_until"] if g.get("held_until", "") > clock else None
+        g["not_yet"] = g["from"] if g.get("from", "") > clock else None      # dated from a day to come (R160)
     return list(out.values())
 
 
 def due(g):
     """An unanswered gate whose moment has come: the person's question now (not one waiting for its item, nor one
     held for their active hours)."""
-    return not g["answer"] and not g.get("waits_for") and not g.get("held") and not g.get("awaiting")
+    return (not g["answer"] and not g.get("waits_for") and not g.get("held") and not g.get("awaiting")
+            and not g.get("not_yet"))
 
 
 def notes(root):
@@ -1681,7 +1683,7 @@ def _closed_path():
 # Pausing a project (R134, the person: "pause a project, which basically pauses the agents console. saves then retracts
 # all gated needs you items. Unpausing Resurfaced those items then unpauses."). While paused, colony types nothing of its
 # own into its console (console.type_into), what it waits on is off the person's list (waiting_items), and no skipped
-# default stands (stand_defaults). Nothing is answered or withdrawn: resuming puts it all back.
+# verdict lapses (stand_defaults). Nothing is answered or withdrawn: resuming puts it all back.
 PAUSE_LINE = ("[colony] The person paused this project. Land your work now: let what is running finish, helpers included "
               "(don't cancel them), take in what they hand back, and commit what works (an unfinished item stays in "
               "progress); start nothing new. Then end your turn with a short word on where things stand. Colony sends you "
@@ -2044,22 +2046,34 @@ def gate_lock(root):
 
 
 def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None, options=(),
-             recommended=None, reframes=None, told="", hold=None, verdict=None):
+             recommended=None, reframes=None, told="", hold=None, verdict=None, by=None, rise=None, not_before=None):
     with gate_lock(root):
         return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default,
                          options=options, recommended=recommended, reframes=reframes, told=told, hold=hold,
-                         verdict=verdict)
+                         verdict=verdict, by=by, rise=rise, not_before=not_before)
 
 
 def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None, options=(), recommended=None,
-              reframes=None, told="", hold=None, verdict=None):
-    """A decision put in the person's hands. A reversible one may carry the default that stands if they skip it
-    (stand_defaults); one with consultant points never does, since each point needs their decision."""
+              reframes=None, told="", hold=None, verdict=None, by=None, rise=None, not_before=None):
+    """A decision put in the person's hands. It may carry a default: what its agent would take, shown with the
+    question for them to take in a tap. It never stands by itself (the person's word, 2026-11-11: no choice is made by
+    omission); one with consultant points carries none, since each point needs their decision."""
     default = (default or "").strip()
     gate = dict(type="gate", id="g" + random_secrets.token_hex(4), at=now(), question=question.strip(), item=item or when,
                 why=why.strip(), **({"when": when} if when else {}), **({"default": default} if default else {}))
     if not gate["question"]:
         raise ValueError("A gate needs its question.")
+    # the Inbox's order (R160): a deadline the world sets ("by", timestamps), how long before it the gate leads their
+    # stack ("rise", seconds; a day unless said), and a day before which it is no one's question yet ("from")
+    stamp = lambda ts: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+    if by:
+        gate["by"] = stamp(by)
+        if rise:
+            gate["rise"] = int(rise)
+    elif rise:
+        raise ValueError("--rise says how long before a deadline: give the deadline with --by.")
+    if not_before:
+        gate["from"] = stamp(not_before)
     if default and (consultation or points is not None):
         raise ValueError("A gate with consultant points has no default: the person decides each point.")
     # the answers the person can tap, the agent's recommended one among them
@@ -2210,6 +2224,8 @@ def due_since(root, g, times=None):
     t = epoch(g["at"])
     if g.get("held_until"):
         t = max(t, epoch(g["held_until"]))
+    if g.get("from"):
+        t = max(t, epoch(g["from"]))
     if g.get("when"):
         rec = (item_times(root) if times is None else times).get(g["when"]) or {}
         t = max(t, rec.get("first") or rec.get("at") or 0)
@@ -2217,21 +2233,23 @@ def due_since(root, g, times=None):
 
 
 def stands_at(root, g, times=None):
-    """When a skipped default stands: as the person's day begins after the first whole day the decision was theirs."""
+    """When a skipped request for a verdict lapses: as the person's day begins after the first whole day it was
+    theirs."""
     return hours.next_day(hours.next_day(due_since(root, g, times) - 1))
 
 
 def stand_defaults(root, gs=None):
-    """A reversible decision the person skipped: a gate with a default, still unanswered as their next day begins
-    after a whole day on their page, is answered with it by colony, and its note reaches the agent as their answer.
-    Never a gate without a default or with consultant points, nor one they have started answering on the page. The
-    gates whose defaults stood. None while the project is paused: the person hasn't seen them."""
+    """A request for the person's verdict on finished work that they skipped: still unanswered as their next day
+    begins after a whole day on their page, it lapses as no verdict, quietly. Nothing else stands by being skipped
+    (the person's word, 2026-11-11): a decision with a default waits for their answer like any other. Never one they
+    have started answering on the page. The gates that lapsed. None while the project is paused: the person hasn't
+    seen them."""
     if paused(root):
         return []
     gs = gates(root) if gs is None else gs
-    times = item_times(root) if any(g.get("when") and g.get("default") for g in gs) else {}
+    times = item_times(root) if any(g.get("when") and g.get("verdict") for g in gs) else {}
     clock = epoch(now())
-    ripe = {g["id"] for g in gs if g.get("default") and not g.get("points") and not g.get("consult") and due(g)
+    ripe = {g["id"] for g in gs if g.get("default") and g.get("verdict") and not g.get("points") and not g.get("consult") and due(g)
             and stands_at(root, g, times) <= clock}
     ripe -= answering(root) if ripe else set()
     if ripe:                                         # one the person replied on waits for the agent to settle it
@@ -2949,7 +2967,7 @@ def sidebar(reg, pid):
                         + " · ".join(f"{e(w)} {v['used']:g}%" for w, v in sorted(ws.items(), key=lambda x: x[0] != "weekly")) + "</div>")
     # first of the links, the first icon on the front page's bar on a phone: what waits on the person in every
     # project, its count glowing, shown while anything does
-    side.append(f"<div class='navfoot'><a class='needsbtn{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/needs-you' "
+    side.append(f"<div class='navfoot'><a class='needsbtn{' on' if pid == NEEDS_PAGE else ''}' id='needs-chip' href='/inbox' "
                 f"title='Needs you'{'' if total or pid == NEEDS_PAGE else ' hidden'}><span class='long'>Needs you </span>"
                 f"<span id='badge-all' class='badge gate' title='waiting on you, in every project'>{total}</span></a>"
                 f"<a class='reportsbtn{' on' if pid == REPORTS_PAGE else ''}{' new' if reports_unseen() else ''}' href='/reports' "
@@ -5852,7 +5870,7 @@ def gate_spoken(gate):
     rec = gate.get("recommended") or ""
     opts = [o + (", recommended" if o == rec else "") for o in gate.get("options") or []]
     said = [gate["question"], gate.get("why") or "",
-            f"If you skip it: {gate['default']}." if gate.get("default") and not opts else "",
+            f"Its default: {gate['default']}." if gate.get("default") and not opts else "",
             ("The choices: " + "; ".join(opts) + ".") if opts else ""]
     said = " ".join(x.strip() for x in said if x.strip())
     # an address is not spelled out: a web one is "the link", a long path its last name
@@ -7713,8 +7731,8 @@ def render_item(reg, pid, iid):
 
 
 def gate_choices(pid, gate, back):
-    """The answers a decision offers, each a tap: the agent's recommended one first and marked (or, with no options,
-    the default that would stand), then the rest; anything else goes in the box below."""
+    """The answers a decision offers, each a tap: the agent's recommended one first and marked (or, with none
+    recommended, its default), then the rest; anything else goes in the box below."""
     if gate.get("points") or gate["answer"]:
         return ""
     rec = gate.get("recommended") or gate.get("default") or ""
@@ -7777,10 +7795,19 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail="", bare=Fals
         f"<b>{e(gate['question'])}</b>" + (f"<p class='muted'>{e(gate['why'])}</p>" if gate.get("why") else ""), root)
     if bare:
         body = ""
+    if gate.get("by") and not gate["answer"]:
+        from . import inbox
+        by = epoch(gate["by"])
+        body += (f"<p class='due{' near' if epoch(now()) >= by - (gate.get('rise') or inbox.RISE) else ''}'>"
+                 f"{'Was due' if epoch(now()) > by else 'Due'} {e(inbox.day(by))}</p>")
     if gate.get("default") and not gate["answer"] and (taps or gate["default"] not in (gate.get("options") or [])):
-        when = "" if gate.get("waits_for") else stands_at(root, gate)
-        when = when and (f" · stands {hours.at_day(when)}" if when > epoch(now()) else " · waits while you answer it")
-        body += f"<p class='default'>If you skip it: {e(gate['default'])}<span class='muted'>{e(when)}</span></p>"
+        if gate.get("verdict"):                      # a skipped request for a verdict lapses; nothing else stands
+            when = "" if gate.get("waits_for") else stands_at(root, gate)
+            when = when and (f" · stands {hours.at_day(when)}" if when > epoch(now()) else " · waits while you answer it")
+            body += f"<p class='default'>If you skip it: {e(gate['default'])}<span class='muted'>{e(when)}</span></p>"
+        else:
+            body += (f"<p class='default'>Its default: {e(gate['default'])}"
+                     "<span class='muted'> · waits for your answer</span></p>")
     points = gate.get("points", [])
     choices = gate.get("point_decisions") or {}
     rec = None
@@ -7860,8 +7887,8 @@ def answer_box(pid, root, numbered, back, hint=False, day=False):
             f"<textarea name='text' placeholder='{e(hint_)}'>{e(text)}</textarea>"
             + (f"<a class='dayline' href='{project_url(root)}'>{e(name_of(root))} →</a>" if day else "")
             + "<button>Send answers</button></form>"
-            + ("<p class='muted'>One answer a line, or after a semicolon; “2 default” takes a default now. Skip one, and "
-               "its default stands as your day begins after a whole day here.</p>" if hint else ""))
+            + ("<p class='muted'>One answer a line, or after a semicolon; “2 default” takes a default. None stands by "
+               "itself: each waits for your answer.</p>" if hint else ""))
 
 
 def consultation(c):
@@ -8395,6 +8422,32 @@ def try_html(text, pid, root, x):
     return "".join(out)
 
 
+def check_html(text, pid, root):
+    """How to check an item ready for the person's OK, as its agent wrote it: addresses and the project's paths as
+    links, as a showcase entry's Try (5 of 5 sign-offs waiting on 2026-11-11 named a demo's address or a folder of
+    pictures the person couldn't tap), and under it the pictures it names: a picture, or a folder's first few."""
+    from . import opener
+    base = Path(root).resolve()
+    text = text.replace(str(base) + "/", "")              # a path written from the machine's root reads from the project
+    page = try_html(text, pid, root, {"id": ""})
+    shots = []
+    for m in PATHLIKE.finditer(ADDRESS.sub(" ", text)):
+        got = pins.inside(base, m.group(1).rstrip("."))
+        if not got or not got.exists():
+            continue
+        found = ([got] if got.is_file() else sorted(f for f in got.iterdir() if f.is_file())[:CHECK_SHOTS] if got.is_dir() else [])
+        for f in found:
+            url = chat_file(pid, root, e(str(f.relative_to(base)))) if f.name.lower().endswith(IMAGES) else None
+            if url and url not in shots:
+                shots.append(url)
+    return page + ("<div class='shots'>" + "".join(
+        f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
+        for u in shots[:CHECK_SHOTS]) + "</div>" if shots else "")
+
+
+CHECK_SHOTS = 6          # pictures shown under one To check; the folder's link opens the rest
+
+
 def try_paths(text, path):
     """Plain text with each path-like word put through path(match), the rest escaped."""
     out, at = [], 0
@@ -8675,7 +8728,7 @@ def clash_page(reg, pid, pin, draft, kept):
     return shell(reg, pid, body)
 
 
-def waiting_items(p, snap=None, paused_too=False):
+def waiting_items(p, snap=None, paused_too=False, shelved=False):
     """Everything a project is waiting on the person for. The one definition: Needs you, the project's
     Waiting on you, the sidebar's count, `colony projects` and status reports all read this.
       gate    a decision the agent put to the person (`colony gate`), once due: not before its item, nor their hours;
@@ -8685,7 +8738,8 @@ def waiting_items(p, snap=None, paused_too=False):
       ask     a turn that asked the person something in the console, once their hours hold
       verify  a roadmap item built but waiting to be checked or accepted
     Each has a key that stays the same while it waits, so it is announced once. A project the person paused waits on
-    nothing until they resume it (paused_too: what it holds meanwhile)."""
+    nothing until they resume it (paused_too: what it holds meanwhile). What they set aside until a date in their
+    Inbox (Later, R160) is left out until that day (shelved: with those)."""
     if not p.exists() or (not paused_too and paused(p)):
         return []
     gs = gates(p)
@@ -8722,7 +8776,9 @@ def waiting_items(p, snap=None, paused_too=False):
     gone = cleared - {w["key"] for w in out}
     for key in gone:                     # its item has gone: if the same thing comes back later, it shows again
         append(p, "dismissed.jsonl", {"type": "restored", "key": key, "at": now()})
-    return [w for w in out if w["key"] not in cleared]
+    from . import inbox
+    away = {} if shelved else inbox.away(p)
+    return [w for w in out if w["key"] not in cleared and w["key"] not in away]
 
 
 def tell_pinned(root, pin, comment=""):
@@ -8855,10 +8911,10 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
     return decided, box, others
 
 
-def moment_html(pid, p, group, back, label=True, number=None, bare=False):
+def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=True):
     """One moment as the person answers it (waiting_parts): a decision, a choice on screen, a question with what it
     left to verify, a version to review. Bare, only its answer (the status report sets its own words above it, R150):
-    no label, nor the question it would repeat."""
+    no label, nor the question it would repeat. Unfolded (the Inbox's card, R160), a decision's answers are open."""
     hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>")
     rows = []
     w = group[0]
@@ -8871,7 +8927,7 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False):
     def ready_row(it):
         # a request for sign-off: what's ready, how to see it, and Approve or say what's wrong
         return (f"<div class='ready'><div><span class='muted'>Ready for your OK:</span> {e(it['what'])}</div>"
-                + (f"<div><span class='muted'>To check:</span> {e(it['check'])}</div>" if it.get("check") else "")
+                + (f"<div><span class='muted'>To check:</span> {check_html(it['check'], pid, p)}</div>" if it.get("check") else "")
                 + f"<form class='verdict' method='post' action='/approve'>{hidden}<input type='hidden' name='item' value='{e(it['id'])}'>"
                 f"<button>Approve</button><input name='text' placeholder='or say what is wrong'>"
                 f"<button class='quiet' name='verdict' value='not-yet'>Not yet</button></form></div>")
@@ -8894,7 +8950,7 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False):
         g = w["gate"]
         folded = not g.get("points")                 # its own answer folds away, and clearing it waits inside
         rows.append(f"<div class='{need}'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
-                    + gate_body(p, pid, g, back, number=number, fold=not bare, bare=bare,
+                    + gate_body(p, pid, g, back, number=number, fold=fold and not bare, bare=bare,
                                 tail=f"<div class='needfoot'>{clear_form(hidden, keys, 'Clear without an answer')}</div>" if folded else "")
                     + ("" if folded else foot) + "</div>")
     elif w["kind"] == "choice":
@@ -9114,8 +9170,14 @@ def model_changes(pending_only=False):
 
 def needs_page(reg):
     """Needs you on a page of its own, from its chip on the board's bar: kept current as things are answered."""
-    return shell(reg, NEEDS_PAGE, f"<h1>Needs you</h1><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
+    return shell(reg, NEEDS_PAGE, f"<h1>Needs you</h1><p class='incount'><a href='/inbox'>← One at a time</a></p><div class='card' id='needs-box'><div id='needs'>{needs_you(reg)}</div></div>"
                  f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('needs'), '/needs');</script>")
+
+
+def own_rows():
+    """How many of colony's own things wait on the person (a model change, lessons to keep): on the list, not in
+    the Inbox's stack."""
+    return bool(model_changes(pending_only=True)) + len(lesson_rows())
 
 
 NEEDS_SHOWN = 3          # a project's decisions shown in Needs you; the rest fold, its box for answering by number below
@@ -10614,6 +10676,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, needs_you(reg).encode())
         if url.path == "/needs-you":
             return self._send(200, needs_page(reg).encode())
+        if url.path in ("/inbox", "/inbox/feed"):                # what waits on the person, one at a time (R160)
+            from . import inbox
+            return self._send(200, (inbox.page(reg) if url.path == "/inbox" else inbox.html(reg)).encode())
         if url.path in ("/reports", "/reports/feed"):            # status reports (R150)
             from . import reports
             return self._send(200, (reports.page(reg) if url.path == "/reports" else reports.feed_html(reg)).encode())
@@ -11521,6 +11586,18 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(409, clash_page(reg, pid, pin, draft, kept).encode())
                 target.write_text(draft)
                 add_note(root, {"pin": pin["id"]}, f"The person edited the pinned {pins.describe(pin)} on the board.", author='colony', quiet=True)
+        elif path in ("/inbox/last", "/inbox/later", "/inbox/back") and form.get("key"):
+            from . import inbox                               # the person's Not now, Later and Bring back (R160)
+            keys = form["key"].split(",")
+            try:
+                if path == "/inbox/last":
+                    inbox.put_last(root, keys)
+                elif path == "/inbox/back":
+                    inbox.bring_back(root, keys)
+                else:
+                    inbox.put_later(root, keys, form.get("date", "") if form.get("until") == "date" else form.get("until", ""))
+            except ValueError as err:
+                return self._send(409, str(err).encode())
         elif path == "/clear" and form.get("key"):
             for key in form["key"].split(","):                # a moment may hold several items
                 clear_waiting(root, key)
@@ -12402,4 +12479,15 @@ details.rneed > summary::-webkit-details-marker { display:none }
 .navfoot a.reportsbtn.new { color:var(--accent); font-weight:600 }
 .rtaps button.choice b { display:block } .rtaps .rpro, .rtaps .rcon, .rtaps .rstands { display:block; font-size:13px; margin-top:2px }
 .rtaps .rpro { color:var(--accent) } .rtaps .rcon { color:var(--flag) } .rtaps .rstands { color:var(--muted); font-style:italic }
+.incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard .need { border-top:0; padding:0 } .incard .need > .who { display:none }
+.inhead { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:10px; font-size:14px }
+.inhead .inproj { font-weight:700; font-size:16px; text-decoration:none } .due { font-weight:600 } .due.near { color:var(--flag) }
+p.due { margin:6px 0 } .inabout { margin:0 0 10px; font-size:14px } .inabout a { display:block; overflow-wrap:anywhere }
+.inabout a.open, .incard .ready a.open { margin:8px 0 4px; padding:9px 12px; border-radius:10px; text-align:center;
+  background:var(--accent); color:var(--card); font-weight:600; text-decoration:none }
+.shots { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px } .shots a.shot { flex:1 1 140px; max-width:320px }
+.shots a.shot img { display:block; width:100%; height:auto; border-radius:8px; border:1px solid var(--line) }
+.infoot { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-top:16px; padding-top:12px; border-top:1px solid var(--line) }
+.infoot form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 } .infoot input[type=date] { font:inherit; font-size:14px; padding:4px 6px }
+.inaside { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line); font-size:14px }
 """

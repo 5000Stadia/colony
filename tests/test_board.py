@@ -7742,7 +7742,7 @@ class PauseTest(HoursBase):
         with self.clock(7, 29, day=14):
             self.assertEqual(board.stand_defaults(self.root), [])
         with self.clock(7, 30, day=14):                                # Wednesday: after a whole Tuesday on their list
-            self.assertEqual([g["id"] for g in board.stand_defaults(self.root)], [first["id"]])
+            self.assertEqual(board.stand_defaults(self.root), [], "nothing stands by being skipped")
 
     def test_an_agent_at_work_is_told_once_to_land_and_told_to_carry_on_at_resume(self):
         console.snapshot = lambda root, lines=6, name=None: {"state": "working", "lines": []}
@@ -7823,23 +7823,25 @@ class DailyPageTest(HoursBase):
     def answers(self):
         return {g["question"]: g["answer"] for g in board.gates(self.root)}
 
-    def test_a_default_is_kept_on_the_gate_shown_under_its_question_and_only_for_a_reversible_choice(self):
+    def test_a_default_is_kept_on_the_gate_and_shown_under_its_question_as_what_waits_for_their_answer(self):
         with self.clock(14):
             said, tick = self.gate("Which reminders first?", "--item", "R3", "--why", "R3 starts with one",
                                    "--default", "email first, SMS later")
             [gate] = board.gates(self.root)
         self.assertEqual(gate["default"], "email first, SMS later")
-        self.assertIn("If they skip it, its default stands at Fri 7:30 AM and arrives as their answer.", said)
+        self.assertIn("Its default is shown to them to take in a tap; it does not stand by itself", said)
         tick.assert_called_once_with(self.root, forced_hold="blocking decision")   # theirs, like any gate, until then
         with self.clock(15):
             for page in (board.render(board.registry(), 0), board.needs_you(board.registry()),
                          board.waiting_html(0, self.root), board.render_item(board.registry(), 0, "R3")):
-                self.assertIn("If you skip it: email first, SMS later", page)
-                self.assertIn("stands Fri 7:30 AM", page)
+                self.assertIn("Its default: email first, SMS later", page)
+                self.assertIn("waits for your answer", page)
+                self.assertNotIn("stands Fri", page)
         helped = " ".join(self.cli("gate", "--help").stdout.split())
-        self.assertIn("only for a reversible choice", helped)
-        self.assertIn("a costly or irreversible decision has no default", helped)
-        self.assertIn('(if reversible, `--default "what stands if they skip it"`)', " ".join((board.GUIDES / "asking.md").read_text().split()))
+        self.assertIn("It never stands by itself; the gate waits for their answer", helped)
+        asking = " ".join((board.GUIDES / "asking.md").read_text().split())
+        self.assertNotIn("--default", asking, "the guide no longer offers a default that stands")
+        self.assertIn("nothing stands because they skipped it", asking)
         self.assertIn("put a decision or question to the person, lay out work that will need one, or get an answer that leaves a kind of choice to you: `asking.md`", " ".join(board.PROTOCOL.split()))
         with self.assertRaisesRegex(ValueError, "consultant points has no default"):
             board.add_gate(self.root, "Which changes?", consultation="c1", points=[{"text": "x", "consultants": [1]}],
@@ -7848,63 +7850,22 @@ class DailyPageTest(HoursBase):
         self.assertEqual(refused.returncode, 2)
         self.assertIn("A default goes with a new gate's question", refused.stderr)
 
-    def test_a_skipped_default_stands_as_the_day_after_a_whole_one_begins_and_reaches_the_agent_as_the_answer(self):
+    def test_a_skipped_default_never_stands_the_decision_waits_for_the_person(self):
+        # the person's word, 2026-11-11: no choice is made by omission (roadmap/R160.md)
         with self.clock(14):                                           # Wednesday afternoon: on the page from 2 PM
             first = board.add_gate(self.root, "Which reminders first?", "R3", default="email first")
             plain = board.add_gate(self.root, "Keep the old export?", "R2")
-        with self.clock(15):
-            board.render(board.registry(), 0)                          # a look, so Friday's page has a "since"
-        with self.clock(3, day=8):                                     # held to Thursday 7:30: a whole Thursday
-            night = board.add_gate(self.root, "Rename the project?", default="keep plants")
-        for h, m, d in ((7, 30, 8), (23, 59, 8), (7, 29, 9)):
+        for h, m, d in ((7, 30, 8), (7, 30, 9), (7, 30, 12), (7, 30, 20)):
             with self.clock(h, m, d):
-                self.assertEqual(board.stand_defaults(self.root), [], f"not yet on the {d}th at {h}:{m:02d}")
-        with self.clock(7, 30, day=9):                                 # Friday begins: no page open, no turn taken
-            monitor.Watcher().mail()
-            gs = {g["id"]: g for g in board.gates(self.root)}
-        self.assertEqual(gs[first["id"]]["answer"], "Default stood (skipped): email first")
-        self.assertEqual(gs[night["id"]]["answer"], "Default stood (skipped): keep plants")
-        self.assertEqual(gs[first["id"]]["answered_by"], "colony")
-        self.assertIsNone(gs[plain["id"]]["answer"], "never without a default")
-        self.assertEqual(self.sent, ["[colony] You have an update from Colony."], "the agent is woken for its answer")
-        [note] = [n for n in board.notes(self.root) if (n["anchor"] or {}).get("gate") == first["id"]]
-        self.assertEqual((note["author"], note.get("quiet")), ("colony", None))
-        with self.clock(7, 31, day=9):
-            out = self.deliver()
-            self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:" + plain["id"]])
-            page = board.render(board.registry(), 0)
-        self.assertIn('On "Which reminders first?": Default stood (skipped): email first', out)
-        self.assertIn("Colony, the harness the person set up and trusts, tells you", out)
-        self.assertEqual(self.NUM.findall(page), [("2", "Keep the old export?")],
-                         "what's still open keeps its number; what was settled is under what changed")
-        self.assertIn("decided: Which reminders first? <b>Default stood (skipped): email first</b>", page)
-        self.assertNotIn("Your answer: Default stood", page)
-        with self.clock(7, 30, day=12):
-            self.assertEqual(board.stand_defaults(self.root), [], "a default stands once")
-
-    def test_a_default_never_stands_on_consultant_points_or_while_the_person_is_answering_it(self):
-        with self.clock(14):
-            board.append(self.root, "gates.jsonl", {"type": "gate", "id": "gp1", "at": board.now(), "question": "Which points?",
-                                                    "consult": "c1", "default": "none of them",   # a hand-edited record
-                                                    "points": [{"id": "P1", "text": "Keep history.", "sources": []}]})
-            mail = board.add_gate(self.root, "Email or SMS?", default="email")
-            weekly = board.add_gate(self.root, "Weekly or daily?", default="weekly")
-        with self.clock(7, 20, day=9):                     # typing an answer to one of them, not yet sent
-            numbers = {n: g["id"] for n, g in board.decisions(self.root)}
-            self.assertEqual(numbers, {"1": "gp1", "2": mail["id"], "3": weekly["id"]})
-            board.save_draft(self.root, "2 SMS, b", numbers)
-        with self.clock(7, 30, day=9):
-            board.stand_defaults(self.root)
-        with self.clock(8, 19, day=9):
-            board.stand_defaults(self.root)
-            answers = self.answers()
-        self.assertIsNone(answers["Which points?"], "consultant points need every one decided")
-        self.assertIsNone(answers["Email or SMS?"], "mid-answer: its default waits")
-        self.assertEqual(answers["Weekly or daily?"], "Default stood (skipped): weekly", "the rest stand")
-        with self.clock(8, 20, day=9):                     # an hour without a keystroke: they have left it
-            board.stand_defaults(self.root)
-        self.assertEqual(self.answers()["Email or SMS?"], "Default stood (skipped): email")
-        self.assertIsNone(self.answers()["Which points?"])
+                monitor.Watcher().mail()
+                self.assertEqual(board.stand_defaults(self.root), [], f"not on the {d}th either")
+                self.assertEqual({w["key"] for w in board.waiting_items(self.root)},
+                                 {"gate:" + first["id"], "gate:" + plain["id"]}, "both still theirs")
+        self.assertEqual(self.answers(), {"Which reminders first?": None, "Keep the old export?": None})
+        self.assertEqual(self.sent, [], "the agent hears nothing: no answer was given")
+        with self.clock(8, day=20):                                    # taken by the person, by number, it is theirs
+            board.answer_by_number(self.root, "1 default", {n: g["id"] for n, g in board.decisions(self.root)})
+        self.assertEqual(self.answers()["Which reminders first?"], "Default accepted: email first")
 
     def test_answers_read_by_number(self):
         n = {"1": "ga", "2": "gb", "3": "gc"}
@@ -7986,7 +7947,7 @@ class DailyPageTest(HoursBase):
             html = board.needs_you(board.registry())
         self.assertEqual(self.NUM.findall(html), [("1", "Email or SMS?"), ("2", "Weekly?"), ("1", "Open on Sundays?")])
         self.assertEqual(html.count("action='/answers'"), 2, "one box a project")
-        self.assertIn("If you skip it: email", html)
+        self.assertIn("Its default: email", html)
         for name, pid in (("plants", 0), ("shop", 1)):
             self.assertIn(f"<a class='dayline' href='/?n={name}'>{name} →</a>", html)
 
@@ -8029,6 +7990,160 @@ class DailyPageTest(HoursBase):
             self.assertFalse(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
             board.set_setting("active_hours", "off")                    # always around: released at once
             self.assertTrue(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
+
+
+class InboxTest(HoursBase):
+    """R160: what waits on the person, one item at a time, in an order that is built in: a deadline inside its window
+    first (the nearest first), then what has waited longest; Not now, Later, and dates on a decision."""
+
+    server, post, answers = DailyPageTest.server, DailyPageTest.post, DailyPageTest.answers
+
+    def order(self):
+        from colony import inbox
+        return [w["gate"]["question"] if w["kind"] == "gate" else w["key"]
+                for x in inbox.stack(board.registry()) for w in x["group"][:1]]
+
+    def top(self):
+        from colony import inbox
+        return inbox.html(board.registry())
+
+    def test_one_card_at_a_time_oldest_first_across_projects_and_the_next_follows_an_answer(self):
+        shop = Path(self.tmp.name) / "shop"
+        shop.mkdir()
+        board.track(shop)
+        with self.clock(9):
+            first = board.add_gate(self.root, "Email or SMS?", "R3", "R3 starts with one", options=["Email", "SMS"],
+                                   recommended="Email")
+        with self.clock(10):
+            board.add_gate(shop, "Open on Sundays?")
+        with self.clock(11):
+            board.add_gate(self.root, "Weekly or daily?", default="weekly")
+        with self.clock(12):
+            self.assertEqual(self.order(), ["Email or SMS?", "Open on Sundays?", "Weekly or daily?"])
+            page = self.top()
+            self.assertIn("<b>1 of 3</b> · then 2 more · <a href='/needs-you'>See all</a>", page)
+            self.assertIn("<b>Email or SMS?</b>", page)
+            self.assertNotIn("Open on Sundays?", page, "one item on the page, nothing else to look at")
+            self.assertIn("plants</a><span class='muted'>a decision · waiting 3 hours</span>", page)
+            self.assertIn("<span class='tag'>Recommended</span>Email</button>", page, "its answers open, not folded away")
+            self.assertNotIn("<details class='one'", page)
+            self.assertIn(" starts with one</p>", page, "and why it is asked")
+            self.assertIn("About: ", page, "the item it belongs to, a tap away")
+            port = self.server()
+            self.assertIn("href='/inbox'", board.render(board.registry(), 0), "the Needs you chip opens it")
+            status, after = self.post(port, "/answer", p=0, gate=first["id"], text="Email", back="/inbox")
+            self.assertEqual(status, 200)
+            self.assertIn("<h1>Inbox</h1>", after, "an answer leads back to the stack")
+            self.assertIn("<b>1 of 2</b>", after)
+            self.assertIn("<b>Open on Sundays?</b>", after, "and the next is on top")
+            self.assertIn("One at a time", board.needs_page(board.registry()), "the list leads back to it")
+
+    def test_not_now_sends_it_to_the_bottom_and_later_takes_it_off_every_list_until_its_day(self):
+        from colony import inbox
+        with self.clock(9):
+            a = board.add_gate(self.root, "Email or SMS?")
+        with self.clock(10):
+            b = board.add_gate(self.root, "Weekly or daily?")
+        port = self.server()
+        with self.clock(11):
+            self.assertEqual(self.post(port, "/inbox/last", p=0, key="gate:" + a["id"], back="/inbox")[0], 200)
+            self.assertEqual(self.order(), ["Weekly or daily?", "Email or SMS?"], "behind the others, as if it had just come")
+            self.assertEqual(len(board.waiting_items(self.root)), 2, "nothing is answered or hidden")
+            self.assertEqual(self.sent, [])
+        with self.clock(12):
+            status, page = self.post(port, "/inbox/later", p=0, key="gate:" + b["id"], until="tomorrow", back="/inbox")
+            self.assertEqual(status, 200)
+            self.assertEqual(self.order(), ["Email or SMS?"])
+            self.assertEqual([w["key"] for w in board.waiting_items(self.root)], ["gate:" + a["id"]],
+                             "off every list, the count and Needs you with it")
+            self.assertNotIn("Weekly or daily?", board.needs_you(board.registry()))
+            self.assertIn("1 set aside until a day to come", page)
+            self.assertIn("back Thu Oct 8, 7:30 AM", page)
+            [note] = [n for n in board.notes(self.root) if "set this aside" in n["text"]]
+            self.assertTrue(note.get("quiet"), "its agent hears on its next turn, without being woken")
+            self.assertIn("don't ask it again meanwhile", note["text"])
+            self.assertIsNone(self.answers()["Weekly or daily?"], "set aside is no answer")
+        with self.clock(7, 29, day=8):
+            self.assertEqual(self.order(), ["Email or SMS?"])
+        with self.clock(7, 30, day=8):
+            self.assertEqual(self.order(), ["Weekly or daily?", "Email or SMS?"],
+                             "back by itself as their day begins, where its age puts it")
+        with self.clock(8, day=8):
+            self.post(port, "/inbox/later", p=0, key="gate:" + a["id"], until="date", date="2026-10-20", back="/inbox")
+            self.assertEqual(self.order(), ["Weekly or daily?"])
+            self.post(port, "/inbox/back", p=0, key="gate:" + a["id"], back="/inbox")
+            self.assertEqual(self.order(), ["Weekly or daily?", "Email or SMS?"], "brought back when they say")
+            self.assertEqual(self.post(port, "/inbox/later", p=0, key="gate:" + a["id"], until="date", date="2026-10-01",
+                                       back="/inbox")[0], 409, "a day already past is refused")
+        self.assertEqual(inbox.away(self.root), {})
+
+    def test_a_deadline_leads_inside_its_window_and_comes_back_to_the_top_after_not_now(self):
+        from colony import inbox
+        with self.clock(9):
+            board.add_gate(self.root, "Which groceries?")
+            said, _ = self.gate("Fetch the car before the shop closes?", "--by", "2026-10-08T16:00")
+            self.gate("Pay the quarterly tax?", "--by", "2026-10-20", "--rise", "7d")
+            self.assertIn("Due Thu Oct 8, 4:00 PM: it leads their Inbox from today 4:00 PM.", said)
+            self.assertIn("Nothing happens by itself at the deadline", said)
+            self.assertEqual(self.order(), ["Which groceries?", "Fetch the car before the shop closes?", "Pay the quarterly tax?"],
+                             "outside their windows: by how long each has waited")
+        with self.clock(16, 1):                                         # the day before: inside the car's window
+            self.assertEqual(self.order()[0], "Fetch the car before the shop closes?")
+            self.assertIn("<span class='due near'>Due Thu Oct 8, 4:00 PM</span>", self.top())
+            self.assertIn("<p class='due near'>Due Thu Oct 8, 4:00 PM</p>", board.needs_you(board.registry()),
+                          "the list says so too")
+            car = next(g for g in board.gates(self.root) if g["question"].startswith("Fetch"))
+            inbox.put_last(self.root, ["gate:" + car["id"]])
+            self.assertEqual(self.order(), ["Which groceries?", "Pay the quarterly tax?", "Fetch the car before the shop closes?"])
+        with self.clock(17, 2):
+            self.assertEqual(self.order()[0], "Fetch the car before the shop closes?", "an hour on, back on top: not lost")
+        with self.clock(9, day=14):                                     # six days before the tax date: its week has begun
+            self.assertEqual(self.order()[:2], ["Fetch the car before the shop closes?", "Pay the quarterly tax?"],
+                             "the nearest deadline first, a passed one still there")
+            self.assertIn("Was due Thu Oct 8, 4:00 PM", self.top())
+            self.assertEqual({g["question"]: g["answer"] for g in board.gates(self.root)}["Fetch the car before the shop closes?"],
+                             None, "a passed deadline decides nothing")
+        refused = self.cli("gate", "When?", "--rise", "2d")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("give the deadline with --by", refused.stderr)
+
+    def test_a_question_dated_from_a_day_to_come_is_no_ones_until_then(self):
+        with self.clock(9):
+            said, tick = self.gate("Renew the domain?", "--from", "2026-10-12")
+            self.assertIn("is dated from Mon Oct 12, 12:00 AM: off the person's list until then; carry on meanwhile.", said)
+            tick.assert_not_called()
+            self.assertEqual(board.waiting_items(self.root), [])
+            self.assertIn("1 set aside until a day to come", self.top())
+            self.assertIn("has a question for a day to come: Renew the domain?", self.top())
+        with self.clock(9, day=12):
+            self.assertEqual(self.order(), ["Renew the domain?"])
+            self.assertIn("waiting 9 hours", self.top(), "it has waited since its day, not since it was written")
+
+    def test_sign_offs_come_one_by_one_with_their_addresses_and_pictures_one_tap_away(self):
+        from colony import inbox
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log")
+                                              .replace("- [ ] R3", "- [?] R3"))
+        shots = self.root / "notes" / "screens"
+        shots.mkdir(parents=True)
+        (shots / "home-390.png").write_bytes(b"\x89PNG")
+        (shots / "readme.txt").write_text("not a picture")
+        with self.clock(9):
+            board.mark_ready(self.root, "R2", "The water log is built.",
+                             f"Open https://plants.example/log and add a day. Pictures: {self.root.resolve()}/notes/screens/ (home).")
+        with self.clock(10):
+            board.mark_ready(self.root, "R3", "Reminders are built.", "Run it once.")
+        with self.clock(12):
+            stack = inbox.stack(board.registry())
+            self.assertEqual([x["keys"] for x in stack], [["verify:R2"], ["verify:R3"]], "each its own card, the older first")
+            page = self.top()
+            self.assertIn("<b>1 of 2</b>", page)
+            self.assertIn("ready for your OK · waiting 3 hours", page)
+            self.assertIn("<a href='https://plants.example/log' target='_blank' rel='noopener'>https://plants.example/log</a>", page)
+            self.assertIn(">notes/screens/</a>", page, "the folder opens, written from the project")
+            self.assertEqual(page.count("<a class='shot'"), 1, "its picture is on the card; the text file is not one")
+            self.assertIn("home-390.png", page)
+            self.assertNotIn("Reminders are built.", page)
+            self.assertIn("<a class='shot'", board.needs_you(board.registry()), "the list gains the same")
 
 
 class PhonePageTest(HoursBase):
@@ -8116,7 +8231,7 @@ class PhonePageTest(HoursBase):
         self.assertNotIn("badge", top)
         self.assertNotIn("proj home", row)
         self.assertIn("id='badge-all' class='badge gate' title='waiting on you, in every project'>1</span>", row)
-        self.assertIn("<div class='navfoot'><a class='needsbtn' id='needs-chip' href='/needs-you' title='Needs you'>", row,
+        self.assertIn("<div class='navfoot'><a class='needsbtn' id='needs-chip' href='/inbox' title='Needs you'>", row,
                       "the first of the links: on a phone, the first icon on the front page's bar")
         self.assertIn("<a class='proj home on' href='/'>", board.home_page(board.registry()), "lit on the front page")
         self.assertIn("Open on Sundays?", needs)
@@ -8125,7 +8240,7 @@ class PhonePageTest(HoursBase):
         self.assertIn(board.CHIPS, page, "a page opens with its own chip in view")
         board.answer_gate(shop, board.gates(shop)[0]["id"], "yes", tell=False)
         with self.clock(14):
-            self.assertIn("id='needs-chip' href='/needs-you' title='Needs you' hidden>", board.sidebar(board.registry(), 1), "nothing waiting: none")
+            self.assertIn("id='needs-chip' href='/inbox' title='Needs you' hidden>", board.sidebar(board.registry(), 1), "nothing waiting: none")
         self.assertIn("{passive: true, capture: true}", board.CHAT, "a scroll inside the floating Needs you holds off the chat's redraw")
         self.assertIn("if (d && !d.scrollTop) d.scrollTop = top;", board.CHAT, "and, redrawn, it stays where it was read to")
         self.assertIn(f"<link rel='stylesheet' href='/static/board.css?v={board.css_version()}'>", page, "styling, fetched once")
@@ -8204,7 +8319,7 @@ class PhonePageTest(HoursBase):
         g = {"question": "Which one?", "why": "See http://host.ts.net:8801/ or work/out/renders/ first.",
              "options": ["A", "B"], "recommended": "B"}
         self.assertEqual(board.gate_spoken(g), "Which one? See the link or renders first. The choices: A; B, recommended.")
-        self.assertEqual(board.gate_spoken({"question": "Go?", "default": "it goes"}), "Go? If you skip it: it goes.")
+        self.assertEqual(board.gate_spoken({"question": "Go?", "default": "it goes"}), "Go? Its default: it goes.")
         self.assertIn("const np = ev.target.closest('button.needplay');", board.CHAT)
 
     def test_the_end_of_a_chat_clears_what_floats_over_it(self):

@@ -111,7 +111,12 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Waiting on you:** decisions a project put to you (gates, each with tap answers, **Choose for me** where
   none is recommended, and **Choose for me, now and for questions like this**, which tells the agent where your line is), a question its agent says it is asking
   (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
-  **Needs you**, the glowing count first in the top bar, opens onto all of it at once. Colony's own notices
+  **Needs you**, the glowing count first in the top bar, opens the **Inbox**: one item fills the page, with what you
+  need to judge it (why it is asked, the item it belongs to, what the project showed for it, a demo's address and its
+  pictures one tap away) and its answers. Answer, and the next appears. The order is built in: an item with a
+  deadline leads from the day before it, the nearest first; then whatever has waited longest. **Not now** sends an
+  item to the bottom of the stack; **Later** takes it off every list until the day you pick. **See all** opens the
+  whole list, project by project. Colony's own notices
   (a project closed, a console that keeps freezing, a folder followed where it moved) sit above it, each with
   Dismiss, for a week at most.
 - **Message**, at the top of every project: type or paste into its console as if you were there,
@@ -246,8 +251,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   its console, and told to carry on where it stopped.
 - **Today:** each project's page for your day, made from colony's records at no token cost: what landed since
   you last looked on an earlier day, the day's decisions numbered, the queue, and what's held for your hours.
-  Answer by number in one box (`1 yes; 2 email`). An agent can give a reversible decision a default, which
-  stands if you skip it, as your day begins after a whole day on the page. Needs you lists every project's
+  Answer by number in one box (`1 yes; 2 email`). An agent may name a default, which you can take in a tap; nothing
+  stands because you skipped it, so every decision put to you waits for your answer. Needs you lists every project's
   numbered decisions in one place.
 
 ## How it works

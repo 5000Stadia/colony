@@ -299,7 +299,7 @@ they can answer it from the report (each item you write about gets its answer co
 For each thing waiting on them: describe the situation that calls for their answer; say whether there's an obvious
 choice; give the likely options with the pros and cons of each; and give your recommendation, so that where they agree
 they can answer in a tap. The page shows each option as a button with its pros and cons on it, marks the one you
-recommend, and shows when a default stands: don't repeat those in the situation.
+recommend, and names its agent's default: don't repeat those in the situation. No default stands by itself.
 
 How to write:
 - Plain words for someone who may have lost the thread: no jargon, no file names, no ids. Name roadmap items by what
@@ -325,7 +325,7 @@ Reply with one JSON object and nothing else:
    "recommend": "the option you recommend, word for word, or empty", "obvious": true when the choice is obvious,
    "why": "one sentence: why that one (or, with none, what the choice turns on)"}]}
 List every project, in the order given. List every item under WAITING, by its ref, most pressing first: a deadline
-near, work blocked on it, or a default about to stand."""
+near, or work blocked on it."""
 
 
 def _cut(text, n, end=False):
@@ -379,8 +379,7 @@ def _need_text(ref, p, group):
         if g.get("recommended"):
             out.append(f"Its agent recommends: {g['recommended']}")
         if g.get("default"):
-            at = board.stands_at(p, g)
-            out.append(f"If you skip it: {g['default']}" + (f" (stands {hours.at_day(at)})" if at else ""))
+            out.append(f"Its agent's default (it does not stand by itself; the decision waits for the person): {g['default']}")
         else:
             out.append("No default: it waits for your answer.")
         return "\n".join(out)
@@ -559,11 +558,7 @@ def _taps(pid, p, g, x, here):
     rec = (x.get("recommend") if x else g.get("recommended")) or None
     rec = rec if rec in opts else None
     default = g.get("default") if g.get("default") in opts else None
-    stands = ""
-    if default and not g.get("waits_for"):
-        at = board.stands_at(p, g)
-        stands = (f"stands {hours.at_day(at)} if you skip it" if at and at > time.time() else
-                  "stands if you skip it, once you've had a day")
+    stands = "the default" if default else ""
     hidden = (f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(g['id'])}'>"
               f"<input type='hidden' name='back' value='{e(here)}'>")
     out = []

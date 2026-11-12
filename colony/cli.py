@@ -616,9 +616,12 @@ def cmd_gate(a):
         if bool(a.consult) != bool(a.points):
             raise ValueError("Use --consult ID and --points FILE together.")
         points = json.loads(sys.stdin.read() if a.points == "-" else Path(a.points).read_text()) if a.points else None
+        from . import inbox
         gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when,
                               default=a.default, options=a.option, recommended=a.recommended, reframes=a.reframes,
-                              told=a.told or "")
+                              told=a.told or "", by=inbox.moment(a.by, end=True) if a.by else None,
+                              rise=inbox.window(a.rise) if a.rise else None,
+                              not_before=inbox.moment(a.not_before) if a.not_before else None)
     except (ValueError, OSError) as err:
         print(str(err), file=sys.stderr)
         return 2
@@ -633,9 +636,18 @@ def cmd_gate(a):
         print(f"gate {gid} waits until {a.when} starts, off the person's list; carry on meanwhile")
         return 0
     from . import hours
-    # A default stands only for a decision the person skips: until then, the gate is theirs like any other.
-    skipped = (f" If they skip it, its default stands at {hours.at_day(board.stands_at(root, gate))} and arrives as their "
-               "answer." if gate.get("default") else "")
+    # A default never stands by itself (the person's word, 2026-11-11): the gate is theirs until they answer it.
+    skipped = (" Its default is shown to them to take in a tap; it does not stand by itself, so the gate waits for "
+               "their answer. If one answer is plainly best, the choice is yours, not theirs: take it, say so, and "
+               f"withdraw this gate (`colony gate --withdraw {gid} \"taken\"`)." if gate.get("default") else "")
+    if gate.get("by"):
+        by = board.epoch(gate["by"])
+        skipped += (f" Due {inbox.day(by)}: it leads their Inbox from {inbox.day(by - (gate.get('rise') or inbox.RISE))}. "
+                    "Nothing happens by itself at the deadline: the answer is still theirs.")
+    if gate.get("from") and board.epoch(gate["from"]) > board.epoch(board.now()):
+        print(f"gate {gid} is dated from {inbox.day(board.epoch(gate['from']))}: off the person's list until then; carry on "
+              f"meanwhile.{skipped}")
+        return 0
     from . import lead, continuation
     # Only the member at work on the gate's item hears of it, on its next turn: no one is woken for it.
     job = lead.info(root)['assignments'].get(a.item) if a.item else None
@@ -1989,8 +2001,8 @@ def main(argv=None):
     p = sub.add_parser("pair", help="a ChatGPT pairing code for a Codex project (--check CODE confirms it)")
     p.add_argument("name", nargs="?"); p.add_argument("--check", metavar="CODE"); p.set_defaults(fn=cmd_pair)
     p = sub.add_parser("gate"); p.add_argument("question"); p.add_argument("--item"); p.add_argument("--why", default="")
-    p.add_argument("--default", help="only for a reversible choice: what stands if the person skips it, once it has "
-                   "been on their page a whole day; a costly or irreversible decision has no default")
+    p.add_argument("--default", help="what you would take if it were yours: shown with the question for the person to "
+                   "take in a tap. It never stands by itself; the gate waits for their answer")
     p.add_argument("--option", action="append", default=[], help="an answer the person can tap (repeat for each)")
     p.add_argument("--recommended", help="the option you recommend: shown first, marked, one tap to choose")
     p.add_argument("--reframes", metavar="ID", help="this question replaces gate ID, asked again with what it was missing")
@@ -1999,6 +2011,13 @@ def main(argv=None):
     p.add_argument("--context", help="with --answered: your reading of what they meant")
     p.add_argument("--withdraw", metavar="ID", help="gate ID no longer applies (superseded, moot); QUESTION says why")
     p.add_argument("--when", metavar="ITEM", help="the question waits, off the person's list, until roadmap ITEM starts")
+    p.add_argument("--by", metavar="WHEN", help="a deadline the world sets (a filing date, a shop's closing): HH:MM, a "
+                   "date, or a date-time (2026-11-13T16:00). It leads the person's Inbox from the day before; nothing "
+                   "happens by itself when it passes")
+    p.add_argument("--rise", metavar="DURATION", help="with --by: lead their Inbox from this long before the deadline "
+                   "(7d, 2h) instead of a day")
+    p.add_argument("--from", dest="not_before", metavar="DAY", help="the question can't be acted on before this day: "
+                   "off the person's list until then")
     p.add_argument("--consult", metavar="ID", help="the first-round consultation that supplied this gate's points")
     p.add_argument("--points", metavar="FILE", help="JSON list of points with text and consultant numbers (- for stdin)")
     p.add_argument("--accept", action="append", default=[], metavar="POINT", help="with --answered: a point the person accepted, e.g. P1")

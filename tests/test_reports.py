@@ -90,7 +90,7 @@ class ReportTest(BoardBase):
         self.assertIn("[n1] plants · a decision", facts["text"])
         self.assertIn("Question: Which pot for the fern?", facts["text"])
         self.assertIn("Its agent recommends: Clay", facts["text"])
-        self.assertIn("If you skip it: Clay", facts["text"])
+        self.assertIn("Its agent's default (it does not stand by itself; the decision waits for the person): Clay", facts["text"])
         self.assertIn("No default: it waits for your answer.", facts["text"])
         self.assertIn("## plants", facts["text"])
         self.assertIn("In progress: water log", facts["text"])
@@ -125,7 +125,7 @@ class ReportTest(BoardBase):
         self.assertLess(cactus.index("<b>Yes</b>"), cactus.index("<b>No</b>"))
         fern = html[html.index("Which pot for the fern?"):]
         self.assertIn("<span class='tag'>Recommended</span><b>Clay</b>", fern, "skipped by the writer: its agent's pick")
-        self.assertIn("<span class='rstands'>stands", fern, "the default says when it stands, on its own option")
+        self.assertIn("<span class='rstands'>the default</span>", fern, "the default is named on its own option, with no time it stands")
         self.assertNotIn("If you skip it", fern)
         self.assertIn("Something else, or a question", fern, "and a box for anything else")
         self.assertNotIn("Invented", html, "a ref the writer made up is dropped")

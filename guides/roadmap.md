@@ -6,8 +6,7 @@ The roadmap is your plan (the file your instructions name).
 
 Reordering is yours; dropping a milestone is the person's call, and Later waits for them. The
 person is the compass: they shape the vision and the path, and can say where quality or direction seems off and
-steer it. Foresee the decisions an item will need and put them to the person together as gates (`asking.md`), each
-with a default where the choice is reversible, and none where skipping would publish, send or spend. Each item's check and the roadmap as a whole trace to the acceptance criteria, and a criterion no item
+steer it. Foresee the decisions an item will need and put them to the person together as gates (`asking.md`). Each item's check and the roadmap as a whole trace to the acceptance criteria, and a criterion no item
 serves is a gap in the path.
 
 ## Its format
