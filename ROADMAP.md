@@ -243,6 +243,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R158 `colony friction`: the friction on record in one list, run on demand, for a reading across reports — no model run, no words in any agent's context, nothing runs it by itself (related: R146, R148)
 - [x] R159 The research flag on the library; the research department removed
 - [x] R160 The Inbox: what needs the person, one item at a time, in an order that is built in; and no choice made by omission
+- [~] R161 The page follows the voice by a switch the person sets, in place of rules that guessed when to: on, it goes to what is being read from anywhere; off, the page is never moved; leaving that chat by hand turns it off
 
 ## M6 — Later
 
