@@ -9523,6 +9523,13 @@ class LineTest(BoardBase):
                   ("say", self.at(12, 1), "Carried over: the fern."),
                   ("colony", self.at(12, 30), "[colony] You have mail."), ("say", self.at(12, 31), "Read the mail."))
         self.assertEqual([x["w"] for x in self.line()["line"]], ["Read the mail."], "a notice to one project is its own")
+        # a project leaves the board: the notice now reached two, and its replies stay out, on record as left out
+        reg = board.registry()
+        reg["projects"] = [p for p in reg["projects"] if Path(p).name != "seeds"]
+        board.save_registry(reg)
+        self.assertEqual(len(board.projects(board.registry())), 2)
+        self.assertEqual([x["w"] for x in self.line()["line"]], ["Read the mail."], "old replies don't come back as new")
+        self.assertEqual([r["how"] for r in board.read(self.root, "heard.jsonl") if r["k"] == f"s{self.at(11, 0)}-0"], ["wide"])
 
     def test_a_reply_stays_in_the_line_past_the_next_message_its_tenth_part_and_a_new_session(self):
         self.talk(self.root, ("you", self.at(10, 0), "list them"), *[("say", self.at(10, 1, n), f"Part {n}.") for n in range(12)])

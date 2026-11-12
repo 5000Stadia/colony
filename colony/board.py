@@ -5289,6 +5289,8 @@ def _marked(kept, row, at):
     elif how == "folded" and k:                  # a working note folded with the work: out of the line, never "recent"
         kept["marks"].setdefault(k, how)
         kept["folded"].add(k)
+    elif how == "wide" and k:                    # a reply to a notice colony gave every project: out for good, never "recent"
+        kept["marks"].setdefault(k, how)
     elif how in MARKS and k:
         kept["marks"].setdefault(k, how)
         kept["recent"].append((iso_epoch(row.get("at", "")), k, how))
@@ -5607,13 +5609,20 @@ def line(plist, dev="", arm=""):
         # a notice colony gave them all is answered by each: none of those replies is read among the projects
         wide = colony_wide({p: rec["spans"] for p, _, rec, _ in got})
         for p, root, rec, hs in got:
-            mine = {}
+            mine, same = {}, []
             for k in _waiting(root, rec, hs):
                 r = rec["rows"][k]
-                if r["e"] < since or r.get("colony") in wide:
+                if r.get("colony") in wide:
+                    same.append(k)
+                    continue
+                if r["e"] < since:
                     continue
                 it = mine.get(r["t"]) or mine.setdefault(r["t"], {"p": p, "t": r["t"], "b": [], "at": r["at"], "w": r["w"], "e": r["e"]})
                 it["b"].append([k, r["at"]])
+            if same:
+                # kept as left out, on record: counted afresh at each look, they came back into the line as old replies
+                # once projects left the board and their notice no longer reached three (2026-11-11: 46 parts, two weeks old)
+                append_rows(root, "heard.jsonl", [{"k": k, "how": "wide", "at": now(), "dev": "colony"} for k in same])
             if mine:
                 info[p] = {"name": name_of(root), "href": f"{project_url(root)}&view=chat", "voice": voice_of(p, root)[0], "n": len(mine)}
                 items += mine.values()
