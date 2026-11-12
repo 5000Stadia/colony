@@ -12489,7 +12489,7 @@ details.rneed > summary::-webkit-details-marker { display:none }
 .navfoot a.reportsbtn.new { color:var(--accent); font-weight:600 }
 .rtaps button.choice b { display:block } .rtaps .rpro, .rtaps .rcon, .rtaps .rstands { display:block; font-size:13px; margin-top:2px }
 .rtaps .rpro { color:var(--accent) } .rtaps .rcon { color:var(--flag) } .rtaps .rstands { color:var(--muted); font-style:italic }
-.incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard .need { border-top:0; padding:0 } .incard .need > .who, .incard form.clear { display:none }
+.incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard[style] { --accent:var(--pc); border-top:3px solid var(--pc) } @media (prefers-color-scheme: dark) { .incard[style] { --accent:var(--pcd); border-top-color:var(--pcd) } } .incard .need { border-top:0; padding:0 } .incard .need > .who, .incard form.clear { display:none }
 .inhead { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:10px; font-size:14px }
 .inhead .inproj { font-weight:700; font-size:16px; text-decoration:none } .due { font-weight:600 } .due.near { color:var(--flag) }
 p.due { margin:6px 0 } .inabout { margin:0 0 10px; font-size:14px } .inabout a { display:block; overflow-wrap:anywhere }

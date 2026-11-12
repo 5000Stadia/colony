@@ -253,7 +253,9 @@ def card(x, back="/inbox"):
             f"<form method='post' action='/inbox/later' class='inlater'>{hidden}<input type='hidden' name='until' value='date'>"
             f"<label>Hide until <input type='date' name='date' value='{tomorrow}' min='{tomorrow}'></label>"
             "<button class='quiet' title='Off your list until that day, then back by itself'>Hide</button></form></div>")
-    return f"<div class='card incard'>{head}{extra}{body}{foot}</div>"
+    tint = board.PALETTE.get(board.colour(p))            # the card in its project's own colour, as its page is
+    tint = f" style='--pc:{tint[0]};--pcd:{tint[1]}'" if tint else ""
+    return f"<div class='card incard'{tint}>{head}{extra}{body}{foot}</div>"
 
 
 def html(reg):

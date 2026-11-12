@@ -8022,6 +8022,9 @@ class InboxTest(HoursBase):
             self.assertEqual(self.order(), ["Email or SMS?", "Open on Sundays?", "Weekly or daily?"])
             page = self.top()
             self.assertIn("<b>1 of 3</b> · then 2 more · <a href='/needs-you'>See all</a>", page)
+            self.assertIn("<div class='card incard'>", page)             # no colour chosen: the board's own
+            board.project_settings(self.root, {"color": "plum"})        # a card wears its project's colour, as its page does
+            self.assertIn("<div class='card incard' style='--pc:#6b3f78;--pcd:#c79ad6'>", self.top())
             self.assertIn("<b>Email or SMS?</b>", page)
             self.assertNotIn("Open on Sundays?", page, "one item on the page, nothing else to look at")
             self.assertIn("plants</a><span class='muted'>a decision · waiting 3 hours</span>", page)
