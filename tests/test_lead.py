@@ -736,8 +736,14 @@ class LeadTest(unittest.TestCase):
         lead.handback(self.helper, 'R2', actor=self.helper)
         with self.assertRaisesRegex(ValueError, 'completing'):
             lead.integrate(self.root, 'R2', 'true', actor=self.root)
-        with self.assertRaisesRegex(ValueError, 'checks failed'):
+        with self.assertRaisesRegex(ValueError, 'checks failed') as silent:
             lead.integrate(self.helper, 'R2', 'false', actor=self.helper)
+        # a check that failed without a word is said as that, with its exit status; the warning about changed
+        # files is kept for a check that did change them (a project's report: a silent exit 1 on a clean tree read
+        # as changed files, and sent its agent looking through the checkout)
+        self.assertIn('exited 1', str(silent.exception)); self.assertNotIn('tracked files', str(silent.exception))
+        with self.assertRaisesRegex(ValueError, 'changed tracked files'):
+            lead.integrate(self.helper, 'R2', "sh -c 'echo more >> feature.txt'", actor=self.helper)
         self.assertEqual(lead.info(self.root)['integrated'], self.initial)
         self.assertEqual(lead.info(self.root)['assignments']['R2']['state'], 'testing')
         value = lead.integrate(self.helper, 'R2', 'true', actor=self.helper)

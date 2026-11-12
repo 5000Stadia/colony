@@ -869,7 +869,10 @@ def integrate(root, item, tests, *, actor=None, deploy='', push=False):
             update(root, lambda g: g['assignments'][item].update(value), generation=g['generation'])
             result = subprocess.run(shlex.split(tests), cwd=bench, text=True, capture_output=True)
             if result.returncode or not clean(bench):
-                error = (result.stdout + result.stderr)[-4000:] or 'Checks changed tracked files; land them and re-test.'
+                said = (result.stdout + result.stderr)[-4000:]
+                # a failed check and a check that left the tree changed are different findings: say which
+                error = ((said or f'The check command exited {result.returncode} and printed nothing.') if result.returncode
+                         else 'Checks changed tracked files; land them and re-test.' + ('\n' + said if said else ''))
                 update(root, lambda g: g['assignments'][item].update(test_error=error), generation=g['generation'])
                 raise ValueError('Integration checks failed; the item remains unaccepted.\n' + error)
             value.update(state='landing', tests=tests, checked_at=board.now())
