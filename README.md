@@ -166,6 +166,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
 - **Tell projects**, on the front page: write once, tick one project, several or all, and each gets it as your
   own note, the same as one written on its page.
+- **Cc and whole nests**, in the message box over every page: Cc beside To copies a message to other projects,
+  and each nest is a row in the To list. Every copy's first line says who else has the same words, so the agents
+  don't pass them on to each other.
 - **Status reports**, from the top bar's Reports: a button (or a schedule you set: every few hours, or a time of
   day, on the days you tick) has a fresh model write where every project stands and what waits on you, numbered,
   with a recommendation for each and its answer live under it. Earlier reports stay in the feed. Listen on any report

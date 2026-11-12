@@ -1368,7 +1368,7 @@ class ChatTest(BoardBase):
         self.assertIn("if (!theirs) { answering(said); ta.focus(); }", board.CHAT)
         self.assertIn("reply(key, text) { if (gc.hidden) return false;", board.PLAYER)
         self.assertIn("const sent = (re ? '(Replying to: \"' + re.words + '\")\\n' : '') + text;", board.PLAYER)
-        self.assertIn("new URLSearchParams({p: t.key, text: sent})", board.PLAYER)
+        self.assertIn("new URLSearchParams(Object.assign({text: sent, cc: keys}, dest))", board.PLAYER)
 
     def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
         board.track(self.root)
@@ -9075,8 +9075,11 @@ class TellProjectsTest(BoardBase):
         plants, ledger, garden = self.roots
         told = board.tell_projects("  Pause new builds until Monday.  ", [str(plants), str(garden)])
         self.assertEqual(sorted(told), ["Garden", "Plants"])
-        self.assertEqual(self.person_notes(plants), ["Pause new builds until Monday."])
-        self.assertEqual(self.person_notes(garden), ["Pause new builds until Monday."], "the same words to each")
+        # several ticked: each copy's first line names the others that have it, so none is passed on (2026-11-12)
+        self.assertEqual(self.person_notes(plants), ["(Garden also has this message, so there is no need to pass it on.)\n"
+                                                     "Pause new builds until Monday."])
+        self.assertEqual(self.person_notes(garden), ["(Plants also has this message, so there is no need to pass it on.)\n"
+                                                     "Pause new builds until Monday."], "the same words to each")
         self.assertEqual(self.person_notes(ledger), [], "a project left unticked hears nothing")
         note = board.notes(plants)[-1]
         self.assertIsNone(note["anchor"], "on the whole project, as one written on its page")
@@ -9086,7 +9089,140 @@ class TellProjectsTest(BoardBase):
         self.assertEqual(board.tell_projects("Hello", [str(Path(self.tmp.name) / "elsewhere")]), [], "only projects on the board")
         self.assertEqual(self.person_notes(ledger), [])
         self.assertEqual(sorted(board.tell_projects("All of you: well done.", ["*"])), ["Garden", "Ledger", "Plants"])
-        self.assertEqual(self.person_notes(ledger), ["All of you: well done."])
+        self.assertEqual(self.person_notes(ledger), ["(Sent to every project, so there is no need to pass it on.)\nAll of you: well done."])
+        board.tell_projects("Only you.", [str(ledger)])
+        self.assertEqual(self.person_notes(ledger)[-1], "Only you.", "to one project: their words alone")
+
+    def keys(self):
+        return {board.name_of(Path(p)): str(i) for i, p in enumerate(board.projects(board.registry()))}
+
+    def test_a_message_copied_to_other_projects_tells_each_copy_who_else_has_it(self):
+        # the person, 2026-11-12: a Cc on a message they send, each copy saying the others have it, so the agents
+        # don't write to each other to pass on what both were told
+        plants, ledger, garden = self.roots
+        k = self.keys()
+        self.serve()
+        words = "Agree the date format between you."
+        with patch.object(console, "ensure", return_value="t"), patch.object(console, "paste_into", return_value=True) as paste:
+            status, _ = self.post("/chat/send", p=k["Plants"], text=words, cc=",".join([k["Ledger"], k["Garden"], k["Plants"], "99", "x", k["Ledger"]]))
+        self.assertEqual(status, 204)
+        self.assertEqual(paste.call_args[0][1], "(Cc: Ledger and Garden also have this message, so there is no need to pass it on.)\n" + words,
+                         "the one it is written to: in its console, as ever, told who has a copy")
+        self.assertEqual(self.person_notes(ledger), ["(Cc: this is your copy of the person's message to Plants. Garden also has one. "
+                                                     "There is no need to pass it on.)\n" + words])
+        self.assertEqual(self.person_notes(garden), ["(Cc: this is your copy of the person's message to Plants. Ledger also has one. "
+                                                     "There is no need to pass it on.)\n" + words])
+        self.assertEqual(self.person_notes(plants), [], "no copy to the one it was written to, to an unknown key, or twice")
+        self.assertNotIn("from", board.notes(ledger)[-1], "a copy is the person's own note, relayed by no one")
+        with patch.object(console, "ensure", return_value="t"), patch.object(console, "paste_into", return_value=False), \
+                patch.object(console, "live", return_value=True), patch.object(console, "asking", return_value=False), \
+                patch.object(console, "draft", return_value="half"):
+            status, _ = self.post("/chat/send", p=k["Plants"], text="Second thoughts.", cc=k["Ledger"])
+        self.assertEqual(status, 409)
+        self.assertEqual(len(self.person_notes(ledger)), 1, "not sent: no copy goes either")
+        with patch.object(console, "ensure", return_value="t"), patch.object(console, "paste_into", return_value=True) as paste:
+            self.assertEqual(self.post("/chat/send", p=k["Plants"], text="Just you.")[0], 204)
+            self.assertEqual(self.post("/chat/send", p=k["Plants"], text="Still just you.", cc="")[0], 204)
+        self.assertEqual([c[0][1] for c in paste.call_args_list], ["Just you.", "Still just you."], "no Cc: the words as written")
+        self.assertEqual(len(self.person_notes(ledger)), 1)
+        self.assertIn("body.append('cc', keys)", board.PLAYER, "the message box sends who is copied")
+
+    def test_a_message_to_a_whole_nest_reaches_each_of_its_projects_on_the_board(self):
+        # the person, 2026-11-12: the option to message an entire nest, from the same box
+        from colony import nest
+        plants, ledger, garden = self.roots
+        nest.join(plants, "Greenhouse")
+        nest.join(garden, "Greenhouse")
+        nest.join(ledger, "Alone")
+        k = self.keys()
+        self.assertEqual(board.nests_for_box(), {"Greenhouse": [k["Plants"], k["Garden"]]}, "a nest of one is its project: not listed")
+        self.assertIn(json.dumps({"Greenhouse": [k["Plants"], k["Garden"]]}), board.player_js(board.nests_for_box()))
+        before = {r: len(self.person_notes(r)) for r in self.roots}
+        self.serve()
+        with patch.object(console, "ensure") as ensure, patch.object(console, "paste_into") as paste:
+            status, _ = self.post("/chat/send", nest="Greenhouse", text="Frost tonight.", cc=f"{k['Ledger']},{k['Plants']}")
+            self.assertEqual(self.post("/chat/send", nest="Nowhere", text="Hello")[0], 400)
+        self.assertEqual(status, 204)
+        ensure.assert_not_called()
+        paste.assert_not_called()
+        self.assertEqual(self.person_notes(plants)[-1], "(To the whole Greenhouse nest. Garden and Ledger also have this message, "
+                                                        "so there is no need to pass it on.)\nFrost tonight.")
+        self.assertEqual(self.person_notes(garden)[-1], "(To the whole Greenhouse nest. Plants and Ledger also have this message, "
+                                                        "so there is no need to pass it on.)\nFrost tonight.")
+        self.assertEqual(self.person_notes(ledger)[-1], "(Cc: this is your copy of the person's message to the Greenhouse nest "
+                                                        "(Plants and Garden). There is no need to pass it on.)\nFrost tonight.")
+        self.assertEqual({r: len(self.person_notes(r)) - before[r] for r in self.roots}, {r: 1 for r in self.roots},
+                         "one each: a member named in Cc gets no second copy")
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_the_message_box_picks_cc_beside_to_on_a_phone_and_sends_it(self):
+        script = r'''
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome',
+    headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const page = await browser.newPage({viewport: {width: 390, height: 844}});
+  const base = process.argv[1], k = JSON.parse(process.argv[2]);
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  await page.addInitScript(() => { try { localStorage.setItem('aloud', '1'); } catch (e) {} });
+  const sent = [];
+  await page.route('**/chat/send', (route) => { sent.push(route.request().postData()); route.fulfill({status: 204, body: ''}); });
+  await page.goto(base + '/?p=' + k.Plants);
+  await page.waitForFunction(() => { const g = document.getElementById('gc'); return g && !g.hidden && g.querySelector('.gcto').textContent.startsWith('To: Plants'); });
+  const cc = page.locator('#gc .gccc'), list = page.locator('#gc .gclist');
+  assert(await cc.textContent() === 'Cc', 'no one copied yet: ' + await cc.textContent());
+  await cc.click();
+  const names = await list.locator('li').allTextContents();
+  assert(!names.includes('Plants') && names.includes('Ledger') && names.includes('Garden'), 'the others, not the one it goes to: ' + names);
+  await list.locator('li', {hasText: 'Ledger'}).click();
+  await list.locator('li', {hasText: 'Garden'}).click();
+  assert(!(await list.isHidden()), 'the list stays for more');
+  assert(await cc.textContent() === 'Cc: Ledger, Garden ▾', 'both named: ' + await cc.textContent());
+  assert(await list.locator('li.on').count() === 2, 'both ticked in the list');
+  await list.locator('li', {hasText: 'Garden'}).click();
+  assert(await cc.textContent() === 'Cc: Ledger ▾', 'a second tap takes one off');
+  await list.locator('li', {hasText: 'Garden'}).click();
+  const head = await page.locator('#gc .gchead').boundingBox();
+  assert(head.x >= 0 && head.x + head.width <= 390, 'its line stays on a phone screen');
+  await page.locator('#gc .gcto').click();                 // written to Garden after all: its copy goes, Ledger's stays
+  await list.locator('li[data-k]', {hasText: 'Garden'}).last().click();
+  assert((await page.locator('#gc .gcto').textContent()).startsWith('To: Garden'), 'now to Garden');
+  assert(await cc.textContent() === 'Cc: Ledger ▾', 'the one it now goes to is no longer copied: ' + await cc.textContent());
+  await page.locator('#gc textarea').fill('Agree the date format.');
+  await page.locator('#gc .gcsend').click();
+  await page.waitForFunction(() => document.querySelector('#gc .gcsaid').textContent === 'Sent to Garden, Cc Ledger');
+  const form = new URLSearchParams(sent[0]);
+  assert(sent.length === 1 && form.get('p') === k.Garden && form.get('cc') === k.Ledger && form.get('text') === 'Agree the date format.',
+    'what went: ' + sent[0]);
+  assert(await cc.textContent() === 'Cc', 'sent: no one copied on the next');
+  await page.locator('#gc textarea').fill('And one alone.');
+  await page.locator('#gc .gcsend').click();
+  await page.waitForFunction(() => document.querySelector('#gc .gcsaid').textContent.startsWith('Sent to'));
+  assert(new URLSearchParams(sent[1]).get('cc') === '', 'the next carries no copy: ' + sent[1]);
+  // a whole nest, from the same To list: its members are no longer offered as copies
+  await page.locator('#gc .gcto').click();
+  const whole = list.locator('li[data-nest]');
+  assert(await whole.count() === 1 && (await whole.textContent()).replace(/\s+/g, ' ') === 'Whole nest: Greenhouse (Plants, Garden)', 'the nest of two is offered: ' + await whole.allTextContents());
+  await whole.click();
+  assert(await page.locator('#gc .gcto').textContent() === 'To: Greenhouse nest ▾', 'to the nest: ' + await page.locator('#gc .gcto').textContent());
+  await cc.click();
+  const rest = await list.locator('li').allTextContents();
+  assert(!rest.includes('Plants') && !rest.includes('Garden') && rest.includes('Ledger'), 'only projects outside it can be copied: ' + rest);
+  await list.locator('li', {hasText: 'Ledger'}).click();
+  await page.locator('#gc textarea').fill('Frost tonight.');
+  await page.locator('#gc .gcsend').click();
+  await page.waitForFunction(() => document.querySelector('#gc .gcsaid').textContent === 'Sent to Greenhouse nest, Cc Ledger');
+  const third = new URLSearchParams(sent[2]);
+  assert(third.get('nest') === 'Greenhouse' && third.get('p') === null && third.get('cc') === k.Ledger && third.get('text') === 'Frost tonight.', 'what went: ' + sent[2]);
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+'''
+        from colony import nest
+        nest.join(self.roots[0], "Greenhouse")
+        nest.join(self.roots[2], "Greenhouse")
+        self.serve()
+        result = subprocess.run(['node', '-e', script, self.base, json.dumps(self.keys())], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_the_box_on_the_front_page_sends_and_says_to_whom(self):
         plants, ledger, garden = self.roots

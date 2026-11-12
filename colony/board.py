@@ -2748,6 +2748,58 @@ def home_page(reg, told=""):
                  + "</div>" f"<script>{KEEP_CURRENT}keepCurrent(document.getElementById('home'), '/home/feed');</script>")
 
 
+def _and(names):
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def copies_line(others, to=None, every=False, whole=None):
+    """The first line of each copy of a message the person sent to several projects (Cc or a whole nest in the message
+    box, several ticked in Tell projects): who else has these same words, so no agent passes them on to one that
+    already has them (the person, 2026-11-12). `to`: what it was written to, on a Cc'd project's copy; `whole`: the
+    nest it was written to, on a member's copy."""
+    if every:
+        return "(Sent to every project, so there is no need to pass it on.)"
+    if whole:
+        more = f" {_and(others)} also {'has' if len(others) == 1 else 'have'} this message, so there is no need to pass it on." if others else ""
+        return f"(To the whole {whole} nest.{more})"
+    if to:
+        more = f" {_and(others)} also {'has' if len(others) == 1 else 'have'} one." if others else ""
+        return f"(Cc: this is your copy of the person's message to {to}.{more} There is no need to pass it on.)"
+    return f"(Cc: {_and(others)} also {'has' if len(others) == 1 else 'have'} this message, so there is no need to pass it on.)"
+
+
+def cc_roots(keys, to, reg=None):
+    """The projects a message is copied to: board keys ("1,3"), those it is written to and any unknown left out."""
+    plist, out, to = projects(reg or registry()), [], [Path(t) for t in to]
+    for k in str(keys or "").split(","):
+        if k.strip().isdigit() and int(k) < len(plist):
+            root = Path(plist[int(k)])
+            if root not in to and root.exists() and root not in out:
+                out.append(root)
+    return out
+
+
+def nest_roots(name, reg=None):
+    """A nest's projects that are on the board, in the board's order: who a message to the whole nest reaches."""
+    from . import nest
+    members = set(nest.nests().get(name, {}).get("members", []))
+    return [Path(p) for p in projects(reg or registry()) if Path(p).exists() and str(Path(p).resolve()) in members]
+
+
+def nests_for_box(reg=None):
+    """For the message box's To list: each nest with two or more projects on the board, as their board keys."""
+    from . import nest
+    plist = projects(reg or registry())
+    out = {}
+    for name, n in nest.nests().items():
+        members = set(n.get("members", []))
+        keys = [str(i) for i, p in enumerate(plist) if Path(p).exists() and str(Path(p).resolve()) in members]
+        if len(keys) > 1:
+            out[name] = keys
+    return out
+
+
 def tell_projects(text, picked, reg=None):
     """The person's words to several projects at once (R152, the person's yes on ge39f386d: the box replaces the
     steward, which carried them before): one note each, theirs, the same as one written on its page, so each
@@ -2756,12 +2808,11 @@ def tell_projects(text, picked, reg=None):
     text, want = (text or "").strip(), set(picked or ())
     if not text or not want:
         return []
-    told = []
-    for root in map(Path, projects(reg)):
-        if ("*" in want or str(root) in want) and root.exists():
-            add_note(root, None, text, author="person")
-            told.append(name_of(root))
-    return told
+    roots = [root for root in map(Path, projects(reg)) if ("*" in want or str(root) in want) and root.exists()]
+    for root in roots:                                     # several: each copy names the others that have it
+        line = "" if len(roots) < 2 else copies_line([name_of(r) for r in roots if r != root], every="*" in want).replace("(Cc: ", "(", 1) + "\n"
+        add_note(root, None, line + text, author="person")
+    return [name_of(root) for root in roots]
 
 
 def tell_box(reg):
@@ -3028,9 +3079,11 @@ def css_version():
     return hashlib.sha1(CSS.encode()).hexdigest()[:10]
 
 
-def player_js():
+def player_js(nests=None):
+    """The player and the message box, for a page; `nests`: those the box's To list offers whole (nests_for_box)."""
     from . import voice
-    return PLAYER.replace("@ICONS@", json.dumps(ICONS)).replace("@SAMPLE@", json.dumps(voice.SAMPLE))
+    return (PLAYER.replace("@ICONS@", json.dumps(ICONS)).replace("@SAMPLE@", json.dumps(voice.SAMPLE))
+            .replace("@NESTS@", json.dumps(nests or {}).replace("</", "<\\/")))
 
 
 def trouble_bar():
@@ -3143,7 +3196,7 @@ def shell(reg, pid, body, wide=False):
             f"<title>Colony</title><meta name='application-name' content='Colony'>"
             f"<meta name='apple-mobile-web-app-title' content='Colony'><link rel='stylesheet' href='/static/board.css?v={css_version()}'>"
             f"<link rel='stylesheet' href='/static/media.css?v={media.version()}'><script type='module' src='/static/media.js?v={media.version()}'></script>"
-            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js()}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
+            f"<style>{own_colour(reg, pid)}</style></head><body{proj_attr(reg, pid)}><script>{player_js(nests_for_box(reg))}</script><nav{'' if pid >= 0 else ' class=noproj'}>{sidebar(reg, pid)}</nav>"
             f"<main{' class=wide' if wide else ''}>{restore_bar()}{trouble_bar()}{signin_notice()}{body}</main><script>{FOLDS}{GRIPS}{POLL}{CHIPS}{DRAFTS}{ANSWERS}{LAZY}{LASTPAGE}{BAR}</script></body></html>")
 
 
@@ -4564,11 +4617,11 @@ PLAYER = """
   // on. A tap on its line lists every project, the active page's first. Unsent words are kept on this device. On a
   // Chat page it stands in for the page's own box; Auto off, or reading aloud alone, the page's box is as it was.
   const gc = document.createElement('form'); gc.id = 'gc'; gc.className = 'gc'; gc.hidden = true;
-  gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gcbox'><div class='gchead'><button type='button' class='gcto'></button><span class='gcsaid'></span></div>"
+  gc.innerHTML = "<ol class='gclist' hidden></ol><div class='gcbox'><div class='gchead'><button type='button' class='gcto'></button><button type='button' class='gccc'></button><span class='gcsaid'></span></div>"
     + "<div class='gcfiles' hidden></div><div class='gcfiles gcre' hidden></div><div class='gcrow'><button type='button' class='gcattach' aria-label='Attach photos or files'>+</button><input type='file' multiple hidden>"
     + "<textarea rows='1' placeholder='Message'></textarea><button class='gcsend' aria-label='Send'>↑</button></div></div>";
   document.body.appendChild(gc);
-  const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gsaid = gc.querySelector('.gcsaid');
+  const gta = gc.querySelector('textarea'), glist = gc.querySelector('.gclist'), gto = gc.querySelector('.gcto'), gcc = gc.querySelector('.gccc'), gsaid = gc.querySelector('.gcsaid');
   const gfile = gc.querySelector('input[type=file]'), gfiles = gc.querySelector('.gcfiles');
   const chosen = () => { const fs = [...gfile.files]; gfiles.hidden = !fs.length; gfiles.innerHTML = '';
     if (fs.length) { const n = document.createElement('span'); n.textContent = '📎 ' + fs.map((f) => f.name).join(', ');
@@ -4591,8 +4644,18 @@ PLAYER = """
     placed(); };
   const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'})[c]);
   let anchor = null, gcTyping = false, ridef = 0;          // anchor: {key, name, chosen} the words are for
-  try { const was = JSON.parse(sessionStorage.getItem('gc') || 'null'); if (was) { anchor = was.to; gta.value = was.text || ''; } } catch (e) {}
-  const keepDraft = () => { try { sessionStorage.setItem('gc', JSON.stringify({to: anchor, text: gta.value})); } catch (e) {} };
+  // Cc: other projects that get the same words, as the person's note, each copy saying who else has it (the board adds
+  // that line); chosen from the list beside To, kept with the draft, and let go once sent
+  // To a whole nest: its row in the To list; every project of it gets the words as the person's note
+  const NESTS = @NESTS@;                                    // {nest: [board keys]}, those with two or more on the board
+  const inNest = (t, k) => !!(t && t.nest && (NESTS[t.nest] || []).includes(String(k)));
+  let cc = [], listFor = 'to';                              // cc: [{key, name}]
+  try { const was = JSON.parse(sessionStorage.getItem('gc') || 'null'); if (was) { anchor = was.to; gta.value = was.text || ''; cc = Array.isArray(was.cc) ? was.cc : []; } } catch (e) {}
+  const keepDraft = () => { try { sessionStorage.setItem('gc', JSON.stringify({to: anchor, text: gta.value, cc})); } catch (e) {} };
+  const ccNow = (t) => cc.filter((c) => !t || (String(c.key) !== String(t.key) && !inNest(t, c.key)));
+  const ccList = () => { const t = target();
+    glist.innerHTML = listed().filter((p) => !t || (String(p.key) !== String(t.key) && !inNest(t, p.key)))
+      .map((p) => `<li data-k="${esc(p.key)}"${cc.some((c) => String(c.key) === String(p.key)) ? ' class="on"' : ''}>${esc(p.name)}</li>`).join(''); };
   const onPage = () => { const k = here(); return listed().find((x) => x.key === k) || null; };
   const target = () => { if (anchor) return anchor; const p = onPage(); if (p) return p;
     if (N && N.document) return {key: N.p, name: N.projectName || 'Document'};
@@ -4604,6 +4667,9 @@ PLAYER = """
     if (!show) return;
     const t = target(), says = 'To: ' + (t ? t.name : 'choose a project') + ' ▾';
     if (gto.textContent !== says) gto.textContent = says;
+    const also = ccNow(t), copy = also.length ? 'Cc: ' + also.map((c) => c.name).join(', ') + ' ▾' : 'Cc';
+    if (gcc.textContent !== copy) gcc.textContent = copy;
+    gcc.classList.toggle('on', !!also.length);
     gc.classList.toggle('held', !!anchor);
   }
   // sized only while shown: measured hidden (a fresh load) it read nothing, and the box shut on its "Message", which fell
@@ -4613,14 +4679,26 @@ PLAYER = """
     if (words && !anchor) anchor = target();                 // the first word ties them to where they are going
     if (!words && anchor && !anchor.chosen) anchor = null;
     grow(); keepDraft(); placed(); });
-  on(gto, 'click', () => { if (!glist.hidden) { glist.hidden = true; return; }
-    const page = onPage();
+  on(gcc, 'click', () => { if (!glist.hidden && listFor === 'cc') { glist.hidden = true; return; }
+    listFor = 'cc'; ccList(); glist.hidden = false; });
+  on(gto, 'click', () => { if (!glist.hidden && listFor === 'to') { glist.hidden = true; return; }
+    listFor = 'to'; const page = onPage();
     glist.innerHTML = (page ? `<li data-k="${esc(page.key)}"><b>Active page:</b> ${esc(page.name)}</li>` : '')
-      + listed().map((p) => `<li data-k="${esc(p.key)}">${esc(p.name)}</li>`).join('');
+      + listed().map((p) => `<li data-k="${esc(p.key)}">${esc(p.name)}</li>`).join('')
+      + Object.keys(NESTS).map((n) => `<li data-nest="${esc(n)}"><b>Whole nest:</b> ${esc(n)} <span class="muted">(${esc(listed().filter((p) => NESTS[n].includes(String(p.key))).map((p) => p.name).join(', '))})</span></li>`).join('');
     glist.hidden = false; });
   on(glist, 'click', (ev) => { const li = ev.target.closest('li'); if (!li) return;
-    const p = listed().find((x) => x.key === li.dataset.k); if (p) anchor = {key: p.key, name: p.name, chosen: true};
-    if (p && reTo && String(reTo.key) !== String(p.key)) { reTo = null; reDraw(); }      // a reply is to its own project
+    const p = listed().find((x) => x.key === li.dataset.k);
+    if (listFor === 'cc') {                                 // a tap adds it, another takes it off; the list stays for more
+      if (!p) return;
+      const had = cc.some((c) => String(c.key) === String(p.key));
+      cc = had ? cc.filter((c) => String(c.key) !== String(p.key)) : cc.concat([{key: p.key, name: p.name}]);
+      const t = target(); if (cc.length && !anchor && t) anchor = {key: t.key, name: t.name, chosen: true};      // a copy ties it to where it is going
+      li.classList.toggle('on', !had); keepDraft(); placed(); return; }      // marked in place: redrawn, the tap would count as one outside the box
+    if (p) { anchor = {key: p.key, name: p.name, chosen: true}; cc = ccNow(p); }
+    const n = li.dataset.nest;
+    if (!p && n && NESTS[n]) { anchor = {key: 'nest:' + n, nest: n, name: n + ' nest', chosen: true}; cc = ccNow(anchor); }
+    if (anchor && reTo && String(reTo.key) !== String(anchor.key)) { reTo = null; reDraw(); }      // a reply is to its own project
     glist.hidden = true; keepDraft(); placed(); });
   on(document, 'click', (ev) => { if (!glist.hidden && !ev.target.closest('#gc')) glist.hidden = true; });
   // typing on a phone, the box rides the keyboard: placed where the visible part of the page ends, the player out of the way
@@ -4653,13 +4731,15 @@ PLAYER = """
     if (!t) { gto.click(); return; }                          // nowhere to send yet: the list, to choose
     const re = reTo && String(reTo.key) === String(t.key) && text ? reTo : null;
     const sent = (re ? '(Replying to: "' + re.words + '")\\n' : '') + text;
-    const body = new FormData(); body.append('p', t.key); body.append('text', sent); fs.forEach((f) => body.append('file', f));
-    gta.value = ''; gfile.value = ''; chosen(); anchor = null; keepDraft(); grow(); gta.blur(); gsaid.textContent = 'Sending to ' + t.name + '…'; placed();
-    const r = await fetch('/chat/send', {method: 'POST', body: fs.length ? body : new URLSearchParams({p: t.key, text: sent})}).catch(() => null);
+    const also = text ? ccNow(t) : [], keys = also.map((c) => c.key).join(','), who = t.name + (also.length ? ', Cc ' + also.map((c) => c.name).join(', ') : '');
+    const dest = t.nest ? {nest: t.nest} : {p: t.key};
+    const body = new FormData(); Object.keys(dest).forEach((d) => body.append(d, dest[d])); body.append('text', sent); body.append('cc', keys); fs.forEach((f) => body.append('file', f));
+    gta.value = ''; gfile.value = ''; chosen(); anchor = null; cc = []; glist.hidden = true; keepDraft(); grow(); gta.blur(); gsaid.textContent = 'Sending to ' + who + '…'; placed();
+    const r = await fetch('/chat/send', {method: 'POST', body: fs.length ? body : new URLSearchParams(Object.assign({text: sent, cc: keys}, dest))}).catch(() => null);
     if (r && r.ok && reTo === re) { reTo = null; reDraw(); }
-    if (r && r.ok) { gsaid.textContent = 'Sent to ' + t.name; after(() => { if (gsaid.textContent === 'Sent to ' + t.name) gsaid.textContent = ''; }, 4000); return; }
-    // not sent: the words come back, still for that project
-    gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = {key: t.key, name: t.name, chosen: true}; keepDraft(); grow(); placed();
+    if (r && r.ok) { gsaid.textContent = 'Sent to ' + who; after(() => { if (gsaid.textContent === 'Sent to ' + who) gsaid.textContent = ''; }, 4000); return; }
+    // not sent: the words come back, still for that project, its copies with it (none went)
+    gta.value = text + (gta.value.trim() ? '\\n\\n' + gta.value : ''); anchor = Object.assign({}, t, {chosen: true}); cc = also; keepDraft(); grow(); placed();
     if (fs.length) { try { const dt = new DataTransfer(); fs.forEach((f) => dt.items.add(f)); gfile.files = dt.files; chosen(); } catch (e) {} }
     const left = r && r.status === 409 ? await r.text() : '';
     gsaid.textContent = r && r.status === 409 ? (left.startsWith('Not sent') ? left : 'Not sent: ' + (left ? '“' + left + '” is' : 'something is') + ' half-typed in its console')
@@ -11251,18 +11331,40 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/chat/send":                         # what the person sends in Chat: into the console, as Message does
             key, text = values.get("p", ["0"])[0], values.get("text", [""])[0].strip()
-            dst = src = projects(registry())[int(key)]
+            # a whole nest: every project of it on the board gets the words as the person's note (a file, kept with the first)
+            whole = values.get("nest", [""])[0]
+            members = nest_roots(whole) if whole else []
+            if whole and not members:
+                return self._send(400, b"no such nest")
+            dst = src = members[0] if whole else projects(registry())[int(key)]
             if self._uploads:                              # kept where the one it's for can read them, their paths in the message
                 try:
                     kept = [f"Attached: {Path(dst) / pins.save_upload(dst, *u)}" for u in self._uploads]
                 except ValueError:
                     return self._send(413, b"that file is too large (25 MB at most)")
                 text = "\n".join(kept) + (f"\n\n{text}" if text else "")
+            # Cc: the same words to other projects as the person's note, each copy naming who else has it; none goes
+            # unless the message itself does
+            copied, words = (cc_roots(values.get("cc", [""])[0], members or [dst]) if text else []), text
+            if whole:
+                for root in members if text else []:
+                    add_note(root, None, copies_line([name_of(r) for r in members + copied if r != root], whole=whole) + "\n" + words, author="person")
+                for root in copied:
+                    add_note(root, None, copies_line([name_of(r) for r in copied if r != root],
+                                                     to=f"the {whole} nest ({_and([name_of(r) for r in members])})") + "\n" + words, author="person")
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if copied:
+                text = copies_line([name_of(r) for r in copied]) + "\n" + words
             # a console still coming up is waited for: 204 only once the message has left its box
             sent = not text or console.paste_into(console.ensure(src, settle=SETTLE), text, answer=True, wait=CHAT_WAIT)
             if sent and text:
                 answer_asks(src, "in the console")
                 append(src, "messages.jsonl", {"type": "message", "at": now(), "text": text, "to": "console"})
+                for root in copied:
+                    add_note(root, None, copies_line([name_of(r) for r in copied if r != root], to=name_of(dst)) + "\n" + words, author="person")
             if not sent and not console.live(src):        # not a draft in the way: its agent isn't there
                 return self._send(503, stopped(src).encode())
             if not sent:                                  # what is in the way, so a leftover (a command left typed) shows
@@ -11899,6 +12001,9 @@ table.benchres { width:100%; border-collapse:collapse; font-size:14px } table.be
   position:relative; z-index:1; white-space:nowrap; overflow:hidden }
 .gcsaid { color:var(--muted); overflow:hidden; text-overflow:ellipsis }
 .gc .gcto { border:0; background:transparent; color:var(--accent); font-weight:600; padding:2px 2px; min-height:0; width:auto; font-size:12.5px; cursor:pointer }
+.gc .gccc { border:0; background:transparent; color:var(--muted); padding:2px 2px; min-height:0; width:auto; min-width:0; font-size:12.5px; cursor:pointer;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .gc .gccc.on { color:var(--accent); font-weight:600 }
+.gclist li.on::before { content:'✓ ' } .gclist li.on { font-weight:600 }
 .gc.held .gcto::after { content:' · kept while you write'; color:var(--muted); font-weight:400 }
 .gcrow { display:flex; align-items:flex-end; gap:6px; background:color-mix(in srgb, var(--accent) 8%, var(--card));
   border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius:20px; padding:5px 5px 5px 8px;
