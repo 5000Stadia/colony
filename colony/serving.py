@@ -7,22 +7,31 @@ has an address of its own (one project served three story boards side by side, a
 turn, so the person's link showed another board), and a port another project serves is refused, naming it (one
 project's host came up on a port colony had served for another's, which crash-looped). Kept across restarts by
 tailscaled itself; looked at again as the board starts and every few minutes while it runs, so certificates turned on
-later are taken up with no restart; a project's goes when it leaves the board. An address once given is its project's
-for good (past): links to it are kept in showcase entries, mail and the person's own bookmarks, and one given up was
-handed to the next project that asked, so a project's saved link opened another project's site. Given up, it answers
-nothing until the same project serves the same local port again.
+later are taken up with no restart; a project's goes when it leaves the board.
+
+A link is looked at when it is tapped, and only then (tapped; the person's design, 2026-11-12): the board draws every
+link to an address of this kind through its opener, carrying the project the link sits in. Its site answering, the
+person is sent on. Not answering, colony starts it with the command the project gave (colony serve PORT --start), waits
+while it comes up, and sends them on: no agent has a part in it. An address that is not that project's now (it moved
+to another port, or another project has the address since) goes to the project's own site. What cannot be opened is
+said to the person on a page. So nothing is kept about addresses given up: a link kept to one opened the next
+project's site, once.
 
 R119. The person, via Bookflow (2026-10-28): "Yes: turn it on, Colony builds shared https serving", and "We want to do
 this without any friction whatsoever on install, it should just work out of the box."
 """
 import json
+import shutil
 import socket
+import subprocess
 import time
+import urllib.parse
 from pathlib import Path
 
 from . import board, tailscale
 
 EVERY = 300                  # seconds between looks while the board runs: a 10 ms question to tailscaled
+WAIT = 60                    # seconds a site started on a tap has to answer (one took 16)
 trouble = ""                 # why Tailscale refused to serve the board, last it was asked (doctor says it)
 
 
@@ -43,28 +52,6 @@ def records():
 def _save(rows):
     board.home().mkdir(parents=True, exist_ok=True)
     _path().write_text(json.dumps(rows, indent=1))
-
-
-def _past_path():
-    return board.home() / "served-past.json"
-
-
-def past():
-    """{https port: [project folder, the local port it was given for]}: every address ever given, kept after its
-    serving ends, so no other project is given it. What is served now is in it whether or not it was written down."""
-    try:
-        out = {int(h): list(v) for h, v in json.loads(_past_path().read_text()).items()}
-    except (OSError, ValueError, TypeError):
-        out = {}
-    for k, rs in records().items():
-        for r in rs:
-            out[r["https"]] = [k, r["port"]]
-    return out
-
-
-def _remember(held):
-    board.home().mkdir(parents=True, exist_ok=True)
-    _past_path().write_text(json.dumps({str(h): v for h, v in sorted(held.items())}, indent=1))
 
 
 def ready():
@@ -111,9 +98,11 @@ def ensure_board(port):
     return tailscale.url(443)
 
 
-def add(root, port):
+def add(root, port, start=None):
     """Serve one of a project's local ports over HTTPS, at an address of its own (the same one again for a port it
-    serves already). Its URL; ValueError with what stands in the way, a port another project serves among it."""
+    serves already). start: the command that starts what listens there, run from the project's folder when a link to
+    it is tapped and nothing answers (kept when not said again; "" forgets it). Its URL; ValueError with what stands
+    in the way, a port another project serves among it."""
     why = ready()
     if why:
         raise ValueError(why)
@@ -123,22 +112,17 @@ def add(root, port):
             if k != key and r["port"] == port:
                 raise ValueError(f"port {port} is served for {board.name_of(Path(k))} at {tailscale.url(r['https'])}: "
                                  "listen on a free port, and serve that")
-    now, held = tailscale.served(), past()
+    now = tailscale.served()
     mine = next((r["https"] for r in rows.get(key, []) if r["port"] == port), None)
-    if not mine:                          # served before and ended: the address it had, unless something else has it now
-        mine = next((h for h, (k, p) in sorted(held.items())
-                     if k == key and p == port and (now.get(h) == port or (h not in now and not _taken(h)))), None)
     used = {r["https"] for rs in rows.values() for r in rs if r["https"] != mine} | {h for h in now if h != mine}
-    free = [h for h in range(tailscale.FIRST, tailscale.FIRST + 200) if h not in used and h != mine]
-    # one never given to anyone; with all 200 given, one whose serving ended (the old way, and far off)
-    https = mine or next((h for h in free if h not in held and not _taken(h)), None) or next(h for h in free if not _taken(h))
+    https = mine if mine else next(h for h in range(tailscale.FIRST, tailscale.FIRST + 200) if h not in used and not _taken(h))
     err = tailscale.serve(https, port)
     if err:
         raise ValueError(f"tailscale serve: {err}")
-    rows[key] = [r for r in rows.get(key, []) if r["port"] != port] + [{"port": port, "https": https}]
+    was = next((r for r in rows.get(key, []) if r["port"] == port), {})
+    cmd = was.get("start", "") if start is None else start.strip()
+    rows[key] = [r for r in rows.get(key, []) if r["port"] != port] + [{"port": port, "https": https, **({"start": cmd} if cmd else {})}]
     _save(rows)
-    held[https] = [key, port]
-    _remember(held)
     return tailscale.url(https)
 
 
@@ -147,8 +131,6 @@ def remove(root, port=None):
     leaving the board). Whether anything was served."""
     rows, key = records(), str(Path(root).resolve())
     had = [r for r in rows.get(key, []) if port is None or r["port"] == int(port)]
-    if had:
-        _remember(past())                 # whose it was outlasts the serving (one served before addresses were kept, too)
     for r in had:
         tailscale.unserve(r["https"])
     if had:
@@ -169,6 +151,95 @@ def served(root):
 def of(root):
     """A project's HTTPS address (its first, where it serves several), or None."""
     return next((url for url, _ in served(root)), None)
+
+
+# --- a link, looked at when it is tapped
+
+_name = None                 # this machine's tailnet name, asked of Tailscale once where the board's settings lack it
+_started = {}                # (project, local port): when colony last started it
+
+
+def given(url):
+    """The https port of an address colony gives a project's server (this machine's tailnet name, a port of the
+    projects' range), or None: any other address is left as it is."""
+    global _name
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if not port or not tailscale.FIRST <= port < tailscale.FIRST + 200 or parts.scheme != "https":
+        return None
+    name = board.registry()["settings"].get("tailscale") or _name
+    if not name:
+        name = _name = tailscale.status().get("name") or "-"
+    return port if (parts.hostname or "").lower() == name.lower() else None
+
+
+def up(port):
+    """Whether anything answers on this machine's local port."""
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def start(root, row):
+    """Run the command a project gave for what listens on one of its ports, from its folder, apart from the board (a
+    unit of its own where systemd runs the person's services, else a process of its own). Whether it was run."""
+    if not row.get("start"):
+        return False
+    where, unit = str(board.workdir(Path(root))), f"colony-site-{Path(root).name}-{row['port']}"
+    unit = "".join(c if c.isalnum() or c in "-_" else "-" for c in unit)
+    try:
+        if shutil.which("systemd-run") and subprocess.run(
+                ["systemd-run", "--user", "--collect", "--quiet", f"--unit={unit}", f"--working-directory={where}",
+                 "sh", "-c", row["start"]], capture_output=True, timeout=30).returncode == 0:
+            return True
+        logs = board.home() / "sites"
+        logs.mkdir(parents=True, exist_ok=True)
+        with open(logs / f"{unit}.log", "ab") as log:
+            subprocess.Popen(["sh", "-c", row["start"]], cwd=where, stdout=log, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def tapped(root, url, since=None, now=None):
+    """A link in one of a project's pages, tapped. None: not an address colony gives, opened as it is. Else
+    ("go", where to send the person), ("wait", what is happening, when the wait began) while its site comes up, or
+    ("down", why it cannot be opened, said to the person alone: whether a site is up is colony's to see to, with no
+    agent, since a link is used long after its project is parked; what is wrong inside one that loads is between
+    the person and its project). since: when this tap began to wait."""
+    https = given(url)
+    if https is None:
+        return None
+    now = now or time.time()
+    key, name = str(Path(root).resolve()), board.name_of(Path(root))
+    ask = f" To have it looked at, ask {name}'s agent in its Chat."
+    rows = records().get(key, [])
+    row = next((r for r in rows if r["https"] == https), None)
+    if row is None:                                   # not this project's address now: its own site, where it has one
+        if len(rows) != 1:
+            return "down", (f"This link is to an address {name} no longer has, and {name} "
+                            + ("serves nothing now." if not rows else "serves several sites, so colony cannot tell "
+                               "which one it meant.") + ask)
+        row = rows[0]
+        parts = urllib.parse.urlsplit(url)
+        url = urllib.parse.urlunsplit(parts._replace(netloc=f"{parts.hostname}:{row['https']}"))
+    if up(row["port"]):
+        return "go", url
+    at = (key, row["port"])
+    began = since if since and now - 2 * WAIT <= since <= now else now     # an old page's wait, opened again, is a new tap
+    if row.get("start") and now - began < WAIT:
+        if now - _started.get(at, 0) >= WAIT and start(root, row):
+            _started[at] = now
+        if at in _started:
+            return "wait", f"{name}'s site was not running. Colony is starting it, and this page opens it when it answers.", began
+    return "down", (f"{name}'s site is not answering, and " + ("colony's start command did not bring it up."
+                    if row.get("start") else "colony has no command to start it with.") + ask)
 
 
 def restore(port):

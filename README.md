@@ -316,6 +316,11 @@ Once it's on, the board refuses every device that isn't yours, the open home net
 your wifi can't reach it: at home your phone reaches it through Tailscale as well. `colony remote --check` says
 where things stand; `colony remote --off` puts it back as it was.
 
+A project that runs a site of its own (a demo, a live app) gets an address beside the board's with `colony serve
+PORT`. A link to it on the board is looked at when you tap it: if the site is up you are sent straight on, and if it
+is down (after the machine restarted, say) colony starts it with the command the project gave (`colony serve PORT
+--start 'COMMAND'`) and sends you on when it answers. No agent is involved. If it can't be opened, a page says why.
+
 ### Leads and completed versions
 
 Each project has one agent responsible for its roadmap by default. If you add another agent to the same folder, choose **Add helper** or **Switch lead**. Shared agents read one canonical Vision and roadmap; the lead assigns individual items when work is split. The completing agent integrates and delivers its tested work, and Colony synchronizes helpers only when they are engaged. A project with one provider needs no coordination setup.

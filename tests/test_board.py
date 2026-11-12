@@ -838,16 +838,6 @@ class ServingTest(BoardBase):
         self.assertIsNone(self.serving.of(other))
         self.assertTrue(self.serving.remove(self.root, 8767))
         self.assertEqual(self.now, {8443: 8766}, "--off PORT ends that one only")
-        # an address given up is never handed to another project: a link kept to it (a showcase entry, a bookmark)
-        # opened the next project's site. The project that had it gets it back for the same port.
-        third = Path(self.tmp.name) / "third"; third.mkdir()
-        board.track(third)
-        self.assertEqual(self.serving.add(third, 6000), "https://colony.tail1.ts.net:8446/", "not 8444 or 8445: others had them")
-        self.assertEqual(self.serving.add(third, 6001), "https://colony.tail1.ts.net:8447/")
-        self.assertEqual(self.serving.add(self.root, 8767), "https://colony.tail1.ts.net:8445/", "served again: the address it had")
-        self.serving.remove(self.root, 8767)
-        self.serving.remove(third)
-        self.assertEqual(self.now, {8443: 8766})
         self.serving.remove(self.root)
         self.assertEqual(self.now, {})
         self.assertEqual(self.serving.records(), {})
@@ -855,15 +845,85 @@ class ServingTest(BoardBase):
         (board.home() / "served.json").write_text(json.dumps({str(self.root.resolve()): {"port": 8766, "https": 8443}}))
         self.assertEqual(self.serving.served(self.root), [("https://colony.tail1.ts.net:8443/", 8766)])
         self.assertEqual(self.serving.add(self.root, 8766), "https://colony.tail1.ts.net:8443/")
-        # one served before addresses were kept, then ended: still its own, not the next project's
-        (board.home() / "served-past.json").unlink()
-        self.serving.remove(self.root)
-        self.assertEqual(self.serving.add(third, 6000), "https://colony.tail1.ts.net:8444/", "not 8443")
-        self.assertEqual(self.serving.add(self.root, 8766), "https://colony.tail1.ts.net:8443/")
         self.certs = False
         with self.assertRaises(ValueError) as said:
             self.serving.add(self.root, 8766)
         self.assertIn("HTTPS Certificates", str(said.exception), "what stands in the way, and where to change it")
+
+    def test_a_link_is_looked_at_when_tapped_and_colony_starts_its_site(self):
+        # the person's design: a link matters only when it is tapped. Up, they are sent on; down, colony starts it by
+        # the command it was given, with no agent; what cannot open is said to them alone
+        from colony import opener
+        board.set_setting("tailscale", "colony.tail1.ts.net")
+        board.track(self.root)
+        other = Path(self.tmp.name) / "bookflow"; other.mkdir()
+        board.track(other)
+        s, alive, ran = self.serving, set(), []
+        for name, value in (("up", lambda port: port in alive), ("start", lambda root, row: ran.append(row["port"]) or True)):
+            q = patch.object(s, name, side_effect=value)
+            q.start()
+            self.addCleanup(q.stop)
+        mine = s.add(self.root, 8766)
+        theirs = s.add(other, 5000, start="run-it")
+        self.assertEqual((mine, theirs), ("https://colony.tail1.ts.net:8443/", "https://colony.tail1.ts.net:8444/"))
+        self.assertIsNone(s.tapped(self.root, "https://example.com/x"), "any other address is opened as it is")
+        self.assertIsNone(s.tapped(self.root, "https://colony.tail1.ts.net/"), "the board's own, too")
+        self.assertEqual(opener.address(0, "https://example.com/x"), "https://example.com/x")
+        self.assertIn("/open?", opener.address(0, mine + "a?b=1"), "one colony serves is drawn through the opener")
+        alive.update({8766, 5000})
+        self.assertEqual(s.tapped(self.root, mine + "a?b=1"), ("go", mine + "a?b=1"))
+        # a link the second project kept to an address that is the first's now opens the second's own site
+        self.assertEqual(s.tapped(other, mine + "x"), ("go", theirs + "x"))
+        alive.discard(5000)                                # down: started once, waited for, then opened
+        got = s.tapped(other, theirs, now=1000.0)
+        self.assertEqual((got[0], got[2], ran), ("wait", 1000.0, [5000]))
+        self.assertEqual(s.tapped(other, theirs, since=1000.0, now=1010.0)[0], "wait")
+        self.assertEqual(ran, [5000], "asked again while it comes up: not started twice")
+        alive.add(5000)
+        self.assertEqual(s.tapped(other, theirs, since=1000.0, now=1016.0), ("go", theirs))
+        alive.discard(5000)                                # it never comes up: said to the person, with where to take it
+        self.assertEqual(s.tapped(other, theirs, now=2000.0)[0], "wait")
+        got = s.tapped(other, theirs, since=2000.0, now=2000.0 + s.WAIT + 1)
+        self.assertEqual(got[0], "down")
+        self.assertIn("start command did not bring it up", got[1])
+        self.assertIn(f"ask {board.name_of(other)}'s agent", got[1])
+        alive.discard(8766)                                # no command given: nothing to run
+        got = s.tapped(self.root, mine, now=3000.0)
+        self.assertEqual((got[0], ran), ("down", [5000, 5000]))
+        self.assertIn("no command to start it", got[1])
+        self.assertEqual([n for r in (self.root, other) for n in board.notes(r) if not n.get("onboarding")], [],
+                         "no agent is told: none has a part in it")
+        s.add(self.root, 8767)                             # two sites, and an address that is neither
+        self.assertIn("several sites", s.tapped(self.root, "https://colony.tail1.ts.net:8500/")[1])
+        s.add(other, 5000)                                 # served again: the command is kept; "" forgets it
+        self.assertEqual(s.records()[str(other.resolve())], [{"port": 5000, "https": 8444, "start": "run-it"}])
+        s.add(other, 5000, start="")
+        self.assertEqual(s.records()[str(other.resolve())], [{"port": 5000, "https": 8444}])
+        # over HTTP: sent on; then a page that asks again while it starts; then why it cannot open
+        s.add(other, 5000, start="run-it")
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+
+        class Stay(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+        ask = lambda path: urllib.request.build_opener(Stay).open(f"http://127.0.0.1:{httpd.server_address[1]}{path}")
+        link = opener.address(1, theirs + "pos")
+        alive.add(5000)
+        with self.assertRaises(urllib.error.HTTPError) as sent:
+            ask(link)
+        self.assertEqual((sent.exception.code, sent.exception.headers["Location"]), (303, theirs + "pos"))
+        alive.discard(5000)
+        s._started.clear()
+        page = ask(link).read().decode()
+        self.assertIn("Colony is starting it", page)
+        self.assertRegex(page, r"http-equiv='refresh' content='2;url=/open\?n=bookflow&amp;u=[^']+&amp;w=\d+'")
+        with self.assertRaises(urllib.error.HTTPError) as down:
+            ask(opener.address(0, mine))
+        self.assertEqual(down.exception.code, 503)
+        self.assertIn("no command to start it", down.exception.read().decode())
 
     def test_the_board_itself_is_served_at_443_while_remote_access_is_on(self):
         self.assertIsNone(self.serving.ensure_board(8791), "remote access off: nothing served")

@@ -10291,6 +10291,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         return self.wfile.write(data)
 
+    def _address(self, root, url, since=""):
+        """An address tapped on the board. One colony serves for a project is looked at now (serving.tapped): the
+        person is sent on, or waits on a page that asks again while its site starts, or reads why it cannot be opened."""
+        from . import opener, serving
+        got = serving.tapped(root, url, since=float(since) if re.fullmatch(r"\d+(\.\d+)?", since or "") else None) if root else None
+        if got is None:
+            return self._redirect(opener.reach(url, self.headers.get("Host", "")))
+        if got[0] == "go":
+            return self._redirect(got[1])
+        again = (f"/open?{project_query(root)}&u={urllib.parse.quote(url, safe='')}&w={got[2]:.0f}" if got[0] == "wait" else "")
+        page = ("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                + (f"<meta http-equiv='refresh' content='2;url={e(again)}'>" if again else "")
+                + "<title>Colony</title><style>body{font:15px system-ui;margin:24px;max-width:36em;line-height:1.5}</style>"
+                f"<p>{e(got[1])}</p><p><a href='{e(project_url(root))}'>Back to {e(name_of(root))}</a></p>")
+        return self._send(200 if again else 503, page.encode())
+
     def _open(self, reg, plist, q):
         """The opener (opener.py): a file, a folder or an address of a project, as the board shows it. A path outside
         its folder, or one not there, is not found."""
@@ -10299,8 +10315,10 @@ class Handler(BaseHTTPRequestHandler):
         if one("u") and one("audio"):
             return self._send(400, b"a local readable document is needed")
         if one("u"):                                   # an address on this machine, as the device asking reaches it
-            return (self._redirect(opener.reach(one("u"), self.headers.get("Host", ""))) if re.match(r"https?://", one("u"), re.I)
-                    else self._send(404, b"not an address"))
+            if not re.match(r"https?://", one("u"), re.I):
+                return self._send(404, b"not an address")
+            key = one("p")
+            return self._address(plist[int(key)] if key.isdigit() and int(key) < len(plist) else None, one("u"), one("w"))
         key = one("p")                                 # anything but a project's place (an old p=steward) is no project, never 0
         root = plist[int(key)] if key.isdigit() and int(key) < len(plist) else None
         path = pins.inside(root, one("f")) if root else None
@@ -10441,7 +10459,7 @@ class Handler(BaseHTTPRequestHandler):
             if not x or not x.get("link"):
                 return self._send(404, b"no such showcase entry")
             if showcase.is_url(x):                    # a link to this machine's localhost, at its own address for a phone
-                return self._redirect(opener.reach(x["link"], self.headers.get("Host", "")))
+                return self._address(plist[pid], x["link"])
             return self._redirect(opener.ref(pid, x["link"], entry=x["id"]))
         if url.path == "/pin/open":                   # a pin's older address: the opener takes it, the pin kept
             from . import opener
@@ -10449,7 +10467,7 @@ class Handler(BaseHTTPRequestHandler):
             if not pin:
                 return self._send(404, b"no such pin")
             if pin["kind"] == "url":
-                return self._redirect(opener.reach(pin["target"], self.headers.get("Host", "")))
+                return self._address(plist[pid], pin["target"])
             return self._redirect(opener.ref(pid, pin["target"], pin=pin["id"]))
         if url.path == "/pin/edit":                   # Edit, at the foot of a pinned text file's reading page
             pin = pins.get(plist[pid], (q.get("id") or [""])[0]) if plist else None

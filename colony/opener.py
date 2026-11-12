@@ -75,12 +75,15 @@ def link(key, root, target, pin="", entry="", here=None):
 
 def address(key, url):
     """Where an address opens from the board: one on this machine through the opener, which gives it this machine's
-    own name so a phone reaches it; any other as it is."""
+    own name so a phone reaches it, and one colony serves for a project through it too, where it is looked at as it
+    is tapped (serving.tapped); any other as it is."""
+    from . import serving
     try:
         host = urllib.parse.urlsplit(url).hostname
     except ValueError:
         return url
-    return f"/open?{board.project_query(key)}&u={urllib.parse.quote(url, safe='')}" if host in LOCAL else url
+    return (f"/open?{board.project_query(key)}&u={urllib.parse.quote(url, safe='')}"
+            if host in LOCAL or serving.given(url) else url)
 
 
 def reach(url, asked_at):

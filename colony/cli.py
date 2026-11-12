@@ -1785,14 +1785,20 @@ def cmd_serve(a):
               or f"{name} isn't served over https (colony serve PORT)")
         return 0
     try:
-        url = serving.add(root, a.port)
+        url = serving.add(root, a.port, start=a.start)
     except ValueError as err:
         raise SystemExit(f"colony serve: {err}")
+    cmd = next((r.get("start") for r in serving.records().get(str(Path(root).resolve()), []) if r["port"] == a.port), None)
     others = [f"{u}  ->  http://127.0.0.1:{p}/" for u, p in serving.served(root) if p != a.port]
     print(f"{url}  ->  http://127.0.0.1:{a.port}/\nBind 127.0.0.1 only, and take your external origin (links, redirects, "
           "Origin checks) from this URL. It's reached only from the person's own devices, kept across restarts, and ends "
           f"with colony serve --off {a.port} or when the project leaves the board. Each port you serve has an address of "
-          "its own." + (f"\nAlso served for {name}:\n" + "\n".join(others) if others else ""))
+          "its own."
+          + (f"\nStarted by colony when a link to it is tapped and nothing answers: {cmd}" if cmd else
+             f"\nGive colony the command that starts it, run from your folder: colony serve {a.port} --start 'COMMAND'. "
+             "When the person taps a link to it and nothing answers (after a restart of the machine, say), colony runs "
+             "it and sends them on, with no turn of yours; without one they are told it is down.")
+          + (f"\nAlso served for {name}:\n" + "\n".join(others) if others else ""))
     return 0
 
 
@@ -2186,6 +2192,8 @@ def main(argv=None):
     p = sub.add_parser("serve", help="serve a project's own local port over https, through Tailscale")
     p.add_argument("port", nargs="?", type=int, help="the local port it listens on (127.0.0.1)")
     p.add_argument("--off", action="store_true", help="stop serving it (with PORT, that port only; alone, all the project serves)")
+    p.add_argument("--start", metavar="COMMAND", help="the command that starts what listens on PORT, run from the project's folder "
+                   "when a link to it is tapped and nothing answers ('' forgets it)")
     p.add_argument("--project", help="the project (default: the one this runs in)")
     p.set_defaults(fn=cmd_serve)
     p = sub.add_parser("reboot", help="restart the machine once every project has parked its work (an hour at most)")
