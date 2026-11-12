@@ -8939,7 +8939,8 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
                 + (f"<div><span class='muted'>To check:</span> {check_html(it['check'], pid, p)}</div>" if it.get("check") else "")
                 + f"<form class='verdict' method='post' action='/approve'>{hidden}<input type='hidden' name='item' value='{e(it['id'])}'>"
                 f"<button>Approve</button><input name='text' placeholder='or say what is wrong'>"
-                f"<button class='quiet' name='verdict' value='not-yet'>Not yet</button></form></div>")
+                f"<button class='quiet' name='verdict' value='not-yet' title='Not approved: back to its agent, with what you wrote'>"
+                "Send back</button></form></div>")
     to_verify = "".join(ready_row(it) for it in verify)
     if w['kind'] == 'checkpoint':
         from . import lead
@@ -12488,7 +12489,7 @@ details.rneed > summary::-webkit-details-marker { display:none }
 .navfoot a.reportsbtn.new { color:var(--accent); font-weight:600 }
 .rtaps button.choice b { display:block } .rtaps .rpro, .rtaps .rcon, .rtaps .rstands { display:block; font-size:13px; margin-top:2px }
 .rtaps .rpro { color:var(--accent) } .rtaps .rcon { color:var(--flag) } .rtaps .rstands { color:var(--muted); font-style:italic }
-.incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard .need { border-top:0; padding:0 } .incard .need > .who { display:none }
+.incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard .need { border-top:0; padding:0 } .incard .need > .who, .incard form.clear { display:none }
 .inhead { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:10px; font-size:14px }
 .inhead .inproj { font-weight:700; font-size:16px; text-decoration:none } .due { font-weight:600 } .due.near { color:var(--flag) }
 p.due { margin:6px 0 } .inabout { margin:0 0 10px; font-size:14px } .inabout a { display:block; overflow-wrap:anywhere }
@@ -12497,6 +12498,7 @@ p.due { margin:6px 0 } .inabout { margin:0 0 10px; font-size:14px } .inabout a {
 .shots { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px } .shots a.shot { flex:1 1 140px; max-width:320px }
 .shots a.shot img { display:block; width:100%; height:auto; border-radius:8px; border:1px solid var(--line) }
 .infoot { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-top:16px; padding-top:12px; border-top:1px solid var(--line) }
-.infoot form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 } .infoot input[type=date] { font:inherit; font-size:14px; padding:4px 6px }
+.infoot form { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 } .infoot label { display:flex; align-items:center; gap:6px; font-size:14px; color:var(--muted) }
+.infoot input[type=date] { font:inherit; font-size:15px; padding:6px 8px; min-width:9.5em; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink) }
 .inaside { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:6px 0; border-top:1px solid var(--line); font-size:14px }
 """

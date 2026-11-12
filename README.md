@@ -114,8 +114,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   **Needs you**, the glowing count first in the top bar, opens the **Inbox**: one item fills the page, with what you
   need to judge it (why it is asked, the item it belongs to, what the project showed for it, a demo's address and its
   pictures one tap away) and its answers. Answer, and the next appears. The order is built in: an item with a
-  deadline leads from the day before it, the nearest first; then whatever has waited longest. **Not now** sends an
-  item to the bottom of the stack; **Later** takes it off every list until the day you pick. **See all** opens the
+  deadline leads from the day before it, the nearest first; then whatever has waited longest. **Skip for now** sends an
+  item to the bottom of the stack; **Hide until** takes it off every list until the day you pick. **See all** opens the
   whole list, project by project. Colony's own notices
   (a project closed, a console that keeps freezing, a folder followed where it moved) sit above it, each with
   Dismiss, for a week at most.

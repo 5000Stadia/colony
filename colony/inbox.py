@@ -1,11 +1,11 @@
 """The Inbox (R160): what waits on the person, one item at a time, in an order that is built in.
 
 It reads the one definition of what waits (board.waiting_items, as the moments the person answers) and keeps only
-what the person does to the stack, in each project's .board/inbox.jsonl: an item put at the bottom (Not now), one set
-aside until a date (Later), and when an item with no time of its own was first seen.
+what the person does to the stack, in each project's .board/inbox.jsonl: an item put at the bottom (Skip for now), one
+hidden until a day (Hide until), and when an item with no time of its own was first seen.
 
 The order: an item with a deadline leads once inside its window (the day before, unless its agent said longer), the
-nearest deadline first; then the rest, the one that has waited longest first. Not now orders an item as if it had
+nearest deadline first; then the rest, the one that has waited longest first. Skip for now orders an item as if it had
 just arrived; a deadline brings it back to the top within the hour, so nothing is missed at the bottom of the stack.
 There is no urgent flag and no choice of sort: the order is the same for everyone who looks.
 """
@@ -78,13 +78,13 @@ def away(root):
 
 
 def put_last(root, keys):
-    """Not now: the item goes behind the others and comes round again. Nothing is answered or hidden."""
+    """Skip for now: the item goes behind the others and comes round again. Nothing is answered or hidden."""
     for key in keys:
         board.append(root, "inbox.jsonl", {"type": "last", "key": key, "at": board.now()})
 
 
 def until(text):
-    """When Later ends: "tomorrow" or "week" (as the person's day begins), or a date."""
+    """When Hide until ends: "tomorrow" or "week" (as the person's day begins), or a date."""
     text = str(text or "").strip().lower()
     now = clock()
     if text in ("", "tomorrow"):
@@ -93,12 +93,12 @@ def until(text):
         return hours.next_day(now + 6 * 86400)
     at = hours.next_day(moment(text) - 1)
     if at <= now:
-        raise ValueError("Later needs a day after today.")
+        raise ValueError("Pick a day after today.")
     return at
 
 
 def put_later(root, keys, text):
-    """Later: the item is off the person's list everywhere until the day they chose, then back by itself. Its agent
+    """Hide until: the item is off the person's list everywhere until the day they chose, then back by itself. Its agent
     hears quietly, on its next turn, so it neither waits on an answer today nor asks again."""
     at = until(text)
     waiting = {w["key"]: w for w in board.waiting_items(root)}
@@ -186,7 +186,7 @@ def stack(reg=None):
 
 
 def set_aside(reg=None):
-    """What is off the list until a date, soonest back first: the person's Later, and a gate its agent dated from a
+    """What is off the list until a date, soonest back first: what the person hid, and a gate its agent dated from a
     day to come. [(project, what, until, keys the person can bring back)]"""
     reg = reg or board.registry()
     now, out = clock(), []
@@ -245,12 +245,14 @@ def card(x, back="/inbox"):
         extra = ("<div class='inabout'>" + (f"<a href='/item?{board.project_query(p)}&id={e(item)}'>About: "
                  f"{e(board.short(board.plain(it['text']), 110))}</a>" if it else "") + shown + "</div>")
     body = board.moment_html(pid, p, group, back, label=False, fold=False)
+    # two ways to put it off, each saying what it does. The day is filled in (tomorrow): an empty date field is a
+    # blank grey oval on a phone, and one more thing to explain.
+    tomorrow = time.strftime("%Y-%m-%d", time.localtime(now + 86400))
     foot = (f"<div class='infoot'><form method='post' action='/inbox/last'>{hidden}"
-            "<button class='quiet' title='Send it to the bottom of the stack: it comes round again'>Not now</button></form>"
-            f"<form method='post' action='/inbox/later' class='inlater'>{hidden}"
-            "<button class='quiet' name='until' value='tomorrow' title='Off your list until tomorrow'>Later: tomorrow</button>"
-            "<input type='date' name='date' aria-label='or until this day'>"
-            "<button class='quiet' name='until' value='date'>until that day</button></form></div>")
+            "<button class='quiet' title='To the bottom of the stack: it comes round again after the others'>Skip for now</button></form>"
+            f"<form method='post' action='/inbox/later' class='inlater'>{hidden}<input type='hidden' name='until' value='date'>"
+            f"<label>Hide until <input type='date' name='date' value='{tomorrow}' min='{tomorrow}'></label>"
+            "<button class='quiet' title='Off your list until that day, then back by itself'>Hide</button></form></div>")
     return f"<div class='card incard'>{head}{extra}{body}{foot}</div>"
 
 
