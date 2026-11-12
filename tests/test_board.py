@@ -7131,6 +7131,67 @@ class ConsultationGateTest(BoardBase):
         return urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/answer',
                                       data=urllib.parse.urlencode(dict(p=0, **form)).encode()))
 
+    def test_words_alone_on_a_decision_with_points_go_to_its_agent_and_a_point_left_out_is_never_assumed(self):
+        # the person filled its box and tapped Save, several times, and nothing happened (2026-11-12; my reading in
+        # roadmap/R160.md): words with no point chosen go as a reply does on any decision; a point left out is refused
+        gate = self.gate()
+        port = self.server()
+        self.assertNotIn(' required', board.waiting_html(0, self.root), "the page's own check says what is missing, where it is seen")
+        self.assertIn("f.matches('form.consultant-gate')", board.ANSWERS)
+        self.post(port, gate=gate['id'], point_P1='', point_P2='', text='What does the second ask of me?', back='/inbox')   # as its form sends it
+        [note] = [n for n in board.notes(self.root) if (n.get('anchor') or {}).get('gate') == gate['id']]
+        self.assertEqual((note['author'], note['anchor']['asked']), ('person', 'What does the second ask of me?'))
+        self.assertIn('--accept P1 --reject P2', note['text'], 'its agent is told how their words are recorded')
+        [g] = board.gates(self.root)
+        self.assertIsNone(g['answer'], 'nothing is decided by it')
+        self.assertTrue(g['awaiting'], "it is its agent's to take up: off the person's list meanwhile")
+        self.assertEqual(board.waiting_items(self.root), [])
+        with self.assertRaises(urllib.error.HTTPError) as refused:
+            self.post(port, gate=gate['id'], point_P1='accept', text='And the other?')
+        self.assertEqual(refused.exception.code, 400, 'one chosen and one not is no set of decisions')
+        self.assertIsNone(board.gates(self.root)[0]['answer'])
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_save_on_a_phone_says_which_points_are_left_and_sends_words_alone(self):
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome',
+    headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const page = await browser.newPage({viewport: {width: 390, height: 844}});
+  const base = process.argv[1];
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  const sent = [];
+  await page.route('**/answer', (route) => { sent.push(new URLSearchParams(route.request().postData())); route.fulfill({status: 204, body: ''}); });
+  await page.goto(base + '/inbox');
+  const form = page.locator('.incard form.consultant-gate'), save = form.locator('button', {hasText: 'Save decisions'});
+  const said = async () => (await form.locator('p.notsent').count()) ? await form.locator('p.notsent').textContent() : '';
+  await save.click();
+  assert(await said() === 'Not saved yet: choose Accept or Reject for P1, P2, or write a question below and send it by itself.', 'nothing chosen or written: ' + await said());
+  const note = await form.locator('p.notsent').boundingBox();
+  assert(note.y >= 0 && note.y + note.height <= 844, 'said where the tap was, on the screen: ' + JSON.stringify(note));
+  assert(await form.locator('select.unset').count() === 2, 'both marked');
+  await form.locator('select[name=point_P1]').selectOption('accept');
+  assert(await form.locator('select.unset').count() === 1, 'one chosen is no longer marked');
+  await form.locator('textarea').fill('And a comment.');
+  await save.click();
+  assert(await said() === 'Not saved yet: choose Accept or Reject for P2.', 'one left, words or not: ' + await said());
+  assert(sent.length === 0, 'nothing has gone: ' + sent.length);
+  await form.locator('select[name=point_P1]').selectOption('');
+  await save.click();
+  assert(sent.length === 1 && sent[0].get('text') === 'And a comment.' && !sent[0].get('point_P1') && !sent[0].get('point_P2') && !(await said()), 'words alone go: ' + sent.map(String));
+  await form.locator('select[name=point_P1]').selectOption('accept');
+  await form.locator('select[name=point_P2]').selectOption('reject');
+  await save.click();
+  assert(sent.length === 2 && sent[1].get('point_P1') === 'accept' && sent[1].get('point_P2') === 'reject', 'every point chosen goes: ' + sent.map(String));
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        self.gate()
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_cli_gate_board_choices_and_checking_round_use_the_same_human_decision(self):
         path = self.root / 'points.json'
         path.write_text(json.dumps(self.points))
@@ -7193,7 +7254,7 @@ class ConsultationGateTest(BoardBase):
         gate = self.gate()
         self.assertIsNone(self.consult.records(self.root)[0]['adopted'])
         port = self.server()
-        for data in [dict(text='Yes'), dict(point_P1='accept'),
+        for data in [dict(point_P1='accept'), dict(point_P1='accept', text='Yes'),       # words alone: the test above
                      dict(point_P1='accept', point_P2='later'),
                      dict(point_P1='accept', point_P2='reject', point_P3='accept')]:
             with self.subTest(data=data), self.assertRaises(urllib.error.HTTPError) as error:

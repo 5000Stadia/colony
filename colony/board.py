@@ -2109,6 +2109,16 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
     return gate
 
 
+def words_alone(root, form):
+    """A decision with points, sent from its card with words and no point chosen at all: a question or an answer in
+    their own words, which goes to its agent as a reply does on any other decision (it stays open meanwhile). With
+    any point chosen it is a set of decisions, and every point needs one."""
+    if form.get("reply") or any(k.startswith("point_") for k in form):
+        return False
+    g = next((g for g in gates(root) if g["id"] == form.get("gate")), None)
+    return bool(g and g.get("points") and not g["answer"])
+
+
 def answer_gate(root, gate_id, text, tell=True, *, decisions=None, only_open=False, via=None):
     """The person's answer to a gate. From the board it reaches the agent the way every other word from the
     person does, as a note; settled in conversation, the agent records it and already knows (tell=False). only_open:
@@ -4908,6 +4918,24 @@ document.addEventListener('submit', (ev) => { if (ev.target.matches('form.bynumb
 # gate), and comes back saying so only if the answer never reached the board. The board's reply to an answer is a
 # redirect to a page, which isn't fetched: an answer once taken is sent, however slow that page would have been to make.
 ANSWERS = """
+// A decision with points, saved with a point left unchosen: said by the button, the ones left marked. The browser's own
+// check put its note by a menu scrolled off a phone's screen, so Save looked dead (the person, 2026-11-12: my reading
+// in roadmap/R160.md). Words with no point chosen at all go as they do on any decision: to its agent, as a reply.
+document.addEventListener('submit', (ev) => {
+  const f = ev.target; if (!f.matches || !f.matches('form.consultant-gate')) return;
+  const all = [...f.querySelectorAll('select[name^=point_]')], left = all.filter((x) => !x.value);
+  const words = ((f.querySelector('textarea') || {}).value || '').trim(), was = f.querySelector('p.notsent');
+  if (was) was.remove();
+  all.forEach((x) => x.classList.toggle('unset', !x.value && !(words && left.length === all.length)));
+  if (!left.length || (words && left.length === all.length)) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const p = document.createElement('p'); p.className = 'notsent';
+  p.textContent = 'Not saved yet: choose Accept or Reject for ' + left.map((x) => x.name.replace('point_', '')).join(', ')
+    + (left.length === all.length ? ', or write a question below and send it by itself.' : '.');
+  f.append(p);
+}, true);
+document.addEventListener('change', (ev) => { const x = ev.target;
+  if (x.matches && x.matches('form.consultant-gate select') && x.value) x.classList.remove('unset'); });
 document.addEventListener('submit', async (ev) => {
   const f = ev.target, b = ev.submitter;
   if (!f.matches || !f.matches('form[action="/answer"]') || !(b && b.matches('button.choice'))) return;
@@ -7871,7 +7899,7 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail="", bare=Fals
     for point in points:
         sources = "; ".join(f"Consultant {s['consultant']}: {s['model']} at {s['effort']} ({s['provider']})"
                             for s in point["sources"])
-        select = (f"<select name='point_{e(point['id'])}' aria-label='Decision on {e(point['id'])}' required>"
+        select = (f"<select name='point_{e(point['id'])}' aria-label='Decision on {e(point['id'])}'>"
                   "<option value=''>Choose…</option>" + "".join(
                       f"<option value='{value}'{' selected' if choices.get(point['id']) == value else ''}>{label}</option>"
                       for value, label in (("accept", "Accept"), ("reject", "Reject"))) + "</select>")
@@ -7883,14 +7911,14 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail="", bare=Fals
         rows.append(prefix + control + suffix)
         editable.append(prefix + select + suffix)
     def form(content, comment=""):
-        hint = ("Optional comment" if points else "Something else, or a question…" if gate.get("options") or gate.get("default")
+        hint = ("A comment with your choices, or a question by itself" if points else "Something else, or a question…" if gate.get("options") or gate.get("default")
                 else "Your answer, or a question…")
         css = "add consultant-gate" if points else "add"
         button = "Save decisions" if points else "Send"
         return (f"<form class='{css}' method='post' action='/answer'{'' if points else " enctype='multipart/form-data'"}>"
                 f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='gate' value='{e(gate['id'])}'>"
                 f"<input type='hidden' name='back' value='{e(back)}'>" + content
-                + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point.</p>" if points else "")
+                + ("<p class='muted'>Accepting a change allows one checking round. Choose for every point, or write a question and send it by itself.</p>" if points else "")
                 + ("" if points else "<input type='hidden' name='reply' value='1'>")
                 + f"<textarea name='text' placeholder='{hint}'>{e(comment)}</textarea>"
                 + ("" if points else "<button type='button' class='attach' aria-label='Attach photos or files'>+</button><input type='file' name='file' multiple hidden>")
@@ -11559,11 +11587,13 @@ class Handler(BaseHTTPRequestHandler):
             from . import lead
             recipient = lead.owner(root, ref) if kind == 'item' and lead.group(root) else root
             add_note(recipient, {kind: ref} if kind in ("item", "commit") else None, text, author='person')
-        elif path == "/answer" and form.get("reply") and (text or self._uploads):
+        elif path == "/answer" and (form.get("reply") or words_alone(root, form)) and (text or self._uploads):
             # typed in a decision's own box: an answer or a question, the agent judges which; it stays open meanwhile
             g = next((g for g in gates(root) if g["id"] == form.get("gate")), None)
             if not g:
                 return self._send(404, b"No such gate in this project.")
+            how = (" It has points: with --answered, give each as they decided it (--accept P1 --reject P2); where their "
+                   "words leave a point open, say so and ask the decision again." if g.get("points") else "")
             if self._uploads:                              # what they attached, kept in the project, its paths in the reply
                 try:
                     text = "\n".join(f"Attached: {Path(root) / pins.save_upload(root, *u)}" for u in self._uploads) + (f"\n\n{text}" if text else "")
@@ -11574,7 +11604,7 @@ class Handler(BaseHTTPRequestHandler):
                      f"If this answers it, record it: colony gate --answered {g['id']} \"their words\" --context \"your reading\". "
                      f"If it asks something or leaves it unclear, answer them, then ask the decision again with what it was "
                      f"missing: colony gate \"the question\" --reframes {g['id']} --told \"your answer to them\" (with --why, "
-                     f"--option, --recommended, --default as fit).", author="person")
+                     f"--option, --recommended, --default as fit).{how}", author="person")
         elif path == "/answer" and form.get("reply"):
             pass                                           # Send on an empty box: nothing was said, so back to the page
         elif path == "/answer":
@@ -12231,6 +12261,7 @@ form.add { margin:8px 0 4px 18px; display:flex; gap:8px; flex-wrap:wrap } form.a
 .consult-point label { display:flex; gap:12px; align-items:flex-start; justify-content:space-between; flex-wrap:wrap }
 .consult-point label span:first-child { flex:1 1 230px } .consult-point .who { margin-top:4px }
 .consult-point select { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink) }
+.consult-point select.unset { border-color:var(--flag); outline:2px solid var(--flag) } form.consultant-gate p.notsent { flex-basis:100%; margin:8px 0 0; color:var(--flag); font-weight:600 }
 button { font:inherit; padding:5px 13px; border-radius:7px; border:0; background:var(--accent); color:var(--card); cursor:pointer }
 .tell > summary { cursor:pointer; font-weight:600 } .tell textarea { width:100%; box-sizing:border-box; margin-top:10px; font:inherit; padding:8px; border-radius:8px }
 .tell .to { display:flex; flex-wrap:wrap; gap:6px 16px; margin:10px 0 } .tell .to label { white-space:nowrap }
