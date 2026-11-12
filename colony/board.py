@@ -5876,7 +5876,7 @@ def chat_feed(key, root, shown=SHOWN):
     held_up = snap["state"] == "needs you"
     if asks or rest:
         decided = "".join(f"<details class='need' open data-k='g{e(g['id'])}'><summary>"
-                          f"<button type='button' class='needplay' data-t='g{e(g['id'])}' data-say='{e(gate_spoken(g))}' "
+                          f"<button type='button' class='needplay' data-t='g{e(g['id'])}' data-say='{e(gate_spoken(g, root))}' "
                           f"aria-label='Read this question aloud'>{ICONS['play']}</button><span class='q'>{e(short(g['question'], 110))}</span>"
                           f"<span class='fold muted'>Fold ▴</span></summary>"
                           f"{gate_body(root, key, g, '/')}</details>" for g in asks)
@@ -5903,15 +5903,30 @@ def chat_feed(key, root, shown=SHOWN):
     return "".join(out)
 
 
-def gate_spoken(gate):
-    """A decision as the player reads it, by its ▷ in a chat's Needs you: the question, why, what stands if it is
-    skipped, and the choices, the recommended one said so."""
-    rec = gate.get("recommended") or ""
+def gate_spoken(gate, root=None):
+    """A decision as the player reads it, by its ▷ in a chat's Needs you or on its Inbox card: all its card puts to the
+    person (the person, 2026-11-12, of a card whose points went unread: my reading in roadmap/R164.md). With its
+    project given, the last thing they asked on it and what they were told; then the question, why, a default that is
+    not among the choices, each point to accept or reject, and the choices, the one the card marks recommended said so.
+    Left to the page: the buttons, and which consultant raised a point."""
+    rec = gate.get("recommended") or gate.get("default") or ""
     opts = [o + (", recommended" if o == rec else "") for o in gate.get("options") or []]
-    said = [gate["question"], gate.get("why") or "",
-            f"Its default: {gate['default']}." if gate.get("default") and not opts else "",
-            ("The choices: " + "; ".join(opts) + ".") if opts else ""]
-    return no_addresses(" ".join(x.strip() for x in said if x.strip()))
+    points = gate.get("points") or []
+    head = [gate["question"], gate.get("why") or "",
+            f"Its default: {gate['default']}." if gate.get("default") and gate["default"] not in (gate.get("options") or []) else "",
+            ("The choices: " + "; ".join(opts) + ".") if opts and not points else ""]
+    paras = []
+    if root is not None:
+        first, rounds = gate_rounds(root, gate)
+        asked, told = rounds[-1] if first and rounds else ("", "")
+        asked = re.sub(r"^Attached: .+\n*", "", asked or "", flags=re.M).strip()
+        paras += [f"You asked: {asked}" if asked else "", f"Answer: {told}" if told else ""]
+    paras.append(" ".join(x.strip() for x in head if x.strip()))
+    if points:
+        paras.append(f"{len(points)} points, each to accept or reject." if len(points) > 1 else "One point, to accept or reject.")
+        paras += [f"{pt['id']}: {pt['text']}" for pt in points]
+        paras.append("Accepting a change allows one checking round.")
+    return no_addresses("\n\n".join(x.strip() for x in paras if x.strip()))
 
 
 def no_addresses(said):

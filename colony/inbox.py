@@ -225,17 +225,24 @@ def shown_for(pid, root, iid):
 
 
 def spoken(x):
-    """A card as the player reads it, by its ▷, in its project's voice: whose it is and what kind of thing, its
-    deadline, then what the card puts to the person. As a reply is read: no code, a link as its words, an address as
-    "the link", a roadmap number with its name. A console's screen is not for the ear, so that card only says where."""
+    """A card as the player reads it, by its ▷, in its project's voice, all of it: whose it is, what kind of thing
+    and how long it has waited, its deadline, the item it belongs to, then what the card puts to the person. As a
+    reply is read: no code, a link as its words, an address as "the link", a roadmap number with its name. Left to
+    the page: its buttons and links, and which consultant raised a point. A console's screen is not for the ear, so
+    that card only says where."""
     p, group, w, now = x["root"], x["group"], x["group"][0], clock()
-    name = board.name_of(p)
-    said = [f"{name} needs you in its console." if w["kind"] == "screen" else f"{name}." if w["kind"] == "verify"
-            else f"{name}, {KIND.get(w['kind'], w['kind'])}."]             # a sign-off says what it is itself
+    name, wait = board.name_of(p), f"waiting {waited(x['since'], now)}"
+    said = [f"{name} needs you in its console." if w["kind"] == "screen" else f"{name}, {wait}." if w["kind"] == "verify"
+            else f"{name}, {KIND.get(w['kind'], w['kind'])}, {wait}."]     # a sign-off says what it is itself
     if x["by"] is not None:
         said.append(f"{'Was due' if now > x['by'] else 'Due'} {day(x['by'])}.")
+    item = w["gate"].get("item") if w["kind"] == "gate" else w["item"]["id"] if w["kind"] == "verify" else None
+    it = board.item_names(p, 80).get(item) if item else None
+    if it:                                               # the card's About line, by the name the voice gives an item:
+        it = it[:-1].rsplit(" ", 1)[0] if it.endswith("\u2026") else it     # whole, where the page's is cut mid-sentence
+        said.append(f"About {item}, {it}.")
     if w["kind"] == "gate":
-        said.append(board.gate_spoken(w["gate"]))
+        said.append(board.gate_spoken(w["gate"], p))
     elif w["kind"] == "choice":
         shown = [o for o in w["options"] if not re.match(r"(?:[☐☑] )?(?:type something|chat about this)", o, re.I)]
         said += list(w["question"]) + ["The choices: " + "; ".join(shown) + "."]
@@ -249,7 +256,7 @@ def spoken(x):
         if it.get("check"):
             said.append(f"To check: {it['check']}")
     text = board.spoken_text("\n\n".join(t.strip() for t in said if t and t.strip()))
-    return board.speak_items(board.no_addresses(text), p, [])
+    return board.speak_items(board.no_addresses(text), p, [item] if it else [])
 
 
 def play_button(x):

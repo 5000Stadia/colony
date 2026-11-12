@@ -8243,15 +8243,17 @@ class InboxTest(HoursBase):
         self.two_cards()
         with self.clock(12):
             gate, ready = inbox.stack(board.registry())
-            self.assertEqual(inbox.spoken(gate), "plants, a decision.\n\nEmail or SMS? See the link first. "
-                                                 "The choices: Email, recommended; SMS.")
-            self.assertEqual(inbox.spoken(ready), "plants.\n\nReady for your OK: The water log is built.\n\n"
+            self.assertEqual(inbox.spoken(gate), "plants, a decision, waiting 3 hours.\n\nAbout R3, reminders.\n\n"
+                                                 "Email or SMS? See the link first. The choices: Email, recommended; SMS.",
+                             "all the card says: how long it has waited and the item it belongs to as well")
+            self.assertEqual(inbox.spoken(ready), "plants, waiting 2 hours.\n\nAbout R2, water log.\n\n"
+                                                  "Ready for your OK: The water log is built.\n\n"
                                                   "To check: Open it and add a day. Pictures: screens.",
                              "a sign-off says what it is once; a folder is its name")
             page = self.top()
             self.assertIn("<button type='button' class='inplay' data-p='0' data-name='plants' "
                           f"data-voice='{board.default_voice()}' data-kokoro='0' data-t='i", page)
-            self.assertIn("data-say='plants, a decision.\n\nEmail or SMS? See the link first.", page)
+            self.assertIn("data-say='plants, a decision, waiting 3 hours.\n\nAbout R3, reminders.\n\nEmail or SMS? See the link first.", page)
             self.assertEqual(page.count("class='inplay'"), 1, "one card, one button")
             board.choose_voice(0, self.root, "bf_emma")                  # a voice of its own: that one, not the colony's
             with patch.object(voice, "ready", return_value=True):
@@ -8259,7 +8261,7 @@ class InboxTest(HoursBase):
             # a deadline is said after whose it is
             board.add_gate(self.root, "File by Friday?", by=self.at(12) + 3600)
             due = inbox.stack(board.registry())[0]
-            self.assertRegex(inbox.spoken(due), r"^plants, a decision\.\n\nDue [^\n]+\.\n\nFile by Friday\?$")
+            self.assertRegex(inbox.spoken(due), r"^plants, a decision, waiting [^\n]+\.\n\nDue [^\n]+\.\n\nFile by Friday\?$")
         self.assertIn("P().read({key: b.dataset.p, name: b.dataset.name, href: '', kvoice: b.dataset.voice", inbox.PLAY,
                       "no page to follow to: the Inbox stays while it is read")
 
@@ -8292,8 +8294,11 @@ const {chromium} = require('/opt/colony-test-playwright');
   assert(st.reading.id === '0|' + await b.getAttribute('data-t'), 'the card is what is read: ' + JSON.stringify(st.reading));
   await page.waitForFunction(() => document.querySelector('button.inplay').dataset.on === 'pause', null, {timeout: 8000});
   assert(asked.length && asked[0].get('v') === 'bf_emma', 'in the voice the project has: ' + asked.map((a) => a.get('v')));
-  assert(asked[0].get('t').startsWith('plants, a decision.'), 'whose it is comes first: ' + asked[0].get('t'));
+  assert(asked[0].get('t').startsWith('plants, a decision, waiting'), 'whose it is comes first: ' + asked[0].get('t'));
   assert(new URL(page.url()).pathname === '/inbox', 'the Inbox stays where it is: ' + page.url());
+  // all of the card is read, to its last words, not its first paragraph alone
+  const wait = async (ok, why) => { for (let i = 0; i < 100 && !ok(); i++) await page.waitForTimeout(100); assert(ok(), why); };
+  await wait(() => asked.some((a) => a.get('t').trim().endsWith('The choices: Email, recommended; SMS.')), 'its last words are asked for: ' + asked.map((a) => a.get('t')).join(' | '));
   await b.click();
   await page.waitForFunction(() => window.colonyPlayer.state().paused && document.querySelector('button.inplay').dataset.on === 'play');
   await b.click();
@@ -8486,6 +8491,18 @@ class PhonePageTest(HoursBase):
              "options": ["A", "B"], "recommended": "B"}
         self.assertEqual(board.gate_spoken(g), "Which one? See the link or renders first. The choices: A; B, recommended.")
         self.assertEqual(board.gate_spoken({"question": "Go?", "default": "it goes"}), "Go? Its default: it goes.")
+        # all its card puts to the person, not its first paragraph alone: each point, and the last exchange on it
+        pts = {"question": "Which do you accept?", "why": "They shape the plan.",
+               "points": [{"id": "P1", "text": "Run it as a job."}, {"id": "P2", "text": "Prove it small."}]}
+        self.assertEqual(board.gate_spoken(pts), "Which do you accept? They shape the plan.\n\n2 points, each to accept or reject."
+                         "\n\nP1: Run it as a job.\n\nP2: Prove it small.\n\nAccepting a change allows one checking round.")
+        first = board.add_gate(self.root, "Clay or plastic?")
+        board.add_note(self.root, {"gate": first["id"], "asked": "Which dries faster?\nAttached: /tmp/pot.png"}, "…", author="person")
+        again = board.add_gate(self.root, "Clay or plastic, then?", reframes=first["id"], told="Clay dries faster.",
+                               options=["Clay", "Plastic"], default="Clay")
+        self.assertEqual(board.gate_spoken(again, self.root), "You asked: Which dries faster?\n\nAnswer: Clay dries faster.\n\n"
+                         "Clay or plastic, then? The choices: Clay, recommended; Plastic.")
+        self.assertEqual(board.gate_spoken(again), "Clay or plastic, then? The choices: Clay, recommended; Plastic.")
         self.assertIn("const np = ev.target.closest('button.needplay');", board.CHAT)
 
     def test_the_end_of_a_chat_clears_what_floats_over_it(self):
