@@ -8938,9 +8938,9 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
         return (f"<div class='ready'><div><span class='muted'>Ready for your OK:</span> {e(it['what'])}</div>"
                 + (f"<div><span class='muted'>To check:</span> {check_html(it['check'], pid, p)}</div>" if it.get("check") else "")
                 + f"<form class='verdict' method='post' action='/approve'>{hidden}<input type='hidden' name='item' value='{e(it['id'])}'>"
-                f"<button>Approve</button><input name='text' placeholder='or say what is wrong'>"
+                f"<button>Approve</button><span class='back'><input name='text' placeholder='or say what is wrong'>"
                 f"<button class='quiet' name='verdict' value='not-yet' title='Not approved: back to its agent, with what you wrote'>"
-                "Send back</button></form></div>")
+                "Send back</button></span></form></div>")      # the box and Send back stay together when the row wraps
     to_verify = "".join(ready_row(it) for it in verify)
     if w['kind'] == 'checkpoint':
         from . import lead
@@ -12323,7 +12323,7 @@ ul.events { list-style:none; padding:0; margin:0 } ul.events li { margin:5px 0 }
 form.clear { margin:0; flex:none } form.clear button { padding:2px 10px; font-size:12px }
 /* clearing sits at the foot, at the far left: never first under a thumb, never beside the answer's own button */
 .needfoot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:6px }
-.ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
+.ready { padding:6px 0; border-top:1px dashed var(--line) } .ready:first-child { border-top:0 } form.verdict { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px } form.verdict .back { display:flex; gap:8px; flex:1 1 260px; min-width:0 } form.verdict .back button { white-space:nowrap } form.verdict input { flex:1 1 140px; min-width:0; font:inherit; padding:5px 8px; border-radius:7px; border:1px solid var(--line); background:var(--bg); color:var(--ink) }
 .num { display:inline-block; min-width:1.7em; padding:0 6px; margin-right:2px; border-radius:999px; text-align:center;
   font-weight:700; font-size:13px; background:var(--flag-bg); color:var(--flag) }
 .need.settled { color:var(--muted) } .need.settled .num { background:var(--sunk); color:var(--muted) }
