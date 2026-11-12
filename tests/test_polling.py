@@ -102,13 +102,19 @@ class PollingTest(unittest.TestCase):
 
     def serve_browser(self):
         pages = {}
-        nav = "<div class='navrow'><a class='proj' href='/?p=0&view=chat'><span class='pname'>First</span> <span id='dot-0' class='sdot idle'></span></a>" \
-              "<a class='proj' href='/?p=1&view=chat'><span class='pname'>Second</span></a></div><span id='sline-0'></span>"
-        with patch.object(board, 'sidebar', return_value=nav), patch.object(board, 'own_colour', return_value=''), \
+        # the bar as the board draws it: each project's link carries its key, and the page's own is marked on (the page
+        # scripts find where a message goes by them)
+        link = lambda k, name, rest, on: (f"<a class='proj{' on' if on else ''}' href='/?p={k}&view=chat' data-p='{k}'>"
+                                          f"<span class='pname'>{name}</span>{rest}</a>")
+        bar = lambda key: ("<div class='navrow'>" + link('0', 'First', " <span id='dot-0' class='sdot idle'></span>", key == '0')
+                           + link('1', 'Second', '', key == '1') + "</div><span id='sline-0'></span>")
+        shown = {'key': None}
+        with patch.object(board, 'sidebar', side_effect=lambda *a, **k: bar(shown['key'])), patch.object(board, 'own_colour', return_value=''), \
                 patch.object(board, 'proj_attr', return_value=''), patch.object(board, 'trouble_bar', return_value=''), \
                 patch.object(board, 'signin_notice', return_value=''), patch.object(board, 'chat_feed', return_value="<div class='msg'><div class='say' data-k='fixture'>Initial reply.</div></div>"), \
                 patch('colony.voice.ready', return_value=False):
             for key in ('0', '1'):
+                shown['key'] = key
                 chat = board.chat_page(key, self.root)
                 pages['/?p=' + key + '&view=chat'] = board.shell(self.reg, -1, chat).encode()
             current = "<h1>Current items</h1><div id='current'><p>Original item</p></div>" + \
