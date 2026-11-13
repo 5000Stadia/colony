@@ -391,10 +391,11 @@ SOUND = """<!doctype html><meta charset=utf-8><meta name=viewport content="width
 button { display: block; width: 100%; font: inherit; font-weight: 600; padding: 18px; margin: 14px 0 6px; border-radius: 12px; border: 0;
   background: #3b6fd4; color: #fff } p.r { margin: 0 0 8px; min-height: 1.4em; color: #b9c0cc } h1 { font-size: 22px }</style>
 <h1>Sound check</h1>
-<p>None of colony's player is on this page. Tap each button once and listen: a tone of two seconds.</p>
+<p>None of colony's player is on this page. Tap each button once, waiting for its line to change before the next, and listen: a tone of two seconds.</p>
 <button id=a>1. One tone</button><p class=r id=ra></p>
 <button id=b>2. A tone over a silent sound</button><p class=r id=rb></p>
 <button id=c>3. A tone, started a moment after the tap</button><p class=r id=rc></p>
+<button id=d>4. A tone started the way colony's player starts one</button><p class=r id=rd></p>
 <script>
 (() => {
   const wav = (secs, hz) => { const rate = 8000, n = Math.round(secs * rate), b = new DataView(new ArrayBuffer(44 + n * 2));
@@ -413,12 +414,14 @@ button { display: block; width: 100%; font: inherit; font-weight: 600; padding: 
     watch(a, 'tone', events, t0); out.textContent = 'Listening…';
     const say = (what) => (p) => p.then(() => events.push([what, 'play() ok', Date.now() - t0, 0]),
       (err) => events.push([what, 'play() refused: ' + (err && err.name), Date.now() - t0, 0]));
-    if (how === 'over') { const h = new Audio(silent); h.loop = true; watch(h, 'silent', events, t0); say('silent')(h.play()); setTimeout(() => h.pause(), 3200); }
-    if (how === 'late') setTimeout(() => say('tone')(a.play()), 400); else say('tone')(a.play());
+    if (how === 'over' || how === 'like') { const h = new Audio(silent); h.loop = true; watch(h, 'silent', events, t0); say('silent')(h.play()); setTimeout(() => h.pause(), 3200); }
+    // as the player does: its one element given a moment of silence within the tap, then the clip put on it afterwards
+    if (how === 'like') { a.src = silent; say('unlock')(a.play()); setTimeout(() => { a.src = tone; say('tone')(a.play()); }, 300); }
+    else if (how === 'late') setTimeout(() => say('tone')(a.play()), 400); else say('tone')(a.play());
     setTimeout(() => { const played = Math.round(a.currentTime * 1000), whole = a.ended || played > 1800;
       out.textContent = whole ? 'The page played the whole tone.' : 'Stopped after ' + played + ' ms of 2000.';
       send({when: 'bare-sound', test: how, played, ended: a.ended, paused: a.paused, events: events.slice(0, 14)}); }, 3400); });
-  run('a', 'one'); run('b', 'over'); run('c', 'late');
+  run('a', 'one'); run('b', 'over'); run('c', 'late'); run('d', 'like');
 })();
 </script>"""
 
