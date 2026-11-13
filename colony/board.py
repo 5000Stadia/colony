@@ -10503,6 +10503,22 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return any(self.headers.get(h) for h in ("Tailscale-User-Login", "X-Forwarded-For", "Forwarded"))
 
+    def _nav_measure(self):
+        """Temporary (out at the Nov 18 friction reading, with the phone-stop measure): what asked for each page the
+        person's phone opens: the page before it, whether a link or the phone itself asked, and the browser's whole
+        name. A page opened from the Inbox left the person in a project's Chat on leaving it (Nov 12); the phone's own
+        record shows that load but not what asked for it."""
+        try:
+            h = self.headers.get
+            if "iPhone" not in h("User-Agent", ""):
+                return
+            m = {"when": "nav", "path": self.path[:200], "from": h("Referer", "")[:200], "site": h("Sec-Fetch-Site", ""),
+                 "user": h("Sec-Fetch-User", ""), "ua": h("User-Agent", "")[60:220]}
+            with open(home() / "chat-measure.log", "a") as fh:
+                fh.write(f"{now()} {json.dumps(m)} {h('User-Agent', '')[:60]}\n")
+        except Exception:
+            pass
+
     def do_GET(self):
         token = PERSONS_LOOK.set(self._the_persons())
         try:
@@ -10515,6 +10531,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, b"not from this page")
         if PERSONS_LOOK.get() and self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document":
             hours.seen()                               # the person opened a page (a page keeping itself current isn't them)
+            self._nav_measure()
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query, keep_blank_values=True)
         if url.path.startswith("/lab/"):                # experiments tried on the person's phone (lab.py)

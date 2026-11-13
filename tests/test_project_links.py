@@ -151,6 +151,34 @@ class ProjectLinksTest(fixtures.BoardBase):
         self.assertTrue(any(n.get("text") == "Remember the watering can." and n.get("anchor") == {"item": "R2"}
                             for n in board.notes(self.root)))
 
+    def test_a_file_opened_from_the_inbox_goes_back_to_the_inbox(self):
+        board.track(self.root)
+        (self.root / "brief.md").write_text("# Garden brief\n")
+        self.serve()
+        status, _, page = self.fetch("/open?n=plants&f=brief.md", Referer=self.base + "/inbox")
+        self.assertEqual(status, 200)
+        self.assertIn("class='back' href='/inbox'>‹ Back to Inbox</a>", page)
+        status, _, page = self.fetch("/open?n=plants&f=brief.md", Referer="https://elsewhere.example/inbox")
+        self.assertNotIn("Back to Inbox", page, "only the board's own Inbox is a way back")
+        status, _, page = self.fetch("/open?n=plants&f=brief.md", Referer=self.base + "/?n=plants&view=chat")
+        self.assertIn("Back to Chat", page)
+
+    def test_a_page_the_phone_opens_is_recorded_with_what_asked_for_it(self):
+        """Temporary, with the measure it checks (out at the Nov 18 friction reading)."""
+        board.track(self.root)
+        self.serve()
+        phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148"
+        asked = {"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document", "Sec-Fetch-Site": "none"}
+        self.fetch("/inbox", **{"User-Agent": phone, "Referer": self.base + "/?n=plants", **asked})
+        log = board.home() / "chat-measure.log"
+        line = log.read_text().splitlines()[-1]
+        for part in ('"when": "nav"', '"path": "/inbox"', '"site": "none"', "/?n=plants", "Mobile/15E148"):
+            self.assertIn(part, line)
+        lines = len(log.read_text().splitlines())
+        self.fetch("/inbox", **{"User-Agent": "Mozilla/5.0 (X11; Linux x86_64)", **asked})
+        self.fetch("/inbox", **{"User-Agent": phone})                    # a page keeping itself current
+        self.assertEqual(len(log.read_text().splitlines()), lines, "only pages the phone itself opens")
+
     def test_named_referrer_returns_to_the_same_project_view_after_reordering(self):
         board.track(self.root)
         (self.root / "brief.md").write_text("# Garden brief\n")

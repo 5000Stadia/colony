@@ -209,7 +209,14 @@ def came_from(referer, key, root, pin=None, entry=None, host=''):
     """Return to this project's showing, Library or original view, using a registered-project resolver.
 
     Only a same-board referrer for this project may choose a view. Its origin and numeric index are never reused.
+    Opened from a card in the Inbox, the way back is the Inbox, whatever the file is kept as.
     """
+    try:
+        u = urllib.parse.urlsplit(referer or '')
+        if host and u.netloc.lower() == host.lower() and u.scheme in ('http', 'https') and u.path == '/inbox':
+            return '/inbox', "Inbox", False
+    except ValueError:
+        pass
     if entry:
         return return_ref(root, 'showcase', 's-' + entry['id']), "Showcase", False
     if pin:
