@@ -385,8 +385,48 @@ def send_audio(handler, body):
     return len(body[start:end + 1])
 
 
+SOUND = """<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
+<title>Sound check</title>
+<style>body { font: 18px/1.45 system-ui, sans-serif; margin: 24px 16px; max-width: 520px; background: #14161a; color: #e8e8ea }
+button { display: block; width: 100%; font: inherit; font-weight: 600; padding: 18px; margin: 14px 0 6px; border-radius: 12px; border: 0;
+  background: #3b6fd4; color: #fff } p.r { margin: 0 0 8px; min-height: 1.4em; color: #b9c0cc } h1 { font-size: 22px }</style>
+<h1>Sound check</h1>
+<p>None of colony's player is on this page. Tap each button once and listen: a tone of two seconds.</p>
+<button id=a>1. One tone</button><p class=r id=ra></p>
+<button id=b>2. A tone over a silent sound</button><p class=r id=rb></p>
+<button id=c>3. A tone, started a moment after the tap</button><p class=r id=rc></p>
+<script>
+(() => {
+  const wav = (secs, hz) => { const rate = 8000, n = Math.round(secs * rate), b = new DataView(new ArrayBuffer(44 + n * 2));
+    const put = (at, text) => [...text].forEach((ch, i) => b.setUint8(at + i, ch.charCodeAt(0)));
+    put(0, 'RIFF'); b.setUint32(4, 36 + n * 2, true); put(8, 'WAVEfmt '); b.setUint32(16, 16, true); b.setUint16(20, 1, true);
+    b.setUint16(22, 1, true); b.setUint32(24, rate, true); b.setUint32(28, rate * 2, true); b.setUint16(32, 2, true); b.setUint16(34, 16, true);
+    put(36, 'data'); b.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) b.setInt16(44 + i * 2, hz ? Math.round(9000 * Math.sin(2 * Math.PI * hz * i / rate)) : 0, true);
+    return URL.createObjectURL(new Blob([b.buffer], {type: 'audio/wav'})); };
+  const tone = wav(2, 440), silent = wav(0.4, 0);
+  const send = (m) => fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {});
+  const watch = (el, name, events, t0) => ['play', 'playing', 'pause', 'ended', 'error', 'waiting', 'stalled', 'suspend'].forEach((t) =>
+    el.addEventListener(t, () => events.push([name, t, Date.now() - t0, Math.round(el.currentTime * 1000)])));
+  const run = (id, how) => document.getElementById(id).addEventListener('click', () => {
+    const out = document.getElementById('r' + id), events = [], t0 = Date.now(), a = new Audio(tone);
+    watch(a, 'tone', events, t0); out.textContent = 'Listening…';
+    const say = (what) => (p) => p.then(() => events.push([what, 'play() ok', Date.now() - t0, 0]),
+      (err) => events.push([what, 'play() refused: ' + (err && err.name), Date.now() - t0, 0]));
+    if (how === 'over') { const h = new Audio(silent); h.loop = true; watch(h, 'silent', events, t0); say('silent')(h.play()); setTimeout(() => h.pause(), 3200); }
+    if (how === 'late') setTimeout(() => say('tone')(a.play()), 400); else say('tone')(a.play());
+    setTimeout(() => { const played = Math.round(a.currentTime * 1000), whole = a.ended || played > 1800;
+      out.textContent = whole ? 'The page played the whole tone.' : 'Stopped after ' + played + ' ms of 2000.';
+      send({when: 'bare-sound', test: how, played, ended: a.ended, paused: a.paused, events: events.slice(0, 14)}); }, 3400); });
+  run('a', 'one'); run('b', 'over'); run('c', 'late');
+})();
+</script>"""
+
+
 def get(handler, path, q):
     one = lambda k: (q.get(k) or [""])[0]
+    if path == "/lab/sound":                             # a bare check that a phone plays a page's sound at all
+        return send(handler, 200, SOUND.encode(), "text/html; charset=utf-8")
     if path == "/lab/lockplay":
         make()
         return send(handler, 200, page().encode(), "text/html; charset=utf-8")
