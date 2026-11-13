@@ -3719,34 +3719,8 @@ PLAYER = """
   const hum = new Audio(); hum.loop = true; hum.src = SILENT;
   let humOurs = 0, humTries = 0;
   const spoken = () => !(aloud() && mode() === 'text');
-  // One page of the board has the sound on a device. Two can be alive at once on a phone (a tab still reading while
-  // hidden, the board opened again in another), and a phone plays one tab's sound at a time: a start in one stops the
-  // other's, and what the phone stopped it may set going again by itself. So a tap played for a moment and was stopped
-  // (the person's phone, 2026-11-12: every resume stopped within the second, on each page opened while an older one
-  // was alive and hidden). A page in view that starts a sound says so; a hidden page that hears it goes quiet, held as
-  // if the phone had stopped it, and stays quiet until the person comes to it. And a sound this page did not ask for,
-  // set going while it is held, is stopped at once.
-  const sounds = (() => { try { return new BroadcastChannel('colony-sound'); } catch (e) { return null; } })();
-  let yielded = false, claimed = 0;
-  const sound = (el) => {
-    if (yielded) return Promise.reject(Object.assign(new Error('another page has the sound'), {name: 'AbortError'}));
-    el.asked = Date.now();
-    const p = Promise.resolve(el.play());
-    p.then(() => { if (sounds && !document.hidden && Date.now() - claimed > 1000) { claimed = Date.now(); sounds.postMessage('taken'); } }).catch(() => {});
-    return p; };
-  if (sounds) sounds.onmessage = () => { if (!document.hidden || yielded) return;
-    yielded = true; humTries += 1;
-    if (N && playing && !paused) { paused = true; loading = false; why = 'phone'; follow(null); }
-    letGo = {why: 'phone', at: Date.now()}; stopAt = stopAt || Date.now(); resting = 0;
-    ours = humOurs = Date.now(); player.pause(); hum.pause(); if (talk) talk.cancel();
-    log('let go', 'another page of the board took the sound'); changed(); };
-  const unasked = (el) => Date.now() - (el.asked || 0) > 3000;
-  on(player, 'play', () => { if (player.src === SILENT) return;
-    if (yielded || (unasked(player) && !(N && playing && !paused))) { ours = Date.now(); player.pause(); log('silenced', 'a clip the phone set going'); } });
-  on(hum, 'play', () => { if (yielded || (unasked(hum) && !listeningOn(false))) { humOurs = Date.now(); hum.pause(); } });
-  // the person came to this page (it is in view again, or they touched it): it may sound again
-  on(document, 'visibilitychange', () => { if (!document.hidden) yielded = false; });
-  on(document, 'pointerdown', () => { yielded = false; }, true);
+  // part of the phone-stop measure below (out with it): when this page last asked each element to play
+  const sound = (el) => { el.asked = Date.now(); return Promise.resolve(el.play()); };
   // attempt: a tap or a coming-back, which may take up what the phone let go (never a pause the person chose)
   const listeningOn = (attempt) => {
     if (writing() || (letGo && (!attempt || letGo.why === 'paused'))) return false;
@@ -3786,7 +3760,7 @@ PLAYER = """
   const phoneSession = () => { try { return navigator.audioSession ? navigator.audioSession.state + '/' + navigator.audioSession.type : 'none'; } catch (e) { return 'error'; } };
   const phoneStop = (el, name) => { try { if (phoneStops++ < 8) measure({when: 'phone-stop', el: name, after: Date.now() - (el.asked || 0),
     played: Math.round((el.currentTime || 0) * 1000), session: phoneSession(), other: (name === 'hum' ? player : hum).paused ? 'off' : 'on',
-    hidden: hidden(), focus: document.hasFocus(), yielded, path: location.pathname + location.search}); } catch (e) {} };
+    hidden: hidden(), focus: document.hasFocus(), path: location.pathname + location.search}); } catch (e) {} };
   try { if (navigator.audioSession) navigator.audioSession.addEventListener('statechange', () => {
     if (sessionSays++ < 12) measure({when: 'session', session: phoneSession(), hidden: hidden()}); }); } catch (e) {}
   // Auto waiting between replies: the silent element going (where the phone lets it, taking up what it let go)
@@ -4170,7 +4144,7 @@ PLAYER = """
     const own = ev.target.closest && ev.target.closest('button.inplay, button.listen, button.needplay');
     if (letGo && !isBox(ev.target)) { if (!N) return resume('a tap'); if (playing && paused && why !== 'person' && !own) return hold(false, 'a tap'); }
     prime(); }, true);
-  if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => { yielded = false; hold(false, 'lock screen'); }], ['nexttrack', () => skip()],
+  if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => hold(false, 'lock screen')], ['nexttrack', () => skip()],
     ['stop', () => hold(true, 'lock screen')], ['previoustrack', () => previous()]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
   // With follow on, the page shows what is being read: in its own chat, that part in view; from anywhere else, that
   // chat opened. Words typed on this page and not sent keep it here: they would go with the page.

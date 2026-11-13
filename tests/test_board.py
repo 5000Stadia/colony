@@ -8402,9 +8402,8 @@ const {chromium} = require('/opt/colony-test-playwright');
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
-    def test_one_page_of_the_board_has_the_sound_and_a_hidden_one_goes_quiet(self):
-        # the person's phone, 2026-11-12: a page still reading while hidden and the board opened again in another tab;
-        # each start in one was stopped by the other, so every tap played for a moment and stopped
+    def test_a_reading_the_phone_stopped_is_taken_up_by_one_tap_on_its_own_button(self):
+        # with Auto on, the press on a held reading's own button took it up and the click that followed held it again
         script = r"""
 const {chromium} = require('/opt/colony-test-playwright');
 (async () => {
@@ -8425,51 +8424,20 @@ const {chromium} = require('/opt/colony-test-playwright');
   const state = (p) => p.evaluate(() => Object.assign(window.colonyPlayer.state(), {clip: !window.sounds[0].paused, hum: !window.sounds[1].paused}));
   const reading = (p) => p.waitForFunction(() => { const s = window.colonyPlayer.state();
     return s.reading && s.playing && !s.paused && !window.sounds[0].paused && window.sounds[0].currentTime > 0; }, null, {timeout: 10000});
-  const quiet = (p) => p.waitForFunction(() => { const s = window.colonyPlayer.state();
-    return s.paused && s.why === 'phone' && s.letGo === 'phone' && window.sounds[0].paused && window.sounds[1].paused; }, null, {timeout: 10000});
-  const seen = (p, yes) => p.evaluate((hidden) => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => hidden});
-    document.dispatchEvent(new Event('visibilitychange')); }, !yes);
-  // what the phone does to a page: stops its sound, or sets it going again, with no word from the page
+  // what the phone does to a page: stops its sound, with no word from the page
   const phoneStops = (p) => p.evaluate(() => window.sounds.slice(0, 2).forEach((x) => x.pause()));
-  const phoneStarts = (p) => p.evaluate(() => window.sounds.slice(0, 2).forEach((x) => { x.asked = 0; x.play().catch(() => {}); }));
 
-  const a = await context.newPage();
-  await a.goto(base + '/inbox');
-  await a.locator('button.inplay').click();
-  await reading(a);
-  await seen(a, false);                                    // the phone locked, or another tab in front: it reads on
-  await a.waitForTimeout(400);
-  assert((await state(a)).clip, 'hidden, it reads on: ' + JSON.stringify(await state(a)));
-
-  const b = await context.newPage();                       // the board opened again: the reading goes on there
+  const b = await context.newPage();
   await b.goto(base + '/inbox');
+  await b.locator('button.inplay').click();
   await reading(b);
-  await quiet(a);                                          // and the hidden page is held, as if the phone had stopped it
-  await phoneStarts(a);
-  await a.waitForTimeout(400);
-  let s = await state(a);
-  assert(!s.clip && !s.hum && s.paused, 'set going again by the phone, the hidden page stops it at once: ' + JSON.stringify(s));
-  s = await state(b);
-  assert(s.clip && s.playing && !s.paused, 'the page in view reads on: ' + JSON.stringify(s));
-
-  // stopped by the phone, a tap on the reading's own button takes it up, once: not taken up and then held by the same tap
   await b.waitForTimeout(700);
   await phoneStops(b);
   await b.waitForFunction(() => { const x = window.colonyPlayer.state(); return x.paused && x.why === 'phone'; });
-  await phoneStarts(b);                                    // held, what the phone sets going by itself is stopped
-  await b.waitForTimeout(400);
-  s = await state(b);
-  assert(!s.clip && !s.hum && s.paused, 'a held page stays quiet: ' + JSON.stringify(s));
   await b.locator('button.inplay').click();
   await b.waitForTimeout(600);
-  s = await state(b);
+  const s = await state(b);
   assert(s.clip && s.playing && !s.paused && s.hum, 'one tap on its button and it reads: ' + JSON.stringify(s));
-
-  // back on the first page, it takes the reading up, and the one now hidden goes quiet
-  await seen(b, false);
-  await seen(a, true);
-  await reading(a);
-  await quiet(b);
   await browser.close();
 })().catch(e => { console.error(e); process.exit(1); });
 """
