@@ -8402,6 +8402,34 @@ const {chromium} = require('/opt/colony-test-playwright');
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_a_narrow_card_keeps_its_play_button_beside_the_name_and_its_attach_at_the_left(self):
+        # on a phone the play button fell to a line of its own under the head, and the reply's + floated mid-row
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const page = await (await browser.newContext({viewport: {width: 300, height: 700}})).newPage();
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  await page.goto(process.argv[1] + '/inbox');
+  const box = (sel) => page.locator(sel).first().boundingBox();
+  const name = await box('.incard .inproj'), play = await box('.incard button.inplay'), head = await box('.incard .inhead');
+  const words = await box('.incard .inhead .muted');
+  assert(words.y > name.y + 10, 'the check needs a head too long for one line: ' + JSON.stringify([name, words]));
+  assert(Math.abs((play.y + play.height / 2) - (name.y + name.height / 2)) < 8, 'the play button beside the name: ' + JSON.stringify([name, play]));
+  assert(play.x + play.width > head.x + head.width - 4 && play.x > name.x + name.width, 'at the right, clear of the name: ' + JSON.stringify([name, play, head]));
+  assert(words.x + words.width <= play.x + 1 || words.y >= play.y + play.height - 12, 'no words under it: ' + JSON.stringify([words, play]));
+  const area = await box('.incard form.add textarea'), plus = await box('.incard form.add .attach'), send = await box('.incard form.add button:not(.attach)');
+  assert(Math.abs(plus.x - area.x) < 3, 'the + at the left: ' + JSON.stringify([area, plus]));
+  assert(Math.abs((send.x + send.width) - (area.x + area.width)) < 3, 'Send at the right: ' + JSON.stringify([area, send]));
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        self.two_cards()
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
     def test_a_reading_the_phone_stopped_is_taken_up_by_one_tap_on_its_own_button(self):
         # with Auto on, the press on a held reading's own button took it up and the click that followed held it again
         script = r"""

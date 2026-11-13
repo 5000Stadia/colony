@@ -12650,11 +12650,15 @@ details.rneed > summary::-webkit-details-marker { display:none }
 .rtaps button.choice b { display:block } .rtaps .rpro, .rtaps .rcon, .rtaps .rstands { display:block; font-size:13px; margin-top:2px }
 .rtaps .rpro { color:var(--accent) } .rtaps .rcon { color:var(--flag) } .rtaps .rstands { color:var(--muted); font-style:italic }
 .incount { margin:0 0 8px; font-size:14px } .incard { padding:16px } .incard[style] { --accent:var(--pc); border-top:3px solid var(--pc) } @media (prefers-color-scheme: dark) { .incard[style] { --accent:var(--pcd); border-top-color:var(--pcd) } } .incard .need { border-top:0; padding:0 } .incard .need > .who, .incard form.clear { display:none }
-.inhead { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:10px; font-size:14px }
-.inhead .inplay { flex:none; margin-left:auto; align-self:center; width:38px; height:38px; min-height:38px; padding:0; border:0; border-radius:50%;
+.inhead { position:relative; display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; margin-bottom:10px; padding-right:44px; font-size:14px }
+/* the play button keeps its corner beside the project's name: as one more thing in the row, a long name sent it to a line of its own */
+.inhead .inplay { position:absolute; right:-6px; top:-8px; width:38px; height:38px; min-height:38px; padding:0; border:0; border-radius:50%;
   background:transparent; color:var(--accent); display:inline-flex; align-items:center; justify-content:center } .inhead .inplay svg { width:21px; height:21px }
 .inhead .inproj { font-weight:700; font-size:16px; text-decoration:none } .due { font-weight:600 } .due.near { color:var(--flag) }
 p.due { margin:6px 0 } .inabout { margin:0 0 10px; font-size:14px } .inabout a { display:block; overflow-wrap:anywhere }
+/* the reply's + sits at the left, round and quiet, and Send at the right: both pushed right, the + floated mid-row */
+.incard form.add .attach { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; min-height:36px; margin-left:0;
+  padding:0; border:0; border-radius:50%; background:var(--sunk); color:var(--ink); cursor:pointer; font-size:20px }
 .inabout a.open, .incard .ready a.open { margin:8px 0 4px; padding:9px 12px; border-radius:10px; text-align:center;
   background:var(--accent); color:var(--card); font-weight:600; text-decoration:none }
 .shots { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px } .shots a.shot { flex:1 1 140px; max-width:320px }
