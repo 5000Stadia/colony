@@ -34,9 +34,13 @@ def records(root):
             out[e["of"]]["adopted"] = e["points"]
     # A linked gate is the human decision, including a rejection of every point.
     # Keep legacy adoption records readable, but never let them override its choices.
-    for gate in board.gates(root):
+    # asked again with its points (the person replied on it; a project's report, 2026-11-12), the new gate is the
+    # decision and the one it replaced, withdrawn, is the way there
+    gates = board.gates(root)
+    replaced = {g["reframes"] for g in gates if g.get("reframes") and g.get("consult")}
+    for gate in gates:
         cid = gate.get("consult")
-        if cid in out:
+        if cid in out and gate["id"] not in replaced:
             rec = out[cid]
             rec["gate"] = gate["id"]
             choices = gate.get("point_decisions") or {}
@@ -52,8 +56,9 @@ def records(root):
     return list(out.values())
 
 
-def gate_points(root, cid, points, item):
-    """The agent curates existing recommendations; source numbers refer to report()'s consultants.
+def gate_points(root, cid, points, item, reframes=None):
+    """The agent curates existing recommendations; source numbers refer to report()'s consultants. A consultation
+    has one gate; the one that asks its open gate again (reframes) takes its place, its points reworded if need be.
 
     No model call or automatic interpretation of an answer is needed. The gate
     snapshots attribution so it stays readable without fetching model catalogs.
@@ -65,8 +70,9 @@ def gate_points(root, cid, points, item):
         raise ValueError("Link a first-round consultation on this same item or decision.")
     if rec.get("checking_round"):
         raise ValueError("This decision has already had its checking round; keep its past gate as recorded.")
-    if rec.get("gate"):
-        raise ValueError(f"Consultation {cid} already has gate {rec['gate']}.")
+    if rec.get("gate") and (rec["gate"] != reframes or rec.get("gate_answer")):
+        raise ValueError(f"Consultation {cid} already has gate {rec['gate']}." + ("" if rec.get("gate_answer") else
+                         f" To ask that one again with its points, add --reframes {rec['gate']}."))
     if not isinstance(points, list) or not points:
         raise ValueError("Provide a nonempty JSON list of consultant points.")
     result = []

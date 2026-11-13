@@ -7131,6 +7131,30 @@ class ConsultationGateTest(BoardBase):
         return urllib.request.urlopen(urllib.request.Request(f'http://127.0.0.1:{port}/answer',
                                       data=urllib.parse.urlencode(dict(p=0, **form)).encode()))
 
+    def test_a_decision_with_points_asked_again_carries_its_consultation(self):
+        # a project's report (2026-11-12): the person replied on a decision with points, and asking it again with its
+        # points was refused, because the consultation already had the gate being replaced
+        gate = self.gate()
+        with self.assertRaises(ValueError) as refused:
+            self.gate()
+        self.assertIn(f"--reframes {gate['id']}", str(refused.exception), 'a second gate is refused still, and says the way')
+        again = board.add_gate(self.root, 'Which consultant changes should we take?', self.rec['decision'], 'Said whole.',
+                               consultation=self.rec['id'], reframes=gate['id'],
+                               points=[dict(text='Keep reminder history for a year.', consultants=[1, 2]),
+                                       dict(text='Require an explicit reset.', consultants=[2])],
+                               told='History is kept on this machine.\n\nA reset is a button,\nnever a default.')
+        board.withdraw_gate(self.root, gate['id'], f"Asked again as {again['id']}, with what it was missing")
+        rec = next(r for r in self.consult.records(self.root) if r['id'] == self.rec['id'])
+        self.assertEqual((rec['gate'], rec['gate_answer']), (again['id'], None), 'the consultation hangs on the gate that is open')
+        self.assertIn("<span class='muted'>Answer:</span> History is kept on this machine.</p><p>A reset is a button,<br>never a default.</p>",
+                      board.waiting_html(0, self.root), 'what they were told keeps its paragraphs')
+        board.answer_gate(self.root, again['id'], 'History, yes', decisions={'P1': 'accept', 'P2': 'reject'})
+        rec = next(r for r in self.consult.records(self.root) if r['id'] == self.rec['id'])
+        self.assertEqual(rec['adopted'], 'P1: Keep reminder history for a year.', 'their choices are on the reworded points')
+        with self.assertRaises(ValueError):
+            board.add_gate(self.root, 'Once more?', self.rec['decision'], '', consultation=self.rec['id'], points=self.points,
+                           reframes=again['id'])                      # decided: not asked again
+
     def test_words_alone_on_a_decision_with_points_go_to_its_agent_and_a_point_left_out_is_never_assumed(self):
         # the person filled its box and tapped Save, several times, and nothing happened (2026-11-12; my reading in
         # roadmap/R160.md): words with no point chosen go as a reply does on any decision; a point left out is refused
@@ -8375,6 +8399,87 @@ const {chromium} = require('/opt/colony-test-playwright');
         self.addCleanup(patcher.stop)
         port = self.server()
         result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=90)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_one_page_of_the_board_has_the_sound_and_a_hidden_one_goes_quiet(self):
+        # the person's phone, 2026-11-12: a page still reading while hidden and the board opened again in another tab;
+        # each start in one was stopped by the other, so every tap played for a moment and stopped
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome',
+    headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required']});
+  const context = await browser.newContext({viewport: {width: 390, height: 844}});
+  const base = process.argv[1];
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  const n = 240000, wav = Buffer.alloc(44 + n, 0x80);          // half a minute of silence, as a clip
+  wav.write('RIFF', 0); wav.writeUInt32LE(36 + n, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32); wav.writeUInt16LE(8, 34);
+  wav.write('data', 36); wav.writeUInt32LE(n, 40);
+  await context.route('**/voice?**', (route) => route.fulfill({status: 200, contentType: 'audio/wav', body: wav}));
+  // each page's sound elements where the check can reach them (the player's, then the silent one), and Auto on
+  await context.addInitScript(() => { const A = window.Audio; window.sounds = [];
+    window.Audio = function (...x) { const a = new A(...x); window.sounds.push(a); return a; };
+    try { localStorage.setItem('aloud', '1'); } catch (e) {} });
+  const state = (p) => p.evaluate(() => Object.assign(window.colonyPlayer.state(), {clip: !window.sounds[0].paused, hum: !window.sounds[1].paused}));
+  const reading = (p) => p.waitForFunction(() => { const s = window.colonyPlayer.state();
+    return s.reading && s.playing && !s.paused && !window.sounds[0].paused && window.sounds[0].currentTime > 0; }, null, {timeout: 10000});
+  const quiet = (p) => p.waitForFunction(() => { const s = window.colonyPlayer.state();
+    return s.paused && s.why === 'phone' && s.letGo === 'phone' && window.sounds[0].paused && window.sounds[1].paused; }, null, {timeout: 10000});
+  const seen = (p, yes) => p.evaluate((hidden) => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => hidden});
+    document.dispatchEvent(new Event('visibilitychange')); }, !yes);
+  // what the phone does to a page: stops its sound, or sets it going again, with no word from the page
+  const phoneStops = (p) => p.evaluate(() => window.sounds.slice(0, 2).forEach((x) => x.pause()));
+  const phoneStarts = (p) => p.evaluate(() => window.sounds.slice(0, 2).forEach((x) => { x.asked = 0; x.play().catch(() => {}); }));
+
+  const a = await context.newPage();
+  await a.goto(base + '/inbox');
+  await a.locator('button.inplay').click();
+  await reading(a);
+  await seen(a, false);                                    // the phone locked, or another tab in front: it reads on
+  await a.waitForTimeout(400);
+  assert((await state(a)).clip, 'hidden, it reads on: ' + JSON.stringify(await state(a)));
+
+  const b = await context.newPage();                       // the board opened again: the reading goes on there
+  await b.goto(base + '/inbox');
+  await reading(b);
+  await quiet(a);                                          // and the hidden page is held, as if the phone had stopped it
+  await phoneStarts(a);
+  await a.waitForTimeout(400);
+  let s = await state(a);
+  assert(!s.clip && !s.hum && s.paused, 'set going again by the phone, the hidden page stops it at once: ' + JSON.stringify(s));
+  s = await state(b);
+  assert(s.clip && s.playing && !s.paused, 'the page in view reads on: ' + JSON.stringify(s));
+
+  // stopped by the phone, a tap on the reading's own button takes it up, once: not taken up and then held by the same tap
+  await b.waitForTimeout(700);
+  await phoneStops(b);
+  await b.waitForFunction(() => { const x = window.colonyPlayer.state(); return x.paused && x.why === 'phone'; });
+  await phoneStarts(b);                                    // held, what the phone sets going by itself is stopped
+  await b.waitForTimeout(400);
+  s = await state(b);
+  assert(!s.clip && !s.hum && s.paused, 'a held page stays quiet: ' + JSON.stringify(s));
+  await b.locator('button.inplay').click();
+  await b.waitForTimeout(600);
+  s = await state(b);
+  assert(s.clip && s.playing && !s.paused && s.hum, 'one tap on its button and it reads: ' + JSON.stringify(s));
+
+  // back on the first page, it takes the reading up, and the one now hidden goes quiet
+  await seen(b, false);
+  await seen(a, true);
+  await reading(a);
+  await quiet(b);
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        from colony import voice
+        self.two_cards()
+        patcher = patch.object(voice, "ready", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 

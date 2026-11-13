@@ -2102,7 +2102,7 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
         gate["held_until"] = until
     if consultation:
         from . import consult
-        gate.update(consult=consultation, points=consult.gate_points(root, consultation, points, item))
+        gate.update(consult=consultation, points=consult.gate_points(root, consultation, points, item, reframes))
     elif points is not None:
         raise ValueError("Link the consultation that supplied these points.")
     append(root, "gates.jsonl", gate)
@@ -3718,6 +3718,34 @@ PLAYER = """
   const hum = new Audio(); hum.loop = true; hum.src = SILENT;
   let humOurs = 0, humTries = 0;
   const spoken = () => !(aloud() && mode() === 'text');
+  // One page of the board has the sound on a device. Two can be alive at once on a phone (a tab still reading while
+  // hidden, the board opened again in another), and a phone plays one tab's sound at a time: a start in one stops the
+  // other's, and what the phone stopped it may set going again by itself. So a tap played for a moment and was stopped
+  // (the person's phone, 2026-11-12: every resume stopped within the second, on each page opened while an older one
+  // was alive and hidden). A page in view that starts a sound says so; a hidden page that hears it goes quiet, held as
+  // if the phone had stopped it, and stays quiet until the person comes to it. And a sound this page did not ask for,
+  // set going while it is held, is stopped at once.
+  const sounds = (() => { try { return new BroadcastChannel('colony-sound'); } catch (e) { return null; } })();
+  let yielded = false, claimed = 0;
+  const sound = (el) => {
+    if (yielded) return Promise.reject(Object.assign(new Error('another page has the sound'), {name: 'AbortError'}));
+    el.asked = Date.now();
+    const p = Promise.resolve(el.play());
+    p.then(() => { if (sounds && !document.hidden && Date.now() - claimed > 1000) { claimed = Date.now(); sounds.postMessage('taken'); } }).catch(() => {});
+    return p; };
+  if (sounds) sounds.onmessage = () => { if (!document.hidden || yielded) return;
+    yielded = true; humTries += 1;
+    if (N && playing && !paused) { paused = true; loading = false; why = 'phone'; follow(null); }
+    letGo = {why: 'phone', at: Date.now()}; stopAt = stopAt || Date.now(); resting = 0;
+    ours = humOurs = Date.now(); player.pause(); hum.pause(); if (talk) talk.cancel();
+    log('let go', 'another page of the board took the sound'); changed(); };
+  const unasked = (el) => Date.now() - (el.asked || 0) > 3000;
+  on(player, 'play', () => { if (player.src === SILENT) return;
+    if (yielded || (unasked(player) && !(N && playing && !paused))) { ours = Date.now(); player.pause(); log('silenced', 'a clip the phone set going'); } });
+  on(hum, 'play', () => { if (yielded || (unasked(hum) && !listeningOn(false))) { humOurs = Date.now(); hum.pause(); } });
+  // the person came to this page (it is in view again, or they touched it): it may sound again
+  on(document, 'visibilitychange', () => { if (!document.hidden) yielded = false; });
+  on(document, 'pointerdown', () => { yielded = false; }, true);
   // attempt: a tap or a coming-back, which may take up what the phone let go (never a pause the person chose)
   const listeningOn = (attempt) => {
     if (writing() || (letGo && (!attempt || letGo.why === 'paused'))) return false;
@@ -3736,7 +3764,7 @@ PLAYER = """
     const taken = () => { unlocked = true; if (letGo && letGo.why !== 'paused') { log('silence', cause, true); letGo = null; } };
     if (!hum.paused) { taken(); if (then) then(true); return; }
     const mine = ++humTries;
-    Promise.resolve(hum.play()).then(() => { unlocked = true; if (mine !== humTries) return; taken(); if (then) then(true); changed(); })
+    sound(hum).then(() => { unlocked = true; if (mine !== humTries) return; taken(); if (then) then(true); changed(); })
       .catch((err) => { if (mine !== humTries || (err && err.name === 'AbortError')) return;
         if (N) { log('silence', cause, false); if (then) then(false); return; }
         resting = 0; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
@@ -3767,7 +3795,7 @@ PLAYER = """
     humSync('a tap', true);
     if ((N && playing) || playerFree) return;
     player.src = SILENT;
-    player.play().then(() => { unlocked = true; playerFree = true; if (letGo && letGo.why !== 'paused') letGo = null; changed(); }).catch(() => {}); };
+    sound(player).then(() => { unlocked = true; playerFree = true; if (letGo && letGo.why !== 'paused') letGo = null; changed(); }).catch(() => {}); };
   const reading = (s) => playing && !paused && N && N.blocks[N.j] === s;
   // a play() the phone refused: held where it is, the pill or the bar saying tap to resume, never a silent pause
   const refused = (what, cause) => { if (!N) return; paused = true; why = 'phone'; letGo = {why: 'refused', at: Date.now()}; stopAt = stopAt || Date.now();
@@ -3785,7 +3813,7 @@ PLAYER = """
       n += 1;
       // refused for want of a tap on this page: held there, tap to resume; cut short by a pause, a skip or the next clip
       // is no refusal, and nothing is read again; a clip that failed goes to clipFailed
-      player.play().then(() => { unlocked = true; }).catch((err) => { if (err && err.name === 'AbortError') return;
+      sound(player).then(() => { unlocked = true; }).catch((err) => { if (err && err.name === 'AbortError') return;
         if (err && err.name === 'NotAllowedError' && mine()) { N.piece = n - 1; return refused('play', 'a clip'); }
         if (mine() && now && now.at === n - 1) clipFailed(j, parts, n - 1, 'error ' + ((err && err.name) || 'play')); });
     };
@@ -3980,7 +4008,7 @@ PLAYER = """
     takeUp(); paused = false; why = null; byVoice = false; sent = -1; save(); humSync(cause, true);
     if (N.silent) return changed();
     if (startingSound && startingSound.reply === N) { if (startingSound.ready) startingSound.go(); return changed(); }
-    if (N.kokoro && !(talk && talk.speaking)) player.play().then(() => { unlocked = true; log('resume', cause, true); changed(); })
+    if (N.kokoro && !(talk && talk.speaking)) sound(player).then(() => { unlocked = true; log('resume', cause, true); changed(); })
       .catch((err) => { if (!err || err.name !== 'AbortError') refused('resume', cause); });
     else if (talk && talk.paused) talk.resume(); else begin(N.j, N.piece);
     changed();
@@ -4107,7 +4135,7 @@ PLAYER = """
       error: player.error && player.error.code, t: player.currentTime, d: player.duration, reply: N.id, part: N.j, of: N.blocks.length,
       piece: now && now.at, blob: player.src.startsWith('blob:')});
     if (player.ended && player.onended) player.onended();
-    else player.play().catch(() => { if (playing && N && now) begin(N.j, now.at); });
+    else sound(player).catch(() => { if (playing && N && now) begin(N.j, now.at); });
   }, 2000);
   // Back on the page: what the phone stopped is taken up again where it lets it (a pause the person chose stays), and a
   // try that fails says tap to resume, never a ring
@@ -4118,16 +4146,18 @@ PLAYER = """
     if (!N && aloud() && letGo && letGo.why !== 'paused') return rest('back on the page', (ok) => { log('resume', 'back on the page', ok); if (ok) { takeUp(); look(); } });
     if (N && playing && !paused && N.kokoro && !N.silent) { const at = player.currentTime;
       after(() => { if (N && playing && !paused && !player.ended && player.currentTime === at)
-        player.play().catch((err) => { if (!err || err.name !== 'AbortError') refused('play', 'stood still on coming back'); }); }, 700); }
+        sound(player).catch((err) => { if (!err || err.name !== 'AbortError') refused('play', 'stood still on coming back'); }); }, 700); }
   });
   // A phone plays a page's audio only after a tap on it: a tap anywhere (Send included) plays a moment of silence, and
   // from then on new replies may be read by themselves; where Auto was let go, it is the tap that resumes
   on(document, 'pointerdown', (ev) => { if (!aloud() || (ev.target.closest && ev.target.closest('#cplayer'))) return;
     if (autoPaused()) return;
     if (writing()) return;                        // a Send tap belongs to the box, never a request to resume
-    if (letGo && !isBox(ev.target)) { if (!N) return resume('a tap'); if (playing && paused && why !== 'person') return hold(false, 'a tap'); }
+    // a reading's own button takes it up by its click: taken up here as well, the click that follows held it again
+    const own = ev.target.closest && ev.target.closest('button.inplay, button.listen, button.needplay');
+    if (letGo && !isBox(ev.target)) { if (!N) return resume('a tap'); if (playing && paused && why !== 'person' && !own) return hold(false, 'a tap'); }
     prime(); }, true);
-  if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => hold(false, 'lock screen')], ['nexttrack', () => skip()],
+  if (ms) { [['pause', () => hold(true, 'lock screen')], ['play', () => { yielded = false; hold(false, 'lock screen'); }], ['nexttrack', () => skip()],
     ['stop', () => hold(true, 'lock screen')], ['previoustrack', () => previous()]].forEach(([a, h]) => { try { ms.setActionHandler(a, h); } catch (e) {} }); }
   // With follow on, the page shows what is being read: in its own chat, that part in view; from anywhere else, that
   // chat opened. Words typed on this page and not sent keep it here: they would go with the page.
@@ -4563,7 +4593,7 @@ PLAYER = """
     if (unlocked || playing) return go();
     // one moment of silence asks for them all: two asking at once would each cut the other's sound short
     if (!allowing) allowing = new Promise((ok) => {
-      Promise.resolve(hum.play()).then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
+      sound(hum).then(() => { unlocked = true; ok(); }).catch(() => on(document, 'pointerdown', () => { unlocked = true; ok(); }, {once: true, capture: true})); });
     allowing.then(() => { allowing = null; go(); humSync('the page opened'); }); };
   const save = () => { const current = N && N.document ? back && back.N : N; put('linenow', current ? {N: current, S: S && {want: [...S.want], play: [...S.play], auto: [...S.auto], begun: [...S.begun]}, rerun,
     sounding: N && N.document ? !!(back && back.sounding) : playing && !paused, saved: Date.now()} : null); };
@@ -7865,8 +7895,10 @@ def gate_body(root, pid, gate, back, number=None, fold=False, tail="", bare=Fals
                               for x in re.findall(r"^Attached: (.+)$", a or "", flags=re.M)
                               if x.strip().lower().endswith(IMAGES) and (u := chat_file(pid, root, e(x.strip()))))
     said = lambda a: re.sub(r"^Attached: .+\n*", "", a or "", flags=re.M).strip()
-    exchange = lambda a, t: ((f"<p><span class='muted'>You asked:</span> {e(said(a))}</p>{shots(a)}" if a else "")
-                             + (f"<p><span class='muted'>Answer:</span> {e(t)}</p>" if t else ""))
+    # each keeps its paragraphs and line breaks (a project's report, 2026-11-12: a long answer drawn as one block)
+    paras = lambda t: "</p><p>".join(e(x.strip()).replace("\n", "<br>") for x in re.split(r"\n\s*\n", t.strip()))
+    exchange = lambda a, t: ((f"<p><span class='muted'>You asked:</span> {paras(said(a))}</p>{shots(a)}" if a else "")
+                             + (f"<p><span class='muted'>Answer:</span> {paras(t)}</p>" if t else ""))
     body = ((f"<details class='round'><summary>First asked: {e(short(first, 90))}</summary><p>{e(first)}</p></details>"
              + "".join(f"<details class='round'><summary>You asked: {e(short(a or '…', 90))}</summary>{exchange(a, t)}</details>"
                        for a, t in rounds[:-1])
@@ -11593,7 +11625,8 @@ class Handler(BaseHTTPRequestHandler):
             if not g:
                 return self._send(404, b"No such gate in this project.")
             how = (" It has points: with --answered, give each as they decided it (--accept P1 --reject P2); where their "
-                   "words leave a point open, say so and ask the decision again." if g.get("points") else "")
+                   "words leave a point open, say so and ask the decision again, its points with it: add --consult "
+                   f"{g.get('consult')} --points FILE to that command (a point may be reworded)." if g.get("points") else "")
             if self._uploads:                              # what they attached, kept in the project, its paths in the reply
                 try:
                     text = "\n".join(f"Attached: {Path(root) / pins.save_upload(root, *u)}" for u in self._uploads) + (f"\n\n{text}" if text else "")
