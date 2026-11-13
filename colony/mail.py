@@ -96,8 +96,10 @@ NO_REPLY = _re.compile(r"\bno (reply|answer|response)s? (is )?(needed|necessary|
 
 def asks_answer(text, ask=True):
     """A message marked as asking whose own words say no reply is needed doesn't ask: it would wait unanswered at
-    every session start, and a reply would tell the sender nothing."""
-    return bool(ask) and not NO_REPLY.search(text or "")
+    every session start, and a reply would tell the sender nothing. Where it also puts a question, the ask stands:
+    the words were about one part of it (a project's report: five questions, then a paragraph for information, sent
+    as plain mail and asked again)."""
+    return bool(ask) and not (NO_REPLY.search(text or "") and "?" not in (text or ""))
 
 
 def send(to, text, ask=False, re=None, urgent=False, dev=False):

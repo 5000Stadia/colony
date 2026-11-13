@@ -1613,7 +1613,7 @@ def cmd_send(a):
         raise SystemExit(str(err))
     delivery = m.get('delivery', {})
     print(f"queued {m['id']} to {a.to} for session handoff" + (" (answer expected via colony reply)" if m["ask"] else "")
-          + (" (as plain mail: it says no reply is needed)" if a.ask and not m["ask"] else "")
+          + (" (as plain mail: it says no reply is needed and puts no question)" if a.ask and not m["ask"] else "")
           + (" (dev report: quiet, it waits for their next turn)" if m.get("dev") else ""))
     if delivery.get('status') == 'delayed':
         print(f"{'delivery may wait' if delivery.get('code') == 'usage-pause' else 'delivery delayed'}: {delivery['reason']}")

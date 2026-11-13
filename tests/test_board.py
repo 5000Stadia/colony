@@ -476,6 +476,9 @@ class BoardTest(BoardBase):
         self.assertTrue(mail.asks_answer("Which format? Reply when you can.", True))
         self.assertFalse(mail.asks_answer("No reply needed. The gate stood.", True))
         self.assertFalse(mail.asks_answer("Thanks, there's no need to reply.", True))
+        # the words about one part of it don't take the ask from the questions beside them
+        self.assertTrue(mail.asks_answer("Which format do you want? And by when?\n\nFor information, no answer needed: r11.md moved.", True))
+        self.assertFalse(mail.asks_answer("Which format do you want? No reply needed on the rest.", False), "never an ask it wasn't sent as")
 
     def test_session_delivery_keeps_fresh_notes_and_mail_out_of_the_backlog(self):
         board.track(self.root)
