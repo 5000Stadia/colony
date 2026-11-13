@@ -3537,7 +3537,8 @@ PLAYER = """
   const hidden = () => hidAt ? Math.round((Date.now() - hidAt) / 1000) + 's hidden' : 'shown';
   const log = (what, cause, ok) => { story.push([new Date().toISOString().slice(11, 19), what, cause, ok === undefined ? '' : ok ? 'ok' : 'refused', hidden()]);
     logged += 1; if (story.length > 14) story.shift(); };
-  const measure = (m) => fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(m)})}).catch(() => {});
+  const DOC = Math.random().toString(36).slice(2, 6);   // this page among the board's pages on a device, in its reports
+  const measure = (m) => fetch('/chat/measure', {method: 'POST', body: new URLSearchParams({m: JSON.stringify(Object.assign({doc: DOC}, m))})}).catch(() => {});
   // Marks: the board's, and during the trial this device's own as well, so going back to the player before it
   // replays nothing it heard here
   const owed = [];
@@ -3778,6 +3779,16 @@ PLAYER = """
   let lastStop = null, stops = 0;
   const restStop = (why) => { lastStop = {why, at: new Date().toISOString().slice(11, 19), hidden: hidden()}; log('let go', why);
     if (stops++ < 4) measure({when: 'rest-stop', why, hidden: hidden(), aloud: aloud(), path: location.pathname + location.search}); };
+  // A measure, to be taken out once the cause is known (2026-11-12: each play stopped by the phone within the second,
+  // on every page, one page's sound or two): what the phone says of a stop it made. Which element, how long after this
+  // page asked for it, how far it had played, the phone's own audio session, and whether the other element was going.
+  let phoneStops = 0, sessionSays = 0;
+  const phoneSession = () => { try { return navigator.audioSession ? navigator.audioSession.state + '/' + navigator.audioSession.type : 'none'; } catch (e) { return 'error'; } };
+  const phoneStop = (el, name) => { try { if (phoneStops++ < 8) measure({when: 'phone-stop', el: name, after: Date.now() - (el.asked || 0),
+    played: Math.round((el.currentTime || 0) * 1000), session: phoneSession(), other: (name === 'hum' ? player : hum).paused ? 'off' : 'on',
+    hidden: hidden(), focus: document.hasFocus(), yielded, path: location.pathname + location.search}); } catch (e) {} };
+  try { if (navigator.audioSession) navigator.audioSession.addEventListener('statechange', () => {
+    if (sessionSays++ < 12) measure({when: 'session', session: phoneSession(), hidden: hidden()}); }); } catch (e) {}
   // Auto waiting between replies: the silent element going (where the phone lets it, taking up what it let go)
   const rest = (cause, then) => {
     if (N) { if (then) then(false); return; }
@@ -4078,6 +4089,7 @@ PLAYER = """
   player.addEventListener('pause', () => {
     if (Date.now() - ours < 600 || player.ended || player.src === SILENT) return;
     if (!playing || paused || !N) return;
+    phoneStop(player, 'player');
     paused = true; loading = false; stopAt = Date.now(); follow(null);
     if (boxed()) { why = 'dictation'; byVoice = true; quietSoon(); log('pause', 'the phone, a box being written in'); }
     else { why = 'phone'; letGo = {why: 'phone', at: Date.now()}; log('pause', 'the phone'); }
@@ -4086,6 +4098,7 @@ PLAYER = """
   // was, and let go; the pill or the bar says tap to resume, and the tap (or coming back to the page) takes it up.
   hum.addEventListener('pause', () => {
     if (Date.now() - humOurs < 600) return;
+    phoneStop(hum, 'hum');
     humTries += 1; resting = 0; letGo = {why: 'phone', at: Date.now()}; stopAt = stopAt || Date.now();
     restStop('the phone stopped the silence'); save(); changed(); });
   // Writing is a hold even with no reply playing yet. Focus covers an iOS microphone waiting for words; composition
