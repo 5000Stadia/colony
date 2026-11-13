@@ -4960,6 +4960,7 @@ document.addEventListener('submit', async (ev) => {
   const gate = (f.querySelector('input[name=gate]') || {}).value || '';
   const rule = document.createElement('style');
   rule.textContent = `.need:has(input[name=gate][value="${CSS.escape(gate)}"]), .card.gate:has(input[name=gate][value="${CSS.escape(gate)}"]),
+    .incard:has(.gatechoices input[name=gate][value="${CSS.escape(gate)}"]),
     details.need[data-k="g${CSS.escape(gate)}"] { display:none !important }`;
   document.head.appendChild(rule);
   // in a status report the item stays where it is, so it says what was answered in place of its options: left as it
@@ -4968,7 +4969,14 @@ document.addEventListener('submit', async (ev) => {
   if (inReport) { const said = document.createElement('div'); said.className = 'pre'; said.textContent = 'Your answer: ' + (body.get('text') || '');
     inReport.replaceChildren(said); }
   const r = await fetch('/answer', {method: 'POST', body, redirect: 'manual'}).catch(() => null);
-  if (r && (r.ok || r.type === 'opaqueredirect')) { if (inReport && inReport.closest('.rneed')) inReport.closest('.rneed').classList.add('answered'); return; }
+  if (r && (r.ok || r.type === 'opaqueredirect')) { if (inReport && inReport.closest('.rneed')) inReport.closest('.rneed').classList.add('answered');
+    // the Inbox shows one card and holds it still, so the next comes here: left to itself the answered card stayed, its
+    // question gone and its head and foot left (the person's screenshot, 2026-11-13)
+    const stack = f.closest('#inbox');
+    if (stack) { const next = await fetch('/inbox/feed', {cache: 'no-store'}).then((x) => x.ok ? x.text() : null).catch(() => null);
+      if (next && next.includes("class='card incard")) { stack.innerHTML = next; rule.remove(); scrollTo(0, 0); }
+      else if (window.colonyNav) colonyNav.go('/inbox'); else location.href = '/inbox'; }
+    return; }
   rule.remove();
   if (inReport) inReport.replaceChildren(...kept);
   const p = document.createElement('p'); p.className = 'muted'; p.textContent = 'Not sent: the board could not be reached. Tap again.';

@@ -8419,6 +8419,36 @@ const {chromium} = require('/opt/colony-test-playwright');
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_a_choice_tapped_on_a_card_brings_the_next_card(self):
+        # the answered card stayed, its question gone and its head and foot left, until the page was opened again
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const page = await (await browser.newContext({viewport: {width: 390, height: 797}})).newPage();
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  await page.goto(process.argv[1] + '/inbox');
+  await page.evaluate(() => { window.samePage = true; });
+  const first = await page.locator('.incard .inproj').first().textContent();
+  const asked = await page.locator('.incard .need b').first().textContent();
+  await page.locator('.incard .gatechoices button.choice').first().click();
+  await page.waitForFunction(() => { const c = [...document.querySelectorAll('.incard')].find((x) => x.offsetParent);
+    const go = c && [...c.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Approve');
+    return !!(go && go.offsetParent && c.querySelector('.inhead .muted').textContent.startsWith('ready for your OK')); }, null, {timeout: 4000})
+    .catch(() => { throw new Error('the next card, whole, within four seconds of the tap'); });
+  assert(await page.evaluate(() => window.samePage === true), 'and with no page load');
+  assert(await page.locator('.incard').count() === 1, 'one card');
+  assert((await page.locator('.incount').textContent()).startsWith('1 of 1'), 'the count is the stack as it now stands: ' + await page.locator('.incount').textContent());
+  assert(first && asked, 'the first card had a name and a question');
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        self.two_cards()
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
     def test_a_narrow_card_keeps_its_play_button_beside_the_name_and_its_attach_at_the_left(self):
         # on a phone the play button fell to a line of its own under the head, and the reply's + floated mid-row
         script = r"""
