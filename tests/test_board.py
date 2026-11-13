@@ -2068,6 +2068,20 @@ class ChatTest(BoardBase):
         unlabelled = board.roadmap(None, "## M1 — Build\n- [ ] R1 a\n- [ ] R2 b\n")
         self.assertEqual(board.items(unlabelled)["R2"]["after"], ["R1"], "a plan that names no kinds is read as before")
 
+    def test_an_address_written_out_in_chat_is_a_link_to_tap(self):
+        said = board.chat_prose("Open https://example.com/a?b=1&c=2, then [the docs](https://example.com/d) and "
+                                "`curl https://example.com/code`.\n\n```\nwget https://example.com/fenced\n```")
+        self.assertIn("<a href='https://example.com/a?b=1&amp;c=2' target='_blank' rel='noopener'>"
+                      "https://example.com/a?b=1&amp;c=2</a>, then", said, "the comma after it is not part of it")
+        self.assertEqual(said.count("<a "), 2, "a link written as one is not made a link twice: " + said)
+        self.assertIn("<code>curl https://example.com/code</code>", said)
+        self.assertIn("<pre>wget https://example.com/fenced</pre>", said)
+        board.track(self.root)
+        mine = board.live_addresses(board.e("it's up at http://127.0.0.1:3000/x <b>now</b>"), 0)   # the person's own words
+        self.assertIn("u=http%3A%2F%2F127.0.0.1%3A3000%2Fx", mine, "one on this machine opens through the opener, so a phone reaches it")
+        self.assertIn(">http://127.0.0.1:3000/x</a> &lt;b&gt;now&lt;/b&gt;", mine, "what they typed stays text")
+        self.assertEqual(board.live_addresses(board.e("no address here: a/b and c://"), 0), board.e("no address here: a/b and c://"))
+
     def test_a_markdown_table_and_a_quote_in_a_reply_show_as_such(self):
         said = board.chat_prose("Here:\n\n| Project | Who takes it |\n|---|---|\n| Novel | `wc -w` **count** |\n\n> 31,200 words\n\nAfter.")
         self.assertIn("<div class='mdtable'><table><tr><th>Project</th><th>Who takes it</th></tr>"

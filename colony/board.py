@@ -5149,6 +5149,29 @@ def chat_attachments(key, root, text):
     return ''.join(out)
 
 
+def live_addresses(page, key=None):
+    """A message as drawn, with each address written out in it a link to tap (the person, Nov 13: asked that links in
+    Chat be tappable; a link written as markdown already was, an address by itself was plain text). Only in its
+    words: never inside a link, code, or a tag. One on this machine opens through the opener, as on a card."""
+    from . import opener
+    out, inside = [], 0
+    for part in re.split(r"(<[^>]+>)", page):
+        if part.startswith("<"):
+            m = re.match(r"<(/?)(?:a|code|pre)\b", part, re.I)
+            if m:
+                inside = max(0, inside - 1) if m.group(1) else inside + 1
+        elif not inside and "://" in part:
+            raw, at, got = html.unescape(part), 0, []
+            for m in ADDRESS.finditer(raw):
+                href = opener.address(key, m.group(0)) if key is not None else m.group(0)
+                got.append(f"{e(raw[at:m.start()])}<a href='{e(href)}'{opener.NEW_TAB}>{e(m.group(0))}</a>")
+                at = m.end()
+            if got:
+                part = "".join(got) + e(raw[at:])
+        out.append(part)
+    return "".join(out)
+
+
 def chat_prose(text, key=None, root=None):
     """An agent's prose in the chat: markdown as the page shows it, code blocks kept as they are, links live; a
     picture in the project shown as itself (![what](path)), and a link to any other file there (a PDF) opens it."""
@@ -5179,7 +5202,7 @@ def chat_prose(text, key=None, root=None):
     page = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", picture, page)
     page = re.sub(r"(?<!!)\[([^\]]+)\]\(((?:https?://|/)[^)\s]+|[^)\s]+\.(?:pdf|png|jpe?g|gif|webp|heic|svg))\)", link, page, flags=re.I)
     page = re.sub(r"<div class='mdtable'><table>.*?</table></div>", lambda m: media.table(m[0]), page, flags=re.S)
-    return name_items(page, root)
+    return name_items(live_addresses(page, key), root)
 
 
 # monitor and suggestion: notes left before colony's steward was retired (R152), still labelled as what they are
@@ -5828,9 +5851,9 @@ def chat_feed(key, root, shown=SHOWN):
             to = REPLY.match(t["text"])
             said = t["text"][to.end():] if to else t["text"]
             out.append(f"<div class='msg you'>" + (f"<div class='re'>↩ {e(to.group(1))}</div>" if to else "")
-                       + f"{e(said)}{shots}{said_at(t['at'])}</div>")
+                       + f"{live_addresses(e(said), key)}{shots}{said_at(t['at'])}</div>")
         elif t["from"] == "queued":                      # sent mid-turn, not yet taken up
-            out.append(f"<div class='msg you pending queued' title='queued: it reaches the agent within this turn'>{e(t['text'])}</div>")
+            out.append(f"<div class='msg you pending queued' title='queued: it reaches the agent within this turn'>{live_addresses(e(t['text']), key)}</div>")
         elif t["from"] == "colony" and t["text"].lstrip().startswith("[colony] Context carry-over ("):
             # what it wrote down before a context refresh: one line, opened to read; never read aloud
             said = "\n\n".join(x for kind, x in t["items"] if kind == "say")
@@ -5842,7 +5865,7 @@ def chat_feed(key, root, shown=SHOWN):
             head, _, rest = t["text"].removeprefix("[colony]").strip().partition("\n")
             body = "\n\n".join(filter(None, [rest.strip(), letters.get(i, "")]))
             out.append(f"<details class='msg colony' data-k='c{k}'><summary>{e(short(head, 90))}</summary>"
-                       f"<div>{e(body)}</div></details>")
+                       f"<div>{live_addresses(e(body), key)}</div></details>")
         elif t["from"] == "compact":
             out.append("<div class='msg colony'>The conversation was compacted here</div>")
         run, last_step = [], max((j for j, (kind, _) in enumerate(t["items"]) if kind == "step"), default=-1)
