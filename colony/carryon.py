@@ -40,7 +40,9 @@ def startable(root):
         for it in m["items"]:
             if it["state"] not in ("todo", "doing") or it["id"] in open_gates:
                 continue
-            if PARKED.search(it["text"] + " " + board.item_full(root, it)):
+            # all three places an item's words live: its line, its indented lines in the plan, its details file.
+            # item_full gives the file where there is one, so a hold written under the line went unread (Accord, Nov 14)
+            if PARKED.search(" ".join((it["text"], it.get("desc", ""), board.item_details(root, it["id"])))):
                 continue
             if shared and Path(lead.owner(root, it["id"])).resolve() != Path(root).resolve():
                 continue

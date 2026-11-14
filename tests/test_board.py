@@ -2304,6 +2304,19 @@ class CarryOnTest(BoardBase):
             board.project_settings(self.root, {"carry_on": ""})
             self.assertNotIn("R2", carryon.startable(self.root), "a decision open on it: not startable")
 
+    def test_a_hold_written_under_an_item_s_line_counts_where_the_item_also_has_a_details_file(self):
+        from colony import carryon
+        board.track(self.root)
+        (self.root / "ROADMAP.md").write_text(
+            "## Vision\nPlants.\n\n## M1 — Build · menu\n- [~] R6 the foothold\n  On hold: waits on the person's look.\n- [ ] R7 next\n")
+        (self.root / "roadmap").mkdir(exist_ok=True)
+        (self.root / "roadmap" / "R6.md").write_text("# R6 the foothold\n\nThe checklist.\n")
+        self.assertEqual(carryon.startable(self.root), ["R7"], "the hold is in the plan, under the line: read there too")
+        (self.root / "ROADMAP.md").write_text("## Vision\nPlants.\n\n## M1 — Build · menu\n- [~] R6 the foothold\n- [ ] R7 next\n")
+        self.assertEqual(carryon.startable(self.root), ["R6", "R7"])
+        (self.root / "roadmap" / "R6.md").write_text("# R6 the foothold\n\nOn hold: waits on the person's look.\n")
+        self.assertEqual(carryon.startable(self.root), ["R7"], "and in its details file, as before")
+
     def test_a_restart_of_the_board_does_not_wake_it_again_and_an_item_the_person_parked_is_not_work_to_start(self):
         from colony import carryon
         board.track(self.root)
