@@ -2304,6 +2304,45 @@ class CarryOnTest(BoardBase):
             board.project_settings(self.root, {"carry_on": ""})
             self.assertNotIn("R2", carryon.startable(self.root), "a decision open on it: not startable")
 
+    def test_an_item_taken_up_unasked_is_met_once_with_a_line_asking_for_its_shape(self):
+        from colony import carryon
+        board.track(self.root)
+        plan = self.root / "ROADMAP.md"
+        plan.write_text("## Vision\nPlants.\n\n## M1 — Build · menu\n- [ ] R2 Business dates for an owner\n- [ ] R3 c\n- [ ] R4 d\n")
+        board.item_times(self.root)
+        typed = []
+        with patch.object(carryon.board, "projects", return_value=[self.root]), \
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
+            carryon.shape()
+            self.assertEqual(typed, [], "nothing taken up")
+            plan.write_text(plan.read_text().replace("- [ ] R2", "- [~] R2"))
+            carryon.shape()
+            self.assertEqual(len(typed), 1)
+            self.assertIn("You took up R2 (Business dates for an owner).", typed[0])
+            for line in ("what it is", "why now", "what it rests on", "what done looks like", "what it will ask of them"):
+                self.assertIn(line, typed[0])
+            self.assertIn("If the person didn't ask for it or agree to it, and no rule of theirs covers it", typed[0])
+            self.assertIn("It is not a question: carry on.", typed[0])
+            carryon.shape()
+            self.assertEqual(len(typed), 1, "once")
+            plan.write_text(plan.read_text().replace("- [~] R2", "- [ ] R2")); board.item_times(self.root)
+            plan.write_text(plan.read_text().replace("- [ ] R2", "- [~] R2"))
+            carryon.shape()
+            self.assertEqual(len(typed), 1, "taken up again: not a start")
+            board.append(self.root, "said.jsonl", {"at": board.now(), "text": "please build the third one"})
+            plan.write_text(plan.read_text().replace("- [ ] R3", "- [~] R3"))
+            carryon.shape()
+            self.assertEqual(len(typed), 1, "the person was just talking to it: what they asked for is left alone")
+            (self.root / ".board" / "said.jsonl").unlink()
+            carryon.shape()
+            self.assertEqual(len(typed), 1, "and it stays left alone once they go quiet")
+            plan.write_text(plan.read_text().replace("- [ ] R4", "- [~] R4"))
+            with patch.object(carryon.console, "type_into", return_value=False):
+                carryon.shape()
+            carryon.shape()
+            self.assertEqual(len(typed), 2, "a line that couldn't be typed is tried again")
+            self.assertIn("You took up R4 (d).", typed[1])
+
     def test_a_hold_written_under_an_item_s_line_counts_where_the_item_also_has_a_details_file(self):
         from colony import carryon
         board.track(self.root)

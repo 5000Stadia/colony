@@ -126,12 +126,66 @@ def tick(now=None):
         away = "" if hours.active() else (f" The person is away{' until ' + hours.at_day(board.epoch(until)) if until else ''}: "
                                           "take what doesn't need them.")
         text = (f"[colony] Idle, with roadmap items that can start: {', '.join(items[:6])}"
-                f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision; "
-                # the moment an item starts unasked is this one (R154): its shape reaches the person before the work does
-                f"as it starts, tell the person its shape (roadmap.md, Starting an item). "
+                f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision. "
                 # a hold said only in the reply is read by no one: the next commit would wake it for the same item
                 f"If something holds one, record it where it lasts: a decision for the person as a gate on it "
                 f"(colony gate ... --item {items[0]}), anything else as \"on hold: why\" in its text.{away}")
         if console.type_into(name, text):
             _idle.pop(key, None)
             board.append(root, "carryon.jsonl", {"at": board.now(), "items": items[:6], "sig": list(sig)})
+
+
+# --- an item taken up that the person didn't just ask for: its shape, said at the mark (R154) ----------------------
+
+SHAPE = 10 * 60              # seconds after an item is first taken up in which its reminder may still be sent
+
+
+def shape_due(root, now=None):
+    """Items this project took up for the first time in the last few minutes, while the person wasn't in conversation
+    with it, and not yet reminded of: [(id, its words)]. Across 33 starts on every project, the shape was told in
+    full at 5, and the guide that asks for it was read before the moment and not acted on at it; the one start that
+    followed colony's own line gave all five lines. Half the starts were things the person had asked for minutes
+    before: those are left alone (their answer, gate g794c00db), by the only sign colony has, that they had just
+    spoken to it. Whether they asked for the item longer ago, or a rule of theirs covers it, the agent knows and
+    colony doesn't, so the line says so."""
+    from . import lead
+    now = time.time() if now is None else now
+    recs, its = board.item_times(root), board.items(board.roadmap(root))
+    told = {i for r in board.read(root, "carryon.jsonl") for i in r.get("shape") or ()}
+    said = [r for r in board.read(root, "said.jsonl") if r.get("text")]
+    spoke = board.epoch(said[-1]["at"]) if said else 0
+    shared = lead.group(root)
+    due, quiet = [], []
+    for iid, r in recs.items():
+        first = r.get("first")
+        if r.get("state") != "doing" or not first or first != r.get("started") or now - first > SHAPE or iid in told:
+            continue                                  # not under way, taken up again, long since, or already said
+        if shared and Path(lead.owner(root, iid)).resolve() != Path(root).resolve():
+            continue
+        (quiet if first - spoke < TALKING else due).append((iid, (its.get(iid) or {}).get("text", "")))
+    if quiet:
+        board.append(root, "carryon.jsonl", {"at": board.now(), "shape": [i for i, _ in quiet], "left": "in conversation"})
+    return due
+
+
+def shape(now=None):
+    """Called by the watcher: tell each project's agent, once, at the moment it takes up an item the person didn't
+    just ask for, to give them the item's shape."""
+    from . import providers, usage
+    for root in board.projects():
+        try:
+            if not root.exists() or board.paused(root) or usage.paused().get(providers.key(providers.of(root))):
+                continue
+            due = shape_due(root, now)
+            if not due:
+                continue
+            names = ", ".join(f"{i} ({t[:60].rsplit(' ', 1)[0] if len(t) > 60 else t})" if t else i for i, t in due[:3])
+            text = (f"[colony] You took up {names}. If the person didn't ask for {'it' if len(due) == 1 else 'these'} or "
+                    f"agree to {'it' if len(due) == 1 else 'them'}, and no rule of theirs covers it, tell them "
+                    f"{'its' if len(due) == 1 else 'each'} shape now if you haven't, in five short lines: what it is, why "
+                    f"now, what it rests on, what done looks like, what it will ask of them. It is not a question: carry on. "
+                    f"If they did, nothing is needed.")
+            if console.type_into(console.session_name(root), text):
+                board.append(root, "carryon.jsonl", {"at": board.now(), "shape": [i for i, _ in due]})
+        except Exception:
+            continue

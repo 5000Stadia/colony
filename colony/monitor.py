@@ -492,6 +492,11 @@ class Watcher:
         except Exception:
             pass
         try:
+            from . import carryon
+            carryon.shape()                         # an item taken up unasked: its shape, asked for at the mark (R154)
+        except Exception:
+            pass
+        try:
             from . import lingering
             lingering.tick()                        # background work gone quiet: named to its agent once
         except Exception:
