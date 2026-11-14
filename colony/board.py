@@ -3530,6 +3530,11 @@ PLAYER = """
   // able: Auto on and the phone letting this page play (a sound played since it opened, and none refused or let go)
   const able = () => aloud() && !autoPaused() && unlocked && !letGo;
   const listening = () => able() && !paused && !writing();
+  // The person's own stop (g55a5c5c3): their pause (on a reading, of Auto, or in the silence between replies), or a
+  // reading left held on this device that they haven't taken up. Not dictation's hold, nor the phone's. What they have
+  // on screen meanwhile is read: it was all kept for the resume, and read aloud to them after they had answered it.
+  const theirStop = () => autoPaused() || !!(letGo && letGo.why === 'paused')
+    || (!!N && !N.document && (paused ? why === 'person' : !playing && !loading && !resuming));
   // The pauses and takings-up, each with its cause and how it went, and each let-go with how long the page had been
   // hidden, for the player-state report: the live trial says from the phone's own record what still cuts it off
   const story = [];
@@ -4616,11 +4621,12 @@ PLAYER = """
       via = ''; begin(0, 0); },
     // a chat's seen: its project's parts still in the line, whether anything will read one, and marking them seen
     unheard(p) { const m = new Map(); visible().forEach((x) => { if (x.p === String(p)) x.b.forEach(([k, at]) => m.set(k, {t: x.t, at})); }); return m; },
-    quiet: () => !(aloud() && able() && !paused),
+    quiet: () => theirStop() || !(aloud() && able() && !paused),
     willRead(p, k, at, t) { p = String(p);
       if (N && N.p === p && N.blocks.some((b) => b.k === k)) return true;               // being read
-      if (S && S.want.has(p + '|' + t)) return true;                                      // waiting to be, in this session
-      if (aloud() && armed && Date.parse(at) >= armed && (autoPaused() || !(stopAt && Date.now() - stopAt >= LONG))) return true;   // Auto's, as it landed
+      if (!theirStop()) {                                                                     // (in their own stop, what they see is read)
+        if (S && S.want.has(p + '|' + t)) return true;                                    // waiting to be, in this session
+        if (aloud() && armed && Date.parse(at) >= armed && !(stopAt && Date.now() - stopAt >= LONG)) return true; }   // Auto's, as it landed
       return (held.get(mk(p, k)) || 0) > Date.now(); },                                            // another device's Auto's
     async seen(p, ks) { p = String(p); const name = (L.projects[p] || {}).name, ats = P.unheard(p);
       ks.forEach((k) => marked.add(mk(p, k))); changed();

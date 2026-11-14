@@ -8607,6 +8607,50 @@ const {chromium} = require('/opt/colony-test-playwright');
         result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_in_the_person_s_own_stop_a_reply_shown_on_screen_is_no_longer_kept_for_auto(self):
+        # g55a5c5c3: what landed during their pause was kept for the resume, and read aloud after they had answered it
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  const base = process.argv[1], landed = new Date().toISOString();
+  const open = async (extra) => { const context = await browser.newContext({viewport: {width: 390, height: 844}});
+    await context.addInitScript((more) => { try { localStorage.setItem('aloud', '1'); localStorage.setItem('alive', String(Date.now()));
+      if (!localStorage.getItem('armed')) localStorage.setItem('armed', String(Date.now() - 600e3));
+      Object.entries(more).forEach(([k, v]) => localStorage.setItem(k, v)); } catch (e) {} }, extra);
+    const page = await context.newPage(); await page.goto(base + '/inbox'); return page; };
+  const will = (page, p, k, t) => page.evaluate(([p, k, at, t]) => window.colonyPlayer.willRead(p, k, at, t), [p, k, landed, t]);
+  // Auto on and nothing stopping it: what lands is Auto's to read, so seeing it marks nothing
+  const on = await open({});
+  assert(await will(on, '0', 'k2', 'T2') === true, 'Auto on: what lands is kept for it');
+  const line = (await on.evaluate(() => fetch('/chat/line').then((r) => r.json()))).line;
+  assert(line.length, 'the check needs a reply in the line');
+  // Auto paused by the person: what they have on screen is read
+  const off = await open({autopaused: 'true'});
+  assert(await will(off, '0', 'k2', 'T2') === false, 'Auto paused by them: not kept');
+  assert(await off.evaluate(() => window.colonyPlayer.quiet()) === true, 'and the chat looks at what shows');
+  // a reading left held and not taken up: what waits behind it isn't kept either; the reading itself is
+  const x = line[0], id = x.p + '|' + x.t, now = Date.now();
+  const held = await open({linenow: JSON.stringify({saved: now, sounding: false,
+    N: {id, p: x.p, t: x.t, name: 'shop', blocks: x.b.map(([k, at]) => ({k, at, text: 'Held.'})), j: 0, piece: 0, seat: 'auto'},
+    S: {want: [id, x.p + '|T2'], play: [], auto: [[id, now], [x.p + '|T2', now]], begun: [id]}})});
+  assert((await held.evaluate(() => window.colonyPlayer.state())).reading, 'the reading is here, held');
+  assert(await will(held, x.p, 'k2', 'T2') === false, 'behind a reading left held: not kept');
+  assert(await will(held, x.p, x.b[0][0], x.t) === true, 'the reading itself is');
+  assert(await held.evaluate(() => window.colonyPlayer.quiet()) === true, 'and the chat looks at what shows');
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        self.two_cards()
+        board.line_since()
+        at = time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(time.time() + 2))      # a reply in the line, just landed
+        board.append(self.root, 'line.jsonl', {'k': f's{at}-0', 't': at, 'at': at, 'text': 'The water log is built.\n\nOpen it and add a day.'})
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 class PhonePageTest(HoursBase):
     """The board laid out for a phone first (the design review of the person's board, 2026-10-19): what changed since
