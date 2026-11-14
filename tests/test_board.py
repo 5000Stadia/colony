@@ -2077,6 +2077,8 @@ class ChatTest(BoardBase):
         self.assertIn("<code>curl https://example.com/code</code>", said)
         self.assertIn("<pre>wget https://example.com/fenced</pre>", said)
         board.track(self.root)
+        drawn = "<button>Use https://example.com/b</button><textarea>https://example.com/t</textarea><summary>https://example.com/s</summary>"
+        self.assertEqual(board.live_addresses(drawn, 0), drawn, "a button's words, a box's text and a fold's title stay as they are")
         mine = board.live_addresses(board.e("it's up at http://127.0.0.1:3000/x <b>now</b>"), 0)   # the person's own words
         self.assertIn("u=http%3A%2F%2F127.0.0.1%3A3000%2Fx", mine, "one on this machine opens through the opener, so a phone reaches it")
         self.assertIn(">http://127.0.0.1:3000/x</a> &lt;b&gt;now&lt;/b&gt;", mine, "what they typed stays text")
@@ -8368,11 +8370,16 @@ class InboxTest(HoursBase):
             board.mark_ready(self.root, "R2", "The water log is built.",
                              f"Open https://plants.example/log and add a day. Pictures: {self.root.resolve()}/notes/screens/ (home).")
         with self.clock(10):
-            board.mark_ready(self.root, "R3", "Reminders are built.", "Run it once.")
+            board.mark_ready(self.root, "R3", "Reminders are built: https://plants.example/remind (try it).", "Run it once.")
         with self.clock(12):
             stack = inbox.stack(board.registry())
             self.assertEqual([x["keys"] for x in stack], [["verify:R2"], ["verify:R3"]], "each its own card, the older first")
+            second = inbox.card(stack[1])
+            self.assertIn("Reminders are built: <a href='https://plants.example/remind' target='_blank' rel='noopener'>"
+                          "https://plants.example/remind</a> (try it).", second, "an address in what is ready is a link too")
+            self.assertNotIn("<a", second.split("data-say='")[1].split("'")[0], "what the player reads stays words")
             page = self.top()
+            self.assertEqual(page.count(">https://plants.example/log</a>"), 1, "one already a link is not made one twice")
             self.assertIn("<b>1 of 2</b>", page)
             self.assertIn("ready for your OK · waiting 3 hours", page)
             self.assertIn("<a href='https://plants.example/log' target='_blank' rel='noopener'>https://plants.example/log</a>", page)

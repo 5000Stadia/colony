@@ -5170,12 +5170,13 @@ def chat_attachments(key, root, text):
 def live_addresses(page, key=None):
     """A message as drawn, with each address written out in it a link to tap (the person, Nov 13: asked that links in
     Chat be tappable; a link written as markdown already was, an address by itself was plain text). Only in its
-    words: never inside a link, code, or a tag. One on this machine opens through the opener, as on a card."""
+    words: never inside a link, code, a button or text box, or a tag. One on this machine opens through the opener, as
+    on a card."""
     from . import opener
     out, inside = [], 0
     for part in re.split(r"(<[^>]+>)", page):
         if part.startswith("<"):
-            m = re.match(r"<(/?)(?:a|code|pre)\b", part, re.I)
+            m = re.match(r"<(/?)(?:a|code|pre|button|textarea|select|summary|script|style)\b", part, re.I)   # nor a control's own words
             if m:
                 inside = max(0, inside - 1) if m.group(1) else inside + 1
         elif not inside and "://" in part:
@@ -9114,7 +9115,9 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
                     + say(ask_html(a['text'], p)) + f"{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
     else:                                         # items ready for the person's OK, with no question beside them
         rows.append(f"<div class='{need}'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}{foot}</div>")
-    return rows[0] if rows else ""
+    # an address written out anywhere in it is a link to tap (the person, Nov 14: a sign-off's "what" named its demo's
+    # address as plain text, where only its To check was linked): the whole moment, whatever its kind
+    return live_addresses(rows[0], pid) if rows else ""
 
 
 def waiting_html(pid, root):
