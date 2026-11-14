@@ -4794,7 +4794,11 @@ PLAYER = """
     } else put('linenow', null); } catch (e) {}
   // Auto on as the page opens: armed again where this device was last able to play two hours ago or more, so a night's
   // replies wait for Play; its silence started where the phone lets it, and where it doesn't the pill says tap to resume
-  if (aloud() && !autoPaused() && (!armed || Date.now() - (+(get('alive') || 0)) >= LONG)) arm();
+  // What Auto had taken up before that stop and never began goes with it, as at the tap that resumes (takeUp): kept
+  // with the reading left here, it was read by itself the next morning (2026-11-14: seven replies from 1 AM, at 11).
+  if (aloud() && !autoPaused() && (!armed || Date.now() - (+(get('alive') || 0)) >= LONG)) {
+    if (S) [...S.auto.keys()].forEach((i) => { if (!S.play.has(i) && !(N && N.id === i)) { S.want.delete(i); S.auto.delete(i); } });
+    arm(); save(); }
   draw();
   Promise.resolve(look()).then(() => { if (aloud() && !N && !resting) rest('the page opened'); });
 })();

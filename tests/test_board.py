@@ -8577,6 +8577,36 @@ const {chromium} = require('/opt/colony-test-playwright');
         result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    @unittest.skipUnless(os.environ.get('COLONY_BROWSER_TEST') == '1', 'isolated Chrome/Playwright mounts are needed')
+    def test_what_auto_took_up_before_a_night_away_waits_for_play_on_the_page_opened_next(self):
+        # the session kept with a reading left on the phone still wanted last night's replies, and read them by itself
+        script = r"""
+const {chromium} = require('/opt/colony-test-playwright');
+(async () => {
+  const browser = await chromium.launch({executablePath: '/opt/colony-test-chrome/chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage']});
+  const context = await browser.newContext({viewport: {width: 390, height: 844}});
+  const assert = (ok, why) => { if (!ok) throw new Error(why); };
+  // a phone last able to play three hours ago, its reading left held and two replies waiting behind it: one Auto took
+  // up as it landed, one a tap on Play asked for
+  await context.addInitScript(() => { const ago = Date.now() - 3 * 3600e3; try {
+    localStorage.setItem('aloud', '1'); localStorage.setItem('alive', String(ago)); localStorage.setItem('armed', String(ago - 3600e3));
+    localStorage.setItem('linenow', JSON.stringify({saved: ago, sounding: false,
+      N: {id: '0|TN', p: '0', t: 'TN', name: 'shop', blocks: [{k: 'kN', at: '', text: 'Held.'}], j: 0, piece: 0, seat: 'auto'},
+      S: {want: ['0|TN', '0|T2', '0|T3'], play: ['0|T3'], auto: [['0|TN', ago], ['0|T2', ago]], begun: ['0|TN']}})); } catch (e) {} });
+  const page = await context.newPage();
+  await page.goto(process.argv[1] + '/inbox');
+  const old = '2020-01-01T00:00:00Z';
+  const will = await page.evaluate((at) => [window.colonyPlayer.willRead('0', 'k2', at, 'T2'), window.colonyPlayer.willRead('0', 'k3', at, 'T3')], old);
+  assert(will[0] === false, 'what Auto took up before the stop is no longer its to read');
+  assert(will[1] === true, 'what Play asked for still is');
+  await browser.close();
+})().catch(e => { console.error(e); process.exit(1); });
+"""
+        self.two_cards()
+        port = self.server()
+        result = subprocess.run(['node', '-e', script, f'http://127.0.0.1:{port}'], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 class PhonePageTest(HoursBase):
     """The board laid out for a phone first (the design review of the person's board, 2026-10-19): what changed since
