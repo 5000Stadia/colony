@@ -8439,9 +8439,10 @@ const {chromium} = require('/opt/colony-test-playwright');
     route.fulfill({status: 200, contentType: 'audio/wav', body: wav}); });
   await page.goto(base + '/inbox');
   const b = page.locator('.incard .inhead button.inplay');
-  const box = await b.boundingBox(), head = await page.locator('.incard .inhead').boundingBox();
+  // (its 38px thumb area reaches 6px past the head's edge so the drawn icon lines up with it: inside the card is the check)
+  const box = await b.boundingBox(), card = await page.locator('.incard').first().boundingBox();
   assert(box.width >= 36 && box.height >= 36, 'a thumb can hit it: ' + JSON.stringify(box));
-  assert(box.x + box.width <= head.x + head.width + 1 && box.x + box.width <= 390, 'inside the card on a phone: ' + JSON.stringify(box));
+  assert(box.x + box.width <= card.x + card.width && box.x + box.width <= 390, 'inside the card on a phone: ' + JSON.stringify([box, card]));
   await b.click();
   await page.waitForFunction(() => { const s = window.colonyPlayer.state(); return s.reading && s.playing && !s.paused; });
   const st = await page.evaluate(() => window.colonyPlayer.state());
