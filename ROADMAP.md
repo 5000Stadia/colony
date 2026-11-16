@@ -155,6 +155,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R127 Migrate and go
 - [x] R165 Backup built in: where colony keeps a nightly copy of itself is a setting, and colony makes the copy
 - [x] R166 Setup without an interview: what a new board's person still has to choose stays on the front page until set or skipped, and colony offers what it can find out itself (their answer to gate g83cf4403; related: R125, R165, R152)
+- [x] R167 Active hours removed: nothing is held by the clock; the Inbox carries what needs the person at any hour (their decision, gate gc82fee43; undoes R82)
 
 ## M7 — Codex as a full option: from install to a project's agent
 
