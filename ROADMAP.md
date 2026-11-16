@@ -154,7 +154,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [~] R130 One native Codex repair connection for the installation — the person can repair colony from the ChatGPT app when the board is down; waits on their one-time pairing (related: R125)
 - [x] R127 Migrate and go
 - [x] R165 Backup built in: where colony keeps a nightly copy of itself is a setting, and colony makes the copy
-- [ ] R166 A first-time setup interview: the few things a new board needs from its person, asked once — none exists since the steward's went; waits on the person for its shape (related: R125, R165, R152)
+- [~] R166 Setup without an interview: what a new board's person still has to choose stays on the front page until set or skipped, and colony offers what it can find out itself (their answer to gate g83cf4403; related: R125, R165, R152)
 
 ## M7 — Codex as a full option: from install to a project's agent
 
