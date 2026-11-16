@@ -302,7 +302,7 @@ DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "la
                     "safe_pause": 98, "auto_update": True, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT,
                     "tailscale": "", "tailscale_lan_before": None, "repair_provider": "",
-                    "dev_mode": True}
+                    "dev_mode": True, "backup": ""}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
@@ -332,6 +332,7 @@ SETTING_HELP = {
     "auto_update": "keep Claude Code and Codex updated daily, and reload a console onto the new version (or changed settings) once it sits idle, in the same conversation",
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
+    "backup": "the folder colony keeps a nightly copy of itself in: every project, its own records and the agents' conversations, the newest four kept (blank or off: no copy is kept); another drive, ideally",
     "active_hours": "when you're around, as HH:MM-HH:MM on this machine's clock (off: always): outside them agents keep working but hold their questions, which reach you together when your hours begin",
 }
 
@@ -394,6 +395,9 @@ def set_setting(key, value):
         reg["settings"][key] = chosen
     elif key == "active_hours":
         reg["settings"][key] = hours.normal(value)          # ValueError, saying what reads, for anything else
+    elif key == "backup":
+        from . import backup
+        reg["settings"][key] = backup.choose(value)         # ValueError, saying why a folder can't take the copy
     elif key == "consultants":
         from .providers import PROVIDERS
         chosen = {}
@@ -2726,7 +2730,41 @@ def start_here():
     return ("<div class='card starthere'><h2>Start here</h2>"
             "<p><a class='go' href='/add'>Add your first project →</a></p>"
             "<p class='muted'>A folder of your own work, new or already under way: colony gives it an agent, and this "
-            "page shows what each project is doing and what it needs from you.</p></div>")
+            "page shows what each project is doing and what it needs from you.</p>"
+            + ("" if registry()["settings"].get("backup") else
+               "<p class='muted'>Colony keeps no second copy of itself until you say where one goes: "
+               "<a href='/settings#set-backup'>Settings → Backup</a>.</p>") + "</div>")
+
+
+def backup_card():
+    """Settings → Backup (R165): where colony keeps a nightly copy of itself, how the last one went, and Copy now."""
+    from . import backup
+    folder, s = backup.chosen(), backup.state()
+    last, failed = s.get("last"), s.get("failed")
+    rows = []
+    if failed:
+        rows.append(f"<p><b class='warn'>The last copy wasn't made:</b> {e(failed['why'])}.</p>")
+    if last:
+        from . import migrate
+        rows.append(f"<p>Last copy: {e(local_day(backup._iso(last['at']), clock=True))}, {e(migrate.size(last['bytes']))}, "
+                    f"made in {e(short_span(last['seconds']))}. <span class='muted'>{e(last['archive'])}</span></p>")
+    if backup.same_drive():
+        rows.append("<p class='muted'>This folder is on the same drive as colony itself: the copy guards against a "
+                    "mistake, not against that drive failing.</p>")
+    return (f"<form method='post' action='/backup' class='options'><label>Keep a nightly copy of colony in "
+            f"<input name='folder' value='{e(folder)}' placeholder='a folder on another drive, by its whole path'></label>"
+            "<button>Save</button></form>" + "".join(rows)
+            + ("<form method='post' action='/backup'><input type='hidden' name='now' value='1'><button class='quiet'"
+               f"{' disabled' if backup.running() else ''}>{'Copying now…' if backup.running() else 'Copy now'}</button></form>" if folder else "")
+            + "<p class='muted'>One archive a night, at 3:30 or when the machine is next on, the newest four kept: every "
+              "project, colony's own records and the agents' conversations, read back whole before it is kept. "
+              "<code>colony migrate --unpack</code> puts one back. Left empty, no copy is kept.</p>")
+
+
+def short_span(seconds):
+    """A stretch of time as it is said: 40 seconds, 7 minutes, 2 hours."""
+    n, unit = (seconds, "second") if seconds < 90 else (round(seconds / 60), "minute") if seconds < 5400 else (round(seconds / 3600), "hour")
+    return f"{n:.0f} {unit}{'s' * (round(n) != 1)}"
 
 
 def machine_card():
@@ -10051,7 +10089,7 @@ def connection_ticks():
 
 
 def settings_page(reg):
-    from . import autostart, machine, selection, voice
+    from . import autostart, backup, machine, selection, voice
     selection.migrate()
     reg = registry()
     rows = []
@@ -10241,6 +10279,7 @@ def settings_page(reg):
                 card(f"<ul class='folders'>{where}</ul><p class='muted'>{e(app_reach())}</p>", board_fields)),
         section("machine", "This machine", e(machine.line() or ("starts with the machine" if autostart.on() else
                                                                 "doesn't start with the machine")), card(machine_card())),
+        section("backup", "Backup", e(backup.line()), card(backup_card())),
         section("projects", "Project folders", e(f"{len(reg['roots'])} folder{'s' * (len(reg['roots']) != 1)} · "
                                                  f"{len(reg['projects'])} added one by one"
                                                  + (f" · {len(reg['hidden'])} hidden" if reg['hidden'] else "")),
@@ -11065,6 +11104,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', '0')
             self.end_headers()
             return
+        if path == "/backup":                                # Settings → Backup: the folder, or a copy now
+            from . import backup
+            if form.get("now"):
+                if backup.chosen() and not backup.running():
+                    backup.start()
+            else:
+                try:
+                    set_setting("backup", form.get("folder", ""))
+                except ValueError as err:
+                    return self._send(400, str(err).encode())
+            return self._redirect("/settings#set-backup")
         if path == "/aa-key":
             from . import bench
             if form.get("do") == "remove":

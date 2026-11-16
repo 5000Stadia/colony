@@ -31,6 +31,7 @@ waits on them for, its roadmap, and their words to one project or many at once.
     colony settings [KEY VALUE] [--project NAME]   global options, or one project's own
     colony urls                     every address the board can be opened at
     colony remote [--check|--off]   the board from your own devices, anywhere, through Tailscale (no one else)
+    colony backup [--now]           the nightly copy of colony, kept in the folder of `colony settings backup DIR`
     colony migrate --list | --pack DIR | --unpack ARCHIVE [--force]   carry colony to a fresh install: what it takes, in
                                     one archive, and back in place there as if it had just restarted
     colony bench [card MODEL | discover | fetch | key]   benchmark cards; discover asks each program its models;
@@ -311,6 +312,22 @@ def cmd_voice(a):
         return 0
     print("Kokoro: " + ("ready; Chat reads replies in its voice" if voice.ready() else
                         "not installed; Chat uses the phone's own voice. `colony voice --setup` installs it (about 500 MB)"))
+    return 0
+
+
+def cmd_backup(a):
+    """The nightly copy of colony (colony/backup.py): where it stands, or --now, one made. The folder is the `backup`
+    setting (colony settings backup DIR, or Settings → Backup)."""
+    from . import backup
+    if a.now:
+        if not backup.chosen():
+            raise SystemExit("colony: no folder is chosen for the copy: colony settings backup DIR")
+        try:
+            os.nice(10)                                # a copy runs behind the consoles and the board
+        except OSError:
+            pass
+        return backup.run()
+    print(backup.line())
     return 0
 
 
@@ -2133,6 +2150,9 @@ def main(argv=None):
     p.add_argument("--try", dest="try_", help="how to see or try it"); p.add_argument("--link", help="a URL or a file in the project")
     p.add_argument("--item", help="the roadmap item it comes from"); p.set_defaults(fn=cmd_show)
 
+    p = sub.add_parser("backup", help="the nightly copy of colony: where it stands (the folder: colony settings backup DIR)")
+    p.add_argument("--now", action="store_true", help="make a copy now")
+    p.set_defaults(fn=cmd_backup)
     p = sub.add_parser("migrate", help="carry colony to a fresh install: what it takes, packed in one archive, and back "
                        "in place there as if it had just restarted")
     g = p.add_mutually_exclusive_group(required=True)

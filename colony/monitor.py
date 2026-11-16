@@ -507,6 +507,11 @@ class Watcher:
         except Exception:
             pass
         try:
+            from . import backup
+            backup.tick()                           # the night's copy of colony, where the person keeps one (R165)
+        except Exception:
+            pass
+        try:
             from . import hibernate
             hibernate.tick()                        # a console idle a day, nothing set to wake it, sleeps (R142)
         except Exception:

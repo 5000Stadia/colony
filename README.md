@@ -35,6 +35,16 @@ to its conversation when you open it.
 3. Give them the local link it printed, and say their first project starts from **+ Add project** there.
 4. Leave signing in, keys and Tailscale to them: those need their own accounts and passwords.
 
+### A nightly copy
+
+Until you say where a second copy goes, everything colony holds sits on one drive. Settings → Backup takes a
+folder (another drive, ideally); `colony settings backup /path/to/folder` does the same. Each night at 3:30, or
+when the machine is next on, colony packs every project, its own records and the agents' conversations into one
+archive there, reads it back whole, and keeps the newest four. A folder on another drive is found by that
+drive's own id wherever it is mounted, and with the drive away no copy is made anywhere else: a notice says so
+once. `colony backup` says where things stand, `colony backup --now` makes a copy, and an archive goes back in
+place as below.
+
 ### Moving to a fresh machine
 
 `colony migrate --list` shows the folders, conversations and settings to take, their sizes, and what stays

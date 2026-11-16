@@ -783,6 +783,10 @@ def _pyz(dest):
     return target
 
 
+class NoRoom(SystemExit):
+    """A pack not started for want of room where it would go (the nightly copy drops its oldest and tries again)."""
+
+
 def pack(dest, say=print):
     """colony migrate --pack DIR: the archive, its manifest and the program to unpack it with, into DIR."""
     dest = Path(dest).expanduser().resolve()
@@ -798,7 +802,7 @@ def pack(dest, say=print):
     dest.mkdir(parents=True, exist_ok=True)
     free = shutil.disk_usage(dest).free
     if free < need:
-        raise SystemExit(f"colony: {dest} has {size(free)} free, and the archive can take up to {size(need)} (less once "
+        raise NoRoom(f"colony: {dest} has {size(free)} free, and the archive can take up to {size(need)} (less once "
                          "compressed, but a pack is never started that might not finish): make room, or choose another disk")
     busy = _at_work(plan)
     if shutil.which("tmux") and _board_running():
