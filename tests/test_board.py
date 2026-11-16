@@ -1376,16 +1376,14 @@ class ChatTest(BoardBase):
     def test_what_the_agent_needs_of_the_person_ends_the_chat_each_answered_in_place(self):
         board.track(self.root)
         from colony import hours
-        with patch.object(hours, "held_until", return_value=None):          # asked within the person's hours
-            board.add_gate(self.root, "Email or SMS first?", why="the reminder order", default="email first")
+        board.add_gate(self.root, "Email or SMS first?", why="the reminder order", default="email first")
         feed = board.chat_feed("0", self.root)
         self.assertIn("Needs you · 1", feed)
         self.assertIn("action='/answer'", feed)
         self.assertIn("<span class='tag'>Recommended</span>email first</button>", feed, "the default, one tap away")
         self.assertIn("Something else, or a question…", feed)
         self.assertIn("name='reply' value='1'", feed, "typed in its box, the agent judges answer or question")
-        with patch.object(hours, "held_until", return_value=None):
-            g = board.add_gate(self.root, "Which pot?", options=["clay", "plastic"], recommended="plastic")
+        g = board.add_gate(self.root, "Which pot?", options=["clay", "plastic"], recommended="plastic")
         feed = board.chat_feed("0", self.root)
         self.assertLess(feed.index("Recommended</span>plastic"), feed.index(">clay</button>"), "the recommended one first")
         with self.assertRaises(ValueError):
@@ -1691,8 +1689,7 @@ class ChatTest(BoardBase):
         self.assertEqual(chat.running(["  ⏵⏵ bypass permissions on · 1 shell · ← for agents"]), "1 shell running")
         # a decision's own box takes them too, and they come back with the question when it is asked again
         from colony import hours
-        with patch.object(hours, "held_until", return_value=None):
-            g = board.add_gate(self.root, "Which pot?")
+        g = board.add_gate(self.root, "Which pot?")
         body = (b"--B\r\nContent-Disposition: form-data; name=\"p\"\r\n\r\n0\r\n"
                 b"--B\r\nContent-Disposition: form-data; name=\"gate\"\r\n\r\n" + g["id"].encode() + b"\r\n"
                 b"--B\r\nContent-Disposition: form-data; name=\"reply\"\r\n\r\n1\r\n"
@@ -2262,8 +2259,7 @@ class CarryOnTest(BoardBase):
                 patch.object(carryon.console, "attached", return_value=False), \
                 patch.object(chat, "helpers", side_effect=lambda snap: helping[0]), \
                 patch.object(lingering, "commands", side_effect=lambda root, name: commands[0]), \
-                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True), \
-                patch("colony.hours.active", return_value=True):
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
             carryon.tick(now=1000); carryon.tick(now=1000 + carryon.IDLE + 1)
             self.assertEqual(typed, [], "a helper still runs")
             helping[0] = False
@@ -2285,8 +2281,7 @@ class CarryOnTest(BoardBase):
                 patch.object(carryon.console, "snapshot", return_value={"state": "idle", "lines": []}), \
                 patch.object(carryon.console, "drafting", return_value=False), \
                 patch.object(carryon.console, "attached", return_value=False), \
-                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True), \
-                patch.object(carryon.hours, "active", return_value=True) if hasattr(carryon, "hours") else patch("colony.hours.active", return_value=True):
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
             carryon.tick(now=1000)
             self.assertEqual(typed, [], "not yet: idle a while first")
             carryon.tick(now=1000 + carryon.IDLE + 1)
@@ -2372,8 +2367,7 @@ class CarryOnTest(BoardBase):
                 patch.object(carryon.console, "snapshot", return_value={"state": "idle", "lines": []}), \
                 patch.object(carryon.console, "drafting", return_value=False), \
                 patch.object(carryon.console, "attached", return_value=False), \
-                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True), \
-                patch("colony.hours.active", return_value=True):
+                patch.object(carryon.console, "type_into", side_effect=lambda name, text: typed.append(text) or True):
             for restart in range(3):
                 carryon._idle.clear(); vars(carryon).get("_woke", {}).clear()       # the board restarted: memory in the process is gone
                 carryon.tick(now=1000 * (restart + 1)); carryon.tick(now=1000 * (restart + 1) + carryon.IDLE + 1)
@@ -3161,7 +3155,7 @@ class GlanceTest(BoardBase):
         self.assertIn("<span class='sttl'>Agent programs</span>", page)
         # Settings is folded into parts; one form's fields sit in the parts they belong to, so a save anywhere keeps the rest
         self.assertIn("<form id='opts' method='post' action='/options'></form>", page)
-        for field in ("active_hours", "permissions", "lan", "auto_balance"):
+        for field in ("safe_pause", "permissions", "lan", "auto_balance"):
             self.assertRegex(page, f"form='opts'[^>]* name='{field}'")
         self.assertIn("name='on' value='claude' checked", page)
         self.assertIn("off, but 1 project still run on it (plants)", page, "unticking breaks nothing that runs")
@@ -7654,13 +7648,12 @@ class ServerTest(BoardBase):
 
 
 class HoursBase(BoardBase):
-    """A tracked project on the person's own hours (colony's default), with both of colony's clocks fixed in each
+    """A tracked project, with both of colony's clocks fixed in each
     check, on 7 October 2026 and the days after by this machine's own clock, whatever its zone."""
 
     def setUp(self):
         super().setUp()
         board.track(self.root)
-        board.set_setting("active_hours", "07:30-23:45")              # the person's own hours: colony's default
         self.saved = (console.snapshot, console.type_into)
         console.snapshot = lambda root, lines=6, name=None: {"state": "idle", "lines": []}
         self.sent = []
@@ -7703,9 +7696,9 @@ class HoursBase(BoardBase):
         return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.at(hour, minute, day)))
 
 
-class ActiveHoursTest(HoursBase):
-    """R82: the person's active hours. Outside them agents keep working and hold their questions, which reach the
-    person together when the hours begin; the person's own words and colony's safety notices go through at any hour."""
+class NoHoursTest(HoursBase):
+    """R167: active hours (R82) are gone. Nothing is held by the clock: what an agent asks is the person's at once,
+    at any hour, and agents hear nothing about the hour."""
 
     def test_a_decision_asked_again_whole_replaces_the_one_it_reframes(self):
         first = board.add_gate(self.root, "Which pot?")
@@ -7725,183 +7718,38 @@ class ActiveHoursTest(HoursBase):
                       "<p><span class='muted'>Answer:</span> Clay, by about a day</p></div>", body)
         self.assertLess(body.index("round now"), body.index("<b>Which pot, given clay dries faster?</b>"))
 
-    def test_the_setting_reads_a_range_even_across_midnight_or_off_and_refuses_anything_else(self):
-        self.assertEqual(board.DEFAULT_SETTINGS["active_hours"], "07:30-23:45", "the person's own hours, by default")
-        for typed, kept in (("7:30-23:45", "07:30-23:45"), ("22:00 – 06:00", "22:00-06:00"), ("09:00-24:00", "09:00-00:00"),
-                            ("Off", "off")):
-            board.set_setting("active_hours", typed)
-            self.assertEqual(board.registry()["settings"]["active_hours"], kept, typed)
-        for typed in ("", "7:30", "9am-5pm", "25:00-06:00", "07:30-07:60", "08:00-08:00"):
-            with self.assertRaises(ValueError, msg=typed):
-                board.set_setting("active_hours", typed)
-        self.assertEqual(board.registry()["settings"]["active_hours"], "off", "what doesn't read changes nothing")
-        run = self.cli("settings", "active_hours", "09:00-17:30")
-        self.assertEqual(run.returncode, 0, run.stderr)
-        self.assertRegex(run.stdout, r"active_hours +09:00-17:30 +when you're around")
-        refused = self.cli("settings", "active_hours", "9-5")
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("HH:MM-HH:MM", refused.stderr, "it says what reads")
-        self.assertIn("name='active_hours' value='09:00-17:30'", board.settings_page(board.registry()))
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        post = lambda **form: urllib.request.urlopen(urllib.request.Request(
-            f"http://127.0.0.1:{httpd.server_address[1]}/options", data=urllib.parse.urlencode(form).encode()))
-        try:
-            with self.assertRaises(urllib.error.HTTPError) as refused:
-                post(active_hours="25:00-01:00", effort="low")
-            self.assertEqual(refused.exception.code, 400)
-            self.assertIn(b"HH:MM-HH:MM", refused.exception.read())
-            self.assertEqual((board.registry()["settings"]["active_hours"], board.registry()["settings"]["effort"]),
-                             ("09:00-17:30", ""), "nothing on the page is saved with hours that don't read")
-            post(active_hours="22:00-06:00", effort="low")
-            self.assertEqual(board.registry()["settings"]["active_hours"], "22:00-06:00")
-        finally:
-            httpd.shutdown()
-            httpd.server_close()
-
-    def test_the_person_seen_at_night_is_around_for_a_quarter_hour(self):
-        with self.clock(2):
-            held = board.add_gate(self.root, "Which pot?")
-        self.assertIn("held_until", held)
+    def test_nothing_is_held_by_the_clock_and_an_agent_hears_nothing_of_the_hour(self):
         with self.clock(3):
-            self.assertTrue(next(g for g in board.gates(self.root) if g["id"] == held["id"])["held"], "still away")
-            hours.seen()                                                # they write to an agent, or open the board
-            self.assertFalse(next(g for g in board.gates(self.root) if g["id"] == held["id"])["held"],
-                             "what was held reaches them now")
-        with self.clock(3, 10):
-            self.assertTrue(hours.active())
-            self.assertEqual(hours.notice(), "", "agents may ask them")
-            self.assertNotIn("held_until", board.add_gate(self.root, "Which soil?"), "asked while they're around: at once")
-        with self.clock(3, 16):
-            self.assertFalse(hours.active(), "a quarter hour on, they're away again")
-            self.assertIn("held_until", board.add_gate(self.root, "Which tray?"))
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        url = f"http://127.0.0.1:{httpd.server_address[1]}/"
-        try:
-            with self.clock(4):
-                urllib.request.urlopen(urllib.request.Request(url, headers={"Sec-Fetch-Mode": "cors", "Sec-Fetch-Dest": "empty"})).read()
-                self.assertFalse(hours.present(), "a page keeping itself current isn't them")
-                urllib.request.urlopen(urllib.request.Request(url, headers={"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"})).read()
-                self.assertTrue(hours.present(), "opening a page is")
-        finally:
-            httpd.shutdown()
-            httpd.server_close()
-
-    def test_passive_player_posts_do_not_release_overnight_gates(self):
-        # Reproduces the presence bypass, not a claim about which request caused the reported midnight update.
-        with self.clock(23, 30, day=6):
-            hours.seen()
-        with self.clock(0, 28):
-            gate = board.add_gate(self.root, "Which reminders first?")
-        stamp = board.home() / "person-seen"
-        before = stamp.read_bytes()
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        self.addCleanup(httpd.server_close)
-        self.addCleanup(httpd.shutdown)
-        base = f"http://127.0.0.1:{httpd.server_address[1]}"
-        for path, form in (("/chat/measure", {"m": '{"when":"player-state"}'}),
-                           ("/chat/heard", {"how": "heard", "keys": "{}"}),
-                           ("/chat/heard", {"how": "seen", "keys": "{}"})):
-            with self.subTest(path=path, how=form.get("how")), self.clock(0, 50) as now:
-                with urllib.request.urlopen(urllib.request.Request(base + path,
-                        data=urllib.parse.urlencode(form).encode())) as response:
-                    response.read()
-                self.assertEqual(stamp.read_bytes(), before, "automatic reports do not renew the person's presence")
-                self.assertFalse(hours.present())
-                self.assertEqual(board.gates(self.root)[0]["held"], gate["held_until"])
-        with self.clock(1) as now:
-            with urllib.request.urlopen(urllib.request.Request(base + "/", headers={
-                    "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document"})) as response:
-                response.read()
-            self.assertTrue(hours.present(), "the person's own navigation still releases what waits")
-            self.assertFalse(board.gates(self.root)[0]["held"])
-
-    def test_explicit_player_actions_and_messages_still_mark_the_person_present(self):
-        httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        self.addCleanup(httpd.server_close)
-        self.addCleanup(httpd.shutdown)
-        base = f"http://127.0.0.1:{httpd.server_address[1]}"
-        for minute, path, form in ((0, "/chat/heard", {"how": "skipped", "keys": "{}"}),
-                                   (16, "/chat/heard", {"how": "cleared", "keys": "{}"}),
-                                   (32, "/chat/send", {"p": "0", "text": "Keep going"})):
-            with self.subTest(path=path, how=form.get("how")), self.clock(1, minute) as now:
-                self.assertFalse(hours.present(), "the preceding action's quarter hour has ended")
-                with patch.object(console, "ensure", return_value="test-console"), \
-                        patch.object(console, "paste_into", return_value=True), \
-                        urllib.request.urlopen(urllib.request.Request(base + path,
-                        data=urllib.parse.urlencode(form).encode())) as response:
-                    response.read()
-                self.assertEqual(hours.last_seen(), now)
-                self.assertTrue(hours.active())
-        with self.clock(1, 48):
-            self.assertFalse(hours.active(), "genuine activity still expires after a quarter hour")
-
-    def test_whether_the_hours_hold_and_when_they_next_begin(self):
-        day = "07:30-23:45"
-        for (h, m), on in (((3, 0), False), ((7, 29), False), ((7, 30), True), ((12, 0), True), ((23, 44), True),
-                           ((23, 45), False), ((0, 0), False)):
-            self.assertEqual(hours.active(self.at(h, m), day), on, f"{h:02d}:{m:02d}")
-        self.assertEqual(hours.next_start(self.at(3), day), self.at(7, 30), "later the same morning")
-        self.assertEqual(hours.next_start(self.at(23, 50), day), self.at(7, 30, day=8), "the next morning")
-        self.assertEqual(hours.next_start(self.at(12), day), self.at(7, 30, day=8), "within them: the next time they begin")
-        night = "22:00-06:00"                                          # someone whose hours cross midnight
-        for (h, m), on in (((21, 59), False), ((22, 0), True), ((3, 0), True), ((5, 59), True), ((6, 0), False)):
-            self.assertEqual(hours.active(self.at(h, m), night), on, f"{h:02d}:{m:02d} on a night shift")
-        self.assertEqual(hours.next_start(self.at(12), night), self.at(22))
-        self.assertTrue(hours.active(self.at(3), "off"), "off: always")
-        self.assertIsNone(hours.next_start(self.at(3), "off"))
-        self.assertIsNone(hours.held_until(self.at(3), "off"))
-        with self.clock(3):
-            self.assertFalse(hours.active(), "the person's own setting, at this moment")
-
-    def test_an_agent_hears_of_the_hours_only_outside_them(self):
-        with self.clock(3):
-            night = self.deliver()
-        self.assertEqual(night.strip(), "It's outside the person's active hours (back at 7:30 AM). Don't end your turn "
-                         "on a question to them: keep on with what doesn't depend on the answer, and record what you need "
-                         "from them with colony gate; they'll see it together when their hours begin.")
-        with self.clock(23, 50):
-            self.assertIn("(back at 7:30 AM)", self.deliver(), "from 11:45 PM until the morning")
-        with self.clock(12):
-            self.assertEqual(self.deliver(), "", "inside the hours: not a word")
-        board.set_setting("active_hours", "off")
-        with self.clock(3):
-            self.assertEqual(self.deliver(), "", "hours off: always active")
-        self.assertIn("Ask in their active hours; outside them, hold your questions", " ".join(board.PROTOCOL.split()))
-
-    def test_a_gate_opened_at_3_am_waits_off_the_persons_list_until_7_30_then_reaches_them_once(self):
-        with self.clock(3):
+            self.assertEqual(self.deliver(), "", "a turn at 3 AM hears nothing about the hour")
             said, tick = self.gate("Which reminders first?", "--item", "R3", "--why", "R3 starts with one")
             [gate] = board.gates(self.root)
-        self.assertIn("held for the person's active hours: it reaches them with any others at 7:30 AM", said)
-        self.assertIn("keep on with what doesn't depend on it", said)
-        tick.assert_not_called()                                       # not their question yet: the version goes on
-        self.assertEqual(gate["held_until"], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.at(7, 30))))
-        for h, m in ((3, 0), (7, 29)):
-            with self.clock(h, m):
-                [gate] = board.gates(self.root)
-                self.assertFalse(board.due(gate))
-                self.assertEqual(board.waiting_items(self.root), [], "off what waits on the person")
-                page = board.render(board.registry(), 0)
-                self.assertIn("Waiting on you (<span id='wcount'>0</span>)", page)
-                self.assertIn("held until 7:30 AM", page, "someone up at night can see it, and answer it")
-                self.assertIn("Which reminders first?", page)
-                self.assertNotIn("Which reminders first?", board.needs_you(board.registry()))
-                self.assertIn("Held until 7:30 AM", board.render_item(board.registry(), 0, "R3"))
-        with self.clock(7, 30):
-            [gate] = board.gates(self.root)
-            self.assertTrue(board.due(gate))
+            self.assertNotIn("held_until", gate)
+            self.assertTrue(board.due(gate), "the person's at once, whatever the hour")
             self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]])
-            self.assertNotIn("held until", board.render(board.registry(), 0))
-            self.assertIn("Which reminders first?", board.needs_you(board.registry()), "theirs now, in Needs you")
+            self.assertIn("Which reminders first?", board.needs_you(board.registry()))
+            self.assertNotIn("Held until", board.render_item(board.registry(), 0, "R3"))
+            self.assertNotIn("held_until", board.record_ask(self.root, "t1", "Shall I index the log?"))
+        self.assertIn("is waiting on the person", said)
+        tick.assert_called_once_with(self.root, forced_hold="blocking decision")
+        self.assertNotIn("active hours", " ".join(board.PROTOCOL.split()))
+
+    def test_the_setting_is_gone_and_what_an_old_board_kept_of_it_holds_nothing(self):
+        self.assertNotIn("active_hours", board.DEFAULT_SETTINGS)
+        with self.assertRaises(KeyError):
+            board.set_setting("active_hours", "09:00-17:30")
+        raw = json.loads((board.home() / "board.json").read_text())
+        raw["settings"]["active_hours"] = "07:30-23:45"
+        (board.home() / "board.json").write_text(json.dumps(raw))
+        self.assertNotIn("active_hours", board.registry()["settings"], "an old board's saved hours are dropped")
+        self.assertNotIn("active_hours", board.settings_page(board.registry()))
+        with self.clock(3):
+            gate = board.add_gate(self.root, "Which tray?")
+            board.append(self.root, "gates.jsonl", {"type": "held", "of": gate["id"], "at": self.stamp(3), "until": self.stamp(7, 30)})
+            self.assertTrue(board.due(board.gates(self.root)[0]), "a hold the old feature wrote holds nothing now")
 
     def test_the_persons_own_words_and_colonys_safety_notices_go_through_at_any_hour(self):
         with self.clock(3):
             gate = board.add_gate(self.root, "Email or SMS?")
-            self.assertIn("held_until", gate)
             board.answer_gate(self.root, gate["id"], "Email, please")         # up at night, they answered it anyway
             board.add_note(self.root, None, "Use the blue palette.", author="person")
             board.add_note(self.root, None, "Safe pause over: the limit has reset. Carry on where you stopped.", author="colony")
@@ -7914,32 +7762,18 @@ class ActiveHoursTest(HoursBase):
             for words in ("Email, please", "Use the blue palette.", "Safe pause over", "Safe pause: Claude Code is at 98%"):
                 self.assertIn(words, out)
 
-    def test_a_gate_opened_within_the_hours_is_the_persons_at_once_and_stays_so_overnight(self):
-        with self.clock(14):
-            said, tick = self.gate("Keep the old export?", "--item", "R2")
-            [gate] = board.gates(self.root)
-            self.assertNotIn("held_until", gate)
-            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]])
-        self.assertIn("is waiting on the person", said)
-        tick.assert_called_once_with(self.root, forced_hold="blocking decision")
-        with self.clock(2, day=8):
-            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["gate:" + gate["id"]],
-                             "already theirs: night changes nothing")
-
-    def test_turbo_keeps_projects_working_at_night_and_its_turns_hear_the_hours(self):
+    def test_turbo_leaves_a_question_made_at_night_to_the_person(self):
         from colony import turbo
         snap = {"state": "idle", "lines": []}
         with self.clock(3):
             board.add_gate(self.root, "Which reminders first?")
-            self.assertIsNone(turbo.held(self.root, snap), "a held question isn't the person's yet: the work goes on")
+            self.assertEqual(turbo.held(self.root, snap), "waiting on the person", "theirs at once: turbo leaves it be")
             note = turbo.note("Claude Code", self.at(12, day=9), deeper=True, research="companion planting")
             self.assertNotIn("?", note, "turbo asks the person nothing")
             board.add_note(self.root, None, note, author="colony", quiet=True)
             out = self.deliver()
         self.assertIn("spare capacity", out)
-        self.assertIn("outside the person's active hours", out, "a turn turbo starts at night hears the hours")
-        with self.clock(7, 30):
-            self.assertEqual(turbo.held(self.root, snap), "waiting on the person", "theirs now: turbo leaves it be")
+        self.assertNotIn("active hours", out)
 
 
 class PauseTest(HoursBase):
@@ -8187,46 +8021,6 @@ class DailyPageTest(HoursBase):
         for name, pid in (("plants", 0), ("shop", 1)):
             self.assertIn(f"<a class='dayline' href='/?n={name}'>{name} →</a>", html)
 
-    def test_a_question_asked_in_the_console_at_night_waits_for_the_hours_like_a_gate(self):
-        with self.clock(3):
-            ask = board.record_ask(self.root, "t1", "Shall I index the log?")
-            self.assertEqual(ask["held_until"], self.stamp(7, 30))
-            self.assertEqual(board.waiting_items(self.root), [], "off what waits on the person")
-            self.assertIn("Waiting on you (<span id='wcount'>0</span>)", board.render(board.registry(), 0))
-            self.assertNotIn("Shall I index the log?", board.needs_you(board.registry()))
-            held = board.waiting_html(0, self.root)
-            self.assertIn("asked in its console · held until 7:30 AM", held, "someone up at night can answer it")
-            self.assertIn("Shall I index the log?", board.render(board.registry(), 0).split("From outside your active hours")[1])
-        with self.clock(7, 30):
-            self.assertEqual([x["key"] for x in board.waiting_items(self.root)], ["ask:" + ask["id"]])
-            self.assertIn("Shall I index the log?", board.needs_you(board.registry()), "theirs now, in Needs you")
-        with self.clock(14):
-            self.assertNotIn("held_until", board.record_ask(self.root, "t2", "Weekly, then?"), "within the hours: at once")
-        with self.clock(2, day=8):
-            late = board.record_ask(self.root, "t3", "Prune the old entries?")
-            board.clear_waiting(self.root, "ask:" + late["id"])
-            self.assertEqual(board.asks(self.root), [], "cleared from the held list")
-
-    def test_changing_the_hours_moves_what_is_held_to_the_new_ones(self):
-        with self.clock(3):
-            gate = board.add_gate(self.root, "Email or SMS?")
-            board.record_ask(self.root, "t1", "Shall I index the log?")
-        with self.clock(4):
-            board.set_setting("active_hours", "06:00-22:00")
-            [g], [a] = board.gates(self.root), board.asks(self.root)
-            self.assertEqual((g["held_until"], a["held_until"]), (self.stamp(6), self.stamp(6)))
-            self.assertEqual(board.waiting_items(self.root), [])
-            records = len(board.read(self.root, "gates.jsonl"))
-            board.set_setting("active_hours", "06:00-22:00")
-            self.assertEqual(len(board.read(self.root, "gates.jsonl")), records, "the same hours again: nothing moves")
-        with self.clock(6):
-            self.assertEqual({x["key"] for x in board.waiting_items(self.root)}, {"gate:" + gate["id"], "ask:" + a["id"]})
-        with self.clock(2, day=8):
-            later = board.add_gate(self.root, "Rename the project?")
-            self.assertFalse(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
-            board.set_setting("active_hours", "off")                    # always around: released at once
-            self.assertTrue(board.due(next(g for g in board.gates(self.root) if g["id"] == later["id"])))
-
 
 class InboxTest(HoursBase):
     """R160: what waits on the person, one item at a time, in an order that is built in: a deadline inside its window
@@ -8297,14 +8091,14 @@ class InboxTest(HoursBase):
                              "off every list, the count and Needs you with it")
             self.assertNotIn("Weekly or daily?", board.needs_you(board.registry()))
             self.assertIn("1 set aside until a day to come", page)
-            self.assertIn("back Thu Oct 8, 7:30 AM", page)
+            self.assertIn("back Thu Oct 8, 12:00 AM", page)
             [note] = [n for n in board.notes(self.root) if "set this aside" in n["text"]]
             self.assertTrue(note.get("quiet"), "its agent hears on its next turn, without being woken")
             self.assertIn("don't ask it again meanwhile", note["text"])
             self.assertIsNone(self.answers()["Weekly or daily?"], "set aside is no answer")
-        with self.clock(7, 29, day=8):
+        with self.clock(23, 59):
             self.assertEqual(self.order(), ["Email or SMS?"])
-        with self.clock(7, 30, day=8):
+        with self.clock(0, 0, day=8):
             self.assertEqual(self.order(), ["Weekly or daily?", "Email or SMS?"],
                              "back by itself as their day begins, where its age puts it")
         with self.clock(8, day=8):
@@ -10727,11 +10521,10 @@ class ReaderLookTest(HoursBase):
         (self.root / "gear.md").write_text("# Gear\n")
         with self.clock(14, day=6):
             board.render(board.registry(), 0)                          # the person's last look, yesterday
-            hours.seen()
         with self.clock(9):
             x = showcase.add(self.root, "The brief, shown", "the plan in one read", link="brief.md")
             pins.add(self.root, "gear.md", "Gear", by="agent")
-        records = lambda: {name: (board.home() / name).read_bytes() for name in ("person-seen", "today.json")}
+        records = lambda: {name: (board.home() / name).read_bytes() for name in ("today.json",)}
         before = records()
         httpd = ThreadingHTTPServer(("127.0.0.1", 0), board.Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -10753,10 +10546,10 @@ class ReaderLookTest(HoursBase):
         self.assertIn(f"new to see: <a href='/open?n=plants&amp;f=brief.md&amp;s={x['id']}'", look,
                       "an unseen showing is still new: the audit's look was never taken for theirs")
         self.assertNotEqual(records(), before, "their own look is kept")
-        seen = (board.home() / "person-seen").read_bytes()
+        seen = (board.home() / "today.json").read_bytes()
         with self.clock(10, day=8):                                   # only straight from this machine
             get("/?p=0", **audit, **{"Tailscale-User-Login": "person@example.com"})
-        self.assertNotEqual((board.home() / "person-seen").read_bytes(), seen,
+        self.assertNotEqual((board.home() / "today.json").read_bytes(), seen,
                             "through Tailscale Serve, with the person's identity on it, a look is always theirs")
 
 
@@ -10821,20 +10614,17 @@ class WakeTest(BoardBase):
         self.assertEqual(self.wakes.make(self.root, "x", within="5m", now=now)["why"], "x", "five minutes is allowed")
         self.assertEqual(len(self.rows("made")), 1, "a refused wake leaves no row")
 
-    def test_a_due_wake_waits_for_idle_and_the_persons_hours_then_fires_once_as_a_note(self):
-        board.set_setting("active_hours", "07:30-23:45")
+    def test_a_due_wake_waits_for_idle_at_any_hour_then_fires_once_as_a_note(self):
         night = self.local(2026, 10, 29, 2, 0)
         self.wakes.make(self.root, "check the nightly build", at="01:00", now=night - 7200)
-        self.watch(night)
-        self.assertEqual(self.rows("fired"), [], "outside the person's hours it waits")
         self.state["state"] = "working"
-        self.watch(self.local(2026, 10, 29, 8, 0))
+        self.watch(night)
         self.assertEqual(self.rows("fired"), [], "while its console works it waits")
         self.state["state"] = "needs you"
-        self.watch(self.local(2026, 10, 29, 8, 1))
+        self.watch(night + 60)
         self.assertEqual(self.rows("fired"), [], "a question on its screen is the person's: it waits")
         self.state["state"] = "idle"
-        w = self.watch(self.local(2026, 10, 29, 8, 2))
+        w = self.watch(self.local(2026, 10, 29, 2, 2))
         self.assertEqual(len(self.rows("fired")), 1)
         note = [n for n in board.open_notes(self.root) if n.get("kind") == "wake"]
         self.assertEqual(len(note), 1)

@@ -857,10 +857,6 @@ class RecoveryTest(unittest.TestCase):
 
     def test_an_idle_console_is_nudged_once_the_network_is_back_and_once_only(self):
         self.write(night(time.time() - 600))
-        later = (time.localtime().tm_hour + 2) % 24
-        board.save_registry(dict(board.registry(), settings=dict(board.registry()['settings'],
-                                                                 active_hours=f'{later:02d}:00-{later:02d}:30')))
-        self.assertFalse(hours.active(), 'the night: it is work, not a question, so it goes on')
         self.online = False
         self.assertIsNone(recovery.tick(self.root), 'the network still down: a nudge now would only fail again')
         self.online = True

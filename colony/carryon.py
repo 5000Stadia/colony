@@ -5,8 +5,7 @@ its own waiting on the person, the person not talking with it lately, no version
 itself), its program not at a usage limit, and roadmap items it owns that can start (not done, not under Later,
 nothing they wait on unfinished, no decision about them open), colony types one short wake into its console: those
 items, and to carry on with the smartest next one or record what holds it where this rule reads it (a gate on the
-item, or "on hold" in its text), since a reply is read by no one. Outside the person's active hours it adds
-that they're away, so it takes what doesn't need them. Once per stretch: it is woken again only after something
+item, or "on hold" in its text), since a reply is read by no one. Once per stretch: it is woken again only after something
 has changed (a commit, the plan, the person's words); that memory is the project's own carryon.jsonl, so a restart of
 the board forgets nothing. An item the person parked (its text says so) is not work to start. A project can turn it
 off (its carry_on setting).
@@ -75,7 +74,7 @@ def wanted(root):
         return False
     if usage.paused().get(providers.key(providers.of(root))):
         return False
-    if [a for a in board.asks(root) if not a.get("held")] or board.waiting_items(root) and any(
+    if board.asks(root) or board.waiting_items(root) and any(
             w["kind"] in ("ask", "choice", "screen") for w in board.waiting_items(root)):
         return False
     said = [r for r in board.read(root, "said.jsonl") if r.get("text")]
@@ -88,7 +87,7 @@ def tick(now=None):
     """Called by the watcher: wake each project that has sat idle long enough with work it can start."""
     if board.restore_held():
         return
-    from . import hibernate, hours
+    from . import hibernate
     now = time.time() if now is None else now
     for root in board.projects():
         if not root.exists():
@@ -122,14 +121,11 @@ def tick(now=None):
             continue
         if not items:
             continue
-        until = hours.held_until()
-        away = "" if hours.active() else (f" The person is away{' until ' + hours.at_day(board.epoch(until)) if until else ''}: "
-                                          "take what doesn't need them.")
         text = (f"[colony] Idle, with roadmap items that can start: {', '.join(items[:6])}"
                 f"{' and more' if len(items) > 6 else ''}. Carry on with the smartest next one toward the vision. "
                 # a hold said only in the reply is read by no one: the next commit would wake it for the same item
                 f"If something holds one, record it where it lasts: a decision for the person as a gate on it "
-                f"(colony gate ... --item {items[0]}), anything else as \"on hold: why\" in its text.{away}")
+                f"(colony gate ... --item {items[0]}), anything else as \"on hold: why\" in its text.")
         if console.type_into(name, text):
             _idle.pop(key, None)
             board.append(root, "carryon.jsonl", {"at": board.now(), "items": items[:6], "sig": list(sig)})

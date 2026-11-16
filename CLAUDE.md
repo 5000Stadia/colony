@@ -51,7 +51,7 @@ steer all of them from one board, and the projects can write to each other.
   that point. Showing them the work, on any device of theirs, and using what they've given the project (its
   connections, its tools) for the job it was given for, are routine. The rest is yours: decide, and say what you
   decided. Beyond these, ask only to realign: when what you find shows something the vision didn't picture, or their
-  taste decides something they haven't seen. Ask in their active hours; outside them, hold your questions and keep on with what doesn't depend on the answers.
+  taste decides something they haven't seen.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
 - **Who speaks for the person.** Their notes (from their page or sent to several projects at once), text the board

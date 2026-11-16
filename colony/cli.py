@@ -652,7 +652,6 @@ def cmd_gate(a):
     if a.when and next(g for g in board.gates(root) if g["id"] == gid).get("waits_for"):
         print(f"gate {gid} waits until {a.when} starts, off the person's list; carry on meanwhile")
         return 0
-    from . import hours
     # A default never stands by itself (the person's word, 2026-11-11): the gate is theirs until they answer it.
     skipped = (" Its default is shown to them to take in a tap; it does not stand by itself, so the gate waits for "
                "their answer. If one answer is plainly best, the choice is yours, not theirs: take it, say so, and "
@@ -672,13 +671,6 @@ def cmd_gate(a):
     if owner and owner != Path(root).resolve() and owner.exists():
         board.add_note(owner, None, f"Costly decision for {a.item}: {a.question}. Reason: {a.why}. "
                        f"Gate {gid} is owned by {root.name}; keep work affected by it stopped.", author='colony', quiet=True)
-    if gate.get("held_until"):
-        # Outside the person's active hours it isn't their question yet, so it holds back only what depends on it:
-        # the version carries on meanwhile, and stops for the answer once the hours begin and the gate is theirs.
-        print(f"gate {gid} is held for the person's active hours: it reaches them with any others at "
-              f"{hours.at_clock(board.epoch(gate['held_until']))}. Don't proceed on it until the answer arrives as a note; "
-              f"meanwhile keep on with what doesn't depend on it.{skipped}")
-        return 0
     continuation.tick(root, forced_hold='blocking decision')
     print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note.{skipped}")
     return 0
@@ -1087,7 +1079,7 @@ def cmd_wake(a):
         if making:
             w = wakes.make(root, why, at=a.at, within=a.within, every=a.every, by=by)
             print(f"Kept as {w['id']}: due {wakes.when(w)}" + (f", then every {a.every} after each firing" if a.every else "")
-                  + ". It arrives as a note once the console is idle, inside the person's active hours; nothing runs "
+                  + ". It arrives as a note once the console is idle; nothing runs "
                     "meanwhile. `colony wake --cancel ID` if it is no longer needed.")
             return 0
     except (ValueError, KeyError) as err:
@@ -1231,8 +1223,6 @@ def cmd_notes(a):
                 context.scoped(root, a.console or providers.key(context.program(root)), payload):
             console.confirm_input(context.seat(root), prompt)
         if _persons(prompt):
-            from . import hours
-            hours.seen()                                     # they're around, whatever the clock says
             board.answer_asks(root, "in the console")        # the person answered there themselves
             board.drop_held_needs_you(root)
             board.said(root, prompt)                         # their own words, kept with the agent's answer to them
@@ -1249,10 +1239,6 @@ def cmd_notes(a):
             engagement, engagement_receipt = lead.engage(root, mark=False, with_receipt=True)
         except Exception as error:                      # a sync problem never costs the turn its notes and mail
             engagement, engagement_receipt = f"Colony could not sync this workspace: {error}", None
-        from . import hours
-        # Outside the person's active hours, a project's agent hears it on every turn; inside them, nothing. The
-        # person typing to it now is awake: their own turn gets no such line.
-        night = "" if _persons(prompt) else hours.notice()
         spoke = _persons(prompt) or any(n.get("author") not in board.NOT_PERSON
                                         for n in fresh)          # the person, in the console or on the board
         text = "\n\n".join(filter(None, [
@@ -1274,8 +1260,7 @@ def cmd_notes(a):
             board.render_notes([n for n in fresh if n.get("author") == "observation"], "Observed file changes (no author or agreement inferred):"),
             board.render_notes(still, "Still open from earlier (delivered, not yet acted on):"),
             mail.render(new_mail, "Mail from other projects in the colony:"),
-            mail.render(open_asks, "Questions from the colony you haven't answered yet:"),
-            night]))
+            mail.render(open_asks, "Questions from the colony you haven't answered yet:")]))
     else:
         text = board.render_notes(board.open_notes(root, a.item), "Open notes:") or "No open notes."
     if text:
@@ -1577,7 +1562,7 @@ def cmd_settings(a):
             board.set_setting(a.key, a.value)
         except KeyError:
             raise SystemExit(f"no setting {a.key}; the settings are: {', '.join(names)}")
-        except ValueError as err:                     # a setting that says what reads (active_hours)
+        except ValueError as err:                     # a setting that says what reads (backup)
             raise SystemExit(f"colony: {err}")
         _settle_reach(a.key)
     only = a.key if looking else None

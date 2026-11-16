@@ -73,8 +73,7 @@ steer all of them from one board, and the projects can write to each other.
   (an approved image, a graded set). A question that matters only later waits for its moment; when an item's time comes and
   nothing else needs the person, you may offer a question or two from curiosity about the open options there.
 - **The person's decisions.** What is costly to undo, or leaves their hands, is theirs: ask, and wait on that
-  point. The rest is yours; say what you decided. Ask in their active hours; outside them, hold your questions and
-  keep on with what doesn't depend on the answers.
+  point. The rest is yours; say what you decided.
 - **Fresh eyes where change is costly.** Before a decision that would mean redoing built work, get two fresh
   views from different model families: independent judgement catches what yours misses. Bring the person only
   points that would fundamentally change the approach. Finished work about to leave their hands (a chapter, a

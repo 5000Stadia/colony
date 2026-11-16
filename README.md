@@ -244,10 +244,6 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   audits it: a fresh model of another family reads the pinned package's code, without running it, and weighs it
   against the asking project's work. Unsafe is refused and the agent told why; a poor fit is shown to you, yours
   to approve anyway.
-- **Active hours:** when you're around, 7:30 AM to 11:45 PM unless you set your own in Settings (or off).
-  Outside them agents keep working but don't end on a question to you: the decisions they need, and any
-  question asked in a console, are held off Waiting on you and arrive together when your hours begin (new
-  hours move them). What you send goes through at any hour.
   Seen within the last quarter hour (you wrote to an agent, tapped or sent on the board, opened one of its
   pages), you count as around whatever the clock says.
 - **A wiser colony:** what one project learns, the next starts with. When you correct an agent, it may
@@ -268,7 +264,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **Usage limits:** an agent the limit stopped mid-work is woken when it lifts, from the limit's own message on
   its console, and told to carry on where it stopped.
 - **Today:** each project's page for your day, made from colony's records at no token cost: what landed since
-  you last looked on an earlier day, the day's decisions numbered, the queue, and what's held for your hours.
+  you last looked on an earlier day, the day's decisions numbered, and the queue.
   Answer by number in one box (`1 yes; 2 email`). An agent may name a default, which you can take in a tap; nothing
   stands because you skipped it, so every decision put to you waits for your answer. Needs you lists every project's
   numbered decisions in one place.

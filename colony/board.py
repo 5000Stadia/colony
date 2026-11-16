@@ -74,7 +74,7 @@ steer all of them from one board, and the projects can write to each other.
   that point. Showing them the work, on any device of theirs, and using what they've given the project (its
   connections, its tools) for the job it was given for, are routine. The rest is yours: decide, and say what you
   decided. Beyond these, ask only to realign: when what you find shows something the vision didn't picture, or their
-  taste decides something they haven't seen. Ask in their active hours; outside them, hold your questions and keep on with what doesn't depend on the answers.
+  taste decides something they haven't seen.
 - **Their words and your reading.** When you record what the person said, keep your reading beside it: what was
   discussed, what they meant, what it changes. Their words alone can be hard to act on later.
 - **Who speaks for the person.** Their notes (from their page or sent to several projects at once), text the board
@@ -285,6 +285,7 @@ def registry():
     old = reg.get("settings", {})
     if "usage_pause" in old:                           # its name before "safe pause"
         old.setdefault("safe_pause", old.pop("usage_pause"))
+    old.pop("active_hours", None)                      # a setting until R167 took the feature out
     if path.exists() and "lan" not in old:
         # a board from before a new one answered this machine only kept the default it had then, the home network,
         # pinned once so nothing about how it is reached changes (every board saves its settings in full after this)
@@ -300,7 +301,7 @@ def registry():
 DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "lan": False, "messaging": True, "trust": True, "model": "", "effort": "",
                     "permissions": "all", "consult": True, "consultants": {},
                     "safe_pause": 98, "auto_update": True, "model_adoption": "automatic",
-                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {}, "active_hours": hours.DEFAULT,
+                    "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {},
                     "tailscale": "", "tailscale_lan_before": None, "repair_provider": "",
                     "dev_mode": True, "backup": ""}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
@@ -333,7 +334,6 @@ SETTING_HELP = {
     "safe_pause": "safe pause: at this % of a program's 5-hour or weekly limit, its projects land what's in flight, save their work and tell you where things stand, before the limit cuts them off mid-task; colony wakes them at the reset (off: never)",
     "consultants": "each family's consultant, as claude=MODEL:EFFORT,codex=MODEL:EFFORT (blank: from the benchmark cards)",
     "backup": "the folder colony keeps a nightly copy of itself in: every project, its own records and the agents' conversations, the newest four kept (blank or off: no copy is kept); another drive, ideally",
-    "active_hours": "when you're around, as HH:MM-HH:MM on this machine's clock (off: always): outside them agents keep working but hold their questions, which reach you together when your hours begin",
 }
 
 
@@ -393,8 +393,6 @@ def set_setting(key, value):
         if chosen and (chosen not in providers.PROVIDERS or not providers.supplies(providers.get(chosen), 'repair_start')):
             raise KeyError(key)
         reg["settings"][key] = chosen
-    elif key == "active_hours":
-        reg["settings"][key] = hours.normal(value)          # ValueError, saying what reads, for anything else
     elif key == "backup":
         from . import backup
         reg["settings"][key] = backup.choose(value)         # ValueError, saying why a folder can't take the copy
@@ -450,8 +448,6 @@ def set_setting(key, value):
         selection.reconcile()
     if key == "dev_mode":
         rewire_projects()                                    # every project's instructions gain or lose its line
-    if key == "active_hours":
-        restamp_held()                                       # what waits for the hours, waits for the new ones
 
     return reg
 
@@ -1241,20 +1237,15 @@ def asks_question(text):
 
 
 def asks(root, gs=None):
-    """The turns that asked the person something and haven't had an answer: at most the latest one. One asked outside
-    the person's active hours keeps `held` (its `held_until`) until those begin, like a gate. One whose questions only
+    """The turns that asked the person something and haven't had an answer: at most the latest one. One whose questions only
     repeat gates open when it was asked is answered when those are settled, by the person or a default that stood:
     the board is where they answer, and they may never write in that console again."""
-    out, clock = {}, now()
+    out = {}
     for e in read(root, "asks.jsonl"):
         if e["type"] == "ask":
             out[e["id"]] = dict(e)
         elif e["type"] == "answered":
             out.pop(e["of"], None)
-        elif e["type"] == "held" and e["of"] in out:            # the person's hours changed: released at the new ones
-            out[e["of"]]["held_until"] = e["until"]
-    for a in out.values():
-        a["held"] = a["held_until"] if a.get("held_until", "") > clock else None
     if out:
         gs = gates(root) if gs is None else gs
         out = {k: a for k, a in out.items() if not settled_on_board(a, gs)}
@@ -1381,9 +1372,6 @@ def record_ask(root, key, text, explicit=False, gates=()):
     ask = {"type": "ask", "id": "a" + random_secrets.token_hex(4), "at": now(), "key": key, "text": text.strip()}
     if gates:
         ask["gates"] = list(gates)
-    until = hours.held_until(epoch(ask["at"]))       # asked at night: the person's when their hours begin
-    if until:
-        ask["held_until"] = until
     append(root, "asks.jsonl", ask)
     return ask
 
@@ -1450,15 +1438,13 @@ def gates(root):
             if later is None:
                 later = {iid for iid, it in items(roadmap(root)).items() if it["state"] == "todo"}
             g["waits_for"] = g["when"] if g["when"] in later else None
-        g["held"] = g["held_until"] if g.get("held_until", "") > clock else None
         g["not_yet"] = g["from"] if g.get("from", "") > clock else None      # dated from a day to come (R160)
     return list(out.values())
 
 
 def due(g):
-    """An unanswered gate whose moment has come: the person's question now (not one waiting for its item, nor one
-    held for their active hours)."""
-    return (not g["answer"] and not g.get("waits_for") and not g.get("held") and not g.get("awaiting")
+    """An unanswered gate whose moment has come: the person's question now (not one waiting for its item)."""
+    return (not g["answer"] and not g.get("waits_for") and not g.get("awaiting")
             and not g.get("not_yet"))
 
 
@@ -2101,9 +2087,6 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
         gate["hold"] = hold
     if verdict:                                      # colony's question at a milestone's end (warning_signs.ask_verdicts)
         gate["verdict"] = verdict
-    until = hours.held_until(epoch(gate["at"]))     # outside the person's active hours: theirs when those begin
-    if until:
-        gate["held_until"] = until
     if consultation:
         from . import consult
         gate.update(consult=consultation, points=consult.gate_points(root, consultation, points, item, reframes))
@@ -2233,7 +2216,7 @@ ANSWERING = 3600         # seconds an unsent answer on the page holds back the d
 
 
 def due_since(root, g, times=None):
-    """When a gate became the person's question: when it was opened, when its hold for their hours ended, or when the
+    """When a gate became the person's question: when it was opened, when the project it was paused with resumed, or when the
     item it waited for started, whichever came last."""
     t = epoch(g["at"])
     if g.get("held_until"):
@@ -2405,22 +2388,6 @@ def answer_by_number(root, text, numbers):
         answer_gate(root, g["id"], w)
     save_draft(root, "", {})
     return [(n, g) for n, g, _ in todo]
-
-
-def restamp_held():
-    """The person changed their hours: what is held for them is released as the new hours next begin (at once, if
-    those hold now or are off)."""
-    until = hours.held_until(epoch(now())) or now()
-    for root in projects():
-        if not (root / ".board").is_dir():
-            continue
-        with gate_lock(root):
-            for g in gates(root):
-                if g.get("held") and not g["answer"] and g["held_until"] != until:
-                    append(root, "gates.jsonl", {"type": "held", "of": g["id"], "at": now(), "until": until})
-        for a in asks(root):
-            if a.get("held") and a["held_until"] != until:
-                append(root, "asks.jsonl", {"type": "held", "of": a["id"], "at": now(), "until": until})
 
 
 def open_notes(root, item=None):
@@ -7297,10 +7264,6 @@ def render(reg, pid, view="overview", show_all=""):
                    " const n = w.querySelectorAll('.need:not(.held)').length; document.getElementById('wcount').textContent = n;"
                    " document.getElementById('waitingbox').hidden = !w.children.length;"
                    f" const q = document.querySelector('#status-{pid} .waits'); if (q) q.hidden = !!n; }});</script>")
-        clock = epoch(now())
-        if not hours.active(clock):
-            out.append(f"<p class='muted'>Outside your hours until {e(hours.at_clock(hours.next_start(clock)))}: "
-                       "what's asked now waits for them.</p>")
         out.append(pinned_section(pid, root))
         # what changed since the person's last look on an earlier day: the newest few, dated, and how much in all
         out.append(since_html(pid, root, page_base(root)))
@@ -7996,9 +7959,7 @@ def render_item(reg, pid, iid):
             if g.get("waits_for"):
                 body.append(f"<div class='card'><p class='muted'>Waits for {e(g['waits_for'])} to start:</p><p>{e(g['question'])}</p></div>")
                 continue
-            until = (f"<p class='muted'>Held until {e(hours.at_clock(epoch(g['held'])))}: opened outside your active hours, it "
-                     "reaches your list when they begin. You can answer it now.</p>" if g.get("held") and not g["answer"] else "")
-            body.append(f"<div class='card{' gate' if due(g) else ''}'>" + until
+            body.append(f"<div class='card{' gate' if due(g) else ''}'>"
                         + gate_body(root, pid, g, f"/item?{project_query(root)}&id={iid}") + "</div>")
     from . import consult
     cs = [c for c in consult.records(root) if c["decision"] == iid]
@@ -9047,7 +9008,7 @@ def waiting_items(p, snap=None, paused_too=False, shelved=False):
             out.append({"kind": "screen", "key": key, "lines": snap["lines"],
                         "summary": "needs you in its console: " + " / ".join(snap["lines"][-2:])})
     out += [{"kind": "ask", "key": "ask:" + a["id"], "ask": a, "summary": "asked you: " + a["text"][-300:]}
-            for a in asks(p, gs) if not a["held"] and not covering(a, gs)]
+            for a in asks(p, gs) if not covering(a, gs)]
     from . import lead, progress
     shared = lead.group(p)
     primary = not shared or shared['lead'] == str(p.resolve())
@@ -9273,28 +9234,7 @@ def waiting_html(pid, root):
     return ("".join(waiting_on(pid, root, project_url(root), label=False))
             + "".join(f"<div class='need held'><div class='who'><span class='kind'>holds this version</span></div>"
                       f"Waiting on you in {where_waiting(m)}: <b>{e(g['question'])}</b></div>" for m, g in elsewhere)
-            + held_html(pid, root))
-
-
-def held_html(pid, root, back=None):
-    """Gates opened and questions asked outside the person's active hours, below what waits on them and not counted
-    with it: they reach their list when the hours begin, and can be answered here before then."""
-    later = [g for g in gates(root) if not g["answer"] and g.get("held") and not g.get("waits_for")]
-    asked = [a for a in asks(root) if a["held"]]
-    if not later and not asked:
-        return ""
-    back = back or project_url(root)
-    hidden = f"<input type='hidden' name='p' value='{pid}'><input type='hidden' name='back' value='{e(back)}'>"
-    foot = lambda key, label="Clear": f"<div class='needfoot'>{clear_form(hidden, key, label)}</div>"
-    until = lambda x: e(hours.at_clock(epoch(x["held"])))
-    return ("<p class='muted'>From outside your active hours: these reach your list when the hours begin, and you can "
-            "answer them now.</p>" + "".join(
-                f"<div class='need held'><div class='who'><span class='kind'>gate"
-                f"{' on ' + e(g['item']) if g.get('item') else ''} · held until {until(g)}</span></div>"
-                f"{gate_body(root, pid, g, back)}{foot('gate:' + g['id'], 'Clear without an answer')}</div>" for g in later) + "".join(
-                f"<div class='need held'><div class='who'><span class='kind'>asked in its console · "
-                f"held until {until(a)}</span></div>{ask_html(a['text'], root)}{reply_form(pid, hidden, a['id'], 'ask:' + a['id'])}</div>"
-                for a in asked))
+            )
 
 
 def lesson_rows():
@@ -10252,9 +10192,6 @@ def settings_page(reg):
     own = lambda html: "<div class='optset'>" + re.sub(r"<(input|select|textarea)\b", r"<\1 form='opts'", html) + "</div>"
     save = "<button form='opts'>Save</button>"
     hours_fields = own(
-        f"<label>Active hours <input name='active_hours' value='{e(s['active_hours'])}' size='11'></label>"
-        f"<p class='muted'>When you're around, as 07:30-23:45 on this machine's clock, or off. Outside them agents keep "
-        f"working, take what doesn't need you, and hold their questions, which reach you together when your hours begin.</p>"
         f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> %</label>"
         f"<p class='muted'>Of a program's 5-hour or weekly limit: its projects land what's in flight, save their work and "
         f"tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset.</p>") + save
@@ -10359,8 +10296,7 @@ def settings_page(reg):
         return (f"<details class='setsec' id='set-{key}'><summary><span class='sttl'>{title}</span>"
                 f"<span class='ssum'>{summary}</span></summary>{inner}</details>")
     sections = [
-        section("hours", "Your hours", e(f"{s['active_hours'] or 'off'} · safe pause "
-                                           f"{str(s['safe_pause']) + '%' if s['safe_pause'] else 'off'}"), card(hours_fields)),
+        section("pause", "Safe pause", e(f"{str(s['safe_pause']) + '%' if s['safe_pause'] else 'off'}"), card(hours_fields)),
         section("programs", "Agent programs", e(", ".join(on) or "none on") + (
             " · <b class='warn'>ChatGPT pairing waits</b>" if "id='codex-pairing' open" in pairing else "") + (
             f" · <b class='warn'>{e(', '.join(pv.get(k).label for k in out))} signed out</b>" if out else ""),
@@ -10719,7 +10655,6 @@ class Handler(BaseHTTPRequestHandler):
         if not self._from_this_page():
             return self._send(403, b"not from this page")
         if PERSONS_LOOK.get() and self.headers.get("Sec-Fetch-Mode") == "navigate" and self.headers.get("Sec-Fetch-Dest") == "document":
-            hours.seen()                               # the person opened a page (a page keeping itself current isn't them)
             self._nav_measure()
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query, keep_blank_values=True)
@@ -11063,8 +10998,6 @@ class Handler(BaseHTTPRequestHandler):
         if urllib.parse.urlparse(self.path).path.startswith("/lab/"):   # a lab page's reports: not the person's tap
             from . import lab
             return lab.post(self, urllib.parse.urlparse(self.path).path)
-        if urllib.parse.urlparse(self.path).path not in ("/codex-pair/status", "/repair/pair/status", "/chat/measure", "/chat/heard"):
-            hours.seen()                               # the person tapped, typed or sent something
         if int(self.headers.get("Content-Length") or 0) > pins.UPLOAD_LIMIT + 64 * 1024:
             return self._send(413, b"that file is too large (25 MB at most)")
         if urllib.parse.urlparse(self.path).path == "/pin/upload":
@@ -11356,11 +11289,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if path == "/options":
-            if form.get("active_hours", "").strip():
-                try:
-                    hours.parse(form["active_hours"])           # checked before anything is saved
-                except ValueError as err:
-                    return self._send(400, str(err).encode())
             if 'auto_balance' in form:
                 try:
                     set_setting('auto_balance', form['auto_balance'])
@@ -11390,8 +11318,6 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting("safe_pause", form["safe_pause"])
                 except KeyError:
                     pass                                  # not a percentage: the old one stays
-            if form.get("active_hours", "").strip():
-                set_setting("active_hours", form["active_hours"])
             if form.get("new_root", "").strip():
                 set_setting("new-folder", form["new_root"].strip())
             self.send_response(303)
@@ -11588,8 +11514,6 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 keys = json.loads(values.get("keys", ["{}"])[0])
                 how = values.get("how", [""])[0]
-                if how in ("skipped", "cleared"):
-                    hours.seen()                         # an explicit action; heard/seen can arrive automatically
                 got = mark_line(projects(registry()), how, keys if isinstance(keys, dict) else {},
                                 values.get("dev", [""])[0], values.get("view", [""])[0])
             except ValueError:

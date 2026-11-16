@@ -4,8 +4,8 @@ made, one each time it fires, one if it is cancelled, so it outlives a board res
 counted (KERNOS built follow-ups and its live data showed none was ever used).
 
 Waiting costs nothing: the watcher's pass reads what is due. A due wake becomes a note from colony, handed over with
-a prompt like any other, once its console is idle (or off, which the watcher then starts) and inside the person's
-active hours; a wake that came due while the board was down fires once. One that repeats is due again `every` after
+a prompt like any other, once its console is idle (or off, which the watcher then starts);
+a wake that came due while the board was down fires once. One that repeats is due again `every` after
 it fires.
 
     colony wake [NAME] --at 14:30 | --in 2h [--every 1d] "why"     colony wake --list     colony wake --cancel ID
@@ -147,14 +147,12 @@ def fire(root, w, now=None):
 
 
 def tick(now=None):
-    """The watcher's pass: each project's due wakes fire once its console is idle (or off) inside the person's hours;
+    """The watcher's pass: each project's due wakes fire once its console is idle (or off);
     one working, or asking something, is left until its turn ends."""
     if board.restore_held():
         return
     from . import console
     now = hours.clock() if now is None else now
-    if not hours.active(now):
-        return
     stamp = _stamp(now)
     for root in [p for p in board.projects() if p.exists()]:
         due = [w for w in waiting(root) if w["due"] <= stamp]
