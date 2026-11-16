@@ -57,7 +57,9 @@ class BackupTest(unittest.TestCase):
         board.set_setting("backup", "off")
         self.assertEqual(backup.chosen(), "")
         self.assertNotIn("Copy now", board.backup_card(), "nothing to copy to")
-        self.assertIn("Settings → Backup", board.start_here(), "a new board says no copy is kept until a place is chosen")
+        with patch.object(board, "machine_says", return_value={"tailscale": {}, "starts": True, "can_start": True}), \
+                patch.object(board, "phone_step", return_value=None):
+            self.assertIn("/settings#set-backup", board.setup_card(), "the front page says no copy is kept until a place is chosen")
 
     def test_a_folder_on_another_drive_is_never_stood_in_for_by_colonys_own(self):
         with patch.object(backup, "_same_drive", return_value=False), patch.object(backup, "_findmnt", return_value=""):

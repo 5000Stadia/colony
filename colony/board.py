@@ -2722,7 +2722,7 @@ def home_list(reg):
     top = notices_html("/") + "".join([choices] if choices else [])
     return (top + "".join(waiting)
             + (f"<h2>Nothing waiting on you</h2>" if waiting and quiet else "") + "".join(quiet)
-            + ("" if plist else start_here()))
+            + ("" if plist else start_here()) + setup_card(reg))
 
 
 def start_here():
@@ -2731,9 +2731,88 @@ def start_here():
             "<p><a class='go' href='/add'>Add your first project →</a></p>"
             "<p class='muted'>A folder of your own work, new or already under way: colony gives it an agent, and this "
             "page shows what each project is doing and what it needs from you.</p>"
-            + ("" if registry()["settings"].get("backup") else
-               "<p class='muted'>Colony keeps no second copy of itself until you say where one goes: "
-               "<a href='/settings#set-backup'>Settings → Backup</a>.</p>") + "</div>")
+            "</div>")
+
+
+_MACHINE_SAYS = {"at": 0.0, "says": None}
+
+
+def machine_says(fresh=False):
+    """What this machine can say about its own setup, asked of it at most once a minute (the front page keeps itself
+    current): Tailscale's state, and whether colony starts with the machine."""
+    if fresh or _MACHINE_SAYS["says"] is None or time.time() - _MACHINE_SAYS["at"] > 60:
+        from . import autostart, tailscale
+        _MACHINE_SAYS.update(at=time.time(), says={"tailscale": tailscale.status(), "starts": autostart.on(),
+                                                    "can_start": autostart.available()})
+    return _MACHINE_SAYS["says"]
+
+
+def phone_step(says=None):
+    """(where reaching the board from a phone stands on this machine, the next step as typed) or None once the board
+    answers beyond this machine. Tailscale needs the person's own account, so the steps are theirs: colony says which
+    one is next."""
+    from . import tailscale
+    if registry()["settings"].get("tailscale") or reach():
+        return None
+    st = (says or machine_says())["tailscale"]
+    if not st["installed"]:
+        return "Tailscale, which lets only your own devices reach it from anywhere, isn't installed here", tailscale.INSTALL
+    if not (st["running"] and st["name"]):
+        return "Tailscale is installed here but not signed in", tailscale.LOGIN
+    return (f"Tailscale is connected here as {st['name']}",
+            "Run in a terminal on this machine:\n  colony remote\nThe board then opens on every device signed in to your Tailscale.")
+
+
+def phone_card():
+    """Settings → This board: the next step toward reaching it from a phone, or '' once it is reachable."""
+    step = phone_step(machine_says(fresh=True))
+    return (f"<h3>From your phone</h3><p>{e(step[0])}.</p><pre class='typed'>{e(step[1])}</pre>"
+            "<p class='muted'>Or tick Open from other devices on your network below, for your home network only.</p>") if step else ""
+
+
+SETUP = ("backup", "phone", "autostart")
+
+
+def setup_left(reg=None, says=None):
+    """What the person still has to choose that colony can't choose for them (R166): [(key, the line, its control)],
+    each gone once it is set or they skipped it. For each, colony says what it found on this machine."""
+    from . import backup
+    reg = reg or registry()
+    skipped, out = set(reg.get("setup_skipped") or ()), []
+    if "backup" not in skipped and not reg["settings"].get("backup"):
+        out.append(("backup", "<b>A second copy.</b> Everything colony holds is on one drive until you say where a nightly "
+                              "copy goes.", "<a class='go' href='/settings#set-backup'>Choose where →</a>"))
+    if "phone" not in skipped or "autostart" not in skipped:
+        says = says or machine_says()
+    if "phone" not in skipped:
+        step = phone_step(says)
+        if step:
+            out.append(("phone", f"<b>From your phone.</b> This board answers this machine only. {e(step[0])}.",
+                        "<a class='go' href='/settings#set-board'>The next step →</a>"))
+    if "autostart" not in skipped and says["can_start"] and not says["starts"]:
+        out.append(("autostart", "<b>After a restart.</b> Colony doesn't start with this machine: nothing comes back until "
+                                 "you start it again.",
+                    "<form method='post' action='/setup'><button name='do' value='autostart'>Start with the machine</button></form>"))
+    return out
+
+
+def setup_card(reg=None):
+    """The front page's Left to set up card, or '' when nothing is."""
+    rows = setup_left(reg)
+    if not rows:
+        return ""
+    return ("<div class='card setupleft'><h2>Left to set up</h2><ul class='folders'>" + "".join(
+        f"<li>{line}<div class='folderacts'>{control}<form method='post' action='/setup'>"
+        f"<button class='quiet' name='skip' value='{key}'>Skip</button></form></div></li>" for key, line, control in rows)
+        + "</ul></div>")
+
+
+def setup_skip(key):
+    if key in SETUP:
+        with board_lock("registry"):
+            reg = registry()
+            reg["setup_skipped"] = sorted(set(reg.get("setup_skipped") or ()) | {key})
+            save_registry(reg)
 
 
 def backup_card():
@@ -2753,12 +2832,40 @@ def backup_card():
                     "mistake, not against that drive failing.</p>")
     return (f"<form method='post' action='/backup' class='options'><label>Keep a nightly copy of colony in "
             f"<input name='folder' value='{e(folder)}' placeholder='a folder on another drive, by its whole path'></label>"
-            "<button>Save</button></form>" + "".join(rows)
+            "<button>Save</button></form>" + ("" if folder else backup_places()) + "".join(rows)
             + ("<form method='post' action='/backup'><input type='hidden' name='now' value='1'><button class='quiet'"
                f"{' disabled' if backup.running() else ''}>{'Copying now…' if backup.running() else 'Copy now'}</button></form>" if folder else "")
             + "<p class='muted'>One archive a night, at 3:30 or when the machine is next on, the newest four kept: every "
               "project, colony's own records and the agents' conversations, read back whole before it is kept. "
               "<code>colony migrate --unpack</code> puts one back. Left empty, no copy is kept.</p>")
+
+
+def voice_setup_card():
+    """Settings → Reading aloud before its voice is there: Set up starts what `colony voice --setup` does (R166)."""
+    from . import voice
+    if voice.setting_up():
+        return ("<p>Setting up the voice now: a few minutes, mostly the download. This page shows the voices once it is "
+                "there.</p>")
+    failed = voice.setup_failed()
+    return ("<p>Replies can be read aloud in a natural voice made on this machine: nothing leaves it and nothing is paid "
+            "for. Until it is set up, Chat reads with the phone's own voice.</p>"
+            + (f"<p><b class='warn'>The last try stopped:</b> {e(failed)}</p>" if failed else "")
+            + "<form method='post' action='/voice/setup'><button>Set up the voice</button></form>"
+              "<p class='muted'>About 500 MB in colony's own folder, downloaded once: the voice's model (Kokoro, open "
+              "weights) from its release on GitHub, and its Python packages from PyPI. The same as "
+              "<code>colony voice --setup</code>.</p>")
+
+
+def backup_places():
+    """The other drives mounted here that colony can write to, each a tap to choose (R166); '' when there is none."""
+    from . import backup, migrate
+    found = backup.places()
+    if not found:
+        return ""
+    return ("<form method='post' action='/backup' class='options'><p class='muted'>Found on this machine, on another "
+            "drive than colony's own:</p>" + "".join(
+                f"<button class='quiet' name='folder' value='{e(path)}'>Use {e(path)} · {e(migrate.size(free))} free</button>"
+                for path, free in found) + "</form>")
 
 
 def short_span(seconds):
@@ -10270,13 +10377,12 @@ def settings_page(reg):
                                         f"project without a voice of its own <select name='voice'>{voice.options(default_voice())}</select></label>"
                                         "<button>Save</button></form><p class='muted'>A project's own voice is chosen in its Chat's "
                                         "player (⚙), or when it is made; choosing Default there has it follow this one again.</p>"
-                                        if voice.ready() else "<p class='muted'>Reading replies aloud needs its voice set up: "
-                                        "<code>colony voice --setup</code>.</p>")),
+                                        if voice.ready() else voice_setup_card())),
         section("connections", "Connections", e(connections_summary()),
                 card("<p>Outside services your projects reach, and how: <a href='/connections'>Connections →</a></p>")),
         section("board", "This board", e(f"{len(urls(port))} address{'es' * (len(urls(port)) != 1)} · "
                                          f"{'open on your network' if reach() else 'this machine only'}"),
-                card(f"<ul class='folders'>{where}</ul><p class='muted'>{e(app_reach())}</p>", board_fields)),
+                card(f"<ul class='folders'>{where}</ul><p class='muted'>{e(app_reach())}</p>", phone_card(), board_fields)),
         section("machine", "This machine", e(machine.line() or ("starts with the machine" if autostart.on() else
                                                                 "doesn't start with the machine")), card(machine_card())),
         section("backup", "Backup", e(backup.line()), card(backup_card())),
@@ -11104,6 +11210,21 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', '0')
             self.end_headers()
             return
+        if path == "/voice/setup":                           # Settings → Reading aloud: what colony voice --setup does
+            from . import voice
+            if not voice.ready() and not voice.setting_up():
+                voice.start_setup()
+            return self._redirect("/settings#set-voice")
+        if path == "/setup":                                 # the front page's Left to set up card (R166)
+            if form.get("do") == "autostart":
+                try:
+                    set_setting("autostart", "on")
+                except ValueError as err:
+                    return self._send(400, str(err).encode())
+                machine_says(fresh=True)
+            elif form.get("skip"):
+                setup_skip(form["skip"])
+            return self._redirect("/")
         if path == "/backup":                                # Settings → Backup: the folder, or a copy now
             from . import backup
             if form.get("now"):
@@ -12409,6 +12530,7 @@ nav .proj.home { border-bottom:1px solid var(--line); border-radius:7px 7px 0 0;
 .navfoot { margin-top:14px; padding-top:10px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:4px; font-size:13px }
 .navfoot a { padding:4px 10px; text-decoration:none } ul.dirs { list-style:none; padding:0; columns:2 } ul.dirs li { margin:3px 0 }
 @media (max-width: 700px) { ul.dirs { columns:1 } }
+pre.typed { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; margin:6px 0 }
 ul.folders { list-style:none; padding:0; margin:0 } ul.folders li { padding:8px 0; border-top:1px solid var(--line) } ul.folders li:first-child { border-top:0 }
 ul.folders .path { display:block; overflow-wrap:anywhere } .folderacts { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:6px }
 .folderacts form { margin:0 } .dangers { display:flex; gap:8px; flex-wrap:wrap } .dangers form { margin:0 } button.danger { background:#b3261e; color:#fff } .folderacts b { margin-right:auto; font-size:13px }

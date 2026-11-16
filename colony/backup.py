@@ -105,6 +105,40 @@ def choose(value):
     return str(folder)
 
 
+def _dev(path):
+    return os.stat(path).st_dev
+
+
+def places():
+    """Folders a copy could go in on the other drives mounted here, for the person to choose with a tap: [(folder,
+    bytes free)], a `colony` folder on each filesystem that isn't the one colony's records are on and that this user
+    can write to. [] where the machine can't say (no findmnt)."""
+    if not shutil.which("findmnt"):
+        return []
+    try:
+        out = subprocess.run(["findmnt", "-rn", "--real", "-o", "TARGET,FSTYPE"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found, seen = [], set()
+    for row in out.splitlines():
+        target, _, kind = row.rpartition(" ")
+        target = target.encode().decode("unicode_escape") if "\\x" in target else target
+        if not target or kind in ("squashfs", "iso9660", "udf") or target.startswith(("/snap", "/boot", "/var/lib", "/efi")):
+            continue
+        folder = Path(target) / "colony"
+        try:
+            dev = _dev(target)
+            if dev in seen or _same_drive(target):
+                continue
+            if not os.access(folder if folder.is_dir() else target, os.W_OK | os.X_OK):
+                continue
+            seen.add(dev)
+            found.append((str(folder), shutil.disk_usage(target).free))
+        except OSError:
+            continue
+    return found
+
+
 AWAY = "its drive isn't attached, or isn't mounted"
 
 

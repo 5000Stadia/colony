@@ -23,6 +23,11 @@ every device on your home network instead.
 A project's agent starts working in its own console right away (it spends tokens from then on), and the project
 joins the board.
 
+There is no setup interview. What only you can choose stays on the front page under **Left to set up** until you
+set it or skip it: where a nightly copy goes, reaching the board from your phone, and starting with the machine.
+Each line says what colony found here (another drive it can write to, whether Tailscale is installed and signed
+in) and the one next step.
+
 `colony stop` ends the board and project consoles. Optional repair access stays available;
 turn it off separately in Settings. `~/colony/start` brings the board back, and each console returns
 to its conversation when you open it.
@@ -38,7 +43,8 @@ to its conversation when you open it.
 ### A nightly copy
 
 Until you say where a second copy goes, everything colony holds sits on one drive. Settings → Backup takes a
-folder (another drive, ideally); `colony settings backup /path/to/folder` does the same. Each night at 3:30, or
+folder (another drive, ideally) and offers the other drives mounted here that colony can write to;
+`colony settings backup /path/to/folder` does the same. Each night at 3:30, or
 when the machine is next on, colony packs every project, its own records and the agents' conversations into one
 archive there, reads it back whole, and keeps the newest four. A folder on another drive is found by that
 drive's own id wherever it is mounted, and with the drive away no copy is made anywhere else: a notice says so
@@ -77,7 +83,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   play: play reads everything since your message aloud (Auto-speak reads each new reply as it arrives), at the
   speed you pick. ⏭ steps to the next part of a reply (the prose between its runs of commands), and past the last
   to the next reply; ⏮ restarts a part, or early in one goes back a part, across replies too; the phone's lock
-  screen does the same. `colony voice --setup` installs Kokoro, a natural voice made on this machine (about 500 MB, free,
+  screen does the same. Settings → Reading aloud (or `colony voice --setup`) installs Kokoro, a natural voice made on this machine (about 500 MB, free,
   nothing leaves it), with money, dates, times and units said as a person would ("$100" as "100 dollars");
   without it, the phone's own voice reads.
   The attachment **+** opens photos or files on the first tap while typing, keeping the draft and selection.

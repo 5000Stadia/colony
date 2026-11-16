@@ -49,10 +49,55 @@ def ready():
     return python().exists() and all((folder() / f).exists() for f in FILES)
 
 
+def _setup_lock():
+    """The lock a setup holds while it runs, held, or None while another holds it."""
+    import fcntl
+    folder().mkdir(parents=True, exist_ok=True)
+    fh = open(folder() / "setup.lock", "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def setting_up():
+    fh = _setup_lock()
+    if fh:
+        fh.close()
+    return fh is None
+
+
+def start_setup():
+    """The setup, begun from Settings in a process of its own (minutes, mostly the download): what it says goes to
+    setup.log beside the voice."""
+    import sys
+    folder().mkdir(parents=True, exist_ok=True)
+    with open(folder() / "setup.log", "w") as out:
+        subprocess.Popen([sys.executable, "-P", "-m", "colony", "voice", "--setup"], stdin=subprocess.DEVNULL,
+                         stdout=out, stderr=out, start_new_session=True, cwd=str(board.home()))
+
+
+def setup_failed():
+    """Why the last setup begun from Settings stopped short, in its own last line; '' when none did."""
+    if ready() or setting_up():
+        return ""
+    try:
+        lines = [x.strip() for x in (folder() / "setup.log").read_text(errors="replace").splitlines() if x.strip()]
+    except OSError:
+        return ""
+    return lines[-1][:300] if lines else ""
+
+
 def setup(say=print):
-    """Its own Python with kokoro-onnx, and the model (about 340 MB, once)."""
+    """Its own Python with kokoro-onnx, and the model (about 340 MB, once; about 500 MB on disk with its Python)."""
     import sys
     import urllib.request
+    lock = _setup_lock()
+    if not lock:
+        say("The voice is already being set up.")
+        return
     folder().mkdir(parents=True, exist_ok=True)
     if not python().exists():
         say("Making its own Python environment…")
