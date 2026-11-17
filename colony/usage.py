@@ -319,7 +319,9 @@ def check():
 # your usage limit. … try again at Sep 13th, 2026 9:15 AM.").
 # The program wraps its own message at the window's width, its further lines indented ("… resets Nov\n     20, 3pm
 # (America/Los_Angeles)", Nov 16): those lines are the message's too, read as one.
-CUT = re.compile(r"You've hit your [A-Za-z0-9 .-]*limit\b[^\n]*(?:\n[ \t]{3,}(?![⎿❯●✻])[^\n]+)*")
+# the message on a line of its own, after its program's mark (⎿, ■): a copy quoted in a log or in code an agent shows
+# is no limit
+CUT = re.compile(r"^[ \t]*(?:[^\w\s\"'][ \t]*)?(?P<msg>You've hit your [A-Za-z0-9 .-]*limit\b[^\n]*(?:\n[ \t]{3,}(?![⎿❯●✻])[^\n]+)*)", re.M)
 # A limit named by a window or kind is the program's; any other name is a model's own (Claude Code: "You've hit your
 # Fable limit · resets Nov 20, 3pm (…)", Nov 16): that model is spent until it lifts, and the program's others still run.
 KINDS = {"session", "usage", "weekly", "daily", "monthly", "monthly spend", "rate", "5-hour", "five-hour", "hourly",
@@ -330,18 +332,28 @@ RESETS = re.compile(r"resets (?:(?P<day>[A-Z][a-z]{2} \d{1,2}), )?(?P<time>\d{1,
 AGAIN = re.compile(r"try again at (?P<when>[A-Z][a-z]{2} \d{1,2}(?:st|nd|rd|th)?, \d{4} \d{1,2}:\d{2} [AP]M)")
 
 
+def time_zone(name):
+    """The zone a limit's message names, also where its program printed it without the underscore (Claude Code shows
+    America/Los_Angeles as America/LosAngeles, the underscore taken as emphasis); None where none matches."""
+    from zoneinfo import ZoneInfo, available_timezones
+    try:
+        return ZoneInfo(name)
+    except (KeyError, ValueError):
+        pass
+    bare = name.replace("_", "").lower()
+    match = [z for z in available_timezones() if z.replace("_", "").lower() == bare]
+    return ZoneInfo(match[0]) if len(match) == 1 else None
+
+
 def lifts(text, seen):
     """When a limit's message says it lifts (a timestamp), or None if it doesn't say (a monthly spend limit)."""
     from datetime import datetime, timedelta
-    from zoneinfo import ZoneInfo
     if m := AGAIN.search(text):
         when = re.sub(r"(\d)(st|nd|rd|th),", r"\1,", m.group("when"))
         return datetime.strptime(when, "%b %d, %Y %I:%M %p").timestamp()
     if not (m := RESETS.search(text)):
         return None
-    try:
-        zone = ZoneInfo(m.group("tz"))
-    except (KeyError, ValueError):
+    if not (zone := time_zone(m.group("tz"))):
         return None
     clock = m.group("time").replace(" ", "")
     hour = datetime.strptime(clock, "%I:%M%p" if ":" in clock else "%I%p").time()
@@ -400,7 +412,8 @@ def mark_spent(key, name, until, clock):
     store = spent_store()
     mine = {n: v for n, v in (store.get(key) or {}).items() if clock < v["until"]}
     before = {n: v["until"] for n, v in mine.items()}
-    mine[name.lower()] = {"until": until or clock + SPENT_UNSAID, "at": clock}
+    known = mine.get(name.lower(), {}).get("until", 0)     # seen again without a time it can read: not sooner
+    mine[name.lower()] = {"until": until or max(known, clock + SPENT_UNSAID), "at": clock}
     store[key] = mine
     folder().mkdir(parents=True, exist_ok=True)
     (folder() / "spent.json").write_text(json.dumps(store))
@@ -459,7 +472,7 @@ def cut_off(screens=None, clock=None):
         name = console.session_name(p)
         # its whole scrollback, wrapped lines joined: each limit message is one more hit, however alike their words
         text = (screens or {}).get(k, "") if screens is not None else (console.history(name) if console.running(name) else "")
-        hits = [" ".join(m.group(0).split()) for m in CUT.finditer(text or "")]
+        hits = [" ".join(m.group("msg").split()) for m in CUT.finditer(text or "")]
         if k not in was or len(hits) < mine.get("n", 0):
             mine = {"n": len(hits)}                     # first seen, or a new console: what's there already is past
         if len(hits) > mine.get("n", 0):

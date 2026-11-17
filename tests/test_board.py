@@ -6062,7 +6062,8 @@ class UsageTest(BoardBase):
         board.track(self.root)
         k, t0 = str(self.root), 1795000000.0                    # Nov 2026
         models = [("claude-fable-5-2", "Fable 5.2"), ("claude-opus-5-5", "Opus 5.5")]
-        line = "  ⎿  You've hit your Fable limit · resets Nov\n     20, 3pm (America/Los_Angeles). /model to\n     switch models.\n"
+        # as Claude Code prints it: wrapped, and the zone's underscore taken for emphasis
+        line = "  ⎿  You've hit your Fable limit · resets Nov\n     20, 3pm (America/LosAngeles). /model to\n     switch models.\n"
         main = {"model": "claude-opus-5-5", "effort": "xhigh"}
         with patch.object(providers, "available", return_value=models), \
                 patch.object(usage, "repick") as repick, patch.object(selection, "main", return_value=main), \
@@ -6083,6 +6084,12 @@ class UsageTest(BoardBase):
             usage.cut_off({k: "working…\n" + line}, t0 + 120)
             reload.assert_called_once()
             self.assertEqual(len([n for n in board.notes(self.root) if n.get("kind") == "resume"]), 1, "told once")
+            quoted = line + '712 {"text": "You\'ve hit your Fable limit · resets Nov 20, 3pm (America/LosAngeles)."}\n'
+            quoted += '        line = "  ⎿  You\'ve hit your Fable limit · resets Nov\\n     20, 3pm"\n'  # code on screen
+            usage.cut_off({k: "working…\n" + quoted}, t0 + 180)
+            self.assertEqual(len([n for n in board.notes(self.root) if n.get("kind") == "resume"]), 1,
+                             "a copy of the message in a log or code an agent shows is no new limit")
+            self.assertEqual(usage.spent("claude", t0 + 181), {"claude-fable-5-2": until})
             usage.cut_off({k: "working…\n" + line}, until + 1)
             self.assertEqual(usage.spent("claude", until + 1), {}, "back as it lifts")
             self.assertEqual(repick.call_count, 2, "and Auto picks again")
