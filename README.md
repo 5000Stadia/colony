@@ -224,7 +224,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   Intelligence Index and cost per task (a free key, in Settings), among the models your programs can run; an
   older version a newer one has replaced is left out, and a setting they don't measure isn't weighed. The
   Models page shows the picks, each model's measured settings, and intelligence against cost, with a switch
-  that shows every other model they score, in grey.
+  that shows every other model they score, in grey. When one model's own limit runs out while its program
+  still has room (Claude Code: "You've hit your Fable limit"), Auto picks the best of the rest until that
+  limit resets: stopped consoles reload into their conversation on it and carry on, and come back after.
 - **Turbo:** when a program's weekly usage runs more than 5 points behind pace (from day 2, aiming for 99%
   the hour before the reset), its projects with queued work are turned up, each as it ticks: stronger
   models, going deeper on its agreed work, research on a topic you type. Alongside the work, never instead
