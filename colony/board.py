@@ -5351,6 +5351,34 @@ def live_addresses(page, key=None):
     return "".join(out)
 
 
+def live_paths(page, key, root):
+    """A card as drawn, with each of the project's files or folders named in its words a link that opens it (a
+    decision's reason named the mock to tap through as plain text; a sign-off's To check and a showcase entry's Try
+    had each been given this one field at a time): whatever the card's kind. Only a path that is there, and never
+    inside a link, a button or text box, or a tag."""
+    from . import opener
+
+    def path(m):
+        word = m.group(1).rstrip(".")
+        got = opener.link(key, root, word)
+        return f"<a href='{e(got[0])}'{opener.NEW_TAB if got[1] else ''}>{word}</a>{m.group(1)[len(word):]}" if got else m.group(0)
+
+    out, inside = [], 0
+    for part in re.split(r"(<[^>]+>)", page):
+        if part.startswith("<"):
+            m = re.match(r"<(/?)(?:a|pre|button|textarea|select|summary|script|style)\b", part, re.I)
+            if m:
+                inside = max(0, inside - 1) if m.group(1) else inside + 1
+        elif not inside and ("/" in part or "." in part):
+            got, at = [], 0
+            for m in ADDRESS.finditer(part):                 # an address left as words (in code) is no path
+                got.append(PATHLIKE.sub(path, part[at:m.start()]) + m.group(0))
+                at = m.end()
+            part = "".join(got) + PATHLIKE.sub(path, part[at:])
+        out.append(part)
+    return "".join(out)
+
+
 def chat_prose(text, key=None, root=None):
     """An agent's prose in the chat: markdown as the page shows it, code blocks kept as they are, links live; a
     picture in the project shown as itself (![what](path)), and a link to any other file there (a PDF) opens it."""
@@ -9277,7 +9305,7 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
         rows.append(f"<div class='{need}'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}{foot}</div>")
     # an address written out anywhere in it is a link to tap (the person, Nov 14: a sign-off's "what" named its demo's
     # address as plain text, where only its To check was linked): the whole moment, whatever its kind
-    return live_addresses(rows[0], pid) if rows else ""
+    return live_paths(live_addresses(rows[0], pid), pid, p) if rows else ""
 
 
 def waiting_html(pid, root):

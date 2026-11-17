@@ -2081,6 +2081,23 @@ class ChatTest(BoardBase):
         self.assertIn(">http://127.0.0.1:3000/x</a> &lt;b&gt;now&lt;/b&gt;", mine, "what they typed stays text")
         self.assertEqual(board.live_addresses(board.e("no address here: a/b and c://"), 0), board.e("no address here: a/b and c://"))
 
+    def test_a_file_of_the_project_named_on_a_card_is_a_link_that_opens_it(self):
+        from colony import inbox
+        board.track(self.root)
+        (self.root / "design" / "mocks").mkdir(parents=True)
+        (self.root / "design" / "mocks" / "sale.html").write_text("<p>mock</p>")
+        board.add_gate(self.root, "Build it the way the mock shows?", None,
+                       "The mock (design/mocks/sale.html) is ready. See also design/mocks/gone.html and/or https://example.com/design/mocks/sale.html.")
+        card = inbox.card(inbox.stack(board.registry())[0])
+        self.assertRegex(card, r"The mock \(<a href='/open\?[^']*f=design/mocks/sale\.html[^']*'[^>]*>design/mocks/sale\.html</a>\) is ready",
+                         "a file there opens with a tap, the bracket after it left out")
+        self.assertIn("See also design/mocks/gone.html and/or ", card, "one that is not there stays words")
+        self.assertEqual(card.count(">design/mocks/sale.html</a>"), 1, "an address that ends the same is its own link, not a path")
+        drawn = "<button>Open design/mocks/sale.html</button><a href='/x'>design/mocks/sale.html</a><code>design/mocks/sale.html</code>"
+        got = board.live_paths(drawn, 0, self.root)
+        self.assertTrue(got.startswith("<button>Open design/mocks/sale.html</button><a href='/x'>design/mocks/sale.html</a><code><a href="),
+                        "a button's words and a link stay as they are; a path written as code opens: " + got)
+
     def test_a_markdown_table_and_a_quote_in_a_reply_show_as_such(self):
         said = board.chat_prose("Here:\n\n| Project | Who takes it |\n|---|---|\n| Novel | `wc -w` **count** |\n\n> 31,200 words\n\nAfter.")
         self.assertIn("<div class='mdtable'><table><tr><th>Project</th><th>Who takes it</th></tr>"
