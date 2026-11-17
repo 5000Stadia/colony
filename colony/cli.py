@@ -1587,7 +1587,7 @@ def cmd_settings(a):
         shown = (("on" if v else "off") if isinstance(v, bool) else ", ".join(v or providers.PROVIDERS) if k == "providers"
                  else ", ".join(f"{f}={c['model']}:{c['effort']}" for f, c in v.items()) or "(from the benchmark cards)"
                  if k == "consultants" else ",".join(f"{f}={'on' if v.get(f, True) else 'off'}" for f in providers.PROVIDERS)
-                 if k == "turbo_by" else v or "(colony Auto)")
+                 if k == "turbo_by" else board._week_text(v) or "(none)" if k == "week_pause" else v or "(colony Auto)")
         print(f"{k:14} {str(shown):28} {board.setting_help(k)}")
     from . import autostart
     if autostart.available() and only in (None, "autostart"):    # kept by systemd: shown as it holds there
