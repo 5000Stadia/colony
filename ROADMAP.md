@@ -39,7 +39,9 @@ new models on its own, keeps itself current, and never gets in the way of the wo
   does both, for thoroughness and to keep the guide; and a guide is used where it has shown it pays and skipped
   where it doesn't, with the reason known.
 - Intelligence where it counts: the smartest model for judgement, effort by role, two fresh views at costly
-  decisions; no extra spend without substantial gain.
+  decisions; no extra spend without substantial gain. The person's subscriptions are one pool: models are scaled
+  across every program by their cost and intelligence return, and work is handed from one program to another where
+  that pays for itself, never where the handoff costs more than it gains.
 - Provider-agnostic: Claude Code, Codex and programs to come, each reachable from its own app.
 - Light machinery: guidance as principles the agents interpret, mechanics as exact commands, hard limits in code;
   structure (tests, memory, review, rules) only where the work shows it helps more than it hinders; nothing
@@ -204,6 +206,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R72 Auto keeps consultants and the step-up helper at the shared Intelligence Index ceiling at all seven…
 - [x] R73 Restoration skips repeating a carry-over whose ID is already present in the native compaction summa…
 - [x] R153 Model data from Artificial Analysis's new free list: only the models colony weighs, no page reading
+- [ ] R169 Two subscriptions as one pool — models scaled across Claude and Codex by return, helpers handed to the other program where that pays, never a live conversation (related: R168, R69)
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar
 
