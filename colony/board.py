@@ -8719,10 +8719,13 @@ def try_html(text, pid, root, x):
     return "".join(out)
 
 
-def check_html(text, pid, root):
+def check_html(text, pid, root, seen=None):
     """How to check an item ready for the person's OK, as its agent wrote it: addresses and the project's paths as
     links, as a showcase entry's Try (5 of 5 sign-offs waiting on 2026-11-11 named a demo's address or a folder of
-    pictures the person couldn't tap), and under it the pictures it names: a picture, or a folder's first few."""
+    pictures the person couldn't tap), and under it the pictures it names: a picture, or a folder's first few. What
+    is ready is shown the same way (a sign-off named its three screenshots there, and they read as words); seen
+    holds the pictures a card already shows, so one named in both is shown once."""
+    seen = set() if seen is None else seen
     from . import opener
     base = Path(root).resolve()
     text = text.replace(str(base) + "/", "")              # a path written from the machine's root reads from the project
@@ -8735,7 +8738,8 @@ def check_html(text, pid, root):
         found = ([got] if got.is_file() else sorted(f for f in got.iterdir() if f.is_file())[:CHECK_SHOTS] if got.is_dir() else [])
         for f in found:
             url = chat_file(pid, root, e(str(f.relative_to(base)))) if f.name.lower().endswith(IMAGES) else None
-            if url and url not in shots:
+            if url and url not in seen:
+                seen.add(url)
                 shots.append(url)
     return page + ("<div class='shots'>" + "".join(
         f"<a class='shot' href='{u}' target='_blank' rel='noopener'><img src='{u}' alt='' loading='lazy'></a>"
@@ -9223,8 +9227,9 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
     verify = [x["item"] for x in group if x["kind"] == "verify"]
     def ready_row(it):
         # a request for sign-off: what's ready, how to see it, and Approve or say what's wrong
-        return (f"<div class='ready'><div><span class='muted'>Ready for your OK:</span> {e(it['what'])}</div>"
-                + (f"<div><span class='muted'>To check:</span> {check_html(it['check'], pid, p)}</div>" if it.get("check") else "")
+        seen = set()
+        return (f"<div class='ready'><div><span class='muted'>Ready for your OK:</span> {check_html(it['what'], pid, p, seen)}</div>"
+                + (f"<div><span class='muted'>To check:</span> {check_html(it['check'], pid, p, seen)}</div>" if it.get("check") else "")
                 + f"<form class='verdict' method='post' action='/approve'>{hidden}<input type='hidden' name='item' value='{e(it['id'])}'>"
                 f"<button>Approve</button><span class='back'><input name='text' placeholder='or say what is wrong'>"
                 f"<button class='quiet' name='verdict' value='not-yet' title='Not approved: back to its agent, with what you wrote'>"

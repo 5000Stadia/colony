@@ -8208,7 +8208,8 @@ class InboxTest(HoursBase):
             board.mark_ready(self.root, "R2", "The water log is built.",
                              f"Open https://plants.example/log and add a day. Pictures: {self.root.resolve()}/notes/screens/ (home).")
         with self.clock(10):
-            board.mark_ready(self.root, "R3", "Reminders are built: https://plants.example/remind (try it).", "Run it once.")
+            board.mark_ready(self.root, "R3", "Reminders are built: https://plants.example/remind (try it). "
+                             "Screenshots: notes/screens/home-390.png", "Run it once, then see notes/screens/home-390.png.")
         with self.clock(12):
             stack = inbox.stack(board.registry())
             self.assertEqual([x["keys"] for x in stack], [["verify:R2"], ["verify:R3"]], "each its own card, the older first")
@@ -8216,6 +8217,9 @@ class InboxTest(HoursBase):
             self.assertIn("Reminders are built: <a href='https://plants.example/remind' target='_blank' rel='noopener'>"
                           "https://plants.example/remind</a> (try it).", second, "an address in what is ready is a link too")
             self.assertNotIn("<a", second.split("data-say='")[1].split("'")[0], "what the player reads stays words")
+            self.assertEqual(second.count("<a class='shot'"), 1, "a picture named in what is ready shows on the card, "
+                             "and once where To check names it too")
+            self.assertIn(">notes/screens/home-390.png</a>", second, "and its path opens")
             page = self.top()
             self.assertEqual(page.count(">https://plants.example/log</a>"), 1, "one already a link is not made one twice")
             self.assertIn("<b>1 of 2</b>", page)
