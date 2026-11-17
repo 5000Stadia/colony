@@ -6105,44 +6105,88 @@ class UsageTest(BoardBase):
         self.assertEqual([x for _, x in usage.check()], ["resumed"])
         self.assertEqual(len(board.notes(self.root)), told, "no wind-down, no carry-on: nothing to wake it for")
 
-    def test_a_week_pause_counts_every_program_it_builds_on_and_waits_for_the_person(self):
+    def test_a_week_limit_pauses_a_project_on_its_own_program_and_only_stops_new_work_on_another(self):
         from colony import providers, usage
         board.track(self.root)
         board.project_settings(self.root, {"week_pause": "50%"})
+        self.assertEqual(board.project_settings(self.root)[1]["week_pause"], {"*": 50}, "one number is every program's")
         weeks = {"claude": {"weekly": {"used": 30, "resets_at": time.time() + 3600}, "5-hour": {"used": 80, "resets_at": time.time() + 600}},
                  "codex": {"weekly": {"used": 49, "resets_at": time.time() + 7200}}}
         at = lambda key: {"at": time.time(), "windows": weeks[key]} if key in weeks else None
         with patch.object(usage, "reading", side_effect=at), patch.object(providers, "usable", return_value=True), \
                 patch.object(console, "snapshot", return_value={"state": "working", "lines": []}):
             self.assertEqual(usage.check(), [], "under half of each week, and a busy 5-hour window is not the week")
+            self.assertEqual(usage.limits_line(self.root), "")
             weeks["codex"]["weekly"]["used"] = 51
-            self.assertEqual([w for _, w in usage.check()], ["paused"], "Codex's week counts for a Claude project")
+            self.assertEqual(usage.check(), [], "Codex's week past its limit does not pause a Claude project")
+            line = usage.limits_line(self.root)
+            for words in ("Week limit: Codex is past 50% of its week", "at 51%", "Start nothing new on it",
+                          "the rest of your work carries on here"):
+                self.assertIn(words, line, "its agent hears, each turn, which program takes nothing new")
+            self.assertEqual(mail.blocker(self.root), None, "and mail still starts it")
+            weeks["codex"]["weekly"]["resets_at"] = time.time() - 1
+            self.assertEqual(usage.limits_line(self.root), "", "the week reset: the line is gone")
+            weeks["claude"]["weekly"]["used"] = 50
+            self.assertEqual([w for _, w in usage.check()], ["paused"], "its own program's week pauses it")
             [note] = [n for n in board.notes(self.root) if n["text"].startswith("Week pause")]
-            for words in ("Codex is past 50% of the week", "don't cancel them", "a clean point", "Start nothing new",
+            for words in ("Claude Code is past 50% of the week", "don't cancel them", "a clean point", "Start nothing new",
                           "where each program's week is", "wait for them"):
                 self.assertIn(words, note["text"])
             self.assertEqual(usage.check(), [], "told once")
             why = mail.blocker(self.root)["reason"]
-            for words in ("its week pause", "50% of any program's week", "Codex's week is past that"):
-                self.assertIn(words, why, "a sender is told which program's week holds a project that runs on another")
-            self.assertNotIn("safe-pause window", why)
-            weeks["codex"]["weekly"]["resets_at"] = time.time() - 1
-            self.assertEqual([w for _, w in usage.check()], ["resumed"])
-            self.assertIn("the week it paused at has reset", board.notes(self.root)[-1]["text"])
-            weeks["claude"]["weekly"]["used"] = 50
-            self.assertEqual([w for _, w in usage.check()], ["paused"])
+            for words in ("its week pause", "50% of its program's week", "Claude Code's week is past that"):
+                self.assertIn(words, why)
             board.project_settings(self.root, {"week_pause": "off"})
             self.assertEqual([w for _, w in usage.check()], ["resumed"], "the person lifted it")
             self.assertIn("no longer pauses at a share of the week", board.notes(self.root)[-1]["text"])
-        board.project_settings(self.root, {"week_pause": "50"})
+            board.project_settings(self.root, {"week_pause": "50"})
+            self.assertEqual([w for _, w in usage.check()], ["paused"])
+            weeks["claude"]["weekly"]["resets_at"] = time.time() - 1
+            self.assertEqual([w for _, w in usage.check()], ["resumed"])
+            self.assertIn("the week it paused at has reset", board.notes(self.root)[-1]["text"])
+        weeks["claude"]["weekly"]["resets_at"] = time.time() + 3600
         with patch.object(usage, "reading", side_effect=at), patch.object(providers, "usable", return_value=True), \
                 patch.object(console, "snapshot", return_value={"state": "idle", "lines": []}):
             self.assertEqual([w for _, w in usage.check()], ["paused"])
         told = board.notes(self.root)[-1]
         self.assertTrue(told["text"].startswith("Week pause") and not told.get("quiet"),
                         "idle between items, it is woken to tell the person where things stand")
-        with self.assertRaises(KeyError):
-            board.project_settings(self.root, {"week_pause": "150"})
+        for wrong in ("150", "claude=70, gemini=5", "lots"):
+            with self.assertRaises(KeyError):
+                board.project_settings(self.root, {"week_pause": wrong})
+
+    def test_colonys_week_limit_holds_for_every_project_and_a_projects_own_takes_its_place(self):
+        from colony import providers, usage
+        board.track(self.root)
+        with patch.object(providers, "usable", return_value=True):
+            self.assertEqual(usage.week_limits(self.root), {}, "none until the person sets one")
+            board.set_setting("week_pause", "claude=70, codex=85")
+            self.assertEqual(board.registry()["settings"]["week_pause"], {"claude": 70, "codex": 85})
+            self.assertEqual(usage.week_limits(self.root), {"claude": 70, "codex": 85}, "colony's, with none of its own")
+            board.project_settings(self.root, {"week_pause": "claude=40"})
+            self.assertEqual(usage.week_limits(self.root), {"claude": 40, "codex": 85},
+                             "its own for the program it names, colony's for the other")
+            board.project_settings(self.root, {"week_pause": "codex=off, claude=95"})
+            self.assertEqual(usage.week_limits(self.root), {"claude": 95}, "higher than colony's, and none for Codex")
+            board.project_settings(self.root, {"week_pause": "off"})
+            self.assertEqual(usage.week_limits(self.root), {}, "off: no week limit here, whatever colony's is")
+            board.project_settings(self.root, {"week_pause": ""})
+            self.assertEqual(usage.week_limits(self.root), {"claude": 70, "codex": 85}, "blank: colony's again")
+            (self.root / ".board" / "settings.json").write_text(json.dumps({"week_pause": 85}))
+            self.assertEqual(usage.week_limits(self.root), {"claude": 85, "codex": 85}, "a number saved before reads as every program's")
+            board.set_setting("week_pause", "off")
+            self.assertEqual(board.registry()["settings"]["week_pause"], {})
+            with self.assertRaises(KeyError):
+                board.set_setting("week_pause", "a lot")
+        page = board.settings_page(board.registry())
+        self.assertIn("name='week_pause' value='off'", page, "Settings has the field")
+        board.set_setting("week_pause", "85")
+        self.assertIn("name='week_pause' value='85'", board.settings_page(board.registry()))
+        form = board.project_settings_form(0, board.project_settings(self.root)[1], root=self.root)
+        self.assertIn("name='week_pause' value='85'", form, "the project's own shows as it was typed")
+        (self.root / ".board" / "settings.json").write_text("{}")
+        form = board.project_settings_form(0, {}, root=self.root)
+        self.assertIn("name='week_pause' value='' size='18' placeholder='85'", form, "blank, with colony's behind it")
 
     def test_a_project_can_keep_going_or_pause_sooner(self):
         from colony import usage

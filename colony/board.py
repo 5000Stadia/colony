@@ -303,13 +303,14 @@ DEFAULT_SETTINGS = {"providers": None, "provider": "claude", "remote": True, "la
                     "safe_pause": 98, "auto_update": True, "model_adoption": "automatic",
                     "helper_models": {}, "auto_balance": 3, "remote_by": {}, "safe_pause_session": 99, "turbo_by": {},
                     "tailscale": "", "tailscale_lan_before": None, "repair_provider": "",
-                    "dev_mode": True, "backup": ""}
+                    "dev_mode": True, "backup": "", "week_pause": {}}
 # PROVIDER: the keys are the person's provider-neutral choices; the values are Claude Code's permission modes.
 # Another provider maps the same keys to its own approval flags in its command(); move this map into
 # ClaudeCode then, and keep only the keys here.
 # "auto": all but the dangerous, each program judging which (Claude Code's auto mode, Codex's automatic review)
 PERMISSIONS = {"ask": None, "edits": "acceptEdits", "auto": "auto", "all": "bypassPermissions", "plan": "plan"}
 SETTING_HELP = {
+    "week_pause": "week limit: the share of a program's week past which no project starts new work on that program, the others carrying on with the other program (85, or claude=70,codex=85; off: none). A project can have its own in its place",
     "auto_balance": "Auto intelligence/cost balance: 0 Intelligence, 3 Balanced, 6 Economy; intermediate steps 1, 2, 4, 5",
     "providers": "the agent programs colony uses: claude, codex (comma-separated; all by default)",
     "provider": "which CLI runs new projects' agents (colony knows: claude, codex)",
@@ -387,6 +388,11 @@ def set_setting(key, value):
             if not 0 < n <= 100:
                 raise KeyError(key)
             reg["settings"][key] = int(n) if n.is_integer() else n
+    elif key == "week_pause":
+        try:
+            reg["settings"][key] = {k: n for k, n in week_shares(value).items() if n}
+        except ValueError:
+            raise KeyError(key)
     elif key == "repair_provider":
         from . import providers
         chosen = '' if value in ('', 'off') else value
@@ -455,6 +461,51 @@ def set_setting(key, value):
 # What turbo means for a project, as it ticks it (colony/turbo.py): stronger models, going deeper on its queued
 # work, research on a topic it names. Never part of how its console starts.
 TURBO = {"turbo_models": True, "turbo_deeper": True, "turbo_research": False, "turbo_topic": ""}
+def week_shares(value):
+    """A week limit as it is kept, from what was typed or saved: {program: percent}, "*" standing for every program
+    ("85"; "claude=70, codex=85"; "codex=off" is none for that program). {} is none said. Raises ValueError."""
+    from .providers import PROVIDERS
+    if isinstance(value, dict):
+        said = list(value.items())
+    elif isinstance(value, (int, float)):
+        said = [("*", value)]
+    else:
+        text = str(value or "").strip().lower()
+        if text in ("", "default", "colony"):
+            return {}
+        said = []
+        for part in filter(None, (p.strip() for p in re.split(r"[,;]", text))):
+            m = re.fullmatch(r"(?:([a-z*]+)\s*[=: ]\s*)?([0-9.]+\s*%?|off)", part)
+            if not m:
+                raise ValueError(part)
+            said.append((m.group(1) or "*", m.group(2)))
+    out = {}
+    for k, v in said:
+        v = str(v).strip().rstrip("%").strip()
+        n = 0.0 if v == "off" else float(v)
+        if not 0 <= n <= 100 or (k != "*" and k not in PROVIDERS):
+            raise ValueError(f"{k}={v}")
+        out[k] = int(n) if n.is_integer() else n
+    return out
+
+
+def _week_text(saved):
+    """A saved week limit as its field shows it ("" where none, or one that can't be read)."""
+    try:
+        return week_shares_text(week_shares(saved or {}))
+    except ValueError:
+        return ""
+
+
+def week_shares_text(shares):
+    """A week limit as it is shown and typed back: "85", "claude=70, codex=85", "off"; "" for none said."""
+    if not shares:
+        return ""
+    if set(shares) == {"*"}:
+        return f"{shares['*']:g}" if shares["*"] else "off"
+    return ", ".join(f"{k}={f'{n:g}' if n else 'off'}" for k, n in shares.items())
+
+
 PROJECT_KEYS = ("provider", "model", "effort", "permissions", "remote", "safe_pause", "week_pause", "auto_balance", "color", "carry_on",
                 "research", *TURBO)
 # A project's own colour, the person's to choose: its accent in light and dark, which every tint on its page comes
@@ -515,18 +566,15 @@ def project_settings(root, changes=None):
                     own[k] = "off"
                 else:
                     own.pop(k, None)
-            elif k == "week_pause":                        # a share of every program's week, the project's alone
-                n = str(v).strip().rstrip("%").lower()
-                if n in ("off", "0"):
-                    own.pop(k, None)
-                    continue
+            elif k == "week_pause":                        # its own week limits, in place of colony's (R168)
                 try:
-                    n = float(n)
+                    shares = week_shares(v)
                 except ValueError:
                     raise KeyError(k)
-                if not 0 < n <= 100:
-                    raise KeyError(k)
-                own[k] = int(n) if n.is_integer() else n
+                if shares:
+                    own[k] = shares
+                else:
+                    own.pop(k, None)                       # blank: colony's
             elif k == "carry_on":                          # on as colony starts it: only off is kept
                 if str(v).lower() in ("off", "false", "no", "0"):
                     own[k] = "off"
@@ -8298,8 +8346,9 @@ def project_settings_form(pid, own, action="/project-settings", root=None, permi
             + "</div>" + (COLOUR_NOW.replace("PID", str(pid)) if root else "") +
             f"<label>Safe pause at <input name='safe_pause' value='{e(str(own.get('safe_pause', '')))}' size='4' "
             f"placeholder='{e(str(g['safe_pause'] or 'off'))}'> % of a usage limit <span class='muted'>(blank: colony's; off: never)</span></label>"
-            + (f"<label>Pause at <input name='week_pause' value='{e(str(own.get('week_pause', '')))}' size='4' placeholder='off'> "
-               "% of any program's week <span class='muted'>(Claude's or Codex's, whichever it builds on; blank: never)</span></label>"
+            + (f"<label>Week limit <input name='week_pause' value='{e(_week_text(own.get('week_pause')))}' size='18' "
+               f"placeholder='{e(_week_text(g.get('week_pause')) or 'none')}'> % of a program's week "
+               "<span class='muted'>(85, or claude=70, codex=85; blank: colony's; off: none)</span></label>"
                if root else "")
             + (f"<label><input type='checkbox' name='carry_on' value='on'{'' if own.get('carry_on') == 'off' else ' checked'}>"
                "<input type='hidden' name='carry_on' value='off'> Carry on by itself: idle with roadmap work it can start, "
@@ -10194,7 +10243,11 @@ def settings_page(reg):
     hours_fields = own(
         f"<label>Safe pause at <input name='safe_pause' value='{e(str(s['safe_pause'] or 'off'))}' size='4'> %</label>"
         f"<p class='muted'>Of a program's 5-hour or weekly limit: its projects land what's in flight, save their work and "
-        f"tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset.</p>") + save
+        f"tell you where things stand, instead of being cut off mid-task; colony wakes them at the reset.</p>"
+        f"<label>Week limit <input name='week_pause' value='{e(_week_text(s.get('week_pause')) or 'off')}' size='18'> %</label>"
+        "<p class='muted'>Of a program's week (85 for each, or claude=70, codex=85): past it, no project starts new work on "
+        "that program, and each carries on with the other. A project on that program lands its work and waits for you. "
+        "A project can have its own limit in its place, on its Settings.</p>") + save
     session_fields = own(
         provider_fields(s["provider"], s["model"], s["effort"], "the provider's default")
         + f"<label>Permissions <select name='permissions'>"
@@ -11318,6 +11371,11 @@ class Handler(BaseHTTPRequestHandler):
                     set_setting("safe_pause", form["safe_pause"])
                 except KeyError:
                     pass                                  # not a percentage: the old one stays
+            if form.get("week_pause", "").strip():
+                try:
+                    set_setting("week_pause", form["week_pause"])
+                except KeyError:
+                    pass                                  # not read as a limit: the old one stays
             if form.get("new_root", "").strip():
                 set_setting("new-folder", form["new_root"].strip())
             self.send_response(303)

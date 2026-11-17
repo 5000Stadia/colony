@@ -195,8 +195,9 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   While asleep its Claude or ChatGPT app connection sleeps too; the board can still wake it.
 - **Safe pause:** at 98% of a program's 5-hour or weekly limit (Settings), its projects land what's
   in flight, save their work and tell you where things stand, instead of being cut off mid-task. Colony
-  wakes them at the reset to carry on. A project can also pause at a share of a program's week you set for it
-  (**Week pause**), winding down the same way.
+  wakes them at the reset to carry on. **Week limit** (Settings, or a project's own in its place): past the
+  share of a program's week you set, no project starts new work on that program; a project that runs on it winds
+  down the same way, and the others carry on with the other program.
 - **Reconnect from your phone:** Settings → Agent programs → Sign-in status and reconnect works over
   Tailscale for Claude Code and Codex. A sign-out or known authentication rejection shows a reconnect notice
   directly on the board. Open the provider's own sign-in page; Claude returns a code to paste back here,

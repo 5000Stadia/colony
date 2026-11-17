@@ -165,29 +165,49 @@ def threshold(root=None):
     return t if 0 < t <= 100 else None
 
 
-def week_threshold(root):
-    """The share of any program's week at which this project pauses (week_pause, set by the person for a project
-    that should build no further once either program's week passes a share): every program it may build on is counted,
-    since a project's agent can run another program's builds. None is off."""
-    try:
-        t = float(board.project_settings(root)[1].get("week_pause") or 0)
-    except (TypeError, ValueError):
-        return None
-    return t if 0 < t <= 100 else None
-
-
-def weeks_past(root, pct, clock):
-    """The weekly windows of every program at pct or past it, named by program: {"codex weekly": {used, resets_at,
-    program}}."""
+def week_limits(root):
+    """The week limits that hold for a project (R168): {program: percent} for each program it could build on, the
+    share of that program's week past which it starts nothing new there. Its own for a program where it has one (off:
+    none), else colony's. A project's agent can run another program's builds, so every usable program is counted."""
     from . import providers
+
+    def kept(value):
+        try:
+            return board.week_shares(value or {})
+        except ValueError:
+            return {}
+    own, everyone = kept(board.project_settings(root)[1].get("week_pause")), kept(board.registry()["settings"].get("week_pause"))
     out = {}
     for k, x in providers.PROVIDERS.items():
-        if not providers.usable(x):
-            continue
+        n = own.get(k, own.get("*"))
+        n = everyone.get(k, everyone.get("*")) if n is None else n
+        if n and providers.usable(x):
+            out[k] = n
+    return out
+
+
+def weeks_past(limits, clock):
+    """The weekly windows at their limit or past it, of the programs in limits ({program: percent}), named by
+    program: {"codex weekly": {used, resets_at, program, limit}}."""
+    out = {}
+    for k, pct in limits.items():
         v = read(k, raw=True).get("weekly") or {}
         if v.get("used") is not None and v["used"] >= pct and not (v.get("resets_at") and v["resets_at"] <= clock):
-            out[f"{k} weekly"] = dict(v, program=k)
+            out[f"{k} weekly"] = dict(v, program=k, limit=pct)
     return out
+
+
+def limits_line(root):
+    """What a project's agent hears each turn while another program than its own is past its week limit: nothing
+    new starts there, and its own program carries on. (Its own program past its limit pauses the project: check().)"""
+    from . import providers
+    mine = providers.key(providers.of(root))
+    past = weeks_past({k: n for k, n in week_limits(root).items() if k != mine}, time.time())
+    return " ".join(
+        f"Week limit: {providers.PROVIDERS[v['program']].label} is past {v['limit']:g}% of its week, the limit the person "
+        f"set (at {v['used']:g}%; it resets {when(v.get('resets_at'))}). Start nothing new on it until then: what is "
+        "already running there finishes, and the rest of your work carries on here. Changing the limit is theirs."
+        for v in past.values())
 
 
 def over(key, pct):
@@ -233,12 +253,12 @@ def check():
             return bool(value.get('resets_at') and value['resets_at'] <= clock)
 
         blocking = {w: v for w, v in raw.items() if limit(w, t) and not reset(v) and v['used'] >= limit(w, t)}
-        week = week_threshold(p)
-        blocking.update(weeks_past(p, week, clock) if week else {})
+        week = week_limits(p).get(key)                     # its own program's week limit pauses it; another's doesn't
+        blocking.update(weeks_past({key: week}, clock) if week else {})
         for window, saved in held.items():
             if saved.get('program'):                       # a program's week (week_pause): held until it resets
                 latest = read(saved['program'], raw=True).get('weekly') or {}
-                if week and not reset(saved) and not reset(latest) and not (
+                if saved['program'] == key and week and not reset(saved) and not reset(latest) and not (
                         latest.get('used') is not None and latest['used'] <= max(0, week - RESUME_MARGIN)):
                     blocking.setdefault(window, dict(saved, **latest))
                 continue
@@ -378,18 +398,18 @@ def twin(root, key):
 
 
 def week_down(root, pct, past):
-    """What an agent is told when a program's week passes the project's week_pause: wind down as for the safe pause,
+    """What an agent is told when its own program's week passes its week limit: wind down as for the safe pause,
     and tell the person where each program stands; carrying on is theirs."""
     from . import providers
     weeks = "; ".join(f"{providers.PROVIDERS[k].label} {line(k) or 'not read'}" for k, x in providers.PROVIDERS.items()
                       if providers.usable(x))
     names = " and ".join(providers.PROVIDERS[v["program"]].label for v in past.values())
-    return (f"Week pause: {names} {'is' if len(past) == 1 else 'are'} past {pct:g}% of the week, the share the person set "
-            f"for this project ({weeks}). Wind down now: let work already running finish, helpers included (don't "
+    return (f"Week pause: {names} {'is' if len(past) == 1 else 'are'} past {pct:g}% of the week, the limit the person set "
+            f"({weeks}). Wind down now: let work already running finish, helpers included (don't "
             "cancel them), and take in what they hand back; commit what works so far (a clean point; the item stays in "
             "progress). Start nothing new. (Idle when it came: nothing to land.) Then end your turn by telling the person, briefly, where things stand (done, "
             "half-done, next) and where each program's week is, and wait for them: carrying on before the week resets "
-            f"is theirs (colony settings --project {root.name} week_pause off, or a higher share).")
+            f"is theirs (colony settings --project {root.name} week_pause off, or a higher limit).")
 
 
 def wind_down(root, prov, window, v, others):

@@ -67,11 +67,9 @@ def blocker(root, snap=None):
         # turn: said so, since "delayed; resets Saturday" was relayed to the person as a project paused until then
         held = (paused.get('windows') or {}).get(window) or {}
         if held.get('program'):
-            # a week pause counts every program's week, so the one holding a project may not be the one it runs on:
-            # named as that, since "its codex weekly window" on a Claude project read as a wrong label
             other = providers.PROVIDERS.get(held['program'])
-            share = usage.week_threshold(root)
-            where = (f"recipient is in its week pause (set to stop at {share:g}% of any program's week; " if share else
+            share = usage.week_limits(root).get(held['program'])
+            where = (f"recipient is in its week pause (set to stop at {share:g}% of its program's week; " if share else
                      "recipient is in its week pause (") + f"{other.label if other else held['program']}'s week is past that, resets {reset}): "
         else:
             where = f"recipient is in its configured {window} safe-pause window (resets {reset}): "

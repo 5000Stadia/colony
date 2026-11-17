@@ -1191,6 +1191,15 @@ def cmd_turn(a):
     return 0
 
 
+def _week_limit_line(root):
+    """The week limit an agent hears of each turn (usage.limits_line); a fault reading it never costs the turn its notes."""
+    from . import usage
+    try:
+        return usage.limits_line(root)
+    except Exception:
+        return ""
+
+
 def cmd_notes(a):
     from . import board
     root = board.root_of()
@@ -1244,6 +1253,7 @@ def cmd_notes(a):
         text = "\n\n".join(filter(None, [
             standing,
             board.PAUSED_TEXT if board.paused(root) else "",
+            _week_limit_line(root),
             board.open_gates_line(root) if spoke else "",
             lead.role_text(root) if a.session else '',
             rules.session_text(root) if a.session else '',
@@ -1552,6 +1562,8 @@ def cmd_settings(a):
                 continue
             v = merged.get(k, "green" if k == "color" else "")      # a colour is the project's alone: the board's green else
             shown = ("on" if v else "off") if isinstance(v, bool) else str(v) or ("(none)" if k in board.TURBO else "(colony Auto)")
+            if k == "week_pause":
+                shown = board._week_text(v) or "(none)"
             print(f"{k:14} {shown:24} {'set for this project' if k in own else 'default' if k in board.TURBO or k == 'color' else 'global'}")
         return 0
     names = list(board.DEFAULT_SETTINGS) + ["autostart", "new-folder"]
