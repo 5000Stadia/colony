@@ -156,7 +156,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R165 Backup built in: where colony keeps a nightly copy of itself is a setting, and colony makes the copy
 - [x] R166 Setup without an interview: what a new board's person still has to choose stays on the front page until set or skipped, and colony offers what it can find out itself (their answer to gate g83cf4403; related: R125, R165, R152)
 - [x] R167 Active hours removed: nothing is held by the clock; the Inbox carries what needs the person at any hour (their decision, gate gc82fee43; undoes R82)
-- [~] R168 Week limits for the whole colony, per program, with a project's own in its place: past a program's limit no project starts new work on that program, and each carries on with the other (their answer to gate gfb778909; what a project's own number counts waits on gate gca2f5233)
+- [x] R168 Week limits for the whole colony, per program, with a project's own in its place: past a program's limit no project starts new work on that program, and each carries on with the other (their answers to gates gfb778909 and gca2f5233)
 
 ## M7 — Codex as a full option: from install to a project's agent
 
