@@ -29,7 +29,7 @@ def record_claude(payload):
                for k, v in limits.items() if k in NAMES and v and v.get("used_percentage") is not None}
     if windows:
         folder().mkdir(parents=True, exist_ok=True)
-        (folder() / "claude.json").write_text(json.dumps({"at": time.time(), "windows": windows}))
+        (folder() / "claude.json").write_text(json.dumps({"at": time.time(), "windows": windows, "raw": limits}))
 
 
 def codex_live():
@@ -317,7 +317,13 @@ def check():
 # What a program prints when its limit stops a turn, and when it says the limit lifts. PROVIDER: Claude Code ("You've
 # hit your session limit · resets 3:40pm (America/Los_Angeles)", or "… resets Aug 28, 4pm (…)"); Codex ("You've hit
 # your usage limit. … try again at Sep 13th, 2026 9:15 AM.").
-CUT = re.compile(r"You've hit your [a-z ]*limit\b[^\n]*")
+CUT = re.compile(r"You've hit your [A-Za-z0-9 .-]*limit\b[^\n]*")
+# A limit named by a window or kind is the program's; any other name is a model's own (Claude Code: "You've hit your
+# Fable limit · resets Nov 20, 3pm (…)", Nov 16): that model is spent until it lifts, and the program's others still run.
+KINDS = {"session", "usage", "weekly", "daily", "monthly", "monthly spend", "rate", "5-hour", "five-hour", "hourly",
+         "spend", "credit", "token", "context", "request"}
+NAMED = re.compile(r"You've hit your (?P<name>[A-Za-z0-9 .-]+?) limit\b")
+SPENT_UNSAID = 86400        # a model's limit that names no time is tried again after a day
 RESETS = re.compile(r"resets (?:(?P<day>[A-Z][a-z]{2} \d{1,2}), )?(?P<time>\d{1,2}(?::\d{2})?\s?[ap]m) \((?P<tz>[A-Za-z_/+-]+)\)")
 AGAIN = re.compile(r"try again at (?P<when>[A-Z][a-z]{2} \d{1,2}(?:st|nd|rd|th)?, \d{4} \d{1,2}:\d{2} [AP]M)")
 
@@ -348,6 +354,88 @@ def lifts(text, seen):
     return (at + timedelta(days=1) if at.timestamp() < seen - 60 else at).timestamp()
 
 
+def limit_name(line):
+    """The model a limit's message names ("Fable"), or None where it names a window or kind of limit."""
+    m = NAMED.search(line or "")
+    name = m.group("name").strip() if m else ""
+    return name if name and name.lower() not in KINDS and not name.lower().endswith(tuple(" " + k for k in KINDS)) else None
+
+
+def matches(name, model, label=""):
+    """Whether a model a limit named is this model: its words, in order, in the model's id or name ("Fable" is
+    claude-fable-5-2 and any later Fable; "Opus 5.5" is claude-opus-5-5), whatever the models to come."""
+    words = re.findall(r"[a-z0-9]+", name.lower())
+    if not words:
+        return False
+    # a name that ends on a version ("Opus 5") is that version, not a later one ("Opus 5.5")
+    pattern = (r"(?<![a-z0-9])" + r"[^a-z0-9]+".join(map(re.escape, words))
+               + (r"(?![a-z0-9]|[^a-z0-9][0-9])" if words[-1].isdigit() else r"(?![a-z])"))
+    return any(re.search(pattern, t.lower()) for t in (model, label) if t)
+
+
+def spent_store():
+    try:
+        return json.loads((folder() / "spent.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def spent(key, clock=None):
+    """A program's models whose own limit is spent now: {model id: when it lifts}. Auto passes over them and picks
+    the best of the rest; they come back as their limit lifts."""
+    from . import providers
+    clock = time.time() if clock is None else clock
+    names = {n: v for n, v in (spent_store().get(key) or {}).items() if clock < v["until"]}
+    if not names or key not in providers.PROVIDERS:
+        return {}
+    return {m: max(v["until"] for n, v in names.items() if matches(n, m, label))
+            for m, label in providers.available(providers.PROVIDERS[key])
+            if any(matches(n, m, label) for n in names)}
+
+
+def mark_spent(key, name, until, clock):
+    """Keep a model's own limit as spent, until it lifts; True where that changed what is spent."""
+    store = spent_store()
+    mine = {n: v for n, v in (store.get(key) or {}).items() if clock < v["until"]}
+    before = {n: v["until"] for n, v in mine.items()}
+    mine[name.lower()] = {"until": until or clock + SPENT_UNSAID, "at": clock}
+    store[key] = mine
+    folder().mkdir(parents=True, exist_ok=True)
+    (folder() / "spent.json").write_text(json.dumps(store))
+    return {n: v["until"] for n, v in mine.items()} != before
+
+
+def lapsed(clock):
+    """Drop model limits that have lifted; True where any did (Auto picks again, and the model comes back)."""
+    store = spent_store()
+    kept = {k: {n: v for n, v in m.items() if clock < v["until"]} for k, m in store.items()}
+    if kept == store:
+        return False
+    (folder() / "spent.json").write_text(json.dumps(kept))
+    return True
+
+
+def repick(roots=()):
+    """Auto picks again, as what is spent changed, and each project's helpers are written at their new tiers: a
+    console then runs stale, and reloads into its conversation when idle (the watcher's reload)."""
+    from . import bench, selection
+    selection.reconcile()
+    for p in roots or board.projects():
+        if p.exists():
+            bench.write_helpers(p)
+
+
+def moved(root, key, clock):
+    """Whether a project's agent now starts on a model that is not spent (Auto moved it, or the person's own
+    choice is another); False where it would start on a spent one still."""
+    from . import selection
+    try:
+        chosen = selection.main(root)
+    except Exception:
+        return False
+    return bool(chosen) and chosen["model"] not in spent(key, clock)
+
+
 def cut_off(screens=None, clock=None):
     """Agents a limit stopped mid-turn, outside any safe pause (it was off for them, or the limit came first): seen by
     the limit's message on their console, and woken once it lifts to carry on. Returns the projects woken."""
@@ -358,7 +446,10 @@ def cut_off(screens=None, clock=None):
         was = json.loads(path.read_text())
     except (OSError, ValueError):
         was = {}
-    now, woken, pausing = {}, [], paused()
+    from . import providers
+    now, woken, pausing, changed = {}, [], paused(), set()
+    if lapsed(clock):
+        changed.add("*")
     for p in board.projects():
         if not p.exists():
             continue
@@ -371,8 +462,16 @@ def cut_off(screens=None, clock=None):
             mine = {"n": len(hits)}                     # first seen, or a new console: what's there already is past
         if len(hits) > mine.get("n", 0):
             mine = {"n": len(hits)}
-            if k not in pausing:                        # a safe pause wakes its own projects
+            name = limit_name(hits[-1])
+            if name:                                    # a model's own: the program's others still run
+                key = providers.key(providers.of(p))
+                if mark_spent(key, name, lifts(hits[-1], clock), clock):
+                    changed.add(key)
+                mine.update(line=hits[-1], at=clock, model=name)
+            elif k not in pausing:                      # a safe pause wakes its own projects
                 mine.update(line=hits[-1], at=clock, until=lifts(hits[-1], clock))
+        if mine.get("model"):
+            mine = moving(p, mine, clock, changed) or {"n": mine["n"]}
         if mine.get("until") and clock >= mine["until"] + 60:
             board.add_note(p, None, f"A usage limit stopped you mid-work (it said: \"{mine['line']}\"). It has "
                            "lifted: carry on where you stopped.", author="colony", kind="resume")
@@ -380,10 +479,40 @@ def cut_off(screens=None, clock=None):
             mine = {"n": mine["n"]}
         if mine:
             now[k] = mine
+    if changed:
+        repick()                                        # a model's limit lifted, or one no project here met yet
     if now != was:
         folder().mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(now))
     return woken
+
+
+def moving(p, mine, clock, changed):
+    """A project a model's own limit stopped: Auto picks again (once a minute at most, where what is spent changed),
+    then its console reloads onto the model it now starts on, when that is safe, and its agent is told to carry on.
+    Where nothing else is open to it (its own choice is that model, or no other fits), it is woken as the limit lifts.
+    Returns what is kept for it, or None once it is done."""
+    from . import console, providers
+    key = providers.key(providers.of(p))
+    if changed:
+        repick()
+        changed.clear()
+    name, nm = console.session_name(p), mine["model"]
+    if not moved(p, key, clock):
+        until = max(spent(key, clock).values(), default=None)
+        return {"n": mine["n"], "line": mine["line"], "at": mine["at"], "until": until or clock + SPENT_UNSAID}
+    if console.running(name) and console.stale(p, name):
+        snap = console.snapshot(p, lines=1, name=name)
+        if (snap["state"] != "idle" or console.drafting(name) or console.attached(name) or not console.room()
+                or console.busy(p, name)):
+            return mine                                 # its next free minute
+        console.reload(p, name)
+    chosen = __import__("colony.selection", fromlist=["main"]).main(p)
+    board.add_note(p, None, f"{nm}'s own usage limit stopped you mid-work (it said: \"{mine['line']}\"). Colony's Auto "
+                   f"now starts you on {chosen['model']}" + (f" at {chosen['effort']}" if chosen.get("effort") else "")
+                   + f", the best model still open, until {nm} comes back, and your helpers likewise: carry on where you "
+                   "stopped.", author="colony", kind="resume")
+    return None
 
 
 def twin(root, key):

@@ -108,8 +108,11 @@ def concrete(family, value):
 
 def recommendations(state):
     """Rank eligible evidence without changing the ledger; a rejection applies to all roles."""
-    from . import intelligence
-    all_entries = bench.standings()
+    from . import intelligence, usage
+    # a model whose own limit is spent is no choice until it lifts: Auto picks the best of the rest, with the ceiling
+    # theirs, so each role keeps its place in the balance (Nov 16: Fable's own week ran out, and every project on it stopped)
+    spent = {m for k in providers.PROVIDERS for m in usage.spent(k)}
+    all_entries = [e for e in bench.standings() if e['model'] not in spent]
     ceiling = max((p['score'] for p in intelligence.pairs(all_entries)), default=None)
     entries = [e for e in all_entries if e['model'] not in state['rejected']]
     settings = board.registry()['settings']
@@ -276,7 +279,9 @@ def auto(family, role, root=None):
         raise Unavailable(f'No available accepted model for {family} {role}; choose a concrete model in Settings.')
     from . import turbo
     up = turbo.pick(root, family, role) if root else None
-    if up and up['model'] not in state['rejected'] and pair(up) not in state['blocked'].get(ident, []):
+    from . import usage
+    if (up and up['model'] not in state['rejected'] and pair(up) not in state['blocked'].get(ident, [])
+            and up['model'] not in usage.spent(family)):
         chosen = concrete(family, up) or chosen          # turbo's stronger pick, latched for its episode
     return dict(chosen, own=False, why=chosen.get('why') or 'Benchmark recommendation')
 

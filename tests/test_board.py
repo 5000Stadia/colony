@@ -6048,6 +6048,53 @@ class UsageTest(BoardBase):
         usage.record_claude({"rate_limits": {"seven_day": {"used_percentage": weekly, "resets_at": time.time() + resets_in},
                                              "five_hour": {"used_percentage": 5, "resets_at": time.time() + 600}}})
 
+    def test_a_models_own_limit_moves_its_projects_to_the_best_model_still_open_until_it_lifts(self):
+        # Nov 16: Fable's own week ran out while Claude's was at 60%, and every project on Fable stopped
+        from colony import console, selection, usage
+        self.assertEqual(usage.limit_name("You've hit your Fable limit · resets Nov 20, 3pm (America/Los_Angeles)."), "Fable")
+        for kind in ("weekly", "session", "usage", "monthly spend"):
+            self.assertIsNone(usage.limit_name(f"You've hit your {kind} limit · resets 3pm"), "a window or kind is the program's")
+        self.assertTrue(usage.matches("Fable", "claude-fable-5-2") and usage.matches("Fable", "claude-fable-6"),
+                        "a family's name is each of its models, those to come too")
+        self.assertTrue(usage.matches("Opus 5.5", "claude-opus-5-5"))
+        self.assertFalse(usage.matches("Opus 5", "claude-opus-5-5"), "a version is that version, not a later one")
+        self.assertFalse(usage.matches("Fable", "claude-opus-5-5"))
+        board.track(self.root)
+        k, t0 = str(self.root), 1795000000.0                    # Nov 2026
+        models = [("claude-fable-5-2", "Fable 5.2"), ("claude-opus-5-5", "Opus 5.5")]
+        line = "⎿ You've hit your Fable limit · resets Nov 20, 3pm (America/Los_Angeles). /model to switch models.\n"
+        main = {"model": "claude-opus-5-5", "effort": "xhigh"}
+        with patch.object(providers, "available", return_value=models), \
+                patch.object(usage, "repick") as repick, patch.object(selection, "main", return_value=main), \
+                patch.object(console, "running", return_value=True), patch.object(console, "stale", return_value="tiers"), \
+                patch.object(console, "snapshot", return_value={"state": "idle"}), patch.object(console, "drafting", return_value=False), \
+                patch.object(console, "attached", return_value=False), patch.object(console, "room", return_value=True), \
+                patch.object(console, "busy", return_value=None), patch.object(console, "reload") as reload:
+            usage.cut_off({k: ""}, t0)
+            usage.cut_off({k: "working…\n" + line}, t0 + 60)
+            until = usage.lifts(line, t0 + 60)
+            self.assertEqual(usage.spent("claude", t0 + 61), {"claude-fable-5-2": until}, "Fable is spent until it lifts")
+            repick.assert_called_once()
+            reload.assert_called_once()
+            note = [n for n in board.notes(self.root) if n.get("kind") == "resume"][-1]
+            self.assertIn("claude-opus-5-5 at xhigh", note["text"])
+            self.assertIn("carry on where you stopped", note["text"])
+            usage.cut_off({k: "working…\n" + line}, t0 + 120)
+            reload.assert_called_once()
+            self.assertEqual(len([n for n in board.notes(self.root) if n.get("kind") == "resume"]), 1, "told once")
+            usage.cut_off({k: "working…\n" + line}, until + 1)
+            self.assertEqual(usage.spent("claude", until + 1), {}, "back as it lifts")
+            self.assertEqual(repick.call_count, 2, "and Auto picks again")
+        with patch.object(usage, "spent", lambda key, clock=None: {"claude-fable-5-2": until} if key == "claude" else {}), \
+                patch.object(selection.bench, "standings", return_value=[
+                    {"model": m, "pair": {"model": m, "effort": e, "family": "claude", "score": sc, "cost": c, "version": "v5"}}
+                    for m, e, sc, c in (("claude-fable-5-2", "low", 53.9, 3.1), ("claude-opus-5-5", "xhigh", 57.4, 6.0),
+                                        ("claude-opus-5-5", "medium", 48.2, 2.5))]), \
+                patch.object(providers, "available", return_value=models), patch.object(providers, "usable", return_value=True), \
+                patch.object(providers, "efforts_of", return_value=["low", "medium", "xhigh"]):
+            picks = selection.recommendations(selection.empty())
+        self.assertEqual({p["model"] for p in picks.values()}, {"claude-opus-5-5"}, "Fable is no choice while it is spent")
+
     def test_codex_limits_come_from_its_session_files(self):
         from colony import usage
         day = Path(self.tmp.name) / "codex" / "sessions" / "2026" / "09" / "30"
