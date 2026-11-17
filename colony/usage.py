@@ -317,7 +317,9 @@ def check():
 # What a program prints when its limit stops a turn, and when it says the limit lifts. PROVIDER: Claude Code ("You've
 # hit your session limit · resets 3:40pm (America/Los_Angeles)", or "… resets Aug 28, 4pm (…)"); Codex ("You've hit
 # your usage limit. … try again at Sep 13th, 2026 9:15 AM.").
-CUT = re.compile(r"You've hit your [A-Za-z0-9 .-]*limit\b[^\n]*")
+# The program wraps its own message at the window's width, its further lines indented ("… resets Nov\n     20, 3pm
+# (America/Los_Angeles)", Nov 16): those lines are the message's too, read as one.
+CUT = re.compile(r"You've hit your [A-Za-z0-9 .-]*limit\b[^\n]*(?:\n[ \t]{3,}(?![⎿❯●✻])[^\n]+)*")
 # A limit named by a window or kind is the program's; any other name is a model's own (Claude Code: "You've hit your
 # Fable limit · resets Nov 20, 3pm (…)", Nov 16): that model is spent until it lifts, and the program's others still run.
 KINDS = {"session", "usage", "weekly", "daily", "monthly", "monthly spend", "rate", "5-hour", "five-hour", "hourly",
@@ -457,7 +459,7 @@ def cut_off(screens=None, clock=None):
         name = console.session_name(p)
         # its whole scrollback, wrapped lines joined: each limit message is one more hit, however alike their words
         text = (screens or {}).get(k, "") if screens is not None else (console.history(name) if console.running(name) else "")
-        hits = [m.group(0).strip() for m in CUT.finditer(text or "")]
+        hits = [" ".join(m.group(0).split()) for m in CUT.finditer(text or "")]
         if k not in was or len(hits) < mine.get("n", 0):
             mine = {"n": len(hits)}                     # first seen, or a new console: what's there already is past
         if len(hits) > mine.get("n", 0):

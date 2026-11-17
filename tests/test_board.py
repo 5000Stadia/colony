@@ -6062,7 +6062,7 @@ class UsageTest(BoardBase):
         board.track(self.root)
         k, t0 = str(self.root), 1795000000.0                    # Nov 2026
         models = [("claude-fable-5-2", "Fable 5.2"), ("claude-opus-5-5", "Opus 5.5")]
-        line = "⎿ You've hit your Fable limit · resets Nov 20, 3pm (America/Los_Angeles). /model to switch models.\n"
+        line = "  ⎿  You've hit your Fable limit · resets Nov\n     20, 3pm (America/Los_Angeles). /model to\n     switch models.\n"
         main = {"model": "claude-opus-5-5", "effort": "xhigh"}
         with patch.object(providers, "available", return_value=models), \
                 patch.object(usage, "repick") as repick, patch.object(selection, "main", return_value=main), \
@@ -6072,7 +6072,8 @@ class UsageTest(BoardBase):
                 patch.object(console, "busy", return_value=None), patch.object(console, "reload") as reload:
             usage.cut_off({k: ""}, t0)
             usage.cut_off({k: "working…\n" + line}, t0 + 60)
-            until = usage.lifts(line, t0 + 60)
+            until = usage.lifts("resets Nov 20, 3pm (America/Los_Angeles)", t0 + 60)
+            self.assertIsNotNone(until)
             self.assertEqual(usage.spent("claude", t0 + 61), {"claude-fable-5-2": until}, "Fable is spent until it lifts")
             repick.assert_called_once()
             reload.assert_called_once()
