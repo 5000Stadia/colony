@@ -249,7 +249,7 @@ def paused():
 
 
 def week_lifted(prov, week, held, latest):
-    """Why a week pause ended before its week reset (Bookflow, Nov 18: told the week had reset when the person had
+    """Why a week pause ended before its week reset (a project, Nov 18: told the week had reset when the person had
     raised its limit): the limit raised above what is used, or the reading fallen below it."""
     used, before = latest.get('used'), max((v.get('limit') or 0) for v in held)
     if before and week > before:

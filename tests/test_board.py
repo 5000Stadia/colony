@@ -6252,7 +6252,7 @@ class UsageTest(BoardBase):
             self.assertEqual([w for _, w in usage.check()], ["resumed"], "the person raised it")
             said = board.notes(self.root)[-1]["text"]
             self.assertIn("week limit for Claude Code is now 60%, up from 50%, above the 50% used", said)
-            self.assertNotIn("reset", said, "the week had not reset (Bookflow, Nov 18)")
+            self.assertNotIn("reset", said, "the week had not reset (Nov 18)")
             board.project_settings(self.root, {"week_pause": "50"})
             self.assertEqual([w for _, w in usage.check()], ["paused"])
             weeks["claude"]["weekly"]["used"] = 40
@@ -8317,7 +8317,7 @@ class InboxTest(HoursBase):
             self.assertIn("waiting 9 hours", self.top(), "it has waited since its day, not since it was written")
 
     def test_every_card_opens_one_link_its_own_else_the_live_site(self):
-        # R170, the person (Nov 18): "If there was one link nearby to check it, that would be wonderful"
+        # R170: one link to open, near what the card is about
         from colony import inbox, pins, serving
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log")
                                               .replace("- [ ] R3", "- [?] R3"))
@@ -8371,16 +8371,16 @@ class InboxTest(HoursBase):
         from colony import showcase
         (self.root / "notes").mkdir(exist_ok=True)
         (self.root / "notes" / "blocks.html").write_text("<p>blocks</p>")
-        shown = showcase.add(self.root, "Workflow building blocks", "the set, drawn", link="notes/blocks.html")
+        shown = showcase.add(self.root, "Garden layout", "the set, drawn", link="notes/blocks.html")
         with self.clock(14):
             gate = board.add_gate(self.root, "Build the 'built first' set as shown on the page?",
-                                  why="The page 'Workflow building blocks' on your board sets out the whole set.")
+                                  why="The page 'Garden layout' on your board sets out the whole set.")
         card = next(inbox.card(x) for x in inbox.stack(board.registry()) if x["group"][0].get("gate", {}).get("id") == gate["id"])
-        self.assertIn("Open “Workflow building blocks” →</a>", card, "named by its title: it opens that entry")
+        self.assertIn("Open “Garden layout” →</a>", card, "named by its title: it opens that entry")
         self.assertIn(f"&amp;s={shown['id']}", card, "opened as that showing, so a comment there attaches to it")
-        self.assertIn("“Workflow building blocks” on its board, the first thing on its board",
+        self.assertIn("“Garden layout” on its board, the first thing on its board",
                       board.opens_line(self.root, "", gate["question"], gate["why"]))
-        self.assertEqual(board.link_given(self.root, "Workflow building blocks"), f"entry:{shown['id']}")
+        self.assertEqual(board.link_given(self.root, "Garden layout"), f"entry:{shown['id']}")
         with self.clock(15):
             given = board.add_gate(self.root, "Which watering days?", link=f"pin:{log['id']}")
         card = next(inbox.card(x) for x in inbox.stack(board.registry()) if x["group"][0].get("gate", {}).get("id") == given["id"])

@@ -9263,7 +9263,7 @@ def board_things(p):
 def card_link(p, given="", *words):
     """What a card waiting on the person opens (R170), as (kind, value): the link its agent gave; else the first
     address its words name; else the board's entry or link they name by its title (the longest such), so a card that
-    says "the page 'Workflow building blocks' on your board" opens that page. None where there is none."""
+    says "the page 'Garden layout' on your board" opens that page. None where there is none."""
     given = (given or "").strip()
     if re.match(r"https?://", given):
         return "url", given
