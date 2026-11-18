@@ -65,6 +65,35 @@ def _add(state, hour, prog, cwd, fresh, read, write, out):
         v[i] += int(n or 0)
 
 
+def _add_model(state, hour, prog, model, fresh, read, write, out):
+    """The same tokens by model, for pricing a program's week (pool.py): {"hour|program|model": [fresh, read, write, out]}."""
+    if hour is None or hour < time.time() - KEEP or not model:
+        return
+    v = state.setdefault("models", {}).setdefault(f"{hour}|{prog}|{model}", [0, 0, 0, 0])
+    for i, n in enumerate((fresh, read, write, out)):
+        v[i] += int(n or 0)
+
+
+def dollars(prog, since, now=None, model=None):
+    """What a program's sessions since a time would have cost at API prices (each model's from Artificial Analysis), all
+    models or those whose id contains model: how much of its work a subscription's week holds. Cache reads at a
+    tenth of input, Claude's cache writes at 1.25 times it. A model with no price counts nothing."""
+    from . import bench
+    now, total, prices = now or time.time(), 0.0, {}
+    for k, v in load().get("models", {}).items():
+        hour, p, m = k.split("|", 2)
+        if p != prog or int(hour) + 3600 <= since or int(hour) > now or (model and model not in m):
+            continue
+        if m not in prices:
+            prices[m] = bench.token_price(m)
+        if not prices[m]:
+            continue
+        pin, pout = prices[m]
+        fresh, read, write, out = v
+        total += (fresh * pin + read * pin * 0.1 + write * pin * (1.25 if prog == "claude" else 1) + out * pout) / 1e6
+    return total
+
+
 def _where(cwd):
     """A session's folder as kept: colony's one-off asks by their kind (each runs in a fresh temporary folder)."""
     m = TMP.match(cwd or "")
@@ -144,11 +173,11 @@ class _Places:
         return self.held.get(str(f))
 
 
-def _claude(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
+def _claude(state, f, st, place=lambda st, f: _where(st.get("cwd")), stop=None):
     with open(f, "rb") as fh:
         fh.seek(st["at"])
         for raw in fh:
-            if not raw.endswith(b"\n"):
+            if not raw.endswith(b"\n") or (stop is not None and st["at"] >= stop):
                 break                                   # a line still being written: read it whole next time
             st["at"] += len(raw)
             if b'"usage"' not in raw or b'"assistant"' not in raw:
@@ -169,20 +198,28 @@ def _claude(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
             if not u or not mid or mid in st.setdefault("seen", []) or m.get("model") == "<synthetic>":
                 continue
             st["seen"] = (st["seen"] + [mid])[-20:]
-            _add(state, _hour(d.get("timestamp")), "claude", place(st, f), u.get("input_tokens"),
-                 u.get("cache_read_input_tokens"), u.get("cache_creation_input_tokens"), u.get("output_tokens"))
+            counts = (u.get("input_tokens"), u.get("cache_read_input_tokens"), u.get("cache_creation_input_tokens"),
+                      u.get("output_tokens"))
+            _add(state, _hour(d.get("timestamp")), "claude", place(st, f), *counts)
+            _add_model(state, _hour(d.get("timestamp")), "claude", m.get("model"), *counts)
 
 
-def _codex(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
+def _codex(state, f, st, place=lambda st, f: _where(st.get("cwd")), stop=None):
     with open(f, "rb") as fh:
         fh.seek(st["at"])
         for raw in fh:
-            if not raw.endswith(b"\n"):
+            if not raw.endswith(b"\n") or (stop is not None and st["at"] >= stop):
                 break
             st["at"] += len(raw)
             if b'"session_meta"' in raw and not st.get("cwd"):
                 try:
                     st["cwd"] = (json.loads(raw).get("payload") or {}).get("cwd") or ""
+                except ValueError:
+                    pass
+                continue
+            if b'"turn_context"' in raw:
+                try:
+                    st["model"] = (json.loads(raw).get("payload") or {}).get("model") or st.get("model")
                 except ValueError:
                     pass
                 continue
@@ -195,8 +232,9 @@ def _codex(state, f, st, place=lambda st, f: _where(st.get("cwd"))):
             u = ((d.get("payload") or {}).get("info") or {}).get("last_token_usage")
             if u:
                 cached = u.get("cached_input_tokens") or 0
-                _add(state, _hour(d.get("timestamp")), "codex", place(st, f), (u.get("input_tokens") or 0) - cached,
-                     cached, u.get("cache_write_input_tokens"), u.get("output_tokens"))
+                counts = ((u.get("input_tokens") or 0) - cached, cached, u.get("cache_write_input_tokens"), u.get("output_tokens"))
+                _add(state, _hour(d.get("timestamp")), "codex", place(st, f), *counts)
+                _add_model(state, _hour(d.get("timestamp")), "codex", st.get("model"), *counts)
 
 
 def sources(keep=KEEP):
@@ -238,6 +276,19 @@ def update(budget=BUDGET):
                     v = [a + b for a, b in zip(hours.get(k, [0, 0, 0, 0]), v)]
                 hours[k] = v
             state["hours"], state["v"] = hours, 2
+        if state.get("v", 0) < 3:                       # tokens by model began (R169): what was read is read again
+            models = {}                                 # for them alone, up to where it was read, in this one look
+            for f, prog in sources():
+                st = files.get(str(f))
+                if st and st.get("at"):
+                    scratch = {"hours": {}, "models": {}}
+                    try:
+                        (_claude if prog == "claude" else _codex)(scratch, f, {"at": 0}, place, stop=st["at"])
+                    except OSError:
+                        continue
+                    for k, v in scratch["models"].items():
+                        models[k] = [a + b for a, b in zip(models.get(k, [0, 0, 0, 0]), v)]
+            state.update(models=models, v=3)
         for f, prog in sources():
             if time.time() > end:
                 done = False
@@ -253,6 +304,7 @@ def update(budget=BUDGET):
                 continue
         old = time.time() - KEEP
         state["hours"] = {k: v for k, v in state["hours"].items() if int(k.split("|", 1)[0]) >= old}
+        state["models"] = {k: v for k, v in state.get("models", {}).items() if int(k.split("|", 1)[0]) >= old}
         state["files"] = {k: v for k, v in files.items() if os.path.exists(k)}
         state["looked"] = time.time()
         _save(state)

@@ -550,6 +550,12 @@ class Provider:
         without one is continued by a wake typed into its idle console (continuation.py)."""
         raise NotImplementedError
 
+    def hand_command(self, model, effort, cwd, out, permissions):
+        """The command for a helper handed to it from another program's project (hand.py): its brief on stdin, at work
+        in cwd with the project's permissions (unattended: nothing can ask), its final message written to out. None:
+        it takes no handed helpers."""
+        return None
+
     def consult(self, brief, model, effort, project):
         """One fresh, stateless consultation: an empty folder, no settings or hooks, read-only; {"text", "cost",
         "usage", "error"} (colony consult). A program without it isn't offered as a consultant."""
@@ -683,7 +689,9 @@ class ClaudeCode(Provider):
              "Stop": "colony turn", "PreCompact": "colony context --hook before --console claude"}
     # PROVIDER: Claude Code's shell tool is Bash; run_in_background runs it without blocking, and its notice wakes the
     # agent when it finishes.
-    tool_hooks = {"PreToolUse": ("Bash", "colony context --hook wait --console claude")}
+    # PROVIDER: its helpers start through the Agent tool (Task in older versions): a colony tier going to another
+    # program this time is caught there (hand.py).
+    tool_hooks = {"PreToolUse": [("Bash", "colony context --hook wait --console claude"), ("Agent|Task", "colony hand --hook")]}
     SHELL_TOOLS, SHELL_BACKGROUND = ("Bash",), "run_in_background"
     WAIT_FREE = ("Waiting on a clock means coming back to check. Run it in the background and end your turn, and "
                  "you're woken when it finishes. Or wait inside one command until it's true: "
@@ -1894,6 +1902,17 @@ class Codex(Provider):
     # (colony-codex's audit, Oct 27; checked on Codex 0.165: only its own built-in tools, none of the person's servers).
     CONSULT_OFF = ("hooks", "apps", "plugins", "image_generation", "goals", "multi_agent")
 
+    def hand_command(self, model, effort, cwd, out, permissions):
+        """PROVIDER: `codex exec` at the tier's pair, in the agent's folder; exec never asks for an approval (it has no
+        such option, checked on Codex 0.169). Full permissions where the project has them, else its workspace sandbox
+        with colony's records writable; read-only where the project plans only. The person's own config and rules
+        hold, as in their consoles."""
+        from .board import home
+        perms = {"all": self.permissions["all"], "plan": ["-s", "read-only"]}.get(
+            permissions, ["-s", "workspace-write", "--add-dir", str(home())])
+        return [self.program, "exec", "-m", model, *(["-c", f"model_reasoning_effort={effort}"] if effort else []),
+                *perms, "--skip-git-repo-check", "-o", str(out), "-C", str(cwd), "-"]
+
     def consult(self, brief, model, effort, project, price=None, popen=None):
         """One fresh, stateless consultation in its read-only sandbox, in an empty folder: none of the person's config
         (its MCP servers, plugins, connectors) or rules, hooks off, no web, nothing it could act through; it reads the
@@ -2045,7 +2064,7 @@ class Codex(Provider):
     # PROVIDER: Codex matches its shell and unified exec (exec_command) as Bash, the command at tool_input.command
     # (learn.chatgpt.com/docs/hooks), nested calls from code mode too. Its sleep tool is left alone: it ends when news
     # arrives, so a long one is a free wait; the guidance asks for one long sleep rather than short ones.
-    tool_hooks = {"PreToolUse": ("Bash", "colony context --hook wait --console codex")}
+    tool_hooks = {"PreToolUse": [("Bash", "colony context --hook wait --console codex")]}
     SHELL_TOOLS, HOOK_NEEDS_JSON = ("Bash", "exec_command", "shell", "shell_command", "local_shell"), True
     WAIT_FREE = ("Waiting on a clock means coming back to check. Start the command and wait on its running cell, or "
                  "use one long sleep or wait_agent with a long timeout: both end when news arrives. Or wait inside one "
@@ -2946,6 +2965,7 @@ def hook_entries(provider):
         if key(provider) == 'codex':
             hook['additionalContextLimit'] = 12_000
         result[event].insert(0, dict(hooks=[hook]))
-    for event, (matcher, command) in provider.tool_hooks.items():
-        result.setdefault(event, []).append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
+    for event, entries in provider.tool_hooks.items():
+        for matcher, command in entries:
+            result.setdefault(event, []).append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
     return result

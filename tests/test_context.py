@@ -773,8 +773,7 @@ class WaitingTest(unittest.TestCase):
         import subprocess, sys
         from colony import providers
         for program in ("claude", "codex"):
-            matcher, command = providers.get(program).tool_hooks["PreToolUse"]
-            self.assertEqual(matcher, "Bash")
+            matcher, command = next(e for e in providers.get(program).tool_hooks["PreToolUse"] if e[0] == "Bash")
             args = [sys.executable, "-m", "colony"] + command.split()[1:]
             ran = subprocess.run(args, input=json.dumps(self.payload(program, "sleep 60 && tail -5 out.log")),
                                  capture_output=True, text=True, cwd=Path(__file__).parent.parent, timeout=30)
@@ -797,7 +796,8 @@ class WaitingTest(unittest.TestCase):
             claude.wire(root, "")                            # again: nothing added twice
             entries = json.loads(settings.read_text())["hooks"]["PreToolUse"]
             ours = {"matcher": "Bash", "hooks": [{"type": "command", "command": "colony context --hook wait --console claude"}]}
-            self.assertEqual(entries, [mine, ours])
+            hand = {"matcher": "Agent|Task", "hooks": [{"type": "command", "command": "colony hand --hook"}]}
+            self.assertEqual(entries, [mine, ours, hand])
             claude._unhook(settings)
             self.assertEqual(json.loads(settings.read_text())["hooks"], {"PreToolUse": [mine]})
 

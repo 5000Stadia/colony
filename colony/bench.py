@@ -481,7 +481,11 @@ def plan_text(root):
             "the work struggles (stalls, retries, work redone). Step back down once the hard part is done. "
             "For a genuinely hard judgement, hand it to the step-up helper with a tight "
             "brief, accepting that it rebuilds context; ordinary work stays yours. Costly decisions go to consultants (colony consult)."
-            + (f" Each tier is a helper: {p.HELPER_CALL}." if p.helper_name("routine") else "") + "\n" + "\n".join(lines))
+            + (f" Each tier is a helper: {p.HELPER_CALL}." if p.helper_name("routine") else "")
+            + (" A routine or step-up helper may run on another program when that does it better for what it costs of "
+               "the weeks: colony says so as you start it, and its report comes to you as a note."
+               if any(c == "colony hand --hook" for _, c in p.tool_hooks.get("PreToolUse", [])) else "")
+            + "\n" + "\n".join(lines))
 
 
 # ---------------------------------------------------------------- Artificial Analysis, the one source
