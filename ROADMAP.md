@@ -206,7 +206,7 @@ The person's words: "Consider it not necessary for me to check any specs unless 
 - [x] R72 Auto keeps consultants and the step-up helper at the shared Intelligence Index ceiling at all seven…
 - [x] R73 Restoration skips repeating a carry-over whose ID is already present in the native compaction summa…
 - [x] R153 Model data from Artificial Analysis's new free list: only the models colony weighs, no page reading
-- [~] R169 Two subscriptions as one pool — models scaled across Claude and Codex by return, helpers handed to the other program where that pays, never a live conversation (related: R168, R69)
+- [~] R169 Two subscriptions as one pool — models scaled across Claude and Codex by return, helpers handed to the other program where that pays, never a live conversation (related: R168, R69); on hold: built and live, its checks wait on Fable's reset (Fri Nov 20, 3 PM), Codex's (Sat Nov 21, 6:13 PM) and the live week to about Nov 28, each on a wake
 
 ## M9 — Consulting at decisions costly to change: the most insight per dollar
 
