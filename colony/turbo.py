@@ -235,14 +235,15 @@ def picks(root):
     base = intelligence.position(board.project_settings(root)[0]["auto_balance"])
     if raised(base) == base:
         return {}
-    state, every = selection.read(), bench.standings()
-    ceiling = max((x["score"] for x in intelligence.pairs(every)), default=None)
+    state = selection.read()
     ask_first = board.registry()["settings"]["model_adoption"] == "ask"
-    entries = [x for x in every if x["model"] not in state["rejected"] and (not ask_first or x["model"] in state["approved"])]
     out = {}
     for role in ("main", "routine"):
         if (selection.pin_of(root, role) or {}).get("model"):
             continue                                            # the person's pin is theirs, turbo or not
+        every = selection.open_to(role, bench.standings())      # spare in the program's week is not in a model's own
+        ceiling = max((x["score"] for x in intelligence.pairs(every)), default=None)
+        entries = [x for x in every if x["model"] not in state["rejected"] and (not ask_first or x["model"] in state["approved"])]
         ident = selection.key(family, role, selection.scope(root))
         chosen = selection.concrete(family, bench.role_pick(family, role, entries, balance=raised(base), ceiling=ceiling,
                                                             blocked=state["blocked"].get(ident, [])))

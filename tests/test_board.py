@@ -6103,6 +6103,32 @@ class UsageTest(BoardBase):
             picks = selection.recommendations(selection.empty())
         self.assertEqual({p["model"] for p in picks.values()}, {"claude-opus-5-5"}, "Fable is no choice while it is spent")
 
+    def test_a_model_with_a_week_of_its_own_goes_to_the_top_roles_only(self):
+        # Nov 13-16: priced in dollars Fable was the pick at almost every level, and its own week ran out in 3.4 days,
+        # 60% of it on main agents' everyday turns; the person: use it where intelligence counts most
+        from colony import selection, usage
+        now = time.time()
+        usage.mark_spent("claude", "Fable", now - 10, now - 100)          # met once, and lifted since
+        self.assertTrue(usage.lapsed(now))
+        self.assertEqual(usage.spent("claude", now), {})
+        models = [("claude-fable-5-2", "Fable 5.2"), ("claude-opus-5-5", "Opus 5.5")]
+        with patch.object(providers, "available", return_value=models):
+            self.assertEqual(set(usage.scarce("claude")), {"claude-fable-5-2"}, "kept after it lifts")
+        with patch.object(selection.bench, "standings", return_value=[
+                    {"model": m, "pair": {"model": m, "effort": e, "family": "claude", "score": sc, "cost": c, "version": "v5"}}
+                    for m, e, sc, c in (("claude-fable-5-2", "max", 64.6, 26.5), ("claude-fable-5-2", "low", 53.9, 3.1),
+                                        ("claude-opus-5-5", "max", 59.1, 10.0), ("claude-opus-5-5", "xhigh", 57.4, 6.0),
+                                        ("claude-opus-5-5", "medium", 48.2, 2.5))]), \
+                patch.object(providers, "available", return_value=models), patch.object(providers, "usable", return_value=True), \
+                patch.object(providers, "efforts_of", return_value=["low", "medium", "xhigh", "max"]):
+            picks = selection.recommendations(selection.empty())
+        got = {k.split(":")[1]: (v["model"], v["effort"]) for k, v in picks.items() if k.startswith("claude:") and "@" not in k}
+        self.assertEqual(got["step-up"], ("claude-fable-5-2", "max"))
+        self.assertEqual(got["consultant"], ("claude-fable-5-2", "max"))
+        self.assertEqual(got["main"], ("claude-opus-5-5", "xhigh"), "the best of the rest, at its place in the balance")
+        for role in ("routine", "chores", "rote"):
+            self.assertNotEqual(got[role][0], "claude-fable-5-2", f"{role} is everyday work")
+
     def test_codex_limits_come_from_its_session_files(self):
         from colony import usage
         day = Path(self.tmp.name) / "codex" / "sessions" / "2026" / "09" / "30"

@@ -17,6 +17,7 @@ from pathlib import Path
 from . import board, bench, providers
 
 ROLES = ('main', 'routine', 'step-up', 'chores', 'rote', 'consultant')
+TOP = ('consultant', 'step-up')          # the roles at the top of the scale: a model with a small week of its own is theirs
 _LOCK = threading.RLock()
 
 
@@ -106,15 +107,30 @@ def concrete(family, value):
     return dict(value, model=model, effort=effort)
 
 
+def open_to(role, entries):
+    """The evidence a role may choose from. A model with a week of its own, smaller than its program's (Fable inside
+    Claude's), goes to the roles at the top of the scale only: priced in dollars it is the best buy at almost every
+    level, so it would spread over everyday work and run out in days (Nov 13-16: in 3.4 days, 60% of Fable's week
+    went to main agents' everyday turns). Everyone else picks from the rest, with the ceiling theirs."""
+    from . import usage
+    if role in TOP:
+        return entries
+    scarce = {m for k in providers.PROVIDERS for m in usage.scarce(k)}
+    return [e for e in entries if e['model'] not in scarce]
+
+
 def recommendations(state):
     """Rank eligible evidence without changing the ledger; a rejection applies to all roles."""
     from . import intelligence, usage
     # a model whose own limit is spent is no choice until it lifts: Auto picks the best of the rest, with the ceiling
     # theirs, so each role keeps its place in the balance (Nov 16: Fable's own week ran out, and every project on it stopped)
     spent = {m for k in providers.PROVIDERS for m in usage.spent(k)}
-    all_entries = [e for e in bench.standings() if e['model'] not in spent]
-    ceiling = max((p['score'] for p in intelligence.pairs(all_entries)), default=None)
-    entries = [e for e in all_entries if e['model'] not in state['rejected']]
+    every = [e for e in bench.standings() if e['model'] not in spent]
+    pools = {}
+    for role in ROLES:
+        mine = open_to(role, every)
+        pools[role] = ([e for e in mine if e['model'] not in state['rejected']],
+                       max((p['score'] for p in intelligence.pairs(mine)), default=None))
     settings = board.registry()['settings']
     scopes = [(None, settings.get('auto_balance', 3))]
     scopes += [(root, board.project_settings(root)[1]['auto_balance']) for root in project_roots()
@@ -129,6 +145,7 @@ def recommendations(state):
                     continue
                 ident = key(family, role, root)
                 blocked = state['blocked'].get(ident, [])
+                entries, ceiling = pools[role]
                 chosen = bench.role_pick(family, role, entries, balance=balance, ceiling=ceiling, blocked=blocked)
                 chosen = concrete(family, chosen)
                 if chosen and pair(chosen) not in blocked:
@@ -281,7 +298,7 @@ def auto(family, role, root=None):
     up = turbo.pick(root, family, role) if root else None
     from . import usage
     if (up and up['model'] not in state['rejected'] and pair(up) not in state['blocked'].get(ident, [])
-            and up['model'] not in usage.spent(family)):
+            and up['model'] not in usage.spent(family) and (role in TOP or up['model'] not in usage.scarce(family))):
         chosen = concrete(family, up) or chosen          # turbo's stronger pick, latched for its episode
     return dict(chosen, own=False, why=chosen.get('why') or 'Benchmark recommendation')
 

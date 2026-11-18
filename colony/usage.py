@@ -407,8 +407,33 @@ def spent(key, clock=None):
             if any(matches(n, m, label) for n in names)}
 
 
+def own_weeks():
+    """The models each program has named in a limit of their own, kept after it lifts: {program: {name: {first, last}}}."""
+    try:
+        return json.loads((folder() / "own-weeks.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def scarce(key):
+    """A program's models with a week of their own, smaller than the program's (Fable inside Claude's): each was named
+    once in a limit of its own. Auto keeps them for the roles at the top of the scale, consultants and the step-up
+    helper, so the small week goes where intelligence counts most, not to everyday work. A model's id: its label."""
+    from . import providers
+    names = set((own_weeks().get(key) or {})) | set((spent_store().get(key) or {}))
+    if not names or key not in providers.PROVIDERS:
+        return {}
+    return {m: label for m, label in providers.available(providers.PROVIDERS[key]) if any(matches(n, m, label) for n in names)}
+
+
 def mark_spent(key, name, until, clock):
-    """Keep a model's own limit as spent, until it lifts; True where that changed what is spent."""
+    """Keep a model's own limit as spent, until it lifts; True where that changed what is spent. The model is kept
+    as one with a week of its own (scarce) from then on."""
+    own = own_weeks()
+    seen = own.setdefault(key, {}).setdefault(name.lower(), {"first": clock})
+    seen["last"] = clock
+    folder().mkdir(parents=True, exist_ok=True)
+    (folder() / "own-weeks.json").write_text(json.dumps(own))
     store = spent_store()
     mine = {n: v for n, v in (store.get(key) or {}).items() if clock < v["until"]}
     before = {n: v["until"] for n, v in mine.items()}
@@ -426,6 +451,11 @@ def lapsed(clock):
     kept = {k: {n: v for n, v in m.items() if clock < v["until"]} for k, m in store.items()}
     if kept == store:
         return False
+    own = own_weeks()                                   # what lifts still has a week of its own
+    for k, m in store.items():
+        for n, v in m.items():
+            own.setdefault(k, {}).setdefault(n, {"first": v.get("at", clock), "last": v.get("at", clock)})
+    (folder() / "own-weeks.json").write_text(json.dumps(own))
     (folder() / "spent.json").write_text(json.dumps(kept))
     return True
 
