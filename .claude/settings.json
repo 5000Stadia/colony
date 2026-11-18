@@ -65,6 +65,15 @@
             "command": "colony context --hook wait --console claude"
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "colony hand --hook"
+          }
+        ]
       }
     ]
   },
