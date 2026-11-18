@@ -8316,6 +8316,77 @@ class InboxTest(HoursBase):
             self.assertEqual(self.order(), ["Renew the domain?"])
             self.assertIn("waiting 9 hours", self.top(), "it has waited since its day, not since it was written")
 
+    def test_every_card_opens_one_link_its_own_else_the_live_site(self):
+        # R170, the person (Nov 18): "If there was one link nearby to check it, that would be wonderful"
+        from colony import inbox, pins, serving
+        (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log")
+                                              .replace("- [ ] R3", "- [?] R3"))
+        live = ["https://box.example.ts.net:8444/"]
+        with patch.object(serving, "served", lambda root: [(u, 8700 + i) for i, u in enumerate(live)]), \
+                patch.object(serving, "given", lambda url: None):
+            with self.clock(9):
+                board.mark_ready(self.root, "R2", "The water log is built.", "Add a day on your phone.")
+            with self.clock(10):
+                board.mark_ready(self.root, "R3", "Reminders are built.", "Run it once: https://plants.example/remind",
+                                 link="https://plants.example/remind/new")
+            with self.clock(11):
+                board.add_gate(self.root, "Which layout: the mock at https://plants.example/mock, or the list?")
+            with self.clock(12):
+                board.add_gate(self.root, "Keep a week's history?")
+            with self.clock(13):
+                cards = [inbox.card(x) for x in inbox.stack(board.registry())]
+                self.assertEqual(len(cards), 4)
+                site = "<a class='go' href='https://box.example.ts.net:8444/' target='_blank' rel='noopener' " \
+                       "title='https://box.example.ts.net:8444/'>Open its live site →</a>"
+                self.assertIn(site, cards[0], "a sign-off naming no address opens the project's live site")
+                self.assertIn("href='https://plants.example/remind/new'", cards[1], "the link its agent gave, over its words'")
+                self.assertIn(">Open it →</a>", cards[1])
+                self.assertIn("href='https://plants.example/mock'", cards[2], "a decision opens the address it names")
+                self.assertIn(site, cards[3], "one naming none, the live site")
+                for card in cards:
+                    self.assertEqual(card.count("class='go'"), 1, "one link: its own, or else the live site")
+                live.append("https://box.example.ts.net:8445/")
+                self.assertIn("&view=library'>Open its links →</a>", inbox.card(inbox.stack(board.registry())[0]),
+                              "with several live addresses, its links: the board, not a guess")
+                self.assertIn("Its card opens this project's links", board.opens_line(self.root, "", "Add a day."))
+                library = board.library_html(0, self.root)
+                self.assertIn(">box.example.ts.net:8445</a>", library, "the link board shows its live addresses by themselves")
+                self.assertNotIn("Empty, and ready", library)
+                del live[:]
+                self.assertNotIn("class='go'", inbox.card(inbox.stack(board.registry())[0]), "nothing to open: no link")
+                self.assertIn("no link to open", board.opens_line(self.root, "", "Add a day."))
+        live[:] = ["https://box.example.ts.net:8444/"]
+        with patch.object(serving, "served", lambda root: [(u, 8700) for u in live]):
+            said = board.opens_line(self.root, "", "Add a day on your phone.")
+            self.assertIn("Its card opens https://box.example.ts.net:8444/, this project's live site", said)
+            self.assertIn("--open URL", said, "said as the card is written: a deeper page can be given then")
+            self.assertIn("the first address its words name", board.opens_line(self.root, "", "See https://plants.example/x"))
+        log = pins.add(self.root, "https://plants.example/log", "Water log", by="agent")
+        self.assertEqual(board.link_given(self.root, "water log"), f"pin:{log['id']}", "a Library link by its title")
+        self.assertEqual(board.link_given(self.root, "https://plants.example/y"), "https://plants.example/y")
+        with self.assertRaises(ValueError) as no:
+            board.link_given(self.root, "Calendar")
+        self.assertIn("'Water log'", str(no.exception), "what it can take is named")
+        # the person's framing: a card points at the thing on the board it is about
+        from colony import showcase
+        (self.root / "notes").mkdir(exist_ok=True)
+        (self.root / "notes" / "blocks.html").write_text("<p>blocks</p>")
+        shown = showcase.add(self.root, "Workflow building blocks", "the set, drawn", link="notes/blocks.html")
+        with self.clock(14):
+            gate = board.add_gate(self.root, "Build the 'built first' set as shown on the page?",
+                                  why="The page 'Workflow building blocks' on your board sets out the whole set.")
+        card = next(inbox.card(x) for x in inbox.stack(board.registry()) if x["group"][0].get("gate", {}).get("id") == gate["id"])
+        self.assertIn("Open “Workflow building blocks” →</a>", card, "named by its title: it opens that entry")
+        self.assertIn(f"&amp;s={shown['id']}", card, "opened as that showing, so a comment there attaches to it")
+        self.assertIn("“Workflow building blocks” on its board, the first thing on its board",
+                      board.opens_line(self.root, "", gate["question"], gate["why"]))
+        self.assertEqual(board.link_given(self.root, "Workflow building blocks"), f"entry:{shown['id']}")
+        with self.clock(15):
+            given = board.add_gate(self.root, "Which watering days?", link=f"pin:{log['id']}")
+        card = next(inbox.card(x) for x in inbox.stack(board.registry()) if x["group"][0].get("gate", {}).get("id") == given["id"])
+        self.assertIn("href='https://plants.example/log'", card, "the Library link its agent gave")
+        self.assertIn("Open “Water log” →", card)
+
     def test_sign_offs_come_one_by_one_with_their_addresses_and_pictures_one_tap_away(self):
         from colony import inbox
         (self.root / "ROADMAP.md").write_text(ROADMAP.replace("- [~] R2 water log", "- [?] R2 water log")

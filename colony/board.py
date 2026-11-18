@@ -1445,9 +1445,11 @@ def ready_notes(root):
     return out
 
 
-def mark_ready(root, item, what, check=""):
-    """The agent says an item is ready for the person's OK: it is back on their list, if they had sent it back."""
-    append(root, "ready.jsonl", {"type": "ready", "item": item, "at": now(), "what": what.strip(), "check": check.strip()})
+def mark_ready(root, item, what, check="", link=""):
+    """The agent says an item is ready for the person's OK: it is back on their list, if they had sent it back. `link`
+    is what its card opens (R170), where its agent gave one."""
+    append(root, "ready.jsonl", {"type": "ready", "item": item, "at": now(), "what": what.strip(), "check": check.strip(),
+                                 **({"open": link.strip()} if (link or "").strip() else {})})
     if "verify:" + item in dismissed(root):
         append(root, "dismissed.jsonl", {"type": "restored", "key": "verify:" + item, "at": now()})
 
@@ -2084,15 +2086,16 @@ def gate_lock(root):
 
 
 def add_gate(root, question, item=None, why="", *, consultation=None, points=None, when=None, default=None, options=(),
-             recommended=None, reframes=None, told="", hold=None, verdict=None, by=None, rise=None, not_before=None):
+             recommended=None, reframes=None, told="", hold=None, verdict=None, by=None, rise=None, not_before=None,
+             link=None):
     with gate_lock(root):
         return _add_gate(root, question, item, why, consultation=consultation, points=points, when=when, default=default,
                          options=options, recommended=recommended, reframes=reframes, told=told, hold=hold,
-                         verdict=verdict, by=by, rise=rise, not_before=not_before)
+                         verdict=verdict, by=by, rise=rise, not_before=not_before, link=link)
 
 
 def _add_gate(root, question, item, why, *, consultation, points, when=None, default=None, options=(), recommended=None,
-              reframes=None, told="", hold=None, verdict=None, by=None, rise=None, not_before=None):
+              reframes=None, told="", hold=None, verdict=None, by=None, rise=None, not_before=None, link=None):
     """A decision put in the person's hands. It may carry a default: what its agent would take, shown with the
     question for them to take in a tap. It never stands by itself (the person's word, 2026-11-11: no choice is made by
     omission); one with consultant points carries none, since each point needs their decision."""
@@ -2101,6 +2104,8 @@ def _add_gate(root, question, item, why, *, consultation, points, when=None, def
                 why=why.strip(), **({"when": when} if when else {}), **({"default": default} if default else {}))
     if not gate["question"]:
         raise ValueError("A gate needs its question.")
+    if (link or "").strip():                         # what its card opens (R170)
+        gate["open"] = link.strip()
     # the Inbox's order (R160): a deadline the world sets ("by", timestamps), how long before it the gate leads their
     # stack ("rise", seconds; a day unless said), and a day before which it is no one's question yet ("from")
     stamp = lambda ts: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
@@ -7562,6 +7567,13 @@ def library_html(pid, root, q=""):
     heads = [g for g in groups if g] + [""] * ("" in groups)
     known = "".join(f"<option value='{e(g)}'>" for g in heads if g)
     out = [f"<div class='pinhead'><h2>Library</h2><a href='/pins/add?{project_query(root)}'>+ Add</a></div>"]
+    from . import serving
+    live = serving.served(root)
+    if live:                            # the link board (R170): its live addresses, kept by colony, none to keep by hand
+        out.append(f"<details class='libgroup d1' open><summary>Live <span class='muted'>{len(live)}</span></summary>" + "".join(
+            f"<div class='pin'><div class='pinline'><a class='pintitle' href='{e(opener.address(pid, url))}'{opener.NEW_TAB}>"
+            f"{e(re.sub(r'^https://', '', url).rstrip('/'))}</a></div><div class='who'>what this project serves, kept by colony"
+            "; started when tapped if it isn't answering</div></div>" for url, _ in live) + "</details>")
     for g in heads:
         rows = []
         for x in reversed(groups[g]):
@@ -7572,7 +7584,7 @@ def library_html(pid, root, q=""):
             rows.append(row.replace("<div class='pinmenu'>", "<div class='pinmenu'>" + move, 1))
         out.append(f"<details class='libgroup d1' open><summary>{e(g or 'Not under a heading')} <span class='muted'>{len(rows)}</span>"
                    f"</summary>{''.join(rows)}</details>")
-    if not groups:
+    if not groups and not live:
         out.append("<div class='card muted'>Empty, and ready for what you'll both keep returning to: a world's places and people, "
                    "a set of policies, research you build on, a page you work on together. Add one, or the agent will when "
                    "something earns a place. Only what keeps its value stays: unpin what no longer does.</div>")
@@ -9099,7 +9111,7 @@ def waiting_items(p, snap=None, paused_too=False, shelved=False):
     told = ready_notes(p)
     for it in (i for i in items(roadmap(p)).values() if primary and i["state"] == "verify" and i['id'] not in held):
         r = told.get(it["id"], {})
-        it = dict(it, what=r.get("what") or plain(it["text"]), check=r.get("check", ""))
+        it = dict(it, what=r.get("what") or plain(it["text"]), check=r.get("check", ""), open=r.get("open", ""))
         out.append({"kind": "verify", "key": "verify:" + it["id"], "item": it, "summary": f"has {it['id']} ready for your OK: {it['what']}"})
     cleared = dismissed(p)
     gone = cleared - {w["key"] for w in out}
@@ -9240,6 +9252,93 @@ def waiting_parts(pid, p, back, label=True, with_gates=True, day=None):
     return decided, box, others
 
 
+def board_things(p):
+    """What a card can point to on a project's board (R170): its Showcase entries, then its Library pins, newest first,
+    each as (title, kind, record)."""
+    from . import pins, showcase
+    return [(x.get("title") or "", kind, x) for kind, xs in (("entry", showcase.entries(p)), ("pin", pins.pins(p)))
+            for x in xs if (x.get("title") or "").strip()]
+
+
+def card_link(p, given="", *words):
+    """What a card waiting on the person opens (R170), as (kind, value): the link its agent gave; else the first
+    address its words name; else the board's entry or link they name by its title (the longest such), so a card that
+    says "the page 'Workflow building blocks' on your board" opens that page. None where there is none."""
+    given = (given or "").strip()
+    if re.match(r"https?://", given):
+        return "url", given
+    if given:
+        kind, _, ident = given.partition(":")
+        hit = next((x for _, k, x in board_things(p) if k == kind and x["id"] == ident), None)
+        if hit:
+            return kind, hit
+    for text in words:
+        m = ADDRESS.search(text or "")
+        if m:
+            return "url", m.group(0)
+    said = " ".join(w for w in words if w).lower()
+    named = [(len(title), kind, x) for title, kind, x in board_things(p) if len(title) >= 8
+             and re.search(r"(?<!\w)" + re.escape(title.lower()) + r"(?!\w)", said)]
+    if named:
+        _, kind, x = max(named, key=lambda n: n[0])
+        return kind, x
+    return None
+
+
+def opens_line(p, given="", *words):
+    """What a card will open, said back to its agent as it writes one (R170): at that one moment, so a deeper page can
+    be given, never as a standing rule."""
+    from . import serving
+    got, live = card_link(p, given, *words), [u for u, _ in serving.served(p)]
+    deeper = ("if what to look at is a page deeper in, give it with --open URL (or the title of the Showcase entry or "
+              "Library link)")
+    what = (got[1] if got[0] == "url" else f"“{got[1]['title']}” on its board") if got else None
+    if got and (given or "").strip():
+        return f"Its card opens {what}."
+    if got:
+        return (f"Its card opens {what}, the first " + ("address" if got[0] == "url" else "thing on its board")
+                + " its words name; for another, --open.")
+    if len(live) == 1:
+        return f"Its card opens {live[0]}, this project's live site; {deeper}."
+    if live:
+        return f"Its card opens this project's links in its Library ({len(live)} live addresses); {deeper}."
+    return ("Its card has no link to open: if there is something to look at, give it with --open URL (or the title of "
+            "the Showcase entry or Library link).")
+
+
+def link_given(p, given):
+    """A link given for a card: an address as it is, else a Showcase entry or Library link by its title or id, kept by
+    its id ("entry:ID", "pin:ID"). ValueError if it is neither."""
+    given = (given or "").strip()
+    if not given or re.match(r"https?://", given):
+        return given
+    things = board_things(p)
+    hit = next(((k, x) for title, k, x in things if given == x["id"] or given.lower() == title.lower()), None)
+    if not hit:
+        raise ValueError("--open takes an address (https://...) or the title of a Showcase entry or Library link; "
+                         "this project's: " + (", ".join(repr(t) for t, _, _ in things[:12]) or "none"))
+    return f"{hit[0]}:{hit[1]['id']}"
+
+
+def open_html(pid, p, got=None):
+    """A card's one Open (R170): to its own link (card_link), else to the project's live address, else to its links
+    where it has several (its Library, the link board). Nothing where the project has none."""
+    from . import opener, serving
+    if got:
+        kind, x = got
+        if kind == "url":
+            return f"<a class='go' href='{e(opener.address(pid, x))}'{opener.NEW_TAB} title='{e(x)}'>Open it →</a>"
+        reach = (opener.entry_link if kind == "entry" else opener.pin_link)(pid, p, x)
+        if reach:
+            return (f"<a class='go' href='{e(reach[0])}'{opener.NEW_TAB if reach[1] else ''}>"
+                    f"Open “{e(x['title'])}” →</a>")
+    live = [u for u, _ in serving.served(p)]
+    if len(live) == 1:
+        return (f"<a class='go' href='{e(opener.address(pid, live[0]))}'{opener.NEW_TAB} title='{e(live[0])}'>"
+                "Open its live site →</a>")
+    return f"<a class='go' href='{e(project_url(p))}&view=library'>Open its links →</a>" if live else ""
+
+
 def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=True):
     """One moment as the person answers it (waiting_parts): a decision, a choice on screen, a question with what it
     left to verify, a version to review. Bare, only its answer (the status report sets its own words above it, R150):
@@ -9253,11 +9352,22 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
     say = lambda html: "" if bare else html            # what the report already says in its own words
     need = "need bare" if bare else "need"
     verify = [x["item"] for x in group if x["kind"] == "verify"]
+    opened = []                                  # whether any part of the card opens its own link (R170)
+
+    def own(url, live=False):
+        """The card's own link; with live, where none of its parts gave one, the project's live site in its place."""
+        if url:
+            opened.append(url)
+            return f"<div>{open_html(pid, p, url)}</div>"
+        got = open_html(pid, p) if live and not opened else ""
+        return f"<div>{got}</div>" if got else ""
+
     def ready_row(it):
         # a request for sign-off: what's ready, how to see it, and Approve or say what's wrong
         seen = set()
         return (f"<div class='ready'><div><span class='muted'>Ready for your OK:</span> {check_html(it['what'], pid, p, seen)}</div>"
                 + (f"<div><span class='muted'>To check:</span> {check_html(it['check'], pid, p, seen)}</div>" if it.get("check") else "")
+                + own(card_link(p, it.get("open"), it.get("check"), it.get("what")))
                 + f"<form class='verdict' method='post' action='/approve'>{hidden}<input type='hidden' name='item' value='{e(it['id'])}'>"
                 f"<button>Approve</button><span class='back'><input name='text' placeholder='or say what is wrong'>"
                 f"<button class='quiet' name='verdict' value='not-yet' title='Not approved: back to its agent, with what you wrote'>"
@@ -9280,7 +9390,9 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
     elif w["kind"] == "gate":
         g = w["gate"]
         folded = not g.get("points")                 # its own answer folds away, and clearing it waits inside
-        rows.append(f"<div class='{need}'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}"
+        link = own(card_link(p, g.get("open"), g.get("question"), g.get("why"), g.get("told"), g.get("default"),
+                             *(g.get("options") or ())), live=True)
+        rows.append(f"<div class='{need}'>{who('gate' + (' on ' + e(g['item']) if g.get('item') else ''))}{link}"
                     + gate_body(p, pid, g, back, number=number, fold=fold and not bare, bare=bare,
                                 tail=f"<div class='needfoot'>{clear_form(hidden, keys, 'Clear without an answer')}</div>" if folded else "")
                     + ("" if folded else foot) + "</div>")
@@ -9299,10 +9411,12 @@ def moment_html(pid, p, group, back, label=True, number=None, bare=False, fold=T
                     + f"<a class='go' href='{project_url(p)}&view=console'>Open its console →</a>{foot}</div>")
     elif w["kind"] == "ask":
         a = w["ask"]
+        link = own(card_link(p, "", a["text"]), live=True)
         rows.append(f"<div class='{need}'>{who('asked in its console · ' + said_at(a['at']))}"
-                    + say(ask_html(a['text'], p)) + f"{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
+                    + say(ask_html(a['text'], p)) + f"{link}{to_verify}{reply_form(pid, hidden, a['id'], keys)}</div>")
     else:                                         # items ready for the person's OK, with no question beside them
-        rows.append(f"<div class='{need}'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}{to_verify}{foot}</div>")
+        rows.append(f"<div class='{need}'>{who('ready for your OK' if len(verify) == 1 else f'{len(verify)} ready for your OK')}"
+                    f"{own(None, live=True)}{to_verify}{foot}</div>")
     # an address written out anywhere in it is a link to tap (the person, Nov 14: a sign-off's "what" named its demo's
     # address as plain text, where only its To check was linked): the whole moment, whatever its kind
     return live_paths(live_addresses(rows[0], pid), pid, p) if rows else ""

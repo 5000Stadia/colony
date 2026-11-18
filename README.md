@@ -127,7 +127,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   (`colony needs-you`; a question mark alone is just talk), choices on its screen, and work ready for your OK.
   **Needs you**, the glowing count first in the top bar, opens the **Inbox**: one item fills the page, with what you
   need to judge it (why it is asked, the item it belongs to, what the project showed for it, a demo's address and its
-  pictures one tap away) and its answers. **▷** on the card reads it aloud in its project's voice. Answer, and the
+  pictures one tap away) and its answers. Each card has one **Open**: the link its agent gave, else the address or
+  board entry its words name, else the project's live site. **▷** on the card reads it aloud in its project's voice. Answer, and the
   next appears. The order is built in: an item with a
   deadline leads from the day before it, the nearest first; then whatever has waited longest. **Skip for now** sends an
   item to the bottom of the stack; **Hide until** takes it off every list until the day you pick. **See all** opens the
@@ -160,8 +161,8 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   raises a notice only for a concern its thresholds support.
 - **The Library:** what you and the agent keep referring to on purpose (a world's places and people, a policy
   set, research you build on, a page you work on together), each with why it's kept, under headings either of you
-  sets; text opens to edit together, a page runs. It starts empty; what's done folds into an archive that costs the
-  agent nothing. A page in a project can send back what you did on it (`colony.send`) as a note to the agent.
+  sets; text opens to edit together, a page runs. The project's live addresses head it by themselves. What's done
+  folds into an archive that costs the agent nothing. A page in a project can send back what you did on it (`colony.send`) as a note to the agent.
 - **The shared vision**, above the roadmap: what the finished work is, and also why you want it, where it
   lands (who uses it, how many, how they find it, on what terms), the edge you bring, and what using it should
   feel like. It directs the work, with you as its guide, and it moves with you: when you redefine it, however far,

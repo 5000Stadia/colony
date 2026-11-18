@@ -634,7 +634,8 @@ def cmd_gate(a):
             raise ValueError("Use --consult ID and --points FILE together.")
         points = json.loads(sys.stdin.read() if a.points == "-" else Path(a.points).read_text()) if a.points else None
         from . import inbox
-        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when,
+        link = board.link_given(root, a.open)
+        gate = board.add_gate(root, a.question, a.item, a.why, consultation=a.consult, points=points, when=a.when, link=link,
                               default=a.default, options=a.option, recommended=a.recommended, reframes=a.reframes,
                               told=a.told or "", by=inbox.moment(a.by, end=True) if a.by else None,
                               rise=inbox.window(a.rise) if a.rise else None,
@@ -672,7 +673,8 @@ def cmd_gate(a):
         board.add_note(owner, None, f"Costly decision for {a.item}: {a.question}. Reason: {a.why}. "
                        f"Gate {gid} is owned by {root.name}; keep work affected by it stopped.", author='colony', quiet=True)
     continuation.tick(root, forced_hold='blocking decision')
-    print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note.{skipped}")
+    print(f"gate {gid} is waiting on the person; do not proceed on it until the answer arrives as a note.{skipped} "
+          + board.opens_line(root, link, a.question, a.why, a.told, a.default, *a.option))
     return 0
 
 
@@ -700,7 +702,9 @@ def cmd_consult(a):
         print(consult.report(rec))
         return 0
     if not a.question or not a.digest:
-        raise SystemExit("colony consult DECISION \"QUESTION\" --digest FILE (- for stdin); see colony consult -h")
+        raise SystemExit("colony consult DECISION \"QUESTION\" --digest FILE (- for stdin)" + (
+            "; round two takes round one's question and digest again, with --plan FILE" if a.plan else
+            "; see colony consult -h"))
     read = lambda f: sys.stdin.read() if f == "-" else Path(f).expanduser().read_text()
     try:
         rec = consult.run(root, a.decision, a.question, read(a.digest), read(a.plan) if a.plan else None,
@@ -1768,8 +1772,13 @@ def cmd_ready(a):
     """Tell the person, in plain words, what's ready for their OK and how to check it."""
     from . import board
     root = board.root_of()
-    board.mark_ready(root, a.item, a.what, a.check or "")
-    print(f"{a.item}: the person will see it ready for their OK")
+    try:
+        link = board.link_given(root, a.open)
+    except ValueError as err:
+        print(err, file=sys.stderr)
+        return 2
+    board.mark_ready(root, a.item, a.what, a.check or "", link)
+    print(f"{a.item}: the person will see it ready for their OK. " + board.opens_line(root, link, a.check, a.what))
     left = _uncommitted(root)
     if left:
         print(f"Colony's check: {len(left)} tracked file{'s' * (len(left) != 1)} not committed ({', '.join(left[:5])}"
@@ -2029,6 +2038,8 @@ def main(argv=None):
                    "take in a tap. It never stands by itself; the gate waits for their answer")
     p.add_argument("--option", action="append", default=[], help="an answer the person can tap (repeat for each)")
     p.add_argument("--recommended", help="the option you recommend: shown first, marked, one tap to choose")
+    p.add_argument("--open", metavar="LINK", help="what its card opens for the person: an address, or a Library link's "
+                   "title (default: the first address in its words, else the project's live site)")
     p.add_argument("--reframes", metavar="ID", help="this question replaces gate ID, asked again with what it was missing")
     p.add_argument("--told", help="with --reframes: your answer to the person's question, shown with the decision")
     p.add_argument("--answered", metavar="ID", help="the person answered gate ID in conversation; QUESTION is their answer")
@@ -2052,7 +2063,7 @@ def main(argv=None):
     p.add_argument("decision", help="the roadmap item (R12) or a short name for the decision")
     p.add_argument("question", nargs="?", help="the decision, in a sentence or two")
     p.add_argument("--digest", metavar="FILE", help="your digest of the facts, each with its source (- for stdin)")
-    p.add_argument("--plan", metavar="FILE", help="round two: your revised approach, for the consultants to check")
+    p.add_argument("--plan", metavar="FILE", help="round two: your revised approach, for the consultants to check, given with round one's question and --digest")
     p.add_argument("--adopt", metavar="ID", help="record which points of consultation ID the person accepted (DECISION is their words)")
     p.add_argument("--context", help="with --adopt: your reading of what they meant")
     p.add_argument("--show", metavar="ID", help="show consultation ID again")
@@ -2208,7 +2219,10 @@ def main(argv=None):
     p.add_argument('--context', help='your reading: what was discussed, what they meant, what it changes; required with --file')
     p.add_argument('--history', action='store_true'); p.set_defaults(fn=cmd_vision)
     p = sub.add_parser("ready", help="tell the person, plainly, what's ready for their OK and how to check it")
-    p.add_argument("item"); p.add_argument("what"); p.add_argument("--check"); p.set_defaults(fn=cmd_ready)
+    p.add_argument("item"); p.add_argument("what"); p.add_argument("--check")
+    p.add_argument("--open", metavar="LINK", help="what its card opens for the person: an address, or a Library link's "
+                   "title (default: the first address in its words, else the project's live site)")
+    p.set_defaults(fn=cmd_ready)
     p = sub.add_parser("remove", help="take a project off the board (its files stay)"); p.add_argument("name"); p.set_defaults(fn=cmd_remove)
     p = sub.add_parser("serve", help="serve a project's own local port over https, through Tailscale")
     p.add_argument("port", nargs="?", type=int, help="the local port it listens on (127.0.0.1)")
