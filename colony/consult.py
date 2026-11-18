@@ -226,7 +226,9 @@ def report(rec):
                 f"{rec['decision']} --consult {rec['id']} --points FILE. Rewording, naming and reorganising never count. "
                 "The person accepts or rejects each point; the gate records adoption automatically. In conversation, "
                 "use colony gate \"their words\" --answered ID --accept P1 --reject P2, covering every point. "
-                "Only an accepted change opens a second round, to check the revised approach (--plan FILE)."]
+                "Only an accepted change opens a second round, to check the revised approach: colony consult "
+                f"{rec['decision']} \"QUESTION\" --digest FILE --plan FILE, with round one's question and digest and "
+                "your revised approach in the plan file."]
     else:
         out += ["", "This decision has had both its rounds. Fix what the checks found that holds up, and go on."]
     return "\n".join(out)
