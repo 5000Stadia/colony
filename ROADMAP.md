@@ -254,7 +254,7 @@ Measure: adopted lessons the mistake came back despite · count: colony lesson -
 - [x] R162 A link to a project's site is looked at when it is tapped: up, the person is sent on; down, colony starts it with the command the project gave, with no agent; what cannot open is said to them on a page
 - [x] R163 A message to one project can be copied to others, or sent to a whole nest: Cc beside To in the message box, and each nest with two or more projects on the board as a row in the To list; every copy's first line says who else has the same words, so no agent passes them on; several ticked in Tell projects carry the same line (related: R152, R112, R93)
 - [x] R164 Each Inbox card can be read aloud: a play button on the card sends its words to the board's player, in the project's own voice; a second tap holds it, and the Inbox stays where it is
-- [~] R170 One link to open on every card waiting on the person — the link its agent gave, else the address its words name, else the project's live address; the project's Library is its link board, its live addresses there by themselves; a deeper page asked for in the reply of `colony ready` and `colony gate`, never as a standing rule (related: R160, R162)
+- [x] R170 One link to open on every card waiting on the person — the link its agent gave, else the address or board entry its words name, else the project's live address; the project's Library is its link board, its live addresses there by themselves; a deeper page asked for in the reply of `colony ready` and `colony gate`, never as a standing rule (related: R160, R162)
 
 ## M6 — Later
 
