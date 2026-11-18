@@ -6133,10 +6133,19 @@ class UsageTest(BoardBase):
         from colony import usage
         day = Path(self.tmp.name) / "codex" / "sessions" / "2026" / "09" / "30"
         day.mkdir(parents=True)
-        event = {"type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+        event = {"timestamp": "2026-09-30T12:00:00.000Z", "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
             "primary": {"used_percent": 42.0, "window_minutes": 10080, "resets_at": 1791201695}, "secondary": None}}}
         (day / "rollout-x.jsonl").write_text(json.dumps({"type": "session_meta"}) + "\n" + json.dumps(event) + "\n")
         self.assertEqual(usage.codex(Path(self.tmp.name) / "codex")["windows"], {"weekly": {"used": 42.0, "resets_at": 1791201695}})
+        # a session written to last can hold only an old report: the latest report wins, by its own time (Nov 18)
+        new = dict(event, timestamp="2026-11-16T18:29:04.371Z", payload=dict(event["payload"], rate_limits={
+            "primary": {"used_percent": 100.0, "window_minutes": 10080, "resets_at": 1795313584}}))
+        (day / "rollout-y.jsonl").write_text(json.dumps(new) + "\n")
+        old = dict(event, timestamp="2026-11-12T01:15:04.973Z")
+        (day / "rollout-z.jsonl").write_text(json.dumps(old) + "\n" + json.dumps({"timestamp": "2026-11-18T01:28:49Z"}) + "\n")
+        got = usage.codex(Path(self.tmp.name) / "codex")
+        self.assertEqual(got["windows"]["weekly"]["used"], 100.0)
+        self.assertAlmostEqual(got["at"], 1794853744.371, places=2)
 
     def test_an_agent_the_limit_itself_stopped_is_woken_once_it_lifts(self):
         # the person: "If session limit is hit anything that was active when it does should have a fire reminder"
@@ -6238,6 +6247,19 @@ class UsageTest(BoardBase):
             self.assertEqual([w for _, w in usage.check()], ["resumed"], "the person lifted it")
             self.assertIn("no longer pauses at a share of the week", board.notes(self.root)[-1]["text"])
             board.project_settings(self.root, {"week_pause": "50"})
+            self.assertEqual([w for _, w in usage.check()], ["paused"])
+            board.project_settings(self.root, {"week_pause": "60"})
+            self.assertEqual([w for _, w in usage.check()], ["resumed"], "the person raised it")
+            said = board.notes(self.root)[-1]["text"]
+            self.assertIn("week limit for Claude Code is now 60%, up from 50%, above the 50% used", said)
+            self.assertNotIn("reset", said, "the week had not reset (Bookflow, Nov 18)")
+            board.project_settings(self.root, {"week_pause": "50"})
+            self.assertEqual([w for _, w in usage.check()], ["paused"])
+            weeks["claude"]["weekly"]["used"] = 40
+            self.assertEqual([w for _, w in usage.check()], ["resumed"])
+            self.assertIn("Claude Code's week reads 40% used now, below this project's 50% limit",
+                          board.notes(self.root)[-1]["text"])
+            weeks["claude"]["weekly"]["used"] = 50
             self.assertEqual([w for _, w in usage.check()], ["paused"])
             weeks["claude"]["weekly"]["resets_at"] = time.time() - 1
             self.assertEqual([w for _, w in usage.check()], ["resumed"])

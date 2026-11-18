@@ -75,6 +75,7 @@ def codex(home=None):
     homes = [Path(home)] if home else [Path(get("codex").config_home()),
                                         *(h for h in board.codex_homes().glob("*") if h.is_dir())]
     files = [f for h in homes if (h / "sessions").exists() for f in (h / "sessions").glob("*/*/*/*.jsonl")]
+    best = None
     for f in sorted(files, key=lambda f: f.stat().st_mtime, reverse=True)[:8]:
         try:
             with f.open("rb") as handle:
@@ -97,8 +98,21 @@ def codex(home=None):
                 if w and WINDOWS.get(w.get("window_minutes")) and w.get("used_percent") is not None:
                     windows[WINDOWS[w["window_minutes"]]] = {"used": w["used_percent"], "resets_at": w.get("resets_at")}
             if windows:
-                return {"at": f.stat().st_mtime, "windows": windows}
-    return None
+                # the report's own time, not its file's: a session written to lately can hold only an old report
+                # (Nov 18: a file written that evening last reported on Nov 12, and Codex, spent, read as 0%)
+                at = _stamp(e.get("timestamp")) or f.stat().st_mtime
+                if not best or at > best["at"]:
+                    best = {"at": at, "windows": windows}
+                break
+    return best
+
+
+def _stamp(text):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
 
 
 TAIL = 1 << 20                              # bytes read from a session's end: its latest reports are there
@@ -234,6 +248,17 @@ def paused():
         return {}
 
 
+def week_lifted(prov, week, held, latest):
+    """Why a week pause ended before its week reset (Bookflow, Nov 18: told the week had reset when the person had
+    raised its limit): the limit raised above what is used, or the reading fallen below it."""
+    used, before = latest.get('used'), max((v.get('limit') or 0) for v in held)
+    if before and week > before:
+        return (f"this project's week limit for {prov.label} is now {week:g}%, up from {before:g}%"
+                + (f", above the {used:g}% used" if used is not None else ""))
+    return (f"{prov.label}'s week reads {used:g}% used now, below this project's {week:g}% limit" if used is not None
+            else f"{prov.label}'s week no longer reads past this project's {week:g}% limit")
+
+
 def check():
     """Pause at the threshold; resume after reset or a clear drop in every blocking window. Returns
     what changed, as (project, "paused"|"resumed")."""
@@ -295,9 +320,11 @@ def check():
                 changed.append((p, "paused"))
         elif previous:
             turned = held and all(reset(v) or reset(raw.get(w, {})) for w, v in held.items())
-            weekly = any(v.get('program') for v in held.values())
+            weekly = [v for v in held.values() if v.get('program')]
             why = (("this project no longer pauses at a share of the week" if not week
-                    else "the week it paused at has reset") if weekly
+                    else "the week it paused at has reset" if all(
+                        reset(v) or reset(read(v['program'], raw=True).get('weekly') or {}) for v in weekly)
+                    else week_lifted(prov, week, weekly, raw.get('weekly') or {})) if weekly
                    else "this project no longer pauses at a usage limit" if not t
                    else f"this project now uses {prov.label}" if previous['provider'] != key
                    else f"{prov.label}'s usage limit has reset" if turned
