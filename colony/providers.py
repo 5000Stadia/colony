@@ -1182,8 +1182,13 @@ class ClaudeCode(Provider):
             d = json.loads(out)
         except (ValueError, OSError, subprocess.TimeoutExpired) as err:
             return {"text": "", "cost": None, "error": f"{err.__class__.__name__}"}
-        return {"text": d.get("result") or "", "cost": d.get("total_cost_usd"), "usage": d.get("usage"),
-                "error": None if not d.get("is_error") else (d.get("subtype") or "error")}
+        if d.get("is_error"):
+            # PROVIDER: Claude Code marks a failed run is_error, often with subtype "success" and the failure as its
+            # result ("API Error: Can't reach the API server"): that is the reason, never an answer
+            why = " ".join((d.get("result") or "").split())[:200]
+            return {"text": "", "cost": d.get("total_cost_usd"), "usage": d.get("usage"),
+                    "error": why or (d.get("subtype") if d.get("subtype") != "success" else "") or "error"}
+        return {"text": d.get("result") or "", "cost": d.get("total_cost_usd"), "usage": d.get("usage"), "error": None}
 
     # PROVIDER: Claude Code holds a process to the tools it's given. The scout's: search and fetch, and nothing else
     # (no shell, edits, local files, MCP servers or helpers); anything else that would ask is refused unasked.

@@ -5916,6 +5916,31 @@ class ConsultTest(BoardBase):
         with self.assertRaisesRegex(ValueError, "both its rounds"):
             self.consult.run(self.root, "R3", "q", "d", plan="again", rnd=2)
 
+    def test_a_consultant_that_failed_is_no_view_and_an_attempt_with_none_is_no_round(self):
+        # a project's report: in a network outage one consultant's "answer" was its API error, headed as a success,
+        # the other gave none, and the attempt counted as round one, so the item could not be consulted again
+        failed = lambda brief, model, effort, project, price=None: {
+            "text": "", "cost": 0.0, "usage": {}, "error": "API Error: Can't reach the API server"}
+        for p in providers.PROVIDERS.values():
+            p.consult = failed
+        with self.assertRaisesRegex(ValueError, "No views came back .*Can't reach.* not a round"):
+            self.consult.run(self.root, "R3", "q", "d")
+        self.assertEqual(self.consult.records(self.root), [])                 # logged, but counted as no round
+        self.assertEqual(len(board.read(self.root, "consults.jsonl")), 1)
+        board.append(self.root, "consults.jsonl", {                           # one recorded before this fix
+            "type": "consult", "id": "cold", "decision": "R3", "round": 1, "question": "q", "cost": 0, "at": "x",
+            "answers": [{"model": "m1", "text": "API Error: Can't reach the API server", "error": "success"},
+                        {"model": "m2", "text": "", "error": "no answer"}]})
+        self.assertEqual(self.consult.records(self.root), [])
+        calls, ok = self.fake()
+        for n, p in enumerate(providers.PROVIDERS.values()):                  # one answers, one fails: a round
+            p.consult = ok if n == 0 else failed
+        rec = self.consult.run(self.root, "R3", "q", "d")
+        report = self.consult.report(rec)
+        self.assertIn("[failed: API Error: Can't reach the API server] No view from this consultant.", report)
+        self.assertNotIn("[success]", report)
+        self.assertEqual([r["id"] for r in self.consult.records(self.root)], [rec["id"]])
+
     def test_the_off_switch_stops_a_run_and_nothing_else_limits_one(self):
         board.set_setting("consult", "off")
         with self.assertRaisesRegex(ValueError, "off"):
@@ -7608,11 +7633,14 @@ const {chromium} = require('/opt/colony-test-playwright');
             with self.subTest(cid=cid, item=item, points=points), self.assertRaises(ValueError):
                 board.add_gate(self.root, 'q', item, consultation=cid, points=points)
             self.assertFalse(board.gates(self.root))
-        failed = dict(self.rec, id='c-failed', decision='R2', answers=[dict(self.rec['answers'][0], text=None, error='failed')])
+        # one consultant answered and one failed: a round, but the failed one is no point's source (one where none
+        # answered is no round at all)
+        failed = dict(self.rec, id='c-failed', decision='R2',
+                      answers=[self.rec['answers'][0], dict(self.rec['answers'][1], text=None, error='failed')])
         board.append(self.root, 'consults.jsonl', failed)
         with self.assertRaisesRegex(ValueError, 'failed or empty'):
             board.add_gate(self.root, 'q', 'R2', consultation='c-failed',
-                           points=[dict(text='Not a recommendation', consultants=[1])])
+                           points=[dict(text='Not a recommendation', consultants=[2])])
         gate = self.gate()
         with self.assertRaisesRegex(ValueError, 'already has gate'):
             self.gate()
@@ -7761,6 +7789,11 @@ class ConsultCallTest(unittest.TestCase):
         self.assertEqual(seen["cmd"][seen["cmd"].index("--setting-sources") + 1], "")
         self.assertNotEqual(seen["cwd"], "/proj")
         self.assertIn("Bash", seen["cmd"][seen["cmd"].index("--disallowedTools") + 1])
+        # a failed run reports success as its subtype and its failure as its result: the reason, never an answer
+        down = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, json.dumps({
+            "is_error": True, "subtype": "success", "result": "API Error: Can't reach the API server"}), "")
+        out = providers.get("claude").consult("brief", "claude-opus-5-5", "high", Path("/proj"), run=down)
+        self.assertEqual((out["text"], out["error"]), ("", "API Error: Can't reach the API server"))
 
 
 class ServerTest(BoardBase):

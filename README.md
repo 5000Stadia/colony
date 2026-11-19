@@ -179,7 +179,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   parts, D&D and its campaigns). A nest has its own page (its shared vision, projects, links, demos and the
   standards you set for it); nothing crosses into another nest.
 - **Showcase:** each project's lab-style page of deliverables worth seeing, newest first: what it is and how to
-  see or try it, with older ones kept as its history. Rate or comment if you like; it reaches the agent, and
+  see or try it, with older ones kept as its history. Comment if you like; it reaches the agent, and
   nothing waits on you. How hands-on you are is yours to set.
 - **Since you were last here:** commits, roadmap moves, gates and replies, newest first, until you Clear.
 - **Tell projects**, on the front page: write once, tick one project, several or all, and each gets it as your

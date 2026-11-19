@@ -25,10 +25,16 @@ ROUND2 = ("Below is the revised approach, after round one's accepted points. Che
           "most 350 words.")
 
 
+def answered(x):
+    """A consultant's answer that is a view: text, and no failure in its place."""
+    return bool((x.get("text") or "").strip()) and not x.get("error")
+
+
 def records(root):
     out = {}
     for e in board.read(root, "consults.jsonl"):
-        if e["type"] == "consult":
+        # an attempt no consultant answered (a network outage, a project's report, 2026-11-19) was no round
+        if e["type"] == "consult" and any(answered(x) for x in e.get("answers", [])):
             out[e["id"]] = dict(e, adopted=None)
         elif e["type"] == "adopted" and e["of"] in out:
             out[e["of"]]["adopted"] = e["points"]
@@ -87,7 +93,7 @@ def gate_points(root, cid, points, item, reframes=None):
         sources = []
         for number in numbers:
             answer = rec["answers"][number - 1]
-            if answer.get("error") or not (answer.get("text") or "").strip():
+            if not answered(answer):
                 raise ValueError("A failed or empty consultant answer cannot be a point's source.")
             sources.append(dict(consultant=number, provider=answer["provider"],
                                 model=answer["model"], effort=answer["effort"]))
@@ -190,7 +196,11 @@ def run(root, decision, question, digest, plan=None, rnd=1, pool=None):
     if rnd == 2:
         rec["checked"] = dict(consult=accepted["id"], gate=accepted.get("gate"), words=accepted["adopted"],
                               points=[p for p in accepted.get("point_decisions", []) if p["decision"] == "accept"])
-    board.append(root, "consults.jsonl", rec)
+    board.append(root, "consults.jsonl", rec)          # logged with its cost either way; records() counts only views
+    if not any(answered(a) for a in answers):
+        why = "; ".join(f"{a['model']}: {a.get('error') or 'no answer'}" for a in answers)
+        raise ValueError(f"No views came back ({why}). This attempt is not a round: run the same command again once "
+                         "the consultants can be reached.")
     return rec
 
 
@@ -216,9 +226,10 @@ def report(rec):
     for n, x in enumerate(rec["answers"], 1):
         cost = f"${x['cost']:.2f}" if x.get("cost") is not None else "cost unknown"
         out += ["", f"## Consultant {n}: {x['model']} at {x['effort']} ({cost}; {x['why']})"]
-        if x.get("error"):
-            out.append(f"[{x['error']}]")
-        out.append(x.get("text") or "(no answer)")
+        if answered(x):
+            out.append(x["text"])
+        else:
+            out.append(f"[failed: {x.get('error') or 'no answer'}] No view from this consultant.")
     if rec["round"] == 1:
         out += ["", "Next: bring the person only the points that would fundamentally change or improve the approach, "
                 "a few at most, as one gate. Write a JSON list of points with text and consultants (their numbered "
