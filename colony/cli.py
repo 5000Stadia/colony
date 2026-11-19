@@ -1375,6 +1375,48 @@ def cmd_topic_closed(a):
     return 0
 
 
+def cmd_history(a):
+    """R171: the ledger of this project's conversation history, a section of it, a search, or an item's place in time."""
+    from . import board, history
+    if a.build:
+        lock = history.building()
+        if not lock:
+            print("a history build is already under way")
+            return 0
+        roots = board.projects() if a.all else [board.root_of()]
+        for root in roots:
+            if not Path(root).is_dir():
+                continue
+            try:
+                kept, titled = history.build(root, a.limit)
+            except (OSError, ValueError) as err:
+                print(f"{Path(root).name}: {err}", file=sys.stderr)
+                continue
+            print(f"{Path(root).name}: {titled} titled" + "".join(f"; {act} {p.name}" for act, p in kept))
+        return 0
+    root = board.root_of()
+    try:
+        if a.item:
+            print(history.item(root, a.item))
+        elif a.search:
+            hits = history.search(root, a.search)
+            for sid, title, when, snip in hits:
+                print(f"{sid} · {when} · {title or '(not titled yet)'}\n    {snip}")
+            print(f"{len(hits)} found" + ("; open one with colony history ID" if hits else ""))
+        elif a.section:
+            print(history.show(root, a.section, raw=a.raw))
+        else:
+            lines = history.ledger_lines(root)
+            print("\n".join(lines) if lines else "No history recorded for this project yet.")
+            if lines:
+                print("\nOpen one: colony history ID (--raw for all its prose) · search: colony history --search WORDS"
+                      " · an item's dates and history: colony history --item R#")
+    except KeyError as err:
+        print(f"no section or item {err} in this project's history; colony history lists them", file=sys.stderr)
+        return 2
+    return 0
+
+
 def cmd_connect(a):
     """Outside services: what this project reaches and how, or (add) a new one the person then gives its keys."""
     import shlex
@@ -2102,6 +2144,15 @@ def main(argv=None):
     g.add_argument("--settled", metavar="TEXT", help="what it settled: what the person and you meant, and whose idea each was")
     g.add_argument("--parked", metavar="TEXT", help="where it waits (an existing item's notes where one fits) and its open question")
     p.set_defaults(fn=cmd_topic_closed)
+    p = sub.add_parser("history", help="this project's conversation history, by section, each titled in one line (the ledger)")
+    p.add_argument("section", nargs="?", help="open one section: its summary and the messages in it")
+    p.add_argument("--raw", action="store_true", help="with a section: all its prose")
+    p.add_argument("--search", metavar="WORDS", help="search every section's prose")
+    p.add_argument("--item", metavar="R#", help="an item's created, started and finished dates, the sections from its time, its commits")
+    p.add_argument("--build", action="store_true", help="bring the ledger up to date now (the watcher does it by itself)")
+    p.add_argument("--all", action="store_true", help="with --build: every project")
+    p.add_argument("--limit", type=int, default=6, help="with --build: titles to write per project")
+    p.set_defaults(fn=cmd_history)
     sub.add_parser("needs-you", help="this turn asks the person something: it waits on their list when it ends").set_defaults(fn=cmd_needs_you)
     sub.add_parser("projects").set_defaults(fn=cmd_projects)
     p = sub.add_parser("send"); p.add_argument("to"); p.add_argument("text", help="the message, or - to read it from stdin")

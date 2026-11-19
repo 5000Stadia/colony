@@ -1155,6 +1155,8 @@ def item_times(root):
     seen = every.get(str(root))
     if seen and any("at" not in r for r in seen.values()):
         seen = None                                  # kept before items knew when they moved: read the history again
+    if seen and any("dated" not in r for r in seen.values()):
+        seen = dated(seen, history_times(root))      # kept before items were dated from git (R171): once
     out = moved(seen if seen is not None else history_times(root), items(roadmap(root)), time.time())
     if out != seen:
         with board_lock("items"):              # read afresh: another page or the watcher may have written meanwhile
@@ -1188,7 +1190,8 @@ def moved(seen, its, t):
             out[iid] = was
             continue
         new = {"state": it["state"], "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t)), "at": t,
-               "worked": (was or {}).get("worked", 0), **({"first": was["first"]} if was and was.get("first") else {})}
+               "worked": (was or {}).get("worked", 0), "created": was.get("created", 0) if was else t, "dated": 1,
+               **({"first": was["first"]} if was and was.get("first") else {})}
         if was and was.get("started"):
             new["worked"] += t - was["started"]                   # it left doing: the timer holds
         if it["state"] == "doing":
@@ -1206,9 +1209,37 @@ def history_times(root):
     for k, (h, t) in enumerate(zip(log[::2], log[1::2])):
         its = items(roadmap(root, git(root, "show", f"{h}:ROADMAP.md")))
         recs = moved(recs, its, int(t))
-        if k == 0:
-            recs = {i: {"state": r["state"], "since": "", "at": 0, "worked": 0} for i, r in recs.items()}
+        if k == 0:                                   # made by the first version's time, if not when
+            recs = {i: {"state": r["state"], "since": "", "at": 0, "worked": 0, "created": int(t), "dated": 1}
+                    for i, r in recs.items()}
     return recs
+
+
+def dated(seen, hist):
+    """Records kept before items were dated from git, each given the roadmap's committed history where that knows
+    earlier: when the item was created and first taken up, and when it reached the state it is in. The board first
+    noticed the items already done when it began keeping times, so their finish was that day, not the commit's."""
+    out = {}
+    for iid, r in seen.items():
+        r, h = dict(r, dated=1), hist.get(iid) or {}
+        for key in ("created", "first") + (("at",) if h.get("state") == r["state"] else ()):
+            if h.get(key) and (not r.get(key) or h[key] < r[key]):
+                r[key] = h[key]
+                if key == "at":
+                    r["since"] = h["since"]
+        out[iid] = r
+    return out
+
+
+def item_dates(rec):
+    """An item's dates as the person and agents read them (R171): "created Oct 3 · started Oct 5 · finished Oct 9",
+    each part only when it is known."""
+    day = lambda t: time.strftime("%b %-d" + (", %Y" if time.localtime(t).tm_year != time.localtime().tm_year else ""),
+                                  time.localtime(t))
+    parts = [f"created {day(rec['created'])}" if rec.get("created") else "",
+             f"started {day(rec['first'])}" if rec.get("first") else "",
+             f"finished {day(rec['at'])}" if rec.get("state") == "done" and rec.get("at") else ""]
+    return " · ".join(p for p in parts if p)
 
 
 def took(secs):
@@ -7292,6 +7323,8 @@ def render(reg, pid, view="overview", show_all=""):
                         + (f"<p>{e(it['text'])}</p>" if lead_clause(it['text'], 90) != it['text'] else "")
                         + item_body(root, it, (it['desc'] or ('' if lead_clause(it['text'], 90) != it['text'] else 'No description yet.')))
                         + (f"<p class='muted'>Unlocks: {e(', '.join(unlocks))}</p>" if unlocks else "")
+                        + (f"<p class='muted'>{e(item_dates(times[it['id']])[:1].upper() + item_dates(times[it['id']])[1:])}</p>"
+                           if item_dates(times.get(it['id'], {})) else "")
                         + thread(ns, its)
                         + note_box(pid, "item", it["id"], "A note the agent reads when it works on this item", back=f"{project_url(root)}&view=roadmap")
                         + f"<p><a href='/item?{project_query(root)}&id={e(it['id'])}'>Open {e(it['id'])}: its work, gates and full thread →</a></p></div></details>")

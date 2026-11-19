@@ -266,6 +266,23 @@ class Provider:
         """Whether the program can find the bookmarked conversation at its current working folder."""
         return False
 
+    # --- a project's history by section (history.py, R171)
+    def transcripts(self, root):
+        """The files of a project's own conversations with this program, oldest first."""
+        return []
+
+    forgets_after = None                # how long the program keeps a conversation after its last use; None: always
+
+    def conversation_file(self, path):
+        """Whether a transcript file is a conversation of the folder's agent, not a one-shot run or a helper's."""
+        return True
+
+    def history_events(self, record):
+        """What one transcript record says, for the history: [(kind, text)], kind one of "message" (to the agent),
+        "reply" (the agent's words), "ran" (a command or edit, one line), "boundary" (the program compacted here)
+        and "summary" (what it kept at a compaction)."""
+        return []
+
     def first_run(self, folders):
         """For a migration: the program's own answers to its first-run screens and its trust in these folders (and
         those under them), never a sign-in, key or anything else, or None where it keeps none apart from its config."""
@@ -769,6 +786,47 @@ class ClaudeCode(Provider):
             was.rename(now)
             was.symlink_to(now, target_is_directory=True)
         return [(str(was), str(now))], [f"Claude Code's conversations moved to {now.name}"]
+
+    # PROVIDER: Claude Code deletes a conversation this long after its last use (cleanupPeriodDays, 30 by default)
+    forgets_after = 30 * 86400
+
+    def transcripts(self, root):
+        """PROVIDER: Claude Code keeps a folder's conversations as one file each under the folder's key (a helper's
+        in a folder of its own beside them, not the project's conversation)."""
+        from . import board
+        from .migrate import claude_key
+        folder = self.config_home() / 'projects' / claude_key(board.workdir(root))
+        return sorted(folder.glob('*.jsonl'), key=lambda f: f.stat().st_mtime) if folder.is_dir() else []
+
+    # PROVIDER: what Claude Code wraps around a message that is not the person's or the agent's own words
+    NOT_SAID = re.compile(r'<(system-reminder|local-command-stdout|local-command-caveat|command-message|command-args)>'
+                          r'.*?</\1>', re.S)
+
+    def history_events(self, record):
+        """PROVIDER: Claude Code marks a compaction with a compact_boundary record, then its summary as a user message
+        (isCompactSummary); tool results come back as user messages and are not the person's."""
+        kind = record.get('type')
+        if kind == 'system' and record.get('subtype') == 'compact_boundary':
+            return [('boundary', '')]
+        if kind not in ('user', 'assistant') or record.get('isMeta'):
+            return []
+        content = (record.get('message') or {}).get('content')
+        parts = [{'type': 'text', 'text': content}] if isinstance(content, str) else content or []
+        out = []
+        for c in parts:
+            if not isinstance(c, dict):
+                continue
+            if c.get('type') == 'text':
+                text = self.NOT_SAID.sub('', c.get('text') or '').strip()
+                if text:
+                    out.append(('summary' if record.get('isCompactSummary') else
+                                'message' if kind == 'user' else 'reply', text))
+            elif c.get('type') == 'tool_use':
+                i = c.get('input') or {}
+                line = (i.get('command') or '').strip().splitlines()[:1] if c.get('name') == 'Bash' else \
+                    [f"{c.get('name')} {i.get('file_path')}"] if i.get('file_path') and c.get('name') in ('Edit', 'Write') else []
+                out += [('ran', line[0][:200])] if line else []
+        return out
 
     def verify_history(self, root):
         """PROVIDER: Claude Code's resume lookup is a session file under the cwd's key."""
@@ -1687,6 +1745,75 @@ class Codex(Provider):
     def config_home():
         import os
         return Path(os.environ.get("COLONY_CODEX_SOURCE_HOME") or os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+    def transcripts(self, root):
+        """PROVIDER: Codex keeps each session as a dated file; a project's own home holds only its sessions, the
+        person's home everyone's, told apart by the folder its first record names."""
+        from . import board, codex_remote
+        own = codex_remote.home_for(root) / 'sessions'
+        here, out = (None if own.is_dir() else str(board.workdir(root))), []
+        for f in (own if here is None else self.config_home() / 'sessions').glob('*/*/*/*.jsonl'):
+            try:
+                with f.open() as handle:
+                    meta = json.loads(handle.readline(1 << 20)).get('payload') or {}
+            except (OSError, ValueError):
+                continue
+            if (here is None or meta.get('cwd') == here) and self.own_session(meta):
+                out.append(f)
+        return sorted(out, key=lambda f: f.stat().st_mtime)
+
+    @staticmethod
+    def own_session(meta):
+        """PROVIDER: whether a session, by its first record, is a conversation of the folder's agent, not a one-shot
+        `codex exec` (a helper, a consult, a title, research), a helper thread an agent spawned, or a call another
+        program's agent made into Codex (Claude Code's own client): on Nov 19, 263 of one project's 310 sessions."""
+        source = meta.get('source')
+        return (source != 'exec' and not (isinstance(source, dict) and 'subagent' in source)
+                and meta.get('originator') != 'Claude Code')
+
+    def conversation_file(self, path):
+        try:
+            with open(path) as handle:
+                meta = json.loads(handle.readline(1 << 20)).get('payload') or {}
+        except (OSError, ValueError):
+            return True                                   # unreadable now: what was recorded of it stays
+        return self.own_session(meta)
+
+    # PROVIDER: what Codex sends as a user message that is its setup, not anyone's words
+    SETUP = ('<environment_context>', '<user_instructions>', '<permissions', '# AGENTS.md', '<turn_aborted>')
+
+    def history_events(self, record):
+        """PROVIDER: Codex records a compaction as one compacted record (its summary in message, or the last user
+        message of the history it kept); messages and tool calls as response items."""
+        kind, p = record.get('type'), record.get('payload') or {}
+        if kind == 'compacted':
+            # A summary the compaction left readable: its message, or (in older versions) the user message that
+            # ends the history it kept. A newer one ends with its own encrypted compaction item instead (all 84 on
+            # this machine on Nov 19), and its last user message is only the latest thing said, not a summary.
+            last = (p.get('replacement_history') or [{}])[-1]
+            said = p.get('message') or (self._said(last) if last.get('type') == 'message' and last.get('role') == 'user'
+                                        else '')
+            return [('boundary', '')] + ([('summary', said)] if said.strip() else [])
+        if kind != 'response_item':
+            return []
+        if p.get('type') == 'message' and p.get('role') in ('user', 'assistant'):
+            text = self._said(p).strip()
+            if text and not text.startswith(self.SETUP):
+                return [('message' if p['role'] == 'user' else 'reply', text)]
+        elif p.get('type') in ('function_call', 'custom_tool_call'):
+            try:
+                args = json.loads(p.get('arguments') or '{}') if p.get('type') == 'function_call' else {'cmd': p.get('input')}
+            except ValueError:
+                args = {}
+            cmd = args.get('cmd') or args.get('command') or ''
+            line = (' '.join(cmd) if isinstance(cmd, list) else str(cmd)).strip().splitlines()[:1]
+            return [('ran', line[0][:200])] if line else []
+        return []
+
+    @staticmethod
+    def _said(message):
+        return '\n'.join(c.get('text', '') for c in message.get('content') or []
+                         if isinstance(c, dict) and c.get('type') in ('input_text', 'output_text', 'text'))
 
     def gather(self, root, dest):
         """PROVIDER: Codex follows linked sessions and SQLite databases in its owned home."""

@@ -413,7 +413,8 @@ def historical(root, job, *, omit_carry=False):
     text = (f'[{marker}] Historical context restored after compaction, not a new request. '
             'Do not redo actions from these exchanges. Current user instructions take precedence. '
             'The carry-over may predate the native summary; use that summary for newer progress. '
-            'Read the current Vision, roadmap, notes and gates for durable project state.\n'
+            'Read the current Vision, roadmap, notes and gates for durable project state. Earlier conversation, by '
+            'section with a one-line title each: colony history (an item\'s dates and history: colony history --item R#).\n'
             + ('The native summary already retains this carry-over (in its summary, or the messages it kept word for word); '
                'its text is not repeated here.\n\n' if omit_carry else
                f"Carry-over recorded {job.get('written') or 'before this refresh'}:\n{job.get('carry') or '(none)'}\n\n"))

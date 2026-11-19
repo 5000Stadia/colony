@@ -142,6 +142,7 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
 - **The roadmap**, kept by the agent in `ROADMAP.md`, drawn as a journey: finished milestones as medals, each open
   one a stop with a ring of its progress, a dot per item and what's being worked on now, and the vision at the end.
   The file stays small: an open item is one line with its 0–3 related items, and its details live in `roadmap/R#.md`.
+  Each item shows when it was created, started and finished, read back from the roadmap's history in git.
   A milestone can name its kind (menu, lanes, findings, sections) and is drawn as one; only a sequence implies an
   order. Open a milestone for its items by title, grouped Doing, To come and Done; **Do this next** or **Leave for
   later** reaches the agent in a tap. Shape hints, read by rule from the plan and its history, flag drift (a
@@ -265,6 +266,11 @@ And [GUIDE.md](GUIDE.md): what measured tests showed about running long projects
   the compaction. Colony clears the closed topic from context at the agent's next pause, and
   Claude's summary is steered toward what the open work needs.
   Codex's own compaction turn preserves completed recent exchanges without treating that empty turn as unfinished work.
+- **History by section:** each project's conversations are cut where their program compacted them. Each section's
+  words are kept in colony's home, outside the project, and a light model titles it in one line. An agent lists,
+  opens and searches this ledger with `colony history`; `colony history --item R2` gives an item's dates, the sections
+  from its time and its commits. Colony names it after each compaction. Before Claude Code's 30-day cleanup
+  reaches a conversation, colony keeps the current one fresh and a compressed copy of any other.
 - **Usage limits:** an agent the limit stopped mid-work is woken when it lifts, from the limit's own message on
   its console, and told to carry on where it stopped.
 - **Today:** each project's page for your day, made from colony's records at no token cost: what landed since

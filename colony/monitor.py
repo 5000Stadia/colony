@@ -41,6 +41,7 @@ class Watcher:
         self.idle_since = {}
         self.signin_observed = self.discovered
         self.reads_kept = time.time()        # what sessions read, first kept two minutes in (cleanup.update)
+        self.history_kept = time.time()      # each project's history, first kept fifteen minutes in (history.kick)
 
     def events(self):
         try:
@@ -525,6 +526,10 @@ class Watcher:
             from . import cleanup
             # what each project's sessions read, kept as their transcripts grow, for the cleanup check (R139)
             threading.Thread(target=cleanup.update, daemon=True).start()
+        if time.time() - getattr(self, "history_kept", time.time()) > 900:
+            self.history_kept = time.time()
+            from . import history
+            history.kick()                          # each project's history kept by section and titled (R171)
         self.models()
         self.usage()                                # the safe pause, its waking at the reset, and turbo
         self.current()                              # a switch or an update reaches its consoles
